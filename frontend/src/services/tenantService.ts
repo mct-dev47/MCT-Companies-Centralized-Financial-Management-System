@@ -4,6 +4,7 @@
  * number, the totals for a repeating lease, and what each user may see or change.
  */
 import type { LeaseRepeat } from '@/services/tenantScheduleService'
+import { notifyNotificationsUpdated } from '@/services/notificationService'
 
 export const TENANT_COMPANY_NAME = 'JK Property and Ventures'
 
@@ -109,6 +110,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message)
   }
+  if (init?.method && init.method.toUpperCase() !== 'GET') notifyNotificationsUpdated()
   if (res.status === 204) return undefined as T
   return (await res.json()) as T
 }

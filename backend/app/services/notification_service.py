@@ -23,9 +23,10 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
 
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, selectinload
 
+from app.core.cache import system_cache
 from app.models.audit_log import AuditLog
 from app.models.company import Company
 from app.models.loan import Loan, LoanRepayment
@@ -41,52 +42,52 @@ logger = logging.getLogger(__name__)
 
 class NotificationType:
     # Bills
-    BILL_OVERDUE               = "BILL_OVERDUE"
-    BILL_DUE_TODAY             = "BILL_DUE_TODAY"
-    BILL_DUE_TOMORROW          = "BILL_DUE_TOMORROW"
-    BILL_DUE_SOON              = "BILL_DUE_SOON"
-    BILL_PAID                  = "BILL_PAID"
-    BILL_PARTIALLY_PAID        = "BILL_PARTIALLY_PAID"
+    BILL_OVERDUE                = "BILL_OVERDUE"
+    BILL_DUE_TODAY              = "BILL_DUE_TODAY"
+    BILL_DUE_TOMORROW           = "BILL_DUE_TOMORROW"
+    BILL_DUE_SOON               = "BILL_DUE_SOON"
+    BILL_PAID                   = "BILL_PAID"
+    BILL_PARTIALLY_PAID         = "BILL_PARTIALLY_PAID"
 
     # Lending (Micro-lending / Borrowers)
-    LENDING_OVERDUE            = "LENDING_OVERDUE"
+    LENDING_OVERDUE             = "LENDING_OVERDUE"
     LENDING_INSTALLMENT_OVERDUE = "LENDING_INSTALLMENT_OVERDUE"
-    LENDING_DUE_TODAY          = "LENDING_DUE_TODAY"
-    LENDING_DUE_TOMORROW       = "LENDING_DUE_TOMORROW"
-    LENDING_DUE_SOON           = "LENDING_DUE_SOON"
-    LENDING_PAYMENT_RECEIVED   = "LENDING_PAYMENT_RECEIVED"
-    LENDING_FULLY_SETTLED      = "LENDING_FULLY_SETTLED"
+    LENDING_DUE_TODAY           = "LENDING_DUE_TODAY"
+    LENDING_DUE_TOMORROW        = "LENDING_DUE_TOMORROW"
+    LENDING_DUE_SOON            = "LENDING_DUE_SOON"
+    LENDING_PAYMENT_RECEIVED    = "LENDING_PAYMENT_RECEIVED"
+    LENDING_FULLY_SETTLED       = "LENDING_FULLY_SETTLED"
 
     # Inter-company Loans
-    LOAN_PENDING_APPROVAL      = "LOAN_PENDING_APPROVAL"
-    LOAN_OVERDUE               = "LOAN_OVERDUE"
-    LOAN_DUE_TODAY             = "LOAN_DUE_TODAY"
-    LOAN_DUE_TOMORROW          = "LOAN_DUE_TOMORROW"
-    LOAN_DUE_SOON              = "LOAN_DUE_SOON"
-    LOAN_REPAYMENT_RECEIVED    = "LOAN_REPAYMENT_RECEIVED"
-    LOAN_REPAYMENT_SENT        = "LOAN_REPAYMENT_SENT"
-    LOAN_FULLY_SETTLED         = "LOAN_FULLY_SETTLED"
-    LOAN_REQUEST_FINANCE       = "LOAN_REQUEST_FINANCE"
-    LOAN_ENDORSED_AUDIT        = "LOAN_ENDORSED_AUDIT"
-    LOAN_APPROVED_SUPERVISOR   = "LOAN_APPROVED_SUPERVISOR"
-    LOAN_REJECTED_SUPERVISOR   = "LOAN_REJECTED_SUPERVISOR"
+    LOAN_PENDING_APPROVAL       = "LOAN_PENDING_APPROVAL"
+    LOAN_OVERDUE                = "LOAN_OVERDUE"
+    LOAN_DUE_TODAY              = "LOAN_DUE_TODAY"
+    LOAN_DUE_TOMORROW           = "LOAN_DUE_TOMORROW"
+    LOAN_DUE_SOON               = "LOAN_DUE_SOON"
+    LOAN_REPAYMENT_RECEIVED     = "LOAN_REPAYMENT_RECEIVED"
+    LOAN_REPAYMENT_SENT         = "LOAN_REPAYMENT_SENT"
+    LOAN_FULLY_SETTLED          = "LOAN_FULLY_SETTLED"
+    LOAN_REQUEST_FINANCE        = "LOAN_REQUEST_FINANCE"
+    LOAN_ENDORSED_AUDIT         = "LOAN_ENDORSED_AUDIT"
+    LOAN_APPROVED_SUPERVISOR    = "LOAN_APPROVED_SUPERVISOR"
+    LOAN_REJECTED_SUPERVISOR    = "LOAN_REJECTED_SUPERVISOR"
 
     # Tenants
-    TENANT_OVERDUE             = "TENANT_OVERDUE"
-    TENANT_DUE_TODAY           = "TENANT_DUE_TODAY"
-    TENANT_DUE_TOMORROW        = "TENANT_DUE_TOMORROW"
-    TENANT_DUE_SOON            = "TENANT_DUE_SOON"
-    TENANT_PAYMENT_RECEIVED    = "TENANT_PAYMENT_RECEIVED"
+    TENANT_OVERDUE              = "TENANT_OVERDUE"
+    TENANT_DUE_TODAY            = "TENANT_DUE_TODAY"
+    TENANT_DUE_TOMORROW         = "TENANT_DUE_TOMORROW"
+    TENANT_DUE_SOON             = "TENANT_DUE_SOON"
+    TENANT_PAYMENT_RECEIVED     = "TENANT_PAYMENT_RECEIVED"
 
     # Petty Cash
-    PETTY_CASH_REQUEST         = "PETTY_CASH_REQUEST"
-    PETTY_CASH_AUDIT           = "PETTY_CASH_AUDIT"
-    PETTY_CASH_APPROVED        = "PETTY_CASH_APPROVED"
-    PETTY_CASH_REJECTED        = "PETTY_CASH_REJECTED"
-    PETTY_CASH_LOW_BALANCE     = "PETTY_CASH_LOW_BALANCE"
+    PETTY_CASH_REQUEST          = "PETTY_CASH_REQUEST"
+    PETTY_CASH_AUDIT            = "PETTY_CASH_AUDIT"
+    PETTY_CASH_APPROVED         = "PETTY_CASH_APPROVED"
+    PETTY_CASH_REJECTED         = "PETTY_CASH_REJECTED"
+    PETTY_CASH_LOW_BALANCE      = "PETTY_CASH_LOW_BALANCE"
 
     # Deposits & Audit
-    DEPOSIT_VERIFIED           = "DEPOSIT_VERIFIED"
+    DEPOSIT_VERIFIED            = "DEPOSIT_VERIFIED"
 
 
 OVERDUE_TYPES = {
@@ -172,7 +173,7 @@ def _calculate_loan_balance(loan: Loan, total_repaid: Decimal) -> Decimal:
 def _company_name(db: Session, company_id: Optional[int], name_map: Optional[dict] = None) -> str:
     if not company_id:
         return "All Companies"
-    if name_map and company_id in name_map:
+    if name_map is not None and company_id in name_map:
         return name_map[company_id]
     name = db.query(Company.company_name).filter(Company.company_id == company_id).scalar()
     return name or f"Company #{company_id}"
@@ -211,20 +212,80 @@ class NotificationService:
         except Exception:
             return {}
 
-    def _get_repayments_map(self) -> dict[int, Decimal]:
+    def _load_loans_context(
+        self,
+        company_id: Optional[int],
+    ) -> tuple[list[Loan], dict[int, Loan], dict[int, Decimal], list[tuple[LoanRepayment, Loan]]]:
+        """
+        Consolidated loader for Loan and LoanRepayment records.
+        Executes at most 2 SQL queries (1 for Loan, 1 for LoanRepayment) instead of 6.
+        """
         try:
-            from sqlalchemy import func
-            rows = (
-                self.db.query(
-                    LoanRepayment.loan_id,
-                    func.coalesce(func.sum(LoanRepayment.amount), 0),
+            q = self.db.query(Loan)
+            if company_id is not None:
+                q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+            loans = q.order_by(Loan.created_at.desc(), Loan.loan_id.desc()).all()
+            loans_by_id = {l.loan_id: l for l in loans}
+
+            repayments_map: dict[int, Decimal] = {}
+            recent_repayments: list[tuple[LoanRepayment, Loan]] = []
+
+            if loans_by_id:
+                rep_rows = (
+                    self.db.query(LoanRepayment)
+                    .filter(LoanRepayment.loan_id.in_(list(loans_by_id.keys())))
+                    .order_by(LoanRepayment.created_at.desc(), LoanRepayment.loan_repayment_id.desc())
+                    .all()
                 )
-                .group_by(LoanRepayment.loan_id)
-                .all()
+                for rep in rep_rows:
+                    amt = Decimal(str(rep.amount or 0))
+                    repayments_map[rep.loan_id] = repayments_map.get(rep.loan_id, Decimal("0.00")) + amt
+                    if len(recent_repayments) < 30 and rep.loan_id in loans_by_id:
+                        recent_repayments.append((rep, loans_by_id[rep.loan_id]))
+
+            return loans, loans_by_id, repayments_map, recent_repayments
+        except Exception as exc:
+            logger.warning("Error loading consolidated loan context: %s", exc)
+            return [], {}, {}, []
+
+    def _load_audit_logs(
+        self,
+        company_id: Optional[int],
+    ) -> tuple[list[AuditLog], list[AuditLog]]:
+        """
+        Consolidated loader for AuditLog records needed by loan repayment fallbacks
+        and deposit/sales verification notifications (1 query instead of 2).
+        """
+        try:
+            q = self.db.query(AuditLog).filter(
+                AuditLog.action.in_(["LOAN_UPDATED", "SALE_UPDATED", "SALE_CREATED"]),
+                AuditLog.details.isnot(None),
             )
-            return {loan_id: Decimal(str(total)) for loan_id, total in rows}
-        except Exception:
-            return {}
+            if company_id is not None:
+                q = q.filter(AuditLog.company_id == company_id)
+            rows = q.order_by(AuditLog.created_at.desc()).limit(80).all()
+            loan_audit_rows = [r for r in rows if r.action == "LOAN_UPDATED"][:50]
+            sale_audit_rows = [r for r in rows if r.action in ("SALE_UPDATED", "SALE_CREATED")][:30]
+            return loan_audit_rows, sale_audit_rows
+        except Exception as exc:
+            logger.warning("Error loading consolidated audit logs: %s", exc)
+            return [], []
+
+    def _load_petty_cash_topups(self, company_id: Optional[int]):
+        """
+        Consolidated loader for PettyCashTopUp records (1 query instead of 3-4).
+        Used by both workflow notifications and low-balance calculations.
+        """
+        try:
+            from app.models.petty_cash import PettyCashTopUp
+
+            q = self.db.query(PettyCashTopUp)
+            if company_id is not None:
+                q = q.filter(PettyCashTopUp.company_id == company_id)
+            return q.order_by(PettyCashTopUp.created_at.desc()).all()
+        except Exception as exc:
+            logger.warning("Error loading petty cash topups: %s", exc)
+            return []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -233,59 +294,110 @@ class NotificationService:
         *,
         company_id: Optional[int] = None,
         user_role: Optional[str] = None,
+        user_scope_key: Optional[str] = None,
         notification_type: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[NotificationOut]:
-        raw_notifications: list[NotificationOut] = []
+        effective_role = (user_role or "supervisor").strip().lower() or "supervisor"
+        scope_ident = user_scope_key or f"r:{effective_role}:c:{company_id}"
+        base_cache_key = f"notifs_v2:{scope_ident}"
 
-        name_map = self._get_company_names_map()
-        repayments_map = self._get_repayments_map()
+        deduped = system_cache.get(base_cache_key)
+        if deduped is None:
+            raw_notifications: list[NotificationOut] = []
 
-        # 1. Bills due-date reminders & payment notifications
-        raw_notifications.extend(self._bill_notifications(company_id, name_map))
+            name_map = self._get_company_names_map()
+            loans, loans_by_id, repayments_map, recent_repayments = self._load_loans_context(company_id)
+            loan_audit_rows, sale_audit_rows = self._load_audit_logs(company_id)
+            petty_cash_topups = self._load_petty_cash_topups(company_id)
 
-        # 2. Lending (Borrower) due-date reminders, installment alerts & repayments
-        raw_notifications.extend(self._lending_notifications(company_id, user_role, name_map))
+            # 1. Bills due-date reminders & payment notifications
+            raw_notifications.extend(self._bill_notifications(company_id, name_map))
 
-        # 3. Inter-company loan due-date reminders, pending approvals, workflow & repayments
-        raw_notifications.extend(self._due_date_notifications(company_id, name_map, repayments_map))
-        raw_notifications.extend(self._pending_approval_notifications(company_id, name_map))
-        raw_notifications.extend(self._repayment_notifications(company_id, name_map))
-        raw_notifications.extend(self._loan_workflow_notifications(user_role, company_id, name_map))
+            # 2. Lending (Borrower) due-date reminders, installment alerts & repayments
+            raw_notifications.extend(self._lending_notifications(company_id, effective_role, name_map))
 
-        # 4. Tenant lease due-date reminders & rent payment notifications
-        raw_notifications.extend(self._tenant_notifications(company_id, name_map))
+            # 3. Inter-company loan due-date reminders, pending approvals, workflow & repayments
+            raw_notifications.extend(
+                self._due_date_notifications(company_id, name_map, repayments_map, loans=loans)
+            )
+            raw_notifications.extend(
+                self._pending_approval_notifications(company_id, name_map, loans=loans)
+            )
+            raw_notifications.extend(
+                self._repayment_notifications(
+                    company_id,
+                    name_map,
+                    recent_repayments=recent_repayments,
+                    loans_by_id=loans_by_id,
+                    audit_rows=loan_audit_rows,
+                )
+            )
+            raw_notifications.extend(
+                self._loan_workflow_notifications(effective_role, company_id, name_map, loans=loans)
+            )
 
-        # 5. Petty cash workflow & low balance notifications
-        raw_notifications.extend(self._petty_cash_workflow_notifications(user_role, company_id, name_map))
-        raw_notifications.extend(self._petty_cash_low_balance_notifications(company_id, name_map))
+            # 4. Tenant lease due-date reminders & rent payment notifications
+            raw_notifications.extend(self._tenant_notifications(company_id, name_map))
 
-        # 6. Sales / Deposit audit notifications
-        raw_notifications.extend(self._deposit_workflow_notifications(user_role, company_id, name_map))
+            # 5. Petty cash workflow & low balance notifications
+            raw_notifications.extend(
+                self._petty_cash_workflow_notifications(
+                    effective_role, company_id, name_map, topups=petty_cash_topups
+                )
+            )
+            raw_notifications.extend(
+                self._petty_cash_low_balance_notifications(
+                    company_id, name_map, topups=petty_cash_topups
+                )
+            )
 
-        # Deduplicate by notification_id
-        deduped: list[NotificationOut] = []
-        seen_ids: set[str] = set()
-        for item in raw_notifications:
-            if item.notification_id not in seen_ids:
-                seen_ids.add(item.notification_id)
-                deduped.append(item)
+            # 6. Sales / Deposit audit notifications
+            raw_notifications.extend(
+                self._deposit_workflow_notifications(
+                    effective_role, company_id, name_map, audit_rows=sale_audit_rows
+                )
+            )
 
+            # Deduplicate by notification_id
+            deduped = []
+            seen_ids: set[str] = set()
+            for item in raw_notifications:
+                if item.notification_id not in seen_ids:
+                    seen_ids.add(item.notification_id)
+                    deduped.append(item)
+
+            deduped.sort(
+                key=lambda n: (
+                    _urgency_priority(n.notification_type),
+                    -_normalize_dt(n.created_at).timestamp(),
+                )
+            )
+            system_cache.set(base_cache_key, deduped, ttl=15, tags=["notifications"])
+
+        filtered = deduped
         if notification_type:
             nt = notification_type.upper()
-            deduped = [n for n in deduped if n.notification_type == nt]
+            filtered = [n for n in deduped if n.notification_type == nt]
 
-        deduped.sort(
-            key=lambda n: (
-                _urgency_priority(n.notification_type),
-                -_normalize_dt(n.created_at).timestamp(),
+        return filtered[offset: offset + limit]
+
+    def get_unread_count(
+        self,
+        *,
+        company_id: Optional[int] = None,
+        user_role: Optional[str] = None,
+        user_scope_key: Optional[str] = None,
+    ) -> int:
+        return len(
+            self.get_notifications(
+                company_id=company_id,
+                user_role=user_role,
+                user_scope_key=user_scope_key,
+                limit=10_000,
             )
         )
-        return deduped[offset: offset + limit]
-
-    def get_unread_count(self, *, company_id: Optional[int] = None, user_role: Optional[str] = None) -> int:
-        return len(self.get_notifications(company_id=company_id, user_role=user_role, limit=10_000))
 
     # ── Source 1: Bills (Due-date reminders & payments) ──────────────────────
 
@@ -299,34 +411,38 @@ class NotificationService:
         now_utc = datetime.now(timezone.utc)
 
         try:
+            from app.models.bills import Bill
             from app.services.bills_service import BillsService
+
             bills_svc = BillsService(self.db)
-            bills = bills_svc.list_bills(company_id=company_id)
+            q = self.db.query(Bill).options(selectinload(Bill.payments))
+            if company_id is not None:
+                q = q.filter(Bill.company_id == company_id)
+            bills = q.order_by(Bill.created_at.desc(), Bill.bill_id.desc()).all()
 
             for b in bills:
                 try:
-                    company_label = b.company or _company_name(self.db, b.company_id, name_map)
-                    next_p = next(
-                        (p for p in (b.periods or []) if getattr(p, "is_next_payable", False) or not p.paid),
-                        None,
-                    )
-                    due_d = b.next_period_date or (next_p.period_date if next_p else None) or b.due_date
-                    if due_d and b.status != "paid":
-                        period_key = b.next_period_key or (next_p.period_key if next_p else due_d.isoformat())
-                        period_label = b.next_period_label or (next_p.period_label if next_p else due_d.strftime("%b %d, %Y"))
+                    cname = _company_name(self.db, b.company_id, name_map)
+                    periods = bills_svc._periods(b, as_of=today, include_future=1, validate_payments=False)
+                    periods_by_key = {p["period_key"]: p for p in periods}
+                    next_p = bills_svc._next_period(b, as_of=today, periods=periods)
+                    computed_status = bills_svc._status(b, as_of=today, periods=periods)
+
+                    due_d = (next_p["period_date"] if next_p else None) or b.due_date
+                    if due_d and computed_status != "paid" and next_p is not None:
+                        period_key = next_p["period_key"]
+                        period_label = next_p["period_label"]
 
                         rem_amt = Decimal("0.00")
-                        if next_p and next_p.remaining_amount and next_p.remaining_amount > Decimal("0.00"):
-                            rem_amt = Decimal(str(next_p.remaining_amount))
-                        elif next_p and next_p.billed_amount and next_p.billed_amount > Decimal("0.00"):
-                            rem_amt = Decimal(str(next_p.billed_amount))
-                        elif b.latest_amount and b.latest_amount > Decimal("0.00"):
-                            rem_amt = Decimal(str(b.latest_amount))
+                        if next_p.get("remaining_amount") and next_p["remaining_amount"] > Decimal("0.00"):
+                            rem_amt = Decimal(str(next_p["remaining_amount"]))
+                        elif next_p.get("billed_amount") and next_p["billed_amount"] > Decimal("0.00"):
+                            rem_amt = Decimal(str(next_p["billed_amount"]))
                         elif b.amount and b.amount > Decimal("0.00"):
                             rem_amt = Decimal(str(b.amount))
 
                         amt_str = f" Amount due: ₱{rem_amt:,.2f}." if rem_amt > Decimal("0.00") else ""
-                        is_partial = (next_p and getattr(next_p, "partially_paid", False)) or b.status == "partially paid"
+                        is_partial = bool(next_p.get("partially_paid")) or computed_status == "partially paid"
                         partial_tag = " (Partially Paid)" if is_partial else ""
 
                         diff_days = (due_d - today).days
@@ -339,7 +455,7 @@ class NotificationService:
                                 notification_type=NotificationType.BILL_OVERDUE,
                                 title=f"Overdue Bill{partial_tag}: {b.bill_name}",
                                 message=(
-                                    f"{b.bill_name} ({company_label}) for {period_label} was due on "
+                                    f"{b.bill_name} ({cname}) for {period_label} was due on "
                                     f"{due_d.strftime('%b %d, %Y')} ({days_overdue} day{'s' if days_overdue != 1 else ''} overdue)."
                                     f"{amt_str}"
                                 ),
@@ -355,7 +471,7 @@ class NotificationService:
                                 notification_type=NotificationType.BILL_DUE_TODAY,
                                 title=f"Bill Due Today{partial_tag}: {b.bill_name}",
                                 message=(
-                                    f"{b.bill_name} ({company_label}) for {period_label} is due TODAY "
+                                    f"{b.bill_name} ({cname}) for {period_label} is due TODAY "
                                     f"({due_d.strftime('%b %d, %Y')})!{amt_str}"
                                 ),
                                 company_id=b.company_id,
@@ -370,7 +486,7 @@ class NotificationService:
                                 notification_type=NotificationType.BILL_DUE_TOMORROW,
                                 title=f"Bill Due Tomorrow{partial_tag}: {b.bill_name}",
                                 message=(
-                                    f"{b.bill_name} ({company_label}) for {period_label} is due tomorrow "
+                                    f"{b.bill_name} ({cname}) for {period_label} is due tomorrow "
                                     f"({due_d.strftime('%b %d, %Y')}).{amt_str}"
                                 ),
                                 company_id=b.company_id,
@@ -385,7 +501,7 @@ class NotificationService:
                                 notification_type=NotificationType.BILL_DUE_SOON,
                                 title=f"Bill Due in {diff_days} Days{partial_tag}: {b.bill_name}",
                                 message=(
-                                    f"{b.bill_name} ({company_label}) for {period_label} is due on "
+                                    f"{b.bill_name} ({cname}) for {period_label} is due on "
                                     f"{due_d.strftime('%b %d, %Y')} ({diff_days} days left).{amt_str}"
                                 ),
                                 company_id=b.company_id,
@@ -395,21 +511,31 @@ class NotificationService:
                                 created_at=now_utc - timedelta(minutes=10 + diff_days),
                             ))
 
-                    # Recent bill payments
-                    for p in (b.payments or [])[:2]:
-                        p_period = next((per for per in (b.periods or []) if per.period_key == p.period_key), None)
-                        is_period_paid = p_period.paid if p_period else True
+                    # Recent bill payments (top 2 newest)
+                    payments = sorted(
+                        b.payments or [],
+                        key=lambda p: (p.payment_date or date.min, p.bill_payment_id or 0),
+                        reverse=True,
+                    )[:2]
+                    for p in payments:
+                        p_period = periods_by_key.get(p.period_key)
+                        is_period_paid = bool(p_period["paid"]) if p_period else (computed_status == "paid")
                         ntype = NotificationType.BILL_PAID if is_period_paid else NotificationType.BILL_PARTIALLY_PAID
                         title = f"Bill Payment Recorded: {b.bill_name}" if is_period_paid else f"Partial Bill Payment: {b.bill_name}"
-                        p_label = p_period.period_label if p_period else p.period_key
-                        ts = p.created_at or datetime.combine(p.payment_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                        p_label = p_period["period_label"] if p_period else p.period_key
+                        p_amount = p.amount or Decimal("0.00")
+                        ts = p.created_at or (
+                            datetime.combine(p.payment_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+                            if p.payment_date
+                            else now_utc
+                        )
                         results.append(NotificationOut(
                             notification_id=_make_id(ntype, b.bill_id, p.bill_payment_id),
                             notification_type=ntype,
                             title=title,
                             message=(
-                                f"Payment of ₱{p.amount:,.2f} recorded for {b.bill_name} ({company_label}) "
-                                f"— {p_label} via {p.payment_method}."
+                                f"Payment of ₱{p_amount:,.2f} recorded for {b.bill_name} ({cname}) "
+                                f"— {p_label} via {p.payment_method or 'Cash'}."
                             ),
                             company_id=b.company_id,
                             reference_type="bill",
@@ -443,7 +569,7 @@ class NotificationService:
                 filcap_cid = cid
                 break
 
-        # If a specific non-FilCap company is queried by a supervisor of another branch, skip lending
+        # If a specific non-FilCap company is queried, skip lending
         if company_id is not None and filcap_cid is not None and company_id != filcap_cid:
             cname = name_map.get(company_id, "")
             if not _is_filcap_company(cname):
@@ -455,6 +581,7 @@ class NotificationService:
 
         try:
             from app.services.lending_service import LendingService
+
             borrowers = LendingService.get_borrowers(self.db, company_id=company_id)
 
             for b in borrowers:
@@ -719,20 +846,24 @@ class NotificationService:
         company_id: Optional[int],
         name_map: Optional[dict] = None,
         repayments_map: Optional[dict] = None,
+        loans: Optional[list[Loan]] = None,
     ) -> list[NotificationOut]:
         today = date.today()
         tomorrow = today + timedelta(days=1)
         now_utc = datetime.now(timezone.utc)
 
-        q = self.db.query(Loan).filter(Loan.due_date.isnot(None))
-        if company_id is not None:
-            q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+        if loans is None:
+            q = self.db.query(Loan).filter(Loan.due_date.isnot(None))
+            if company_id is not None:
+                q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+            loans = q.all()
+        else:
+            loans = [l for l in loans if l.due_date is not None]
 
-        loans = q.all()
         results: list[NotificationOut] = []
 
         if repayments_map is None:
-            repayments_map = self._get_repayments_map()
+            _, _, repayments_map, _ = self._load_loans_context(company_id)
         if name_map is None:
             name_map = self._get_company_names_map()
 
@@ -901,17 +1032,22 @@ class NotificationService:
         self,
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        loans: Optional[list[Loan]] = None,
     ) -> list[NotificationOut]:
-        q = self.db.query(Loan).filter(Loan.status.ilike("%pending%"))
-        if company_id is not None:
-            q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
-        loans = q.all()
+        if loans is None:
+            q = self.db.query(Loan).filter(Loan.status.ilike("%pending%"))
+            if company_id is not None:
+                q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+            pending_loans = q.all()
+        else:
+            pending_loans = [l for l in loans if "pending" in (l.status or "").lower()]
+
         results: list[NotificationOut] = []
 
         if name_map is None:
             name_map = self._get_company_names_map()
 
-        for loan in loans:
+        for loan in pending_loans:
             try:
                 borrower_name = _company_name(self.db, loan.borrower, name_map)
                 lender_name = _company_name(self.db, loan.lender, name_map) if loan.lender else "Corporate Treasury"
@@ -960,6 +1096,9 @@ class NotificationService:
         self,
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        recent_repayments: Optional[list[tuple[LoanRepayment, Loan]]] = None,
+        loans_by_id: Optional[dict[int, Loan]] = None,
+        audit_rows: Optional[list[AuditLog]] = None,
     ) -> list[NotificationOut]:
         results: list[NotificationOut] = []
         if name_map is None:
@@ -969,10 +1108,13 @@ class NotificationService:
 
         # 1. Direct LoanRepayment table records
         try:
-            rep_q = self.db.query(LoanRepayment, Loan).join(Loan, LoanRepayment.loan_id == Loan.loan_id)
-            if company_id is not None:
-                rep_q = rep_q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
-            rep_rows = rep_q.order_by(LoanRepayment.created_at.desc()).limit(30).all()
+            if recent_repayments is None:
+                rep_q = self.db.query(LoanRepayment, Loan).join(Loan, LoanRepayment.loan_id == Loan.loan_id)
+                if company_id is not None:
+                    rep_q = rep_q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+                rep_rows = rep_q.order_by(LoanRepayment.created_at.desc()).limit(30).all()
+            else:
+                rep_rows = recent_repayments
 
             for rep, loan in rep_rows:
                 seen_repayment_ids.add(int(rep.loan_repayment_id))
@@ -1028,14 +1170,15 @@ class NotificationService:
 
         # 2. Fallback from AuditLog for any historical repayments
         try:
-            q = self.db.query(AuditLog).filter(
-                AuditLog.action == "LOAN_UPDATED",
-                AuditLog.details.isnot(None),
-            )
-            if company_id is not None:
-                q = q.filter(AuditLog.company_id == company_id)
+            if audit_rows is None:
+                q = self.db.query(AuditLog).filter(
+                    AuditLog.action == "LOAN_UPDATED",
+                    AuditLog.details.isnot(None),
+                )
+                if company_id is not None:
+                    q = q.filter(AuditLog.company_id == company_id)
+                audit_rows = q.order_by(AuditLog.created_at.desc()).limit(50).all()
 
-            audit_rows = q.order_by(AuditLog.created_at.desc()).limit(50).all()
             parsed_items: list[tuple[AuditLog, dict, int]] = []
             needed_loan_ids: set[int] = set()
 
@@ -1049,13 +1192,15 @@ class NotificationService:
                     parsed_items.append((row, details, lid))
                     needed_loan_ids.add(lid)
 
-            loans_by_id: dict[int, Loan] = {}
-            if needed_loan_ids:
-                found_loans = self.db.query(Loan).filter(Loan.loan_id.in_(list(needed_loan_ids))).all()
-                loans_by_id = {l.loan_id: l for l in found_loans}
+            known_loans: dict[int, Loan] = dict(loans_by_id or {})
+            missing_loan_ids = needed_loan_ids - set(known_loans.keys())
+            if missing_loan_ids:
+                found_loans = self.db.query(Loan).filter(Loan.loan_id.in_(list(missing_loan_ids))).all()
+                for l in found_loans:
+                    known_loans[l.loan_id] = l
 
             for row, details, loan_id in parsed_items:
-                loan = loans_by_id.get(loan_id)
+                loan = known_loans.get(loan_id)
                 if not loan:
                     continue
 
@@ -1120,21 +1265,26 @@ class NotificationService:
         user_role: Optional[str],
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        loans: Optional[list[Loan]] = None,
     ) -> list[NotificationOut]:
         results: list[NotificationOut] = []
         if name_map is None:
             name_map = self._get_company_names_map()
-        role = (user_role or "").lower()
+        role = (user_role or "supervisor").strip().lower() or "supervisor"
 
         try:
-            if not role or role in ("finance", "admin"):
-                pending_finance = (
-                    self.db.query(Loan)
-                    .filter(Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
-                    .order_by(Loan.created_at.desc())
-                    .limit(20)
-                    .all()
-                )
+            if loans is None:
+                q = self.db.query(Loan)
+                if company_id is not None:
+                    q = q.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
+                loans = q.order_by(Loan.created_at.desc()).all()
+
+            if role in ("finance", "admin"):
+                pending_finance = [
+                    l for l in loans
+                    if l.status in ("Pending Finance Endorsement", "Pending Approval")
+                    and (company_id is None or l.borrower == company_id or l.lender == company_id)
+                ][:20]
                 for loan in pending_finance:
                     borrower_name = _company_name(self.db, loan.borrower, name_map)
                     ref = loan.loan_ref_no or str(loan.loan_id)
@@ -1151,14 +1301,16 @@ class NotificationService:
                         created_at=loan.created_at or datetime.now(timezone.utc),
                     ))
 
-            if not role or role in ("audit", "auditor", "admin"):
-                pending_audit = (
-                    self.db.query(Loan)
-                    .filter(Loan.status == "Pending Audit Approval")
-                    .order_by(Loan.updated_at.desc())
-                    .limit(20)
-                    .all()
-                )
+            if role in ("audit", "auditor", "admin"):
+                pending_audit = sorted(
+                    [
+                        l for l in loans
+                        if l.status == "Pending Audit Approval"
+                        and (company_id is None or l.borrower == company_id or l.lender == company_id)
+                    ],
+                    key=lambda l: _normalize_dt(l.updated_at or l.created_at),
+                    reverse=True,
+                )[:20]
                 for loan in pending_audit:
                     borrower_name = _company_name(self.db, loan.borrower, name_map)
                     lender_name = _company_name(self.db, loan.lender, name_map) if loan.lender else "Corporate Treasury"
@@ -1176,13 +1328,16 @@ class NotificationService:
                         created_at=loan.endorsed_at or loan.updated_at or datetime.now(timezone.utc),
                     ))
 
-            if not role or role in ("supervisor", "company", "admin"):
-                q_sup = self.db.query(Loan).filter(
-                    Loan.status.in_(["Approved", "Disapproved by Audit", "Rejected by Finance"])
-                )
-                if company_id:
-                    q_sup = q_sup.filter(Loan.borrower == company_id)
-                supervisor_loans = q_sup.order_by(Loan.updated_at.desc()).limit(20).all()
+            if role in ("supervisor", "company", "admin"):
+                supervisor_loans = sorted(
+                    [
+                        l for l in loans
+                        if l.status in ("Approved", "Disapproved by Audit", "Rejected by Finance")
+                        and (company_id is None or l.borrower == company_id)
+                    ],
+                    key=lambda l: _normalize_dt(l.updated_at or l.created_at),
+                    reverse=True,
+                )[:20]
                 for loan in supervisor_loans:
                     lender_name = _company_name(self.db, loan.lender, name_map) if loan.lender else "Corporate Treasury"
                     ref = loan.loan_ref_no or str(loan.loan_id)
@@ -1229,7 +1384,7 @@ class NotificationService:
             from app.models.tenant import TenantLease
             from app.services.tenant_service import add_period_clamped, count_periods
 
-            q = self.db.query(TenantLease)
+            q = self.db.query(TenantLease).options(selectinload(TenantLease.payments))
             if company_id is not None:
                 q = q.filter(TenantLease.company_id == company_id)
             leases = q.order_by(TenantLease.lease_id.desc()).all()
@@ -1333,8 +1488,13 @@ class NotificationService:
                                 created_at=now_utc - timedelta(minutes=10 + diff_days),
                             ))
 
-                    # Recent rent payments
-                    for p in (lease.payments or [])[:2]:
+                    # Recent rent payments (sorted newest first)
+                    sorted_payments = sorted(
+                        lease.payments or [],
+                        key=lambda p: (p.payment_date or date.min, p.payment_id or 0),
+                        reverse=True,
+                    )[:2]
+                    for p in sorted_payments:
                         if (p.status or "Paid").lower() == "missed" or (p.amount or 0) <= 0:
                             continue
                         ts = p.created_at or datetime.combine(p.payment_date, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -1365,23 +1525,23 @@ class NotificationService:
         user_role: Optional[str],
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        topups: Optional[list] = None,
     ) -> list[NotificationOut]:
         results: list[NotificationOut] = []
         if name_map is None:
             name_map = self._get_company_names_map()
-        role = (user_role or "").lower()
+        role = (user_role or "supervisor").strip().lower() or "supervisor"
 
         try:
-            from app.models.petty_cash import PettyCashTopUp
+            if topups is None:
+                topups = self._load_petty_cash_topups(company_id)
 
-            if not role or role in ("finance", "admin"):
-                pending_finance = (
-                    self.db.query(PettyCashTopUp)
-                    .filter(PettyCashTopUp.status == "Pending Finance Endorsement")
-                    .order_by(PettyCashTopUp.created_at.desc())
-                    .limit(20)
-                    .all()
-                )
+            if role in ("finance", "admin"):
+                pending_finance = [
+                    t for t in topups
+                    if t.status == "Pending Finance Endorsement"
+                    and (company_id is None or t.company_id == company_id)
+                ][:20]
                 for topup in pending_finance:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
@@ -1398,14 +1558,12 @@ class NotificationService:
                         created_at=topup.created_at or datetime.now(timezone.utc),
                     ))
 
-            if not role or role in ("audit", "auditor", "admin"):
-                pending_audit = (
-                    self.db.query(PettyCashTopUp)
-                    .filter(PettyCashTopUp.status == "Pending Audit Approval")
-                    .order_by(PettyCashTopUp.created_at.desc())
-                    .limit(20)
-                    .all()
-                )
+            if role in ("audit", "auditor", "admin"):
+                pending_audit = [
+                    t for t in topups
+                    if t.status == "Pending Audit Approval"
+                    and (company_id is None or t.company_id == company_id)
+                ][:20]
                 for topup in pending_audit:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
@@ -1422,13 +1580,12 @@ class NotificationService:
                         created_at=topup.endorsed_at or topup.created_at or datetime.now(timezone.utc),
                     ))
 
-            if not role or role in ("supervisor", "company", "admin"):
-                q_sup = self.db.query(PettyCashTopUp).filter(
-                    PettyCashTopUp.status.in_(["Approved", "Rejected by Finance", "Disapproved by Audit", "Disapproved"])
-                )
-                if company_id:
-                    q_sup = q_sup.filter(PettyCashTopUp.company_id == company_id)
-                topup_rows = q_sup.order_by(PettyCashTopUp.created_at.desc()).limit(20).all()
+            if role in ("supervisor", "company", "admin"):
+                topup_rows = [
+                    t for t in topups
+                    if t.status in ("Approved", "Rejected by Finance", "Disapproved by Audit", "Disapproved")
+                    and (company_id is None or t.company_id == company_id)
+                ][:20]
                 for topup in topup_rows:
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
@@ -1460,28 +1617,98 @@ class NotificationService:
         self,
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        topups: Optional[list] = None,
     ) -> list[NotificationOut]:
+        """
+        Computes authoritative petty cash balance per company using local SQLAlchemy
+        aggregation (SUM of approved non-seed PettyCashTopUp minus SUM of non-seed
+        petty-cash Expense) without remote Supabase REST calls.
+        """
         results: list[NotificationOut] = []
         now_utc = datetime.now(timezone.utc)
+        if name_map is None:
+            name_map = self._get_company_names_map()
+
         try:
-            from app.services.petty_cash_service import PettyCashService
-            pc_svc = PettyCashService(self.db)
-            summaries = pc_svc.list_summaries()
-            for s in summaries:
-                if company_id is not None and s.company_id != company_id:
+            from app.models.finance import Category, Expense
+            from app.models.petty_cash import PettyCashWallet
+
+            if topups is None:
+                topups = self._load_petty_cash_topups(company_id)
+
+            # 1. Sum approved non-seed topups per company from already-loaded PettyCashTopUp rows
+            topups_by_company: dict[int, Decimal] = {}
+            for t in topups:
+                if t.company_id is None:
                     continue
-                if s.is_low and (s.total_topups > Decimal("0.00") or s.total_spent > Decimal("0.00")):
+                if t.reference_no and str(t.reference_no).upper().startswith("SEED-"):
+                    continue
+                if (t.status or "Approved").lower() == "approved":
+                    amt = Decimal(str(t.amount or 0)).quantize(Decimal("0.01"))
+                    topups_by_company[t.company_id] = topups_by_company.get(t.company_id, Decimal("0.00")) + amt
+
+            # 2. Aggregate non-seed petty cash expenses per company in a single SQL GROUP BY query
+            exp_q = (
+                self.db.query(
+                    Expense.company_id,
+                    func.coalesce(func.sum(Expense.amount), 0),
+                )
+                .outerjoin(Category, Expense.category_id == Category.category_id)
+                .filter(
+                    or_(
+                        func.lower(func.trim(func.coalesce(Expense.payment_method, ""))).like("%petty cash%"),
+                        func.lower(func.trim(func.coalesce(Category.name, ""))) == "petty cash",
+                    ),
+                    or_(~Expense.reference_no.like("SEED-%"), Expense.reference_no.is_(None)),
+                )
+            )
+            if company_id is not None:
+                exp_q = exp_q.filter(Expense.company_id == company_id)
+            exp_rows = exp_q.group_by(Expense.company_id).all()
+            expenses_by_company: dict[int, Decimal] = {
+                cid: Decimal(str(total or 0)).quantize(Decimal("0.01"))
+                for cid, total in exp_rows
+                if cid is not None
+            }
+
+            # 3. Load wallet thresholds in a single query
+            wallet_q = self.db.query(PettyCashWallet)
+            if company_id is not None:
+                wallet_q = wallet_q.filter(PettyCashWallet.company_id == company_id)
+            thresholds_by_company: dict[int, Decimal] = {
+                w.company_id: Decimal(str(w.low_balance_threshold or "1000.00")).quantize(Decimal("0.01"))
+                for w in wallet_q.all()
+                if w.company_id is not None
+            }
+
+            target_company_ids = (
+                [company_id]
+                if company_id is not None
+                else sorted(name_map.keys())
+            )
+
+            for cid in target_company_ids:
+                if cid is None:
+                    continue
+                total_topups = topups_by_company.get(cid, Decimal("0.00"))
+                total_spent = expenses_by_company.get(cid, Decimal("0.00"))
+                if total_topups <= Decimal("0.00") and total_spent <= Decimal("0.00"):
+                    continue
+                balance = total_topups - total_spent
+                threshold = thresholds_by_company.get(cid, Decimal("1000.00"))
+                if balance < threshold:
+                    cname = name_map.get(cid) or _company_name(self.db, cid, name_map)
                     results.append(NotificationOut(
-                        notification_id=_make_id(NotificationType.PETTY_CASH_LOW_BALANCE, s.company_id),
+                        notification_id=_make_id(NotificationType.PETTY_CASH_LOW_BALANCE, cid),
                         notification_type=NotificationType.PETTY_CASH_LOW_BALANCE,
-                        title=f"Low Petty Cash Balance: {s.company_name}",
+                        title=f"Low Petty Cash Balance: {cname}",
                         message=(
-                            f"{s.company_name}'s petty cash wallet balance is ₱{s.balance:,.2f}, "
-                            f"below the ₱{s.low_balance_threshold:,.2f} threshold. Please request a top-up."
+                            f"{cname}'s petty cash wallet balance is ₱{balance:,.2f}, "
+                            f"below the ₱{threshold:,.2f} threshold. Please request a top-up."
                         ),
-                        company_id=s.company_id,
+                        company_id=cid,
                         reference_type="petty_cash",
-                        reference_id=s.company_id,
+                        reference_id=cid,
                         is_read=False,
                         created_at=now_utc - timedelta(minutes=15),
                     ))
@@ -1497,32 +1724,35 @@ class NotificationService:
         user_role: Optional[str],
         company_id: Optional[int],
         name_map: Optional[dict] = None,
+        audit_rows: Optional[list[AuditLog]] = None,
     ) -> list[NotificationOut]:
         results: list[NotificationOut] = []
         if name_map is None:
             name_map = self._get_company_names_map()
-        role = (user_role or "").lower()
+        role = (user_role or "supervisor").strip().lower() or "supervisor"
 
-        if role and role not in ("supervisor", "company", "admin"):
+        if role not in ("supervisor", "company", "admin"):
             return results
 
         try:
-            q = self.db.query(AuditLog).filter(
-                AuditLog.action.in_(["SALE_UPDATED", "SALE_CREATED"]),
-                AuditLog.details.isnot(None),
-            )
-            if company_id:
-                q = q.filter(AuditLog.company_id == company_id)
+            if audit_rows is None:
+                q = self.db.query(AuditLog).filter(
+                    AuditLog.action.in_(["SALE_UPDATED", "SALE_CREATED"]),
+                    AuditLog.details.isnot(None),
+                )
+                if company_id is not None:
+                    q = q.filter(AuditLog.company_id == company_id)
+                audit_rows = q.order_by(AuditLog.created_at.desc()).limit(30).all()
 
-            audit_rows = q.order_by(AuditLog.created_at.desc()).limit(30).all()
             for row in audit_rows:
                 details = _parse_details(row.details)
+                record_id = details.get("record_id") or getattr(row, "record_id", None)
                 is_deposit_or_verified = (
                     details.get("audit_status") in ("Verified", "Audited")
                     or details.get("status") == "Paid"
                     or details.get("record_type") in ("deposit", "sales_deposit")
                 )
-                if is_deposit_or_verified and row.record_id:
+                if is_deposit_or_verified and record_id:
                     cname = _company_name(self.db, row.company_id, name_map)
                     amt = details.get("amount") or details.get("net_amount") or 0.0
                     try:
@@ -1537,7 +1767,7 @@ class NotificationService:
                         message=f"Deposit {amt_str}for {cname} has been verified and approved by Internal Audit.",
                         company_id=row.company_id,
                         reference_type="deposit",
-                        reference_id=row.record_id,
+                        reference_id=int(record_id),
                         is_read=False,
                         created_at=row.created_at or datetime.now(timezone.utc),
                     ))

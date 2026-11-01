@@ -462,6 +462,7 @@ class PettyCashService:
         self.db.commit()
         self.db.refresh(topup)
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -493,6 +494,7 @@ class PettyCashService:
         self.db.commit()
         self.db.refresh(topup)
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -532,6 +534,7 @@ class PettyCashService:
         self.db.commit()
         self.db.refresh(topup)
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -568,6 +571,7 @@ class PettyCashService:
             self._disburse_to_bank(topup)
 
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -659,6 +663,7 @@ class PettyCashService:
         self.db.delete(topup)
         self.db.commit()
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return topup
 
@@ -670,6 +675,7 @@ class PettyCashService:
         wallet.low_balance_threshold = threshold
         self.db.commit()
         system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
         return self.get_summary(company)
 
     def topups_total_in_period(self, company_id: int, start: Optional[date], end: Optional[date]) -> Decimal:

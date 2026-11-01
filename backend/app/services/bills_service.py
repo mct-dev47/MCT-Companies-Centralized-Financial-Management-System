@@ -5,8 +5,9 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
+from app.core.cache import system_cache
 from app.models.bills import Bill, BillPayment
 from app.models.company import Company
 from app.schemas.bills import (
@@ -131,7 +132,13 @@ class BillsService:
     def __init__(self, db: Session):
         self.db = db
 
-    def _periods(self, bill: Bill, as_of: date = date.today(), include_future: Optional[int] = None) -> List[dict]:
+    def _periods(
+        self,
+        bill: Bill,
+        as_of: date = date.today(),
+        include_future: Optional[int] = None,
+        validate_payments: bool = True,
+    ) -> List[dict]:
         recurring = _normalize_recurring(bill.recurring)
         anchor_day = bill.due_date.day
         period_date = bill.due_date
@@ -150,10 +157,20 @@ class BillsService:
         if period_date.year < 2025:
             period_date = date(2025, 1, min(anchor_day, monthrange(2025, 1)[1]))
 
+        # Pre-index payments by period_key in O(P) instead of scanning inside the period loop
+        payments_by_key: dict[str, list[BillPayment]] = {}
+        max_payment_key = ""
+        for item in (bill.payments or []):
+            pk = item.period_key or ""
+            payments_by_key.setdefault(pk, []).append(item)
+            if pk > max_payment_key:
+                max_payment_key = pk
+
         periods = []
+        future_count = 0
         for _ in range(max_periods):
             key = _period_key(period_date, recurring)
-            period_payments = [item for item in bill.payments if item.period_key == key]
+            period_payments = payments_by_key.get(key, [])
             paid_amount = sum((item.amount for item in period_payments), Decimal("0.00"))
 
             # Determine billed statement amount for this period
@@ -184,6 +201,8 @@ class BillsService:
                 default=None,
             )
             is_future = period_date > as_of
+            if is_future:
+                future_count += 1
 
             periods.append({
                 "period_key": key,
@@ -196,31 +215,47 @@ class BillsService:
                 "remaining_amount": remaining_amount,
                 "payment_date": latest_payment.payment_date if latest_payment else None,
                 "is_future": is_future,
-                "payments": [
-                    BillPaymentOut.model_validate(p)
-                    for p in sorted(
-                        period_payments,
-                        key=lambda p: (p.payment_date, p.bill_payment_id),
-                        reverse=True,
-                    )
-                ],
+                "payments": (
+                    [
+                        BillPaymentOut.model_validate(p)
+                        for p in sorted(
+                            period_payments,
+                            key=lambda p: (p.payment_date, p.bill_payment_id),
+                            reverse=True,
+                        )
+                    ]
+                    if validate_payments and period_payments
+                    else []
+                ),
             })
 
-            if period_date >= as_of and sum(1 for item in periods if item["is_future"]) >= min_future:
-                if not any(item.period_key > key for item in bill.payments):
+            if period_date >= as_of and future_count >= min_future:
+                if max_payment_key <= key:
                     break
 
             period_date = _add_period(period_date, recurring, 1, anchor_day=anchor_day)
 
         return periods
 
-    def _next_period(self, bill: Bill, as_of: date = date.today()) -> Optional[dict]:
-        periods = self._periods(bill, as_of)
+    def _next_period(
+        self,
+        bill: Bill,
+        as_of: date = date.today(),
+        periods: Optional[List[dict]] = None,
+    ) -> Optional[dict]:
+        if periods is None:
+            periods = self._periods(bill, as_of)
         # Oldest unpaid period is always next payable (past due first, then current, then future advance)
         return next((p for p in periods if not p["paid"]), None)
 
-    def _status(self, bill: Bill, as_of: date = date.today()) -> str:
-        periods = self._periods(bill, as_of)
+    def _status(
+        self,
+        bill: Bill,
+        as_of: date = date.today(),
+        periods: Optional[List[dict]] = None,
+    ) -> str:
+        if periods is None:
+            periods = self._periods(bill, as_of)
         unpaid_past_or_current = next(
             (p for p in periods if not p["paid"] and not p["is_future"]),
             None,
@@ -239,8 +274,8 @@ class BillsService:
         return "unpaid"
 
     def _to_output(self, bill: Bill, as_of: date = date.today()) -> BillOut:
-        next_period = self._next_period(bill, as_of)
         periods = self._periods(bill, as_of)
+        next_period = self._next_period(bill, as_of, periods=periods)
         latest_payment = max(
             bill.payments,
             key=lambda p: (p.payment_date, p.bill_payment_id),
@@ -263,7 +298,7 @@ class BillsService:
             due_date=bill.due_date,
             due_date_reminder=bill.due_date_reminder,
             notes=bill.notes,
-            status=self._status(bill, as_of),
+            status=self._status(bill, as_of, periods=periods),
             created_at=bill.created_at,
             updated_at=bill.updated_at,
             payments=[
@@ -287,7 +322,7 @@ class BillsService:
         )
 
     def list_bills(self, company_id: Optional[int] = None, company_name: Optional[str] = None) -> List[BillOut]:
-        query = self.db.query(Bill).options(joinedload(Bill.company), joinedload(Bill.payments))
+        query = self.db.query(Bill).options(joinedload(Bill.company), selectinload(Bill.payments))
         if company_id:
             query = query.filter(Bill.company_id == company_id)
         elif company_name and company_name.lower() != "all companies":
@@ -298,7 +333,7 @@ class BillsService:
     def get_bill(self, bill_id: int) -> Bill:
         bill = (
             self.db.query(Bill)
-            .options(joinedload(Bill.company), joinedload(Bill.payments))
+            .options(joinedload(Bill.company), selectinload(Bill.payments))
             .filter(Bill.bill_id == bill_id)
             .first()
         )
@@ -333,6 +368,7 @@ class BillsService:
         bill = Bill(**values)
         self.db.add(bill)
         self.db.commit()
+        system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill.bill_id))
 
     def update_bill(self, bill_id: int, data: BillUpdate) -> BillOut:
@@ -368,16 +404,18 @@ class BillsService:
             if key != "status":
                 setattr(bill, key, value)
         self.db.commit()
+        system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
     def delete_bill(self, bill_id: int) -> None:
         self.db.delete(self.get_bill(bill_id))
         self.db.commit()
+        system_cache.invalidate_tag("notifications")
 
     def schedule(self, bill_id: int, as_of: date = date.today()) -> BillScheduleOut:
         bill = self.get_bill(bill_id)
         periods = self._periods(bill, as_of)
-        next_period = self._next_period(bill, as_of)
+        next_period = self._next_period(bill, as_of, periods=periods)
         return BillScheduleOut(
             bill_id=bill.bill_id,
             recurring=_normalize_recurring(bill.recurring),
@@ -395,7 +433,7 @@ class BillsService:
     def record_payment(self, bill_id: int, data: BillPaymentCreate) -> BillOut:
         bill = self.get_bill(bill_id)
         periods = self._periods(bill)
-        next_period = self._next_period(bill)
+        next_period = self._next_period(bill, periods=periods)
 
         target_period_key = data.period_key or (next_period["period_key"] if next_period else None)
         if not target_period_key:
@@ -467,6 +505,7 @@ class BillsService:
             self.db.rollback()
             raise HTTPException(status_code=409, detail=f"Failed to record bill payment: {str(exc)}")
 
+        system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
@@ -478,6 +517,7 @@ class BillsService:
             raise HTTPException(status_code=404, detail="Bill payment not found.")
         self.db.delete(payment)
         self.db.commit()
+        system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
     def delete_latest_payment(self, bill_id: int) -> BillOut:
@@ -491,6 +531,7 @@ class BillsService:
             raise HTTPException(status_code=404, detail="No bill payment found to undo.")
         self.db.delete(payment)
         self.db.commit()
+        system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
     def get_stats(

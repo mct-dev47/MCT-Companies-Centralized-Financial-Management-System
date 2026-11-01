@@ -4,9 +4,10 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 
+from app.core.cache import system_cache
 from app.models.loan import Loan, LoanRepayment
 from app.models.company import Company
 from app.models.lending import Borrower, LendingTransaction
@@ -603,9 +604,12 @@ class LendingService:
         db: Session,
         borrower_query: Optional[str] = None,
         company_id: Optional[int] = None,
+        borrower_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve borrowers with calculated summary balances, accrued penalties, and schedules."""
-        b_query = db.query(Borrower)
+        b_query = db.query(Borrower).options(selectinload(Borrower.transactions))
+        if borrower_id is not None:
+            b_query = b_query.filter(Borrower.borrower_id == borrower_id)
         if borrower_query and str(borrower_query).strip():
             b_query = b_query.filter(Borrower.borrower_name.ilike(f"%{str(borrower_query).strip()}%"))
         borrowers = b_query.order_by(Borrower.created_at.desc()).all()
@@ -618,11 +622,14 @@ class LendingService:
                 borrower_name = b.borrower_name
                 term_days = b.term_days or (40 if freq == "Daily" else 60)
 
-                txs = (
-                    db.query(LendingTransaction)
-                    .filter(LendingTransaction.borrower_id == b.borrower_id)
-                    .order_by(LendingTransaction.payment_date.desc(), LendingTransaction.created_at.desc())
-                    .all()
+                txs = sorted(
+                    b.transactions or [],
+                    key=lambda t: (
+                        t.payment_date or date.min,
+                        (t.created_at.replace(tzinfo=None) if t.created_at and t.created_at.tzinfo else (t.created_at or datetime.min)),
+                        t.transaction_id or 0,
+                    ),
+                    reverse=True,
                 )
 
                 repayment_dicts = [
@@ -697,21 +704,6 @@ class LendingService:
                     derived_status = "Overdue"
                 else:
                     derived_status = b.status or "Active"
-
-                # Synchronize borrower persistent columns in Supabase
-                if (
-                    b.total_penalties != total_penalties
-                    or b.amount_paid != total_paid
-                    or b.total_payable != contractual_total_payable
-                    or b.remaining_balance != remaining_balance
-                    or b.status != derived_status
-                ):
-                    b.total_penalties = total_penalties
-                    b.amount_paid = total_paid
-                    b.total_payable = contractual_total_payable
-                    b.remaining_balance = remaining_balance
-                    b.status = derived_status
-                    db.commit()
 
                 results.append({
                     "id": str(b.borrower_id),
@@ -861,13 +853,11 @@ class LendingService:
     @classmethod
     def get_borrower(cls, db: Session, borrower_id: int) -> Dict[str, Any]:
         """Fetch single borrower details by ID."""
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
-        if b:
-            res = cls.get_borrowers(db)
-            for item in res:
-                if str(item["id"]) == str(borrower_id) or str(item.get("borrower_id")) == str(borrower_id):
-                    return item
-        # Fallback to legacy loan
+        res = cls.get_borrowers(db, borrower_id=borrower_id)
+        for item in res:
+            if str(item["id"]) == str(borrower_id) or str(item.get("borrower_id")) == str(borrower_id):
+                return item
+        # Fallback to legacy loan if borrower_id was not in Borrower table
         res = cls.get_borrowers(db)
         for item in res:
             if str(item["id"]) == str(borrower_id) or str(item.get("borrower_id")) == str(borrower_id):
@@ -1143,6 +1133,7 @@ class LendingService:
         db.add(new_borrower)
         db.commit()
         db.refresh(new_borrower)
+        system_cache.invalidate_tag("notifications")
 
         return {
             "id": str(new_borrower.borrower_id),
@@ -1201,6 +1192,7 @@ class LendingService:
                 loan.status = str(payload["status"]).strip()
             db.commit()
             db.refresh(loan)
+            system_cache.invalidate_tag("notifications")
             return cls.get_borrower(db=db, borrower_id=borrower_id)
 
         if "borrower_name" in payload and payload["borrower_name"] is not None:
@@ -1263,6 +1255,7 @@ class LendingService:
             b.principal_amount = p
             b.interest_rate = Decimal(str(terms["interest_rate"]))
             b.total_payable = Decimal(str(terms["total_payable"]))
+            b.remaining_balance = max(Decimal("0.00"), b.total_payable - (b.amount_paid or Decimal("0.00")))
             b.payment_frequency = freq
             b.term_days = term_days
             b.date_borrowed = start
@@ -1270,6 +1263,7 @@ class LendingService:
 
         db.commit()
         db.refresh(b)
+        system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower_id)
 
     @classmethod
@@ -1279,6 +1273,7 @@ class LendingService:
         if b:
             db.delete(b)
             db.commit()
+            system_cache.invalidate_tag("notifications")
             return {"success": True, "message": "Borrower deleted successfully."}
 
         loan = db.query(Loan).filter(Loan.loan_id == borrower_id).first()
@@ -1286,6 +1281,7 @@ class LendingService:
             db.query(LoanRepayment).filter(LoanRepayment.loan_id == borrower_id).delete()
             db.delete(loan)
             db.commit()
+            system_cache.invalidate_tag("notifications")
             return {"success": True, "message": "Borrower deleted successfully."}
 
         raise HTTPException(status_code=404, detail="Borrower not found.")
@@ -1467,6 +1463,7 @@ class LendingService:
             db.commit()
             db.refresh(new_tx)
             db.refresh(b)
+            system_cache.invalidate_tag("notifications")
 
             return {
                 "transaction_id": new_tx.transaction_id,
@@ -1578,6 +1575,7 @@ class LendingService:
             loan.status = "Completed"
         db.commit()
         db.refresh(new_repayment)
+        system_cache.invalidate_tag("notifications")
 
         return {
             "transaction_id": new_repayment.loan_repayment_id,

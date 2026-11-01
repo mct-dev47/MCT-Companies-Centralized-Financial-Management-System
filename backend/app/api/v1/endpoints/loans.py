@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from typing import List, Optional
 from datetime import date, datetime
 from decimal import Decimal
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_, func
 
 from app.db.session import get_db
@@ -652,6 +652,7 @@ def create_loan(
         pass
 
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
 
     return LoanOut(
@@ -773,6 +774,9 @@ def update_loan(
         db.commit()
         db.refresh(sql_loan)
 
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
     final_row = updated_row or existing_row
     if final_row:
         b_id = final_row.get("borrower")
@@ -805,6 +809,7 @@ def update_loan(
         )
 
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
     return LoanOut.model_validate(sql_loan)
 
@@ -949,6 +954,7 @@ def endorse_loan(
         pass
 
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
 
     return LoanOut(
@@ -1127,6 +1133,7 @@ def audit_review_loan(
         pass
 
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
 
     return LoanOut(
@@ -1276,6 +1283,9 @@ def approve_loan(
     b_id = final_source.get("borrower")
     l_id = final_source.get("lender")
     p_amt = Decimal(str(final_source.get("principal_amount") or 0.0))
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
 
     return LoanOut(
         loan_id=final_source["loan_id"],
@@ -1354,6 +1364,9 @@ def delete_loan(
         db.delete(sql_loan)
         db.commit()
 
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
     return {
         "message": "Loan deleted successfully",
         "success": True,
@@ -1419,4 +1432,7 @@ def create_loan_repayment(
         record_id=loan_id, record_type="loan_repayment",
         extra={"repayment_id": repayment.loan_repayment_id, "amount": float(repayment.amount), "remaining_balance": float(new_remaining)},
     )
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
     return repayment

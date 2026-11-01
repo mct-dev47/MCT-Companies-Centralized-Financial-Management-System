@@ -23,6 +23,11 @@ import { websocketService } from '@/services/websocketService'
 import {
   notificationService,
   NOTIFICATION_UPDATED_EVENT,
+  READ_STORAGE_KEY_PREFIX,
+  getReadStorageKey,
+  getReadNotificationIds,
+  saveReadNotificationId,
+  saveAllReadNotificationIds,
   type NotificationItemOut,
 } from '@/services/notificationService'
 
@@ -47,43 +52,6 @@ interface DisplayNotification {
   icon: React.ElementType
   iconColor: string
   iconBg: string
-}
-
-const READ_STORAGE_KEY = 'mct_read_notification_ids'
-
-function getReadIds(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
-  try {
-    const raw = localStorage.getItem(READ_STORAGE_KEY)
-    if (raw) {
-      return new Set(JSON.parse(raw))
-    }
-  } catch {
-    // ignore
-  }
-  return new Set()
-}
-
-function saveReadId(id: string) {
-  if (typeof window === 'undefined') return
-  try {
-    const set = getReadIds()
-    set.add(id)
-    localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore
-  }
-}
-
-function saveAllReadIds(ids: string[]) {
-  if (typeof window === 'undefined') return
-  try {
-    const set = getReadIds()
-    ids.forEach((i) => set.add(i))
-    localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore
-  }
 }
 
 function formatRelativeTime(dateStr?: string | null): string {
@@ -111,14 +79,35 @@ interface NotificationBellProps {
 
 export const NotificationBell: React.FC<NotificationBellProps> = ({ className }) => {
   const navigate = useNavigate()
-  const { user } = useSession()
+  const { user, status } = useSession()
   const { activeCompany } = useCompany()
+
+  const userId = user?.id ?? null
+  const isAuthenticated = status === 'authenticated' && Boolean(user)
 
   const [isOpen, setIsOpen] = React.useState(false)
   const [activeTab, setActiveTab] = React.useState<NotificationCategory>('all')
   const [notifications, setNotifications] = React.useState<DisplayNotification[]>([])
-  const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadIds())
+  const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
+  const [isLoading, setIsLoading] = React.useState(false)
   const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const isFetchingRef = React.useRef(false)
+  const mountedRef = React.useRef(true)
+
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // Sync readIds when user account changes
+  React.useEffect(() => {
+    setReadIds(getReadNotificationIds(userId))
+    if (!isAuthenticated) {
+      setNotifications([])
+    }
+  }, [userId, isAuthenticated])
 
   const userRole = (user?.role || '').toLowerCase()
   const isMultiCompanyRole =
@@ -127,182 +116,225 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     ? activeCompany || 'All Companies'
     : user?.assignedCompany || activeCompany || 'All Companies'
 
-  const fetchLiveNotifications = React.useCallback(async () => {
-    try {
-      const items: NotificationItemOut[] = await notificationService.getNotifications({
-        companyName: scopedCompanyName,
-        userRole: userRole || undefined,
-        limit: 100,
-      })
-      const readSet = getReadIds()
+  const fetchLiveNotifications = React.useCallback(
+    async (forceRefresh = false) => {
+      if (!isAuthenticated) {
+        return
+      }
+      // Prevent overlapping polling requests while a previous poll is still unresolved
+      if (isFetchingRef.current && !forceRefresh) {
+        return
+      }
 
-      const mapped: DisplayNotification[] = items.map((item) => {
-        const nt = (item.notification_type || '').toUpperCase()
-        const refType = (item.reference_type || '').toLowerCase()
+      isFetchingRef.current = true
+      setIsLoading((prev) => (notifications.length === 0 ? true : prev))
 
-        let IconComponent: React.ElementType = AlertCircle
-        let iconColor = 'text-primary'
-        let iconBg = 'bg-primary/10'
-        let category: 'bills' | 'lending' | 'other' = 'other'
-        let categoryLabel = 'General'
-        let isDueReminder = false
-        let urgencyBadge: { label: string; className: string } | undefined
+      try {
+        const items: NotificationItemOut[] = await notificationService.getNotifications({
+          userId,
+          companyName: scopedCompanyName,
+          userRole: userRole || undefined,
+          limit: 100,
+          forceRefresh,
+        })
 
-        // Determine category
-        if (refType === 'bill' || nt.startsWith('BILL_')) {
-          category = 'bills'
-          categoryLabel = 'Bills'
-        } else if (refType === 'lending' || refType === 'borrower' || nt.startsWith('LENDING_')) {
-          category = 'lending'
-          categoryLabel = 'Lending'
-        } else if (refType === 'loan' || refType === 'loan_repayment' || nt.startsWith('LOAN_')) {
-          category = 'other'
-          categoryLabel = 'Loan'
-        } else if (refType === 'tenant' || nt.startsWith('TENANT_')) {
-          category = 'other'
-          categoryLabel = 'Tenants'
-        } else if (refType === 'petty_cash' || nt.startsWith('PETTY_CASH_')) {
-          category = 'other'
-          categoryLabel = 'Petty Cash'
-        } else if (refType === 'deposit' || refType === 'sale' || nt.startsWith('DEPOSIT_')) {
-          category = 'other'
-          categoryLabel = 'Sales'
+        if (!mountedRef.current) return
+
+        const readSet = getReadNotificationIds(userId)
+
+        const mapped: DisplayNotification[] = items.map((item) => {
+          const nt = (item.notification_type || '').toUpperCase()
+          const refType = (item.reference_type || '').toLowerCase()
+
+          let IconComponent: React.ElementType = AlertCircle
+          let iconColor = 'text-primary'
+          let iconBg = 'bg-primary/10'
+          let category: 'bills' | 'lending' | 'other' = 'other'
+          let categoryLabel = 'General'
+          let isDueReminder = false
+          let urgencyBadge: { label: string; className: string } | undefined
+
+          // Determine category
+          if (refType === 'bill' || nt.startsWith('BILL_')) {
+            category = 'bills'
+            categoryLabel = 'Bills'
+          } else if (refType === 'lending' || refType === 'borrower' || nt.startsWith('LENDING_')) {
+            category = 'lending'
+            categoryLabel = 'Lending'
+          } else if (refType === 'loan' || refType === 'loan_repayment' || nt.startsWith('LOAN_')) {
+            category = 'other'
+            categoryLabel = 'Loan'
+          } else if (refType === 'tenant' || nt.startsWith('TENANT_')) {
+            category = 'other'
+            categoryLabel = 'Tenants'
+          } else if (refType === 'petty_cash' || nt.startsWith('PETTY_CASH_')) {
+            category = 'other'
+            categoryLabel = 'Petty Cash'
+          } else if (refType === 'deposit' || refType === 'sale' || nt.startsWith('DEPOSIT_')) {
+            category = 'other'
+            categoryLabel = 'Sales'
+          }
+
+          // Determine urgency / due reminder status & styling
+          if (nt.includes('OVERDUE')) {
+            isDueReminder = true
+            IconComponent = AlertCircle
+            iconColor = 'text-rose-600'
+            iconBg = 'bg-rose-50 border border-rose-200/70'
+            urgencyBadge = {
+              label: 'Overdue',
+              className: 'bg-rose-100 text-rose-700 border-rose-200',
+            }
+          } else if (nt.includes('DUE_TODAY')) {
+            isDueReminder = true
+            IconComponent = Clock
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+            urgencyBadge = {
+              label: 'Due Today',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
+            }
+          } else if (nt.includes('DUE_TOMORROW')) {
+            isDueReminder = true
+            IconComponent = Calendar
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50/70 border border-amber-200/60'
+            urgencyBadge = {
+              label: 'Due Tomorrow',
+              className: 'bg-amber-50 text-amber-700 border-amber-200',
+            }
+          } else if (nt.includes('DUE_SOON')) {
+            isDueReminder = true
+            IconComponent = Calendar
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
+            urgencyBadge = {
+              label: 'Due Soon',
+              className: 'bg-blue-50 text-blue-700 border-blue-200',
+            }
+          } else if (nt === 'PETTY_CASH_LOW_BALANCE') {
+            isDueReminder = true
+            IconComponent = Wallet
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+            urgencyBadge = {
+              label: 'Low Balance',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
+            }
+          } else if (category === 'bills') {
+            IconComponent = Receipt
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (category === 'lending') {
+            IconComponent = Banknote
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (categoryLabel === 'Tenants') {
+            IconComponent = Store
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (nt === 'LOAN_PENDING_APPROVAL' || nt === 'LOAN_REQUEST_FINANCE') {
+            IconComponent = FileCheck2
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+          } else if (nt === 'LOAN_ENDORSED_AUDIT' || nt === 'PETTY_CASH_AUDIT') {
+            IconComponent = FileCheck2
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
+          } else if (
+            nt === 'LOAN_APPROVED_SUPERVISOR' ||
+            nt === 'PETTY_CASH_APPROVED' ||
+            nt === 'DEPOSIT_VERIFIED' ||
+            nt === 'LOAN_REPAYMENT_RECEIVED' ||
+            nt === 'LOAN_FULLY_SETTLED'
+          ) {
+            IconComponent = CheckCircle2
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (nt === 'LOAN_REJECTED_SUPERVISOR' || nt === 'PETTY_CASH_REJECTED') {
+            IconComponent = AlertCircle
+            iconColor = 'text-rose-600'
+            iconBg = 'bg-rose-50 border border-rose-200/70'
+          } else if (nt === 'PETTY_CASH_REQUEST') {
+            IconComponent = Wallet
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+          } else if (nt === 'LOAN_REPAYMENT_SENT') {
+            IconComponent = Landmark
+            iconColor = 'text-slate-600'
+            iconBg = 'bg-slate-100 border border-slate-200'
+          } else {
+            IconComponent = Building2
+            iconColor = 'text-primary'
+            iconBg = 'bg-primary/10'
+          }
+
+          const isUnread = !readSet.has(item.notification_id)
+
+          return {
+            id: item.notification_id,
+            title: item.title,
+            description: item.message,
+            time: isDueReminder && urgencyBadge ? urgencyBadge.label : formatRelativeTime(item.created_at),
+            unread: isUnread,
+            type: nt,
+            category,
+            categoryLabel,
+            isDueReminder,
+            urgencyBadge,
+            refType: item.reference_type,
+            refId: item.reference_id,
+            icon: IconComponent,
+            iconColor,
+            iconBg,
+          }
+        })
+
+        setReadIds(readSet)
+        setNotifications(mapped)
+      } catch {
+        // Keep last known good notifications displayed
+      } finally {
+        isFetchingRef.current = false
+        if (mountedRef.current) {
+          setIsLoading(false)
         }
+      }
+    },
+    [isAuthenticated, userId, scopedCompanyName, userRole, notifications.length]
+  )
 
-        // Determine urgency / due reminder status & styling
-        if (nt.includes('OVERDUE')) {
-          isDueReminder = true
-          IconComponent = AlertCircle
-          iconColor = 'text-rose-600'
-          iconBg = 'bg-rose-50 border border-rose-200/70'
-          urgencyBadge = {
-            label: 'Overdue',
-            className: 'bg-rose-100 text-rose-700 border-rose-200',
-          }
-        } else if (nt.includes('DUE_TODAY')) {
-          isDueReminder = true
-          IconComponent = Clock
-          iconColor = 'text-amber-600'
-          iconBg = 'bg-amber-50 border border-amber-200/70'
-          urgencyBadge = {
-            label: 'Due Today',
-            className: 'bg-amber-100 text-amber-800 border-amber-200',
-          }
-        } else if (nt.includes('DUE_TOMORROW')) {
-          isDueReminder = true
-          IconComponent = Calendar
-          iconColor = 'text-amber-600'
-          iconBg = 'bg-amber-50/70 border border-amber-200/60'
-          urgencyBadge = {
-            label: 'Due Tomorrow',
-            className: 'bg-amber-50 text-amber-700 border-amber-200',
-          }
-        } else if (nt.includes('DUE_SOON')) {
-          isDueReminder = true
-          IconComponent = Calendar
-          iconColor = 'text-blue-600'
-          iconBg = 'bg-blue-50 border border-blue-200/70'
-          urgencyBadge = {
-            label: 'Due Soon',
-            className: 'bg-blue-50 text-blue-700 border-blue-200',
-          }
-        } else if (nt === 'PETTY_CASH_LOW_BALANCE') {
-          isDueReminder = true
-          IconComponent = Wallet
-          iconColor = 'text-amber-600'
-          iconBg = 'bg-amber-50 border border-amber-200/70'
-          urgencyBadge = {
-            label: 'Low Balance',
-            className: 'bg-amber-100 text-amber-800 border-amber-200',
-          }
-        } else if (category === 'bills') {
-          IconComponent = Receipt
-          iconColor = 'text-emerald-600'
-          iconBg = 'bg-emerald-50 border border-emerald-200/70'
-        } else if (category === 'lending') {
-          IconComponent = Banknote
-          iconColor = 'text-emerald-600'
-          iconBg = 'bg-emerald-50 border border-emerald-200/70'
-        } else if (categoryLabel === 'Tenants') {
-          IconComponent = Store
-          iconColor = 'text-emerald-600'
-          iconBg = 'bg-emerald-50 border border-emerald-200/70'
-        } else if (nt === 'LOAN_PENDING_APPROVAL' || nt === 'LOAN_REQUEST_FINANCE') {
-          IconComponent = FileCheck2
-          iconColor = 'text-amber-600'
-          iconBg = 'bg-amber-50 border border-amber-200/70'
-        } else if (nt === 'LOAN_ENDORSED_AUDIT' || nt === 'PETTY_CASH_AUDIT') {
-          IconComponent = FileCheck2
-          iconColor = 'text-blue-600'
-          iconBg = 'bg-blue-50 border border-blue-200/70'
-        } else if (
-          nt === 'LOAN_APPROVED_SUPERVISOR' ||
-          nt === 'PETTY_CASH_APPROVED' ||
-          nt === 'DEPOSIT_VERIFIED' ||
-          nt === 'LOAN_REPAYMENT_RECEIVED' ||
-          nt === 'LOAN_FULLY_SETTLED'
-        ) {
-          IconComponent = CheckCircle2
-          iconColor = 'text-emerald-600'
-          iconBg = 'bg-emerald-50 border border-emerald-200/70'
-        } else if (nt === 'LOAN_REJECTED_SUPERVISOR' || nt === 'PETTY_CASH_REJECTED') {
-          IconComponent = AlertCircle
-          iconColor = 'text-rose-600'
-          iconBg = 'bg-rose-50 border border-rose-200/70'
-        } else if (nt === 'PETTY_CASH_REQUEST') {
-          IconComponent = Wallet
-          iconColor = 'text-amber-600'
-          iconBg = 'bg-amber-50 border border-amber-200/70'
-        } else if (nt === 'LOAN_REPAYMENT_SENT') {
-          IconComponent = Landmark
-          iconColor = 'text-slate-600'
-          iconBg = 'bg-slate-100 border border-slate-200'
-        } else {
-          IconComponent = Building2
-          iconColor = 'text-primary'
-          iconBg = 'bg-primary/10'
-        }
-
-        const isUnread = !readSet.has(item.notification_id)
-
-        return {
-          id: item.notification_id,
-          title: item.title,
-          description: item.message,
-          time: isDueReminder && urgencyBadge ? urgencyBadge.label : formatRelativeTime(item.created_at),
-          unread: isUnread,
-          type: nt,
-          category,
-          categoryLabel,
-          isDueReminder,
-          urgencyBadge,
-          refType: item.reference_type,
-          refId: item.reference_id,
-          icon: IconComponent,
-          iconColor,
-          iconBg,
-        }
-      })
-
-      setNotifications(mapped)
-    } catch {
-      // ignore
-    }
-  }, [scopedCompanyName, userRole])
-
-  // Initial fetch and polling every 30s
+  // Initial fetch and polling every 30s (only when authenticated)
   React.useEffect(() => {
-    void fetchLiveNotifications()
-    const timer = setInterval(fetchLiveNotifications, 30000)
+    if (!isAuthenticated) return
+    void fetchLiveNotifications(false)
+    const timer = setInterval(() => {
+      void fetchLiveNotifications(false)
+    }, 30000)
     return () => clearInterval(timer)
-  }, [fetchLiveNotifications])
+  }, [isAuthenticated, fetchLiveNotifications])
 
-  // Listen to custom notification update events and WebSocket broadcasts
+  // Listen to custom notification update events, WebSocket broadcasts, and cross-tab storage sync
   React.useEffect(() => {
+    if (!isAuthenticated) return
+
     const handleRefresh = () => {
-      void fetchLiveNotifications()
+      void fetchLiveNotifications(true)
     }
+
+    const handleStorageSync = (event: StorageEvent) => {
+      const targetKey = getReadStorageKey(userId)
+      if (event.key === targetKey || event.key === READ_STORAGE_KEY_PREFIX) {
+        const latestReadSet = getReadNotificationIds(userId)
+        setReadIds(latestReadSet)
+        setNotifications((prev) =>
+          prev.map((n) => ({ ...n, unread: !latestReadSet.has(n.id) }))
+        )
+      }
+    }
+
     window.addEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
+    window.addEventListener('storage', handleStorageSync)
     const unsubs = [
       websocketService.subscribe('LOANS_UPDATED', handleRefresh),
       websocketService.subscribe('PETTY_CASH_UPDATED', handleRefresh),
@@ -312,16 +344,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     ]
     return () => {
       window.removeEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
+      window.removeEventListener('storage', handleStorageSync)
       unsubs.forEach((off) => off())
     }
-  }, [fetchLiveNotifications])
+  }, [isAuthenticated, userId, fetchLiveNotifications])
 
-  // Refetch when dropdown opened
+  // Refetch when dropdown opened (uses 10s cache if fresh)
   React.useEffect(() => {
-    if (isOpen) {
-      void fetchLiveNotifications()
+    if (isOpen && isAuthenticated) {
+      void fetchLiveNotifications(false)
     }
-  }, [isOpen, fetchLiveNotifications])
+  }, [isOpen, isAuthenticated, fetchLiveNotifications])
 
   const unreadCount = notifications.filter((n) => n.unread).length
   const dueRemindersCount = notifications.filter((n) => n.isDueReminder).length
@@ -360,13 +393,13 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
   const markAllAsRead = () => {
     const allIds = notifications.map((n) => n.id)
-    saveAllReadIds(allIds)
+    saveAllReadNotificationIds(allIds, userId)
     setReadIds(new Set([...readIds, ...allIds]))
     setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
   }
 
   const handleItemClick = (item: DisplayNotification) => {
-    saveReadId(item.id)
+    saveReadNotificationId(item.id, userId)
     setReadIds((prev) => new Set([...prev, item.id]))
     setNotifications((prev) =>
       prev.map((n) => (n.id === item.id ? { ...n, unread: false } : n))
@@ -495,7 +528,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
           {/* Notification List */}
           <div className="max-h-96 overflow-y-auto divide-y divide-stroke/10">
-            {filteredNotifications.length === 0 ? (
+            {isLoading && notifications.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-fg">
+                Loading notifications...
+              </div>
+            ) : filteredNotifications.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-fg">
                 No notifications in this category
               </div>
