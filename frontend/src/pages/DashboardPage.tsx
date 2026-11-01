@@ -37,7 +37,7 @@ import { useCompany, ALL_COMPANIES_LIST } from '@/context/CompanyContext'
 
 export const DashboardPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const userRole = (user?.role || '').trim().toLowerCase()
   const isFinance = userRole === 'finance'
@@ -46,8 +46,14 @@ export const DashboardPage: React.FC = () => {
   const isCompanyScoped = !isFinance && !isAudit && !isAdmin
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
-  // Dynamic companies list populated from database with fallback to ALL_COMPANIES_LIST
-  const [companyList, setCompanyList] = React.useState<string[]>(ALL_COMPANIES_LIST)
+  // Dynamic companies list populated from database
+  const [companyList, setCompanyList] = React.useState<string[]>(allCompanies)
+
+  React.useEffect(() => {
+    if (allCompanies.length > 1) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
 
   React.useEffect(() => {
     let mounted = true
