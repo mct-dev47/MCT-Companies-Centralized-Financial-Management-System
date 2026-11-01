@@ -28,7 +28,7 @@ export const ALL_COMPANIES_LIST = [
   'MyCity.Kitchen Corporation',
 ]
 
-const COMPANY_STORAGE_KEY = 'mct_selected_company'
+const COMPANY_STORAGE_KEY = 'mct_active_company_session'
 
 export const CompanyContext = React.createContext<CompanyContextValue | undefined>(undefined)
 
@@ -50,7 +50,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return user.assignedCompany
     }
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(COMPANY_STORAGE_KEY)
+      const saved = sessionStorage.getItem(COMPANY_STORAGE_KEY)
       if (saved) return saved
     }
     return (isCompanyScoped ? user?.assignedCompany : 'All Companies') || 'All Companies'
@@ -60,8 +60,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   React.useEffect(() => {
     if (isCompanyScoped && user?.assignedCompany && user.assignedCompany !== 'All Companies') {
       setActiveCompanyState(user.assignedCompany)
+    } else if (!isCompanyScoped) {
+      const saved = typeof window !== 'undefined' ? sessionStorage.getItem(COMPANY_STORAGE_KEY) : null
+      setActiveCompanyState(saved || 'All Companies')
     }
-  }, [isCompanyScoped, user?.assignedCompany])
+  }, [isCompanyScoped, user?.assignedCompany, user?.id])
 
   const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>([])
 
@@ -100,7 +103,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const setActiveCompany = React.useCallback((company: string) => {
     setActiveCompanyState(company)
     if (typeof window !== 'undefined') {
-      localStorage.setItem(COMPANY_STORAGE_KEY, company)
+      sessionStorage.setItem(COMPANY_STORAGE_KEY, company)
     }
   }, [])
 

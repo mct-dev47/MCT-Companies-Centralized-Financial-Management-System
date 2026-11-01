@@ -71,6 +71,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useNavigate } from 'react-router-dom'
 import { useCompany } from '@/context/CompanyContext'
+import { isCompanyMatch } from '@/utils/companyUtils'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 
@@ -157,17 +158,11 @@ export const SalesPage: React.FC = () => {
     }
   }, [activeCompany, isCompanyScoped])
 
-  const [dateRange, setDateRange] = React.useState<DateRange>(() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-      label: 'This Month',
-      preset: 'This Month',
-    }
+  const [dateRange, setDateRange] = React.useState<DateRange>({
+    startDate: null,
+    endDate: null,
+    label: 'All Dates',
+    preset: 'All Dates',
   })
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<
@@ -425,8 +420,7 @@ export const SalesPage: React.FC = () => {
         // 1. Company filter
         if (
           targetCompany !== 'All Companies' &&
-          (item.company || '').toLowerCase().trim() !==
-            targetCompany.toLowerCase().trim()
+          !isCompanyMatch(item.company, targetCompany)
         ) {
           return false
         }

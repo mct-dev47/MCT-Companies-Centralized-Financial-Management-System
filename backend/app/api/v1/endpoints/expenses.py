@@ -180,9 +180,16 @@ def get_expenses(
             check_company_access(current_user, company_id)
             query = query.filter(Expense.company_id == company_id)
         elif company_name and company_name.lower() != "all companies":
-            query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
-            if not is_privileged:
-                query = query.filter(Expense.company_id.in_(user_company_ids))
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Expense.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
+                if not is_privileged:
+                    query = query.filter(Expense.company_id.in_(user_company_ids))
         elif not is_privileged:
             if not user_company_ids:
                 return []

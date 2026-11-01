@@ -120,6 +120,8 @@ def get_sales(
             )
             for row in rows
         ]
+    except HTTPException:
+        raise
     except Exception as e:
         # Fallback to local SQLite if Supabase is unavailable
         query = (
@@ -133,9 +135,21 @@ def get_sales(
         )
 
         if company_id:
+            check_company_access(current_user, company_id)
             query = query.filter(Sale.company_id == company_id)
         elif company_name and company_name.lower() != "all companies":
-            query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Sale.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
+        elif not is_admin:
+            if not user_company_ids:
+                return []
+            query = query.filter(Sale.company_id.in_(user_company_ids))
 
         if category_id:
             query = query.filter(Sale.category_id == category_id)

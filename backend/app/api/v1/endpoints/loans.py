@@ -80,6 +80,13 @@ def resolve_company_id(
         comp = db.query(Company).filter(func.lower(Company.company_name) == norm).first()
         if comp:
             return comp.company_id
+        try:
+            from app.core.company_resolver import resolve_company
+            resolved = resolve_company(db, company_id=cid, company_name=cname)
+            if resolved:
+                return resolved.company_id
+        except Exception:
+            pass
     return None
 
 
@@ -367,15 +374,16 @@ def get_loans(
     role = (user_role or (request.headers.get("X-User-Role") if request else None) or current_user.get("role") or "").strip().lower()
     is_auditor = role in {"audit", "auditor"}
 
-    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}"
-    cached = system_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
     is_admin = current_user.get("is_admin") or (current_user.get("role") or "").lower() in ("admin", "finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_admin and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
+
+    scope_cids = "all" if is_admin else ",".join(str(c) for c in sorted(user_company_ids))
+    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}"
+    cached = system_cache.get(cache_key)
+    if cached is not None:
+        return cached
 
     if borrower_id:
         check_company_access(current_user, borrower_id)
@@ -478,11 +486,9 @@ def get_loans(
 
         resolved_target_cid = None
         if company_name and company_name.lower() != "all companies":
-            comp = db.query(Company).filter(func.lower(Company.company_name) == company_name.strip().lower()).first()
-            if comp:
-                resolved_target_cid = comp.company_id
-                if not is_admin:
-                    check_company_access(current_user, resolved_target_cid)
+            resolved_target_cid = resolve_company_id(None, company_name, {}, db)
+            if resolved_target_cid and not is_admin:
+                check_company_access(current_user, resolved_target_cid)
 
         if isinstance(borrower_id, int):
             query = query.filter(Loan.borrower == borrower_id)

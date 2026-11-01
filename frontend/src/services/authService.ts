@@ -354,10 +354,8 @@ function mapUser(user: {
     }
   }
 
-  const assignedCompany = (role === 'Admin' || role === 'Audit')
+  const assignedCompany = (role === 'Admin' || role === 'Audit' || role === 'Finance')
     ? 'All Companies'
-    : role === 'Finance'
-    ? (resolvedCompany || 'All Companies')
     : (resolvedCompany || 'MCT Kitchen')
 
   const displayName = rawEmail === 'admin@mct.com' || rawEmail === 'remi.lee@mct.com'

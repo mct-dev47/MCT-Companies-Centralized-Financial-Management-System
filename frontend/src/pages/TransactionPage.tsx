@@ -36,6 +36,7 @@ import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashSe
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
+import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatPHP } from '@/lib/format'
 import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
@@ -432,13 +433,9 @@ export const TransactionPage: React.FC = () => {
 
     // Company scope
     if (isCompanyScoped) {
-      list = list.filter(
-        (t) => (t.company || '').toLowerCase().trim() === assignedCompany.toLowerCase().trim()
-      )
+      list = list.filter((t) => isCompanyMatch(t.company, assignedCompany))
     } else if (activeCompany && activeCompany !== 'All Companies') {
-      list = list.filter(
-        (t) => (t.company || '').toLowerCase().trim() === activeCompany.toLowerCase().trim()
-      )
+      list = list.filter((t) => isCompanyMatch(t.company, activeCompany))
     }
     return list
   }, [transactions, isCompanyScoped, assignedCompany, activeCompany])
@@ -527,13 +524,9 @@ export const TransactionPage: React.FC = () => {
 
     // Company scope
     if (isCompanyScoped) {
-      list = list.filter(
-        (t) => (t.company || '').toLowerCase().trim() === assignedCompany.toLowerCase().trim()
-      )
+      list = list.filter((t) => isCompanyMatch(t.company, assignedCompany))
     } else if (activeCompany && activeCompany !== 'All Companies') {
-      list = list.filter(
-        (t) => (t.company || '').toLowerCase().trim() === activeCompany.toLowerCase().trim()
-      )
+      list = list.filter((t) => isCompanyMatch(t.company, activeCompany))
     }
 
     // Record-type filter: All | Sales | Expense | Loan | Petty Cash
