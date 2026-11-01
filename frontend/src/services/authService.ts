@@ -13,6 +13,9 @@ export interface User {
   email: string
   role: UserRole | string
   assignedCompany?: string
+  companyId?: number
+  companyIds?: number[]
+  companyNames?: string[]
   avatarUrl?: string
 }
 
@@ -364,12 +367,18 @@ function mapUser(user: {
     ? 'Audit Officer'
     : user.name
 
+  const userCompanyIds = (user as any).company_ids || ((user as any).company_id ? [(user as any).company_id] : [])
+  const userCompanyNames = (user as any).company_names || (resolvedCompany ? [resolvedCompany] : [])
+
   return {
     id: String(user.user_id),
     fullName: displayName,
     email: user.email,
     role: role,
     assignedCompany: assignedCompany,
+    companyId: (user as any).company_id,
+    companyIds: userCompanyIds,
+    companyNames: userCompanyNames,
     avatarUrl: user.photo_url || logo2Url,
   }
 }

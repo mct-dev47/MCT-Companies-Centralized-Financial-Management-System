@@ -356,35 +356,24 @@ def load_application_user(db: Session, identifier: Union[int, str]) -> Optional[
 
 # get current user information
 def get_current_user_info(db: Session, user_id: int) -> UserResponse:
-    user = db.query(User).filter(User.user_id == user_id).first()
+    from app.services.user_service import UserService
+    user = UserService(db).get_user(user_id)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
+    return UserService(db).to_response(user)
 
-    company_name = None
-    if user.company_id:
-        company = db.query(Company).filter(Company.company_id == user.company_id).first()
-        if company:
-            company_name = company.company_name
-
-    user_role = str(getattr(user, "role", "admin" if user.is_admin else "company") or ("admin" if user.is_admin else "company")).lower()
-    is_admin_flag = bool(user.is_admin)
-
-    return UserResponse(
-        user_id=user.user_id,
-        email=user.email,
-        name=user.name,
-        company_id=user.company_id,
-        is_admin=is_admin_flag,
-        role=user_role,
-        last_login_at=user.last_login_at,
-        created_at=user.created_at,
-        updated_at=user.updated_at,
-        company_name=company_name,
-    )
-
+def _unused_legacy_get_user_info():
+    from app.services.user_service import UserService
+    user = UserService(db).get_user(user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    return UserService(db).to_response(user)
 
 # login user with encrypted payload support
 def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[LoginChallengeResponse, str]:

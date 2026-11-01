@@ -42,7 +42,21 @@ export const SignInForm: React.FC = () => {
       const response = await signIn(values)
 
       if (response.status === 'authenticated') {
-        navigate('/dashboard', { replace: true })
+        const role = (response.user.role || '').toLowerCase()
+        if (role === 'admin') {
+          navigate('/employee', { replace: true })
+        } else if (role === 'finance') {
+          navigate('/centralized-auth', { replace: true })
+        } else if (role === 'supervisor') {
+          const cids = response.user.companyIds || []
+          if (cids.length > 1) {
+            navigate('/centralized-auth', { replace: true })
+          } else {
+            navigate('/dashboard', { replace: true })
+          }
+        } else {
+          navigate('/dashboard', { replace: true })
+        }
       } else if (response.status === '2fa_required') {
         // Route to 2FA verification step
         navigate('/verify-2fa', { state: { email: response.email } })

@@ -4,6 +4,18 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.core.dependencies import (
+    AuditorUser,
+    AuthenticatedUser,
+    BusinessReader,
+    BusinessWriter,
+    FinanceUser,
+    check_company_access,
+    require_auditor_user,
+    require_business_reader,
+    require_business_writer,
+    require_finance_user,
+)
 from app.db.session import get_db
 from app.schemas.petty_cash import (
     PettyCashEndorseIn,
@@ -33,10 +45,12 @@ def get_summary(
     company_name: Optional[str] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
     service = PettyCashService(db)
     company = service.resolve_company(company_id, company_name)
+    check_company_access(current_user, company.company_id)
     return service.get_summary(company, start_date, end_date)
 
 
@@ -44,9 +58,19 @@ def get_summary(
 def list_summaries(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    return PettyCashService(db).list_summaries(start_date, end_date)
+    summaries = PettyCashService(db).list_summaries(start_date, end_date)
+    role = (current_user.get("role") or "").lower()
+    if role in ("finance", "audit", "auditor"):
+        return summaries
+
+    user_company_ids = current_user.get("company_ids") or []
+    if current_user.get("company_id") and current_user["company_id"] not in user_company_ids:
+        user_company_ids.append(current_user["company_id"])
+
+    return [s for s in summaries if s.company_id in user_company_ids]
 
 
 @router.get("/ledger", response_model=List[PettyCashLedgerEntry], summary="Petty cash top-ups and spending")
@@ -55,16 +79,24 @@ def get_ledger(
     company_name: Optional[str] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
-    user_role: Optional[str] = Query(None),
-    request: Request = None,
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
     service = PettyCashService(db)
     company = None
     if company_id or (company_name and company_name.strip().lower() != "all companies"):
         company = service.resolve_company(company_id, company_name)
-    role = user_role or (request.headers.get("X-User-Role") if request else None)
-    return service.list_ledger(company, start_date, end_date, user_role=role)
+        check_company_access(current_user, company.company_id)
+    else:
+        role = (current_user.get("role") or "").lower()
+        if role not in ("finance", "audit", "auditor"):
+            user_company_ids = current_user.get("company_ids") or []
+            if user_company_ids:
+                company = service.resolve_company(user_company_ids[0], None)
+            elif current_user.get("company_id"):
+                company = service.resolve_company(current_user["company_id"], None)
+
+    return service.list_ledger(company, start_date, end_date, user_role=current_user.get("role"))
 
 
 @router.get(
@@ -75,21 +107,30 @@ def get_ledger(
 def get_movements(
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
     service = PettyCashService(db)
     company = None
     if company_id or (company_name and company_name.strip().lower() != "all companies"):
         company = service.resolve_company(company_id, company_name)
+        check_company_access(current_user, company.company_id)
     return service.list_movements(company)
 
 
 @router.post("/topups", response_model=PettyCashTopUpOut, status_code=status.HTTP_201_CREATED, summary="Top up petty cash from sales")
-def create_topup(topup_in: PettyCashTopUpCreate, request: Request, db: Session = Depends(get_db)):
+def create_topup(
+    topup_in: PettyCashTopUpCreate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    target_comp = PettyCashService(db).resolve_company(topup_in.company_id, topup_in.company_name)
+    check_company_access(current_user, target_comp.company_id)
     topup = PettyCashService(db).create_topup(topup_in)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
-        user_id=topup_in.created_by, company_id=topup.company_id,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
         ip_address=_client_ip(request),
         record_id=topup.topup_id, record_type="petty_cash_topup",
         extra={"amount": float(topup.amount), "topup_date": topup.topup_date.isoformat()},
@@ -102,6 +143,7 @@ def update_topup(
     topup_id: int,
     topup_update: PettyCashTopUpUpdate,
     request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
     topup = PettyCashService(db).update_topup(
@@ -109,9 +151,10 @@ def update_topup(
         amount=topup_update.amount,
         description=topup_update.description,
     )
+    check_company_access(current_user, topup.company_id)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
-        user_id=None, company_id=topup.company_id,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
         ip_address=_client_ip(request),
         record_id=topup.topup_id, record_type="petty_cash_topup_update",
         extra={"amount": float(topup.amount)},
@@ -124,9 +167,10 @@ def endorse_topup(
     topup_id: int,
     endorse_in: PettyCashEndorseIn,
     request: Request,
+    current_user: AuthenticatedUser = Depends(require_finance_user),
     db: Session = Depends(get_db),
 ):
-    endorser = request.headers.get("X-User-Name") or "Finance Officer"
+    endorser = current_user.get("name") or "Finance Officer"
     topup = PettyCashService(db).endorse_topup(
         topup_id=topup_id,
         action=endorse_in.action,
@@ -136,7 +180,7 @@ def endorse_topup(
     )
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
-        user_id=None, company_id=topup.company_id,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
         ip_address=_client_ip(request),
         record_id=topup.topup_id, record_type="petty_cash_endorsement",
         extra={"action": endorse_in.action, "remark": endorse_in.remark, "status": topup.status},
@@ -149,9 +193,10 @@ def review_topup(
     topup_id: int,
     review_in: PettyCashReviewIn,
     request: Request,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db),
 ):
-    reviewer = request.headers.get("X-User-Name") or "Internal Auditor"
+    reviewer = current_user.get("name") or "Internal Auditor"
     topup = PettyCashService(db).review_topup(
         topup_id=topup_id,
         action=review_in.action,
@@ -160,7 +205,7 @@ def review_topup(
     )
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
-        user_id=None, company_id=topup.company_id,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
         ip_address=_client_ip(request),
         record_id=topup.topup_id, record_type="petty_cash_audit_review",
         extra={"action": review_in.action, "remark": review_in.remark, "status": topup.status},
@@ -169,11 +214,17 @@ def review_topup(
 
 
 @router.delete("/topups/{topup_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove a petty cash top-up")
-def delete_topup(topup_id: int, request: Request, db: Session = Depends(get_db)):
+def delete_topup(
+    topup_id: int,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
     topup = PettyCashService(db).delete_topup(topup_id)
+    check_company_access(current_user, topup.company_id)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_DELETED,
-        user_id=None, company_id=topup.company_id,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
         ip_address=_client_ip(request),
         record_id=topup_id, record_type="petty_cash_topup",
         extra={"amount": float(topup.amount)},
@@ -187,6 +238,7 @@ def update_wallet(
     request: Request,
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_finance_user),
     db: Session = Depends(get_db),
 ):
     service = PettyCashService(db)
@@ -194,7 +246,7 @@ def update_wallet(
     summary = service.update_threshold(company, wallet_in.low_balance_threshold)
     log_transaction(
         db, AuditAction.PETTY_CASH_WALLET_UPDATED,
-        user_id=None, company_id=company.company_id,
+        user_id=current_user.get("user_id"), company_id=company.company_id,
         ip_address=_client_ip(request),
         record_type="petty_cash_wallet",
         extra={"low_balance_threshold": float(wallet_in.low_balance_threshold)},

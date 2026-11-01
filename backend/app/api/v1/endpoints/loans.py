@@ -25,7 +25,7 @@ from app.schemas.loan import (
     CompanyLoanOut,
     CompanyLoanListOut,
 )
-from app.core.dependencies import AdminUser, AuthenticatedUser, CurrentUser, get_current_user, check_company_access
+from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, FinanceUser, check_company_access, require_auditor_user, require_business_reader, require_business_writer, require_finance_user
 from app.core.cache import system_cache
 from app.core.websocket import ws_manager
 from app.services.finance_service import FinanceService, FinanceCalculator
@@ -242,9 +242,8 @@ def _group_company_loans(
     return result
 
 
-@router.get("/company", response_model=CompanyLoanListOut, summary="List approved company loans for administrators")
+@router.get("/company", response_model=CompanyLoanListOut, summary="List approved company loans")
 def get_company_loans(
-    _admin: AdminUser,
     borrower_id: Optional[int] = Query(None),
     lender_id: Optional[int] = Query(None),
     company_id: Optional[int] = Query(None),
@@ -256,13 +255,33 @@ def get_company_loans(
     end_date: Optional[date] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
+    role = (current_user.get("role") or "").lower()
+    is_privileged = role in ("finance", "audit", "auditor")
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    if company_id:
+        check_company_access(current_user, company_id)
+    if borrower_id:
+        check_company_access(current_user, borrower_id)
+    if lender_id:
+        check_company_access(current_user, lender_id)
+
     company_names = {c.company_id: c.company_name for c in db.query(Company).all()}
     query = _company_loan_query(
         db, borrower_id, lender_id, company_id, category, reference,
         particulars, payment_status, start_date, end_date,
     )
+    if not is_privileged:
+        if not user_company_ids:
+            query = query.filter(Loan.loan_id == -1)
+        else:
+            query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
+
     groups = _group_company_loans(
         query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).all(),
         company_names,
@@ -293,16 +312,16 @@ def export_company_loans(
     payment_status: Optional[str] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ) -> Response:
     import csv
     import io
 
-
-    is_admin = current_user.get("is_admin") or (current_user.get("role") or "").lower() in ("admin", "finance", "audit", "auditor")
+    role = (current_user.get("role") or "").lower()
+    is_privileged = role in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
-    if not is_admin and not user_company_ids and current_user.get("company_id"):
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
 
     if company_id:
@@ -318,7 +337,7 @@ def export_company_loans(
         particulars, payment_status, start_date, end_date,
     )
 
-    if not is_admin:
+    if not is_privileged:
         if not user_company_ids:
             query = query.filter(Loan.loan_id == -1)
         else:
@@ -368,18 +387,18 @@ def get_loans(
     end_date: Optional[date] = Query(None, description="Filter to loan date"),
     user_role: Optional[str] = Query(None, description="Current user role"),
     request: Request = None,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    role = (user_role or (request.headers.get("X-User-Role") if request else None) or current_user.get("role") or "").strip().lower()
+    role = (current_user.get("role") or "").strip().lower()
     is_auditor = role in {"audit", "auditor"}
 
-    is_admin = current_user.get("is_admin") or (current_user.get("role") or "").lower() in ("admin", "finance", "audit", "auditor")
+    is_privileged = role in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
-    if not is_admin and not user_company_ids and current_user.get("company_id"):
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
 
-    scope_cids = "all" if is_admin else ",".join(str(c) for c in sorted(user_company_ids))
+    scope_cids = "all" if is_privileged else ",".join(str(c) for c in sorted(user_company_ids))
     cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}"
     cached = system_cache.get(cache_key)
     if cached is not None:
@@ -397,7 +416,7 @@ def get_loans(
         resolved_target_cid = None
         if company_name and company_name.lower() != "all companies":
             resolved_target_cid = resolve_company_id(None, company_name, name_to_id, db)
-            if resolved_target_cid and not is_admin:
+            if resolved_target_cid and not is_privileged:
                 check_company_access(current_user, resolved_target_cid)
 
         sb_query = client.table("loan").select("*")
@@ -415,7 +434,7 @@ def get_loans(
             else:
                 # Matches either borrower or lender
                 sb_query = sb_query.or_(f"borrower.eq.{resolved_target_cid},lender.eq.{resolved_target_cid}")
-        elif not is_admin:
+        elif not is_privileged:
             if not user_company_ids:
                 return []
             if len(user_company_ids) == 1:
@@ -487,7 +506,7 @@ def get_loans(
         resolved_target_cid = None
         if company_name and company_name.lower() != "all companies":
             resolved_target_cid = resolve_company_id(None, company_name, {}, db)
-            if resolved_target_cid and not is_admin:
+            if resolved_target_cid and not is_privileged:
                 check_company_access(current_user, resolved_target_cid)
 
         if isinstance(borrower_id, int):
@@ -502,7 +521,7 @@ def get_loans(
                 query = query.filter(Loan.lender == resolved_target_cid)
             else:
                 query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
-        elif not is_admin:
+        elif not is_privileged:
             if not user_company_ids:
                 return []
             query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
@@ -560,7 +579,7 @@ def get_loans(
 def create_loan(
     loan_in: LoanCreate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 
@@ -686,7 +705,7 @@ def create_loan(
 def update_loan(
     loan_id: int,
     loan_update: LoanUpdate,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
     forbid_audit_edit(current_user)
@@ -825,15 +844,9 @@ def endorse_loan(
     loan_id: int,
     endorse_in: LoanEndorseRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_finance_user),
     db: Session = Depends(get_db)
 ):
-    role = (current_user.get("role") or "").lower()
-    if not current_user.get("is_admin") and role not in ("finance", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Finance and Administrator accounts can endorse loans."
-        )
     client = None
     name_to_id = {}
     id_to_name = {}
@@ -996,15 +1009,9 @@ def audit_review_loan(
     loan_id: int,
     review_in: LoanAuditReviewRequest,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
-    role = (current_user.get("role") or "").lower()
-    if not current_user.get("is_admin") and role not in ("audit", "auditor", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Audit and Administrator accounts can review loans."
-        )
     client = None
     name_to_id = {}
     id_to_name = {}
@@ -1175,15 +1182,9 @@ def audit_review_loan(
 def approve_loan(
     loan_id: int,
     approval_in: Optional[LoanApproveRequest] = None,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_finance_user),
     db: Session = Depends(get_db)
 ):
-    role = (current_user.get("role") or "").lower()
-    if not current_user.get("is_admin") and role not in ("finance", "admin"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only Finance and Administrator accounts can approve loans."
-        )
     client = None
     name_to_id = {}
     id_to_name = {}
@@ -1317,7 +1318,7 @@ def approve_loan(
 @router.delete("/{loan_id}", status_code=status.HTTP_200_OK, summary="Delete loan (Only allowed if Pending Approval)")
 def delete_loan(
     loan_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
     forbid_audit_edit(current_user)
@@ -1382,12 +1383,16 @@ def delete_loan(
 
 
 @router.get("/{loan_id}/statement", response_model=LoanStatementOut, summary="Get full loan statement and amortized balance")
-def get_loan_statement(loan_id: int, current_user: AuthenticatedUser = Depends(get_current_user), db: Session = Depends(get_db)):
+def get_loan_statement(loan_id: int, current_user: AuthenticatedUser = Depends(require_business_reader), db: Session = Depends(get_db)):
     loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
-    if not current_user["is_admin"] and current_user.get("role") not in {"admin", "audit", "finance"}:
-        if current_user.get("company_id") not in {loan.borrower, loan.lender}:
+    role = (current_user.get("role") or "").lower()
+    if role not in {"audit", "auditor", "finance"}:
+        user_cids = set(current_user.get("company_ids") or [])
+        if current_user.get("company_id"):
+            user_cids.add(current_user["company_id"])
+        if loan.borrower not in user_cids and loan.lender not in user_cids:
             raise HTTPException(status_code=403, detail="You are not authorized to view this loan.")
     service = FinanceService(db)
     statement = service.get_loan_statement(loan_id)
@@ -1401,13 +1406,14 @@ def create_loan_repayment(
     loan_id: int,
     repayment_in: LoanRepaymentCreate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
-    forbid_audit_edit(current_user)
     loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
     if not loan:
         raise HTTPException(status_code=404, detail="Loan not found")
+
+    check_company_access(current_user, loan.borrower)
 
     service = FinanceService(db)
     statement = service.get_loan_statement(loan_id)

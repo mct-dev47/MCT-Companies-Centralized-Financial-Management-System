@@ -183,7 +183,7 @@ export function getSidebarNavSections(
   // Audit Main: Dashboard -> Transactions -> Petty Cash -> Bills
   // Supervisor / Finance / Company Main: Dashboard -> Petty Cash -> Bills -> Transactions
   const mainItems: NavItem[] = isAdmin
-    ? [NAV_ITEM_DASHBOARD]
+    ? []
     : isAudit
     ? [NAV_ITEM_DASHBOARD, NAV_ITEM_TRANSACTIONS, NAV_ITEM_PETTY_CASH, NAV_ITEM_BILLS]
     : [NAV_ITEM_DASHBOARD, NAV_ITEM_PETTY_CASH, NAV_ITEM_BILLS, NAV_ITEM_TRANSACTIONS]
@@ -202,13 +202,13 @@ export function getSidebarNavSections(
     // Bank Management in Operations for Finance, Audit, and Company accounts
     operationsItems.push(NAV_ITEM_BANK_MANAGEMENT)
 
-    // FilCap gets Lending in Operations (also accessible to Audit and Finance)
-    if (isFilCap || isAudit || isFinance) {
+    // FilCap gets Lending in Operations exclusively
+    if (isFilCap) {
       operationsItems.push(NAV_ITEM_LENDING)
     }
 
-    // JK Property gets Tenants in Operations (also accessible to Audit and Finance)
-    if (isJK || isAudit || isFinance) {
+    // JK Property gets Tenants in Operations exclusively
+    if (isJK) {
       operationsItems.push(NAV_ITEM_TENANTS)
     }
   }

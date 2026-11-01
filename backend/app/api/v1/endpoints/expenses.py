@@ -16,7 +16,7 @@ from app.services.petty_cash_service import PettyCashService
 
 router = APIRouter()
 
-from app.core.dependencies import AuthenticatedUser, get_current_user, check_company_access, require_audit_or_admin_user
+from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.cache import get_cached, set_cached
 
@@ -95,12 +95,11 @@ def get_expenses(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
     user_role = (current_user.get("role") or "").lower()
-    is_admin = current_user.get("is_admin") or user_role == "admin"
-    is_privileged = is_admin or user_role in ("admin", "audit", "finance", "auditor")
+    is_privileged = user_role in ("audit", "finance", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -232,7 +231,7 @@ def get_expenses(
 def create_expense(
     expense_in: ExpenseCreate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 
@@ -476,7 +475,7 @@ def create_expense(
 @router.get("/{expense_id}", response_model=ExpenseOut, summary="Get expense details")
 def get_expense(
     expense_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
 
@@ -554,7 +553,7 @@ def update_expense(
     expense_id: int,
     expense_in: ExpenseUpdate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 
@@ -720,12 +719,12 @@ def update_expense(
         **audit_fields(expense)
     )
 
-@router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Audit or Admin only)")
+@router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Auditor only)")
 def review_expense_audit(
     expense_id: int,
     review_in: AuditReviewIn,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_audit_or_admin_user),
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
     apply_audit_review(
@@ -745,7 +744,7 @@ def review_expense_audit(
 def delete_expense(
     expense_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 

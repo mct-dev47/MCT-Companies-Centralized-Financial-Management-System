@@ -49,10 +49,13 @@ export const CentralizedAuthPage: React.FC = () => {
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const userMenuRef = React.useRef<HTMLDivElement>(null)
 
-  // Strictly Finance only: redirect Audit and all other roles to dashboard
+  // Admin is strictly restricted to Employee / User / Activity Log
   React.useEffect(() => {
-    if (user && (user.role || '').toLowerCase() !== 'finance') {
-      navigate('/dashboard', { replace: true })
+    if (user) {
+      const role = (user.role || '').toLowerCase()
+      if (role === 'admin') {
+        navigate('/employee', { replace: true })
+      }
     }
   }, [user, navigate])
 
@@ -153,9 +156,35 @@ export const CentralizedAuthPage: React.FC = () => {
     }
   }
 
+  // Companies authorized for the current user
+  const userAllowedCompanies = React.useMemo(() => {
+    const role = (user?.role || '').toLowerCase()
+    if (role === 'finance' || role === 'audit' || role === 'auditor') {
+      return CENTRALIZED_COMPANIES
+    }
+    if (role === 'supervisor') {
+      const assignedNames = new Set([
+        ...(user?.companyNames || []).map((n) => n.trim().toLowerCase()),
+        ...(user?.assignedCompany && user.assignedCompany.toLowerCase() !== 'all companies' ? [user.assignedCompany.trim().toLowerCase()] : []),
+      ])
+      if (assignedNames.size === 0) return []
+      return CENTRALIZED_COMPANIES.filter((c) => {
+        const sys = c.systemCompanyName.toLowerCase()
+        const name = c.name.toLowerCase()
+        for (const assigned of assignedNames) {
+          if (sys.includes(assigned) || assigned.includes(sys) || name.includes(assigned) || assigned.includes(name)) {
+            return true
+          }
+        }
+        return false
+      })
+    }
+    return CENTRALIZED_COMPANIES
+  }, [user])
+
   // Pinned companies list
   const pinnedCompanies = React.useMemo(() => {
-    const pinned = CENTRALIZED_COMPANIES.filter((c) => pinnedIds.includes(c.id))
+    const pinned = userAllowedCompanies.filter((c) => pinnedIds.includes(c.id))
     if (!searchQuery.trim()) return pinned
     const q = searchQuery.toLowerCase().trim()
     return pinned.filter(
@@ -170,7 +199,7 @@ export const CentralizedAuthPage: React.FC = () => {
 
   // Filter & Search logic for All Companies
   const filteredCompanies = React.useMemo(() => {
-    return CENTRALIZED_COMPANIES.filter((company) => {
+    return userAllowedCompanies.filter((company) => {
       // Tab filter
       if (activeTab === 'needs_attention') {
         if (!company.needsAttention && company.status.type !== 'overdue' && company.status.type !== 'pending') {
@@ -200,7 +229,7 @@ export const CentralizedAuthPage: React.FC = () => {
 
   // Total count of attention items
   const attentionCount = React.useMemo(() => {
-    return CENTRALIZED_COMPANIES.filter((c) => c.needsAttention || c.status.type === 'overdue' || c.status.type === 'pending').length
+    return userAllowedCompanies.filter((c) => c.needsAttention || c.status.type === 'overdue' || c.status.type === 'pending').length
   }, [])
 
   // User initials
@@ -334,18 +363,20 @@ export const CentralizedAuthPage: React.FC = () => {
 
                 {/* Options */}
                 <div className="p-1.5 space-y-0.5">
-                  {/* Go to own account / consolidated overview */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsUserMenuOpen(false)
-                      handleSelectAllCompanies()
-                    }}
-                    className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer text-left"
-                  >
-                    <UserCheck className="h-4 w-4 text-muted-fg shrink-0" />
-                    <span>My Account (All Companies)</span>
-                  </button>
+                  {/* Go to own account / consolidated overview (Finance/Audit only) */}
+                  {(user?.role || '').toLowerCase() !== 'supervisor' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false)
+                        handleSelectAllCompanies()
+                      }}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer text-left"
+                    >
+                      <UserCheck className="h-4 w-4 text-muted-fg shrink-0" />
+                      <span>My Account (All Companies)</span>
+                    </button>
+                  )}
 
                   <Link
                     to="/settings"
@@ -386,10 +417,11 @@ export const CentralizedAuthPage: React.FC = () => {
             Choose company
           </h1>
           <p className="text-xs sm:text-sm text-muted-fg font-medium mt-0.5">
-            You have access to {CENTRALIZED_COMPANIES.length} companies
+            You have access to {userAllowedCompanies.length} companies
           </p>
         </div>
         {/* Banner: Continue where you left off */}
+        {userAllowedCompanies.some((c) => c.id === lastOpened.companyId) && (
         <section
           aria-label="Continue where you left off"
           className="bg-white rounded-2xl border border-gray-200/80 shadow-xs p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 transition-all hover:shadow-sm"
@@ -416,6 +448,7 @@ export const CentralizedAuthPage: React.FC = () => {
             <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
           </button>
         </section>
+        )}
 
         {/* Section: PINNED AND RECENT */}
         {pinnedCompanies.length > 0 && (
@@ -486,7 +519,7 @@ export const CentralizedAuthPage: React.FC = () => {
                 : 'bg-white text-gray-600 border border-gray-200/80 hover:bg-gray-50 hover:text-gray-900'
             )}
           >
-            All {CENTRALIZED_COMPANIES.length}
+            All {userAllowedCompanies.length}
           </button>
 
           <button

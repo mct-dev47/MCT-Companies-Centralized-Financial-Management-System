@@ -14,7 +14,7 @@ from app.services.audit_service import AuditAction, log_transaction
 
 router = APIRouter()
 
-from app.core.dependencies import AuthenticatedUser, get_current_user, check_company_access, require_audit_or_admin_user
+from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.cache import get_cached, set_cached
 
@@ -61,12 +61,12 @@ def get_sales(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
-    is_admin = current_user.get("is_admin") or (current_user.get("role") or "").lower() in ("admin", "finance", "audit", "auditor")
+    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
-    if not is_admin and not user_company_ids and current_user.get("company_id"):
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
 
     try:
@@ -85,7 +85,7 @@ def get_sales(
             target_cid = resolved_comp.company_id
             check_company_access(current_user, target_cid)
             sb_query = sb_query.eq("company_id", target_cid)
-        elif not is_admin:
+        elif not is_privileged:
             if not user_company_ids:
                 return []
             if len(user_company_ids) == 1:
@@ -146,7 +146,7 @@ def get_sales(
                 raise
             except Exception:
                 query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
-        elif not is_admin:
+        elif not is_privileged:
             if not user_company_ids:
                 return []
             query = query.filter(Sale.company_id.in_(user_company_ids))
@@ -182,7 +182,7 @@ def get_sales(
 def create_sale(
     sale_in: SaleCreate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 
@@ -398,7 +398,7 @@ def create_sale(
 @router.get("/{sales_id}", response_model=SaleOut, summary="Get sale details")
 def get_sale(
     sales_id: int,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
 
@@ -466,7 +466,7 @@ def update_sale(
     sales_id: int,
     sale_in: SaleUpdate,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 
@@ -610,12 +610,12 @@ def update_sale(
         **audit_fields(sale)
     )
 
-@router.patch("/{sales_id}/audit", response_model=SaleOut, summary="Save the audit review of a sale (Audit or Admin only)")
+@router.patch("/{sales_id}/audit", response_model=SaleOut, summary="Save the audit review of a sale (Auditor only)")
 def review_sale_audit(
     sales_id: int,
     review_in: AuditReviewIn,
     request: Request,
-    current_user: AuthenticatedUser = Depends(require_audit_or_admin_user),
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
     apply_audit_review(
@@ -635,7 +635,7 @@ def review_sale_audit(
 def delete_sale(
     sales_id: int,
     request: Request,
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
 

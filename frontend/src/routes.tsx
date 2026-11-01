@@ -6,6 +6,7 @@ import {
   PublicOnlyRoute,
   AdminOnlyRoute,
   FinanceOnlyRoute,
+  NonAdminRouteGuard,
   LendingRouteGuard,
   TenantRouteGuard,
   SalesRouteGuard,
@@ -123,7 +124,11 @@ export const router = createBrowserRouter([
     children: [
       {
         path: '/dashboard',
-        element: <DashboardPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <DashboardPage />
+          </NonAdminRouteGuard>
+        ),
       },
       // Sales routes
       {

@@ -1,7 +1,18 @@
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.company_features import COMPANY_FEATURE_LENDING, FILCAP_COMPANY_ID, require_company_feature_access
+from app.core.dependencies import (
+    AuthenticatedUser,
+    BusinessReader,
+    BusinessWriter,
+    CurrentUser,
+    check_company_access,
+    get_current_user,
+    require_business_reader,
+    require_business_writer,
+)
 from app.db.session import get_db
 from app.services.lending_service import LendingService
 from app.schemas.lending import (
@@ -20,12 +31,22 @@ from app.schemas.lending import (
 router = APIRouter()
 
 
+def _enforce_lending_access(user: dict, company_id: Optional[int] = None) -> None:
+    """Enforce that Lending is strictly restricted to FILCAP Prime Holdings Corp. (ID 7) and authorized callers."""
+    target_cid = company_id if company_id is not None else FILCAP_COMPANY_ID
+    require_company_feature_access(COMPANY_FEATURE_LENDING, target_cid)
+    check_company_access(user, target_cid)
+
+
 @router.post(
     "/calculate",
     response_model=LendingCalculateResponse,
     summary="Stateless loan terms and installment calculation",
 )
-def calculate_terms(payload: LendingCalculateRequest):
+def calculate_terms(
+    payload: LendingCalculateRequest,
+    _: AuthenticatedUser = Depends(get_current_user),
+):
     """
     Pure calculation endpoint computing interest, total payable, and installment amounts
     based on principal, interest rate, payment frequency, and schedule dates.
@@ -46,13 +67,12 @@ def calculate_terms(payload: LendingCalculateRequest):
     summary="List borrowers with balance and schedule aggregates",
 )
 def list_borrowers(
+    company_id: Optional[int] = Query(None, description="Filter by company ID (FILCAP only)"),
     borrower: Optional[str] = Query(None, description="Filter by borrower name"),
+    user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    """
-    Retrieve all borrowers, computing real-time amount paid, remaining balance,
-    and schedule aggregates.
-    """
+    _enforce_lending_access(user, company_id)
     return LendingService.get_borrowers(db=db, borrower_query=borrower)
 
 
@@ -63,11 +83,10 @@ def list_borrowers(
 )
 def get_borrower(
     borrower_id: int,
+    user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    """
-    Retrieve single borrower details by ID.
-    """
+    _enforce_lending_access(user)
     return LendingService.get_borrower(db=db, borrower_id=borrower_id)
 
 
@@ -79,11 +98,10 @@ def get_borrower(
 )
 def create_borrower(
     payload: BorrowerCreateRequest,
+    user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    """
-    Create a new borrower record in the borrowers database table and calculate loan terms.
-    """
+    _enforce_lending_access(user)
     return LendingService.create_borrower(
         db=db,
         borrower_name=payload.borrower_name,
@@ -107,11 +125,10 @@ def create_borrower(
 def update_borrower(
     borrower_id: int,
     payload: BorrowerUpdateRequest,
+    user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    """
-    Update borrower details and loan terms in the database.
-    """
+    _enforce_lending_access(user)
     return LendingService.update_borrower(
         db=db,
         borrower_id=borrower_id,
@@ -126,11 +143,10 @@ def update_borrower(
 )
 def delete_borrower(
     borrower_id: int,
+    user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    """
-    Delete a borrower and all linked transactions from the database.
-    """
+    _enforce_lending_access(user)
     return LendingService.delete_borrower(db=db, borrower_id=borrower_id)
 
 
@@ -141,12 +157,10 @@ def delete_borrower(
 )
 def get_ledger(
     borrower_id: int,
+    user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    """
-    Retrieve the full schedule ledger for a borrower. For daily loans, missed days are
-    automatically derived. For monthly loans, installment cycle progress and due dates are generated.
-    """
+    _enforce_lending_access(user)
     return LendingService.get_borrower_ledger(db=db, borrower_id=borrower_id)
 
 
@@ -156,16 +170,15 @@ def get_ledger(
     summary="List and filter all lending transactions",
 )
 def list_transactions(
+    user: AuthenticatedUser = Depends(require_business_reader),
     borrower_id: Optional[int] = Query(None, description="Filter by borrower ID"),
     transaction_type: Optional[str] = Query(None, description="Filter by transaction type"),
-    payment_method: Optional[str] = Query(None, description="Filter by payment method (Cash, GCash, Bank Transfer)"),
+    payment_method: Optional[str] = Query(None, description="Filter by payment method"),
     date_from: Optional[str] = Query(None, description="Filter transactions starting from date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Filter transactions up to date (YYYY-MM-DD)"),
     db: Session = Depends(get_db),
 ):
-    """
-    Retrieve all lending transactions recorded in the lending_transactions table with optional filtering.
-    """
+    _enforce_lending_access(user)
     return LendingService.get_transactions(
         db=db,
         borrower_id=borrower_id,
@@ -183,11 +196,10 @@ def list_transactions(
 )
 def get_transaction(
     transaction_id: int,
+    user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
-    """
-    Retrieve a single lending transaction record by ID.
-    """
+    _enforce_lending_access(user)
     return LendingService.get_transaction(db=db, transaction_id=transaction_id)
 
 
@@ -198,11 +210,10 @@ def get_transaction(
 )
 def create_transaction(
     payload: LendingTransactionCreateRequest,
+    user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    """
-    Record a lending transaction with settlement validation and boundary checks.
-    """
+    _enforce_lending_access(user)
     penalty_val = payload.penalty_amount if payload.penalty_amount is not None else payload.penalty_portion
     return LendingService.record_payment(
         db=db,
@@ -226,12 +237,10 @@ def create_transaction(
 )
 def record_payment(
     payload: LendingPaymentCreateRequest,
+    user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    """
-    Record payment remittance. Enforces period settlement locking (HTTP 409 if date/cycle
-    is already settled) and boundary constraints (1.00 <= amount <= remaining balance).
-    """
+    _enforce_lending_access(user)
     return LendingService.record_payment(
         db=db,
         borrower_id=payload.borrower_id,

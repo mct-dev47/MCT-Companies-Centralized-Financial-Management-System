@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import date
 from sqlalchemy.orm import Session
 from app.db.session import get_db
+from app.models.company import Company
 from app.schemas.financial_calc import CompanyFinancialSummary, GroupFinancialSummary
 from app.services.finance_service import FinanceService, quantize_currency
 from decimal import Decimal
@@ -27,14 +28,15 @@ def get_group_summary(
 ):
     service = FinanceService(db)
 
-    # Calculate for companies 1 to 12 as per system architecture
+    # Calculate for all registered companies dynamically
     company_summaries = []
     total_group_revenue = Decimal("0.00")
     total_group_expenses = Decimal("0.00")
     total_group_cash_inflow = Decimal("0.00")
     total_group_cash_outflow = Decimal("0.00")
 
-    for cid in range(1, 13):
+    active_companies = db.query(Company.company_id).order_by(Company.company_id.asc()).all()
+    for (cid,) in active_companies:
         summary = service.get_company_financial_summary(cid, start_date, end_date)
         company_summaries.append(summary)
         total_group_revenue += summary.total_revenue
