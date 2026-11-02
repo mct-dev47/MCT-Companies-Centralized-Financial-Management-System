@@ -43,18 +43,22 @@ export const SignInForm: React.FC = () => {
 
       if (response.status === 'authenticated') {
         const role = (response.user.role || '').toLowerCase()
+        const assignedCount = Math.max(
+          response.user.companyIds?.length || 0,
+          response.user.companyNames?.length || 0
+        )
+
         if (role === 'admin') {
           navigate('/employee', { replace: true })
+        } else if (assignedCount >= 2) {
+          navigate('/centralized-auth', { replace: true })
         } else if (role === 'finance') {
           navigate('/centralized-auth', { replace: true })
-        } else if (role === 'supervisor') {
-          const cids = response.user.companyIds || []
-          if (cids.length > 1) {
-            navigate('/centralized-auth', { replace: true })
-          } else {
-            navigate('/dashboard', { replace: true })
-          }
         } else {
+          const singleComp = response.user.companyNames?.[0] || response.user.companyName
+          if (singleComp && typeof window !== 'undefined') {
+            sessionStorage.setItem('mct_selected_company', singleComp)
+          }
           navigate('/dashboard', { replace: true })
         }
       } else if (response.status === '2fa_required') {

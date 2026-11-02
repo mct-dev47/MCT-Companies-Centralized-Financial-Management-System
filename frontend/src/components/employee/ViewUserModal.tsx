@@ -26,6 +26,7 @@ import {
   type UpdateUserPayload,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 
@@ -44,6 +45,13 @@ const ROLES = [
   'Supervisor',
 ] as const
 
+const formatCompanyList = (names: string[]): string => {
+  if (!names || names.length === 0) return 'no company'
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
 
 export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   open,
@@ -57,6 +65,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
 
   // Photo upload and cropping in edit mode
   const [editProfilePreview, setEditProfilePreview] = React.useState<string | null>(null)
@@ -103,6 +112,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setEditAvatarFile(null)
       setRawImageForCrop(null)
       setIsCropperOpen(false)
+      setActionError(null)
     }
   }, [user, open])
 
@@ -224,7 +234,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       onOpenChange(false)
       onUpdate?.(updated)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to update user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to update user. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmEditOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -242,7 +255,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setIsConfirmDeleteOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to delete user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete user. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmDeleteOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -263,6 +279,19 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
           <DialogTitle className="sr-only">
             {user.fullName} Details
           </DialogTitle>
+
+          {actionError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           {isEditing ? (
             /* Edit Form View in Portrait Orientation */
@@ -638,9 +667,30 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
         onOpenChange={setIsConfirmEditOpen}
         title="Confirm User Changes"
         description={
-          <span>
-            Are you sure you want to update the profile for{' '}
-            <strong className="text-focus">{formData.fullName}</strong>?
+          <span className="block space-y-2.5">
+            <span>
+              Are you sure you want to update the profile for{' '}
+              <strong className="text-focus">{formData.fullName}</strong>?
+            </span>
+            {editSelectedCompanies.length > 0 && (
+              <span className="block text-xs text-muted-fg">
+                Appointed to:{' '}
+                <strong className="text-focus">{formatCompanyList(editSelectedCompanies)}</strong>
+              </span>
+            )}
+            {editSelectedCompanies.length > 0 && (
+              <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                {editSelectedCompanies.map((cName) => (
+                  <span
+                    key={cName}
+                    className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
+                  >
+                    <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                    <span>{cName}</span>
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         }
         confirmLabel="Yes, Save Changes"

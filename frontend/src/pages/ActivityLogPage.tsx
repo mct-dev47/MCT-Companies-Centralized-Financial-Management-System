@@ -15,13 +15,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
-import { employeeService, type ActivityLogItem } from '@/services/employeeService'
+import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { AlertCircle } from 'lucide-react'
 
 // Helper to parse date string like "Oct 6, 2026 · 9:15 AM" or "2026-10-05 08:14"
 function parseDateForFilter(dateStr: string): Date | null {
   if (!dateStr) return null
-  if (dateStr === 'Just now') return new Date('2026-10-06')
   const datePart = dateStr.includes('·') ? dateStr.split('·')[0].trim() : dateStr.split(' ')[0].trim()
   const parsed = Date.parse(datePart)
   if (!isNaN(parsed)) return new Date(parsed)
@@ -65,12 +66,12 @@ export const ActivityLogPage: React.FC = () => {
 
   const fetchLogs = React.useCallback(async () => {
     try {
-      const data = await employeeService.getActivityLogs()
+      const data = await activityLogService.getActivityLogs()
       setLogs(data)
       setLoadError('')
     } catch (err) {
-      // Never show an empty list that looks like "nothing happened" when the real log could not be read
-      setLoadError(err instanceof Error ? err.message : 'Could not load the activity log.')
+      // Catch and format all possible network, server, and authorization errors into user-friendly messages
+      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not load the activity log. Please try again.'))
     } finally {
       setLoading(false)
       setIsRefreshing(false)
@@ -82,9 +83,23 @@ export const ActivityLogPage: React.FC = () => {
     fetchLogs()
   }, [fetchLogs])
 
+  // Real-time synchronization via WebSockets
+  React.useEffect(() => {
+    const unsubscribe = activityLogService.subscribeToActivityLogs(() => {
+      fetchLogs()
+    })
+    return () => unsubscribe()
+  }, [fetchLogs])
+
   const handleRefresh = async () => {
     setIsRefreshing(true)
-    await fetchLogs()
+    try {
+      await fetchLogs()
+    } catch (err) {
+      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not refresh activity logs. Please try again.'))
+    } finally {
+      setIsRefreshing(false)
+    }
   }
 
   // Filter logs by search and date range
@@ -138,27 +153,31 @@ export const ActivityLogPage: React.FC = () => {
 
   // Export CSV handler
   const handleExportCsv = () => {
-    const headers = ['Company', 'User', 'Action', 'Module', 'Target', 'Time']
-    const rows = filteredLogs.map((l) => [
-      csvCell(l.company),
-      csvCell(l.user),
-      csvCell(l.action),
-      csvCell(l.module),
-      csvCell(l.target),
-      csvCell(l.time),
-    ])
+    try {
+      const headers = ['Company', 'User', 'Action', 'Module', 'Target', 'Time']
+      const rows = filteredLogs.map((l) => [
+        csvCell(l.company),
+        csvCell(l.user),
+        csvCell(l.action),
+        csvCell(l.module),
+        csvCell(l.target),
+        csvCell(l.time),
+      ])
 
-    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.setAttribute('download', `mct_activity_logs_${new Date().toISOString().slice(0, 10)}.csv`)
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-    setIsExportDropdownOpen(false)
+      const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `mct_activity_logs_${new Date().toISOString().slice(0, 10)}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      setIsExportDropdownOpen(false)
+    } catch (err) {
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to export CSV. Please try again.'))
+    }
   }
 
   // Export PDF handler
@@ -263,7 +282,7 @@ export const ActivityLogPage: React.FC = () => {
             Activity Log
           </h1>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {logs.length} system activity records tracked across all companies
+            {logs.length} system activity records tracked across all companies · 6-month retention policy
           </p>
         </div>
 
@@ -323,6 +342,24 @@ export const ActivityLogPage: React.FC = () => {
           </div>
         </div>
       </div>
+      {/* Error alert banner if refreshing or fetching fails */}
+      {loadError && logs.length > 0 && (
+        <div className="p-4 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-center justify-between gap-3 text-rose-800 text-xs sm:text-sm animate-in fade-in duration-200">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+            <span className="font-medium">{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={fetchLogs}
+            className="h-8 px-3 text-xs rounded-lg border-rose-300 text-rose-800 hover:bg-rose-100 cursor-pointer"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
 
       {/* 2. Filters Toolbar with Extended Width Search Bar & Date Range Filter */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -418,14 +455,27 @@ export const ActivityLogPage: React.FC = () => {
                       <div className="h-12 w-12 rounded-full bg-surface flex items-center justify-center text-muted-fg/60">
                         <Clock className="h-6 w-6" />
                       </div>
-                      <p className="font-semibold text-focus">No activity logs found</p>
+                      <p className="font-semibold text-focus">
+                        {loadError ? 'Unable to load activity logs' : 'No activity logs found'}
+                      </p>
                       <p className="text-xs text-muted-fg max-w-sm">
                         {loadError
-                          ? `The activity log could not be loaded. ${loadError}`
+                          ? loadError
                           : hasActiveFilters
                           ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
                           : 'No recent system activity records have been recorded yet.'}
                       </p>
+                      {loadError && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={fetchLogs}
+                          className="mt-2 text-xs font-semibold rounded-lg cursor-pointer"
+                        >
+                          Try again
+                        </Button>
+                      )}
                       {hasActiveFilters && (
                         <Button
                           type="button"

@@ -40,34 +40,25 @@ export const DashboardPage: React.FC = () => {
   const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const userRole = (user?.role || '').trim().toLowerCase()
-  const isFinance = userRole === 'finance'
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
-  const isAdmin = userRole === 'admin'
-  const isCompanyScoped = !isFinance && !isAudit && !isAdmin
-  const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
-
-  // Dynamic companies list populated from database
-  const [companyList, setCompanyList] = React.useState<string[]>(allCompanies)
-
-  React.useEffect(() => {
-    if (allCompanies.length > 1) {
-      setCompanyList(allCompanies)
+  const userAssignedCompanies = React.useMemo(() => {
+    if (user?.companyNames && user.companyNames.length > 0) {
+      return user.companyNames
     }
-  }, [allCompanies])
-
-  React.useEffect(() => {
-    let mounted = true
-    loanService.getCompanies().then((companies) => {
-      if (mounted && companies.length > 0) {
-        const names = companies.map((c) => c.company_name).filter(Boolean)
-        const combined = Array.from(new Set(['All Companies', ...names]))
-        setCompanyList(combined)
-      }
-    })
-    return () => {
-      mounted = false
+    if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+      return [user.assignedCompany]
     }
-  }, [])
+    return []
+  }, [user?.companyNames, user?.assignedCompany])
+
+  const hasMultipleAssigned = userAssignedCompanies.length >= 2
+  const isCompanyScoped = Boolean(
+    !hasMultipleAssigned &&
+      userAssignedCompanies.length === 1 &&
+      userRole !== 'admin'
+  )
+
+  // Dynamic companies list strictly from authorized assigned companies in CompanyContext
+  const companyList = allCompanies
 
   const [filters, setFilters] = React.useState<DashboardFilterState>(() => ({
     dateRange: {
@@ -75,27 +66,17 @@ export const DashboardPage: React.FC = () => {
       endDate: null,
       label: 'All Dates',
     },
-    company: isCompanyScoped ? assignedCompany : (activeCompany || 'All Companies'),
+    company: activeCompany || (userAssignedCompanies[0] || 'All Companies'),
   }))
-
-  // Keep filters.company in sync if user profile loads after initial render
-  React.useEffect(() => {
-    if (isCompanyScoped && user?.assignedCompany) {
-      setFilters((prev) => ({
-        ...prev,
-        company: user.assignedCompany || 'MCT Kitchen',
-      }))
-    }
-  }, [isCompanyScoped, user?.assignedCompany])
 
   // Keep filters.company in sync with global activeCompany from context
   React.useEffect(() => {
-    if (!isCompanyScoped && activeCompany) {
+    if (activeCompany) {
       setFilters((prev) =>
         prev.company !== activeCompany ? { ...prev, company: activeCompany } : prev
       )
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
 
   const [loading, setLoading] = React.useState<boolean>(true)
   const [data, setData] = React.useState<DashboardData | null>(null)
@@ -177,7 +158,7 @@ export const DashboardPage: React.FC = () => {
   React.useEffect(() => {
     let isMounted = true
     setPettyCashLoading(true)
-    const company = isCompanyScoped ? assignedCompany : filters.company
+    const company = filters.company
     const request =
       company === 'All Companies'
         ? pettyCashService.getAllSummaries()
@@ -198,13 +179,13 @@ export const DashboardPage: React.FC = () => {
     return () => {
       isMounted = false
     }
-  }, [filters.company, isCompanyScoped, assignedCompany])
+  }, [filters.company])
 
   // Filter transactions strictly on client side by company and date range, sorted latest first
   const filteredTransactions = React.useMemo(() => {
     if (!data?.recentTransactions) return []
 
-    const targetCompany = isCompanyScoped ? assignedCompany : filters.company
+    const targetCompany = filters.company
 
     return data.recentTransactions
       .filter((tx) => {
@@ -230,7 +211,7 @@ export const DashboardPage: React.FC = () => {
         if (cmp !== 0) return cmp
         return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
       })
-  }, [data?.recentTransactions, isCompanyScoped, assignedCompany, filters.company, filters.dateRange])
+  }, [data?.recentTransactions, filters.company, filters.dateRange])
 
   // Dynamic KPI calculations responding to filtered transactions:
   // Total Cash: actual cash inflow/deposits collected from sales
@@ -287,7 +268,7 @@ export const DashboardPage: React.FC = () => {
           companies={companyList}
           onFiltersChange={(newFilters) => {
             setFilters(newFilters)
-            if (!isCompanyScoped && newFilters.company !== filters.company) {
+            if (newFilters.company !== filters.company) {
               setActiveCompany(newFilters.company)
             }
           }}

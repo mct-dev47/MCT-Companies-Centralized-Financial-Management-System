@@ -7,6 +7,8 @@ import {
   Building2,
   Shield,
   User as UserIcon,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +21,7 @@ import {
   type EmployeeUser,
   type Company,
 } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const UserManagementPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -33,20 +36,37 @@ export const UserManagementPage: React.FC = () => {
   const [isViewUserOpen, setIsViewUserOpen] = React.useState(false)
   const [selectedUser, setSelectedUser] = React.useState<EmployeeUser | null>(null)
 
+  // Helper formatter for company list
+  const formatCompanyList = (names: string[]): string => {
+    if (!names || names.length === 0) return 'no company'
+    if (names.length === 1) return names[0]
+    if (names.length === 2) return `${names[0]} and ${names[1]}`
+    return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+  }
+
   // Success message toast/banner & confirmation modal
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
-  const [successModal, setSuccessModal] = React.useState<{ title: string; message: string } | null>(null)
+  const [successModal, setSuccessModal] = React.useState<{ title: string; message: React.ReactNode } | null>(null)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load users and companies
   const loadData = React.useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const [userList, companyList] = await Promise.all([
         employeeService.getUsers(),
         employeeService.getCompanies(),
       ])
       setUsers(userList)
       setCompanies(companyList)
+    } catch (err) {
+      setLoadError(
+        formatUserFriendlyErrorMessage(
+          err,
+          'Unable to load user management data. Please try again.'
+        )
+      )
     } finally {
       setLoading(false)
     }
@@ -94,9 +114,35 @@ export const UserManagementPage: React.FC = () => {
   const handleUserCreated = async (newUser: EmployeeUser) => {
     setUsers((prev) => [newUser, ...prev])
     setSuccessBanner(`User "${newUser.fullName}" has been created successfully.`)
+
+    const assigned = (newUser.companyNames && newUser.companyNames.length > 0)
+      ? newUser.companyNames
+      : (newUser.companyName ? [newUser.companyName] : [])
+
     setSuccessModal({
       title: 'User Created Successfully',
-      message: `User "${newUser.fullName}" has been created successfully.`,
+      message: (
+        <span className="block space-y-2.5">
+          <span>
+            User <strong className="text-focus">{newUser.fullName}</strong> has been created successfully appointed to{' '}
+            <strong className="text-focus">{formatCompanyList(assigned)}</strong> as{' '}
+            <strong className="text-focus">{newUser.role || 'Supervisor'}</strong>.
+          </span>
+          {assigned.length > 0 && (
+            <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+              {assigned.map((cName) => (
+                <span
+                  key={cName}
+                  className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
+                >
+                  <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                  <span>{cName}</span>
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
+      ),
     })
     try {
       const [userList, companyList] = await Promise.all([
@@ -116,9 +162,33 @@ export const UserManagementPage: React.FC = () => {
     )
     setSelectedUser(updated)
     setSuccessBanner(`User "${updated.fullName}" updated successfully.`)
+
+    const assigned = (updated.companyNames && updated.companyNames.length > 0)
+      ? updated.companyNames
+      : (updated.companyName ? [updated.companyName] : [])
+
     setSuccessModal({
       title: 'User Updated Successfully',
-      message: `The user profile for "${updated.fullName}" has been updated successfully.`,
+      message: (
+        <span className="block space-y-2.5">
+          <span>
+            The user profile for <strong className="text-focus">{updated.fullName}</strong> has been updated successfully.
+          </span>
+          {assigned.length > 0 && (
+            <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+              {assigned.map((cName) => (
+                <span
+                  key={cName}
+                  className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
+                >
+                  <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                  <span>{cName}</span>
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
+      ),
     })
     try {
       const [userList, companyList] = await Promise.all([
@@ -186,6 +256,29 @@ export const UserManagementPage: React.FC = () => {
         >
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
           <span>{successBanner}</span>
+        </div>
+      )}
+
+      {/* Error Notification Alert */}
+      {loadError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium animate-in fade-in-50 duration-200"
+        >
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => loadData()}
+            className="border-red-200 hover:bg-red-100 text-red-800 h-8 gap-1.5 rounded-lg shrink-0"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Retry</span>
+          </Button>
         </div>
       )}
 

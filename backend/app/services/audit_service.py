@@ -301,8 +301,8 @@ _ACTION_DESCRIPTION_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 def log_action(
-    db: Session,
-    action: AuditAction | str,
+    db: Optional[Session] = None,
+    action: AuditAction | str = AuditAction.LOGIN_ATTEMPT,
     *,
     user_id: Optional[int] = None,
     company_id: Optional[int] = None,
@@ -310,83 +310,24 @@ def log_action(
     details: Optional[Any] = None,
 ) -> None:
     """
-    Record an audit log entry.
-
-    Parameters
-    ----------
-    db          : SQLAlchemy session (required for local DB write).
-    action      : One of the ``AuditAction`` enum values.
-    user_id     : ID of the user who performed the action (nullable).
-    company_id  : Company context of the action (nullable).
-    ip_address  : Remote IP address of the client (nullable, max 45 chars
-                  to support both IPv4 and IPv6).
-    details     : Optional free-form context — pass a dict and it will be
-                  serialised to JSON, or a plain string.  Never put PII /
-                  credentials here.
+    Record an audit log entry via event-driven architecture.
+    Dispatches an ActivityEvent asynchronously so callers are never blocked.
     """
+    from app.core.events import dispatch_activity_event
+
     action_str = action.value if isinstance(action, AuditAction) else str(action)
     action_category = _ACTION_CATEGORY_MAP.get(action_str, "GENERAL")
 
-    # Serialise details safely
-    details_str: Optional[str] = None
-    if details is not None:
-        if isinstance(details, dict):
-            try:
-                details_str = json.dumps(details, default=str)
-            except Exception:
-                details_str = str(details)
-        else:
-            details_str = str(details)
+    dispatch_activity_event(
+        action=action_str,
+        action_category=action_category,
+        user_id=user_id,
+        company_id=company_id,
+        ip_address=ip_address,
+        details=details,
+        sync=False,
+    )
 
-    # Truncate ip_address to the column width just in case
-    if ip_address and len(ip_address) > 45:
-        ip_address = ip_address[:45]
-
-    # If no active session was passed (e.g. auth flows), persist in a background thread
-    if db is None:
-        def _bg_log():
-            try:
-                from app.db.session import SessionLocal
-                session = SessionLocal()
-                try:
-                    entry = AuditLog(
-                        user_id=user_id,
-                        company_id=company_id,
-                        action=action_str,
-                        action_category=action_category,
-                        ip_address=ip_address,
-                        details=details_str,
-                    )
-                    session.add(entry)
-                    session.commit()
-                finally:
-                    session.close()
-            except Exception as exc:
-                logger.warning("Failed to write audit log in background: %s", exc)
-
-        threading.Thread(target=_bg_log, daemon=True).start()
-        return
-
-    # If an active session was passed, use it
-    try:
-        entry = AuditLog(
-            user_id=user_id,
-            company_id=company_id,
-            action=action_str,
-            action_category=action_category,
-            ip_address=ip_address,
-            details=details_str,
-        )
-        db.add(entry)
-        db.commit()
-        if action_category in ("TRANSACTION", "LOAN", "PETTY_CASH", "TENANT"):
-            system_cache.invalidate_tag("notifications")
-    except Exception as exc:
-        logger.warning("Failed to write audit log to DB: %s", exc)
-        try:
-            db.rollback()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------

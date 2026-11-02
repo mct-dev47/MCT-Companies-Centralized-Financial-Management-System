@@ -78,18 +78,22 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     const sessionUser = await authService.getSession()
     resetState()
     const role = (sessionUser?.role || '').toLowerCase()
+    const assignedCount = Math.max(
+      sessionUser?.companyIds?.length || 0,
+      sessionUser?.companyNames?.length || 0
+    )
+
     if (role === 'admin') {
       navigate('/employee', { replace: true })
+    } else if (assignedCount >= 2) {
+      navigate('/centralized-auth', { replace: true })
     } else if (role === 'finance') {
       navigate('/centralized-auth', { replace: true })
-    } else if (role === 'supervisor') {
-      const cids = sessionUser?.companyIds || []
-      if (cids.length > 1) {
-        navigate('/centralized-auth', { replace: true })
-      } else {
-        navigate('/dashboard', { replace: true })
-      }
     } else {
+      const singleComp = sessionUser?.companyNames?.[0] || sessionUser?.companyName
+      if (singleComp && typeof window !== 'undefined') {
+        sessionStorage.setItem('mct_selected_company', singleComp)
+      }
       navigate('/dashboard', { replace: true })
     }
   }

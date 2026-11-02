@@ -120,13 +120,13 @@ def get_expenses(
             target_cid = resolved_comp.company_id
             check_company_access(current_user, target_cid)
             sb_query = sb_query.eq("company_id", target_cid)
-        elif not is_privileged:
-            if not user_company_ids:
-                return []
+        elif user_company_ids:
             if len(user_company_ids) == 1:
                 sb_query = sb_query.eq("company_id", user_company_ids[0])
             else:
                 sb_query = sb_query.in_("company_id", user_company_ids)
+        elif not is_privileged:
+            return []
 
         if category_id:
             sb_query = sb_query.eq("category_id", category_id)
@@ -189,10 +189,10 @@ def get_expenses(
                 query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
                 if not is_privileged:
                     query = query.filter(Expense.company_id.in_(user_company_ids))
-        elif not is_privileged:
-            if not user_company_ids:
-                return []
+        elif user_company_ids:
             query = query.filter(Expense.company_id.in_(user_company_ids))
+        elif not is_privileged:
+            return []
 
         if category_id:
             query = query.filter(Expense.category_id == category_id)

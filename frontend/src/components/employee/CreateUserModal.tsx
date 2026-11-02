@@ -37,6 +37,7 @@ import {
   type EmployeeUser,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { cn } from '@/lib/utils'
 
@@ -52,6 +53,13 @@ const ROLES = [
   'Audit',
   'Supervisor',
 ] as const
+
+const formatCompanyList = (names: string[]): string => {
+  if (!names || names.length === 0) return 'no company'
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
 
 
 export const CreateUserModal: React.FC<CreateUserModalProps> = ({
@@ -74,6 +82,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   // Multi-company selection state
   const [selectedCompanies, setSelectedCompanies] = React.useState<string[]>([])
   const [companyError, setCompanyError] = React.useState<string | null>(null)
+  const [submitError, setSubmitError] = React.useState<string | null>(null)
 
   const form = useForm<CreateUserFormValues>({
     resolver: zodResolver(createUserSchema),
@@ -107,6 +116,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       form.setValue('assignedCompanies', next)
       form.setValue('assignedCompany', next[0] || '')
       if (next.length > 0) setCompanyError(null)
+      setSubmitError(null)
       return next
     })
   }
@@ -198,6 +208,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       return
     }
     setCompanyError(null)
+    setSubmitError(null)
     setPendingValues(values)
     setIsConfirmOpen(true)
   }
@@ -223,11 +234,18 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         password: 'Password123!',
         avatarFile: avatarFile || undefined,
       })
+      if (!created.companyNames || created.companyNames.length === 0) {
+        created.companyNames = selectedCompanies
+        created.companyName = selectedCompanies.join(', ')
+      }
       onSuccess?.(created)
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to create user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create user. Please try again.')
+      setSubmitError(errorMsg)
+      setIsConfirmOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -245,6 +263,19 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               Register an employee and appoint them to a company
             </DialogDescription>
           </DialogHeader>
+
+          {submitError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{submitError}</span>
+              <button
+                type="button"
+                onClick={() => setSubmitError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
@@ -564,12 +595,30 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         onOpenChange={setIsConfirmOpen}
         title="Confirm User Creation"
         description={
-          <span>
-            Are you sure you want to add{' '}
-            <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
-            appointed to{' '}
-            <strong className="text-focus">{pendingValues?.assignedCompany}</strong> as{' '}
-            <strong className="text-focus">{pendingValues?.role}</strong>?
+          <span className="block space-y-2.5">
+            <span>
+              Are you sure you want to add{' '}
+              <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
+              appointed to{' '}
+              <strong className="text-focus">
+                {formatCompanyList(selectedCompanies)}
+              </strong>{' '}
+              as{' '}
+              <strong className="text-focus">{pendingValues?.role}</strong>?
+            </span>
+            {selectedCompanies.length > 0 && (
+              <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                {selectedCompanies.map((cName) => (
+                  <span
+                    key={cName}
+                    className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
+                  >
+                    <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                    <span>{cName}</span>
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         }
         confirmLabel="Yes, Create User"
