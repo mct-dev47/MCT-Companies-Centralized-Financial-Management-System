@@ -124,6 +124,12 @@ export const ReceivablesPage: React.FC = () => {
     resetToDefault,
   } = useReceivables(undefined, effectiveCompany)
 
+  // State Filters
+  const [activeTab, setActiveTab] = React.useState<'All' | 'External' | 'Staff'>('All')
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [statusFilter, setStatusFilter] = React.useState<'All' | 'Unpaid' | 'Partial' | 'Paid'>('All')
+
+  // Skeleton loading state
   const [loading, setLoading] = React.useState(true)
 
   React.useEffect(() => {
@@ -133,11 +139,6 @@ export const ReceivablesPage: React.FC = () => {
     }, 250)
     return () => clearTimeout(timer)
   }, [effectiveCompany, activeTab, statusFilter])
-
-  // State Filters
-  const [activeTab, setActiveTab] = React.useState<'All' | 'External' | 'Staff'>('All')
-  const [searchQuery, setSearchQuery] = React.useState('')
-  const [statusFilter, setStatusFilter] = React.useState<'All' | 'Unpaid' | 'Partial' | 'Paid'>('All')
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
