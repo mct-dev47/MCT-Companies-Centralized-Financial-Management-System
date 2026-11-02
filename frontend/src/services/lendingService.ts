@@ -237,6 +237,7 @@ class LendingServiceGateway {
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(LENDING_STORAGE_KEY, JSON.stringify(facilities))
+        window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
       } catch (err) {
         console.error('Error saving lending facilities to storage:', err)
       }
@@ -518,6 +519,9 @@ class LendingServiceGateway {
 
       if (res.ok) {
         const data = await res.json()
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
+        }
         return { success: true, transaction: data }
       }
 

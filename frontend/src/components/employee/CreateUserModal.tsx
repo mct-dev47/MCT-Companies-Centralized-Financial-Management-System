@@ -206,11 +206,19 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     if (!pendingValues) return
     try {
       setIsSubmitting(true)
+      const resolvedCompanyIds = selectedCompanies
+        .map((name) => {
+          const comp = companies.find((c) => c.name === name || c.id === name)
+          return comp ? Number(comp.id) : null
+        })
+        .filter((id): id is number => id !== null && !isNaN(id))
+
       const created = await employeeService.createUser({
         fullName: pendingValues.fullName,
         email: pendingValues.email,
         assignedCompany: selectedCompanies[0] || '',
         assignedCompanies: selectedCompanies,
+        companyIds: resolvedCompanyIds,
         role: pendingValues.role,
         password: 'Password123!',
         avatarFile: avatarFile || undefined,

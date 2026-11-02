@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -16,7 +16,7 @@ class Bill(Base):
         index=True,
     )
     bill_name = Column(String(255), nullable=False)
-    amount = Column(Numeric(15, 2), nullable=False)
+    amount = Column(Numeric(15, 2), nullable=True, default=0.00)
     recurring = Column(String(50), nullable=False, default="monthly")
     due_date = Column(Date, nullable=False)
     due_date_reminder = Column(Integer, nullable=False, default=3)
@@ -30,15 +30,12 @@ class Bill(Base):
         "BillPayment",
         back_populates="bill",
         cascade="all, delete-orphan",
-        order_by="BillPayment.payment_date.desc()",
+        order_by="BillPayment.payment_date.desc(), BillPayment.bill_payment_id.desc()",
     )
 
 
 class BillPayment(Base):
     __tablename__ = "bill_payments"
-    __table_args__ = (
-        UniqueConstraint("bill_id", "period_key", name="uq_bill_payment_period"),
-    )
 
     bill_payment_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     bill_id = Column(
@@ -50,6 +47,7 @@ class BillPayment(Base):
     period_key = Column(String(20), nullable=False, index=True)
     payment_date = Column(Date, nullable=False)
     amount = Column(Numeric(15, 2), nullable=False)
+    billed_amount = Column(Numeric(15, 2), nullable=True)
     payment_method = Column(String(50), nullable=False)
     reference_no = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)

@@ -83,21 +83,24 @@ export function formatUserFriendlyErrorMessage(
     lower.includes('service unavailable') ||
     lower.includes('gateway timeout')
   ) {
-    return 'The lending service is temporarily unavailable. Please try again shortly.'
+    return 'The service is temporarily unavailable. Please try again shortly.'
   }
 
   // 5. HTTP 404 Not Found
   if (status === 404 || lower.includes('404') || lower.includes('not found')) {
-    return 'The requested borrower or transaction record could not be found.'
+    return 'The requested record could not be found.'
   }
 
-  // 6. HTTP 409 Conflict (e.g. Period settlement locking)
-  if (status === 409 || lower.includes('409') || lower.includes('settled') || lower.includes('already exists')) {
-    if (lower.includes('settle')) {
-      return 'This installment date is already fully settled and locked.'
-    }
-    if (lower.includes('already exists')) {
+  // 6. HTTP 409 Conflict (e.g. Period settlement locking, duplicate names)
+  if (status === 409 || lower.includes('409') || lower.includes('settled') || lower.includes('already exists') || lower.includes('duplicate')) {
+    if (lower.includes('already exists') || lower.includes('duplicate')) {
+      if (rawMessage && rawMessage.length < 120 && !lower.includes('sql') && !lower.includes('traceback')) {
+        return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
+      }
       return 'A record with these details already exists.'
+    }
+    if (lower.includes('settle')) {
+      return 'This billing period or installment is already fully settled and locked.'
     }
     return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim() || 'A conflicting record was found. Please refresh and try again.'
   }
@@ -107,7 +110,7 @@ export function formatUserFriendlyErrorMessage(
     return 'Your session has expired. Please sign in again to continue.'
   }
   if (status === 403 || lower.includes('forbidden') || lower.includes('permission')) {
-    return 'You do not have permission to perform this lending operation.'
+    return 'You do not have permission to perform this operation.'
   }
 
   // 8. HTTP 422 / 400 Validation Errors

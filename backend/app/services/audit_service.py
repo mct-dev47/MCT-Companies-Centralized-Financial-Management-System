@@ -33,6 +33,7 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.cache import system_cache
 from app.db.supabase import get_supabase_admin_client
 from app.models.audit_log import AuditLog
 
@@ -378,6 +379,8 @@ def log_action(
         )
         db.add(entry)
         db.commit()
+        if action_category in ("TRANSACTION", "LOAN", "PETTY_CASH", "TENANT"):
+            system_cache.invalidate_tag("notifications")
     except Exception as exc:
         logger.warning("Failed to write audit log to DB: %s", exc)
         try:

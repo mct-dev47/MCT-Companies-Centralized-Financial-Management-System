@@ -38,6 +38,7 @@ import {
 } from '@/services/loanService'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, isDateInRange } from '@/utils/dateUtils'
+import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/useSession'
 
@@ -93,23 +94,16 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   const [selectedCompany, setSelectedCompany] = React.useState<string>('All Companies')
   const [selectedCategory, setSelectedCategory] = React.useState<string>('All')
   const [selectedPaymentStatus, setSelectedPaymentStatus] = React.useState<string>('All')
-  const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('Monthly')
+  const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
   const [dateRange, setDateRange] = React.useState<{
     startDate: string | null
     endDate: string | null
     label: string
-  }>((() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-      label: 'This Month',
-      preset: 'This Month',
-    }
-  })())
+  }>({
+    startDate: null,
+    endDate: null,
+    label: 'All Periods',
+  })
   const [searchQuery, setSearchQuery] = React.useState('')
   const [currentPage, setCurrentPage] = React.useState(1)
 
@@ -138,8 +132,8 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   const loadCompanyLoans = React.useCallback(async () => {
     setLoading(true)
     try {
-      const matchedCompany = dbCompanies.find(
-        (c) => c.company_name.toLowerCase() === selectedCompany.toLowerCase()
+      const matchedCompany = dbCompanies.find((c) =>
+        isCompanyMatch(c.company_name, selectedCompany)
       )
       const res = await loanService.getCompanyLoans({
         borrowerId: matchedCompany ? matchedCompany.company_id : undefined,
@@ -374,8 +368,8 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   const handleExportCsv = async () => {
     setIsExportDropdownOpen(false)
     try {
-      const matchedCompany = dbCompanies.find(
-        (c) => c.company_name.toLowerCase() === selectedCompany.toLowerCase()
+      const matchedCompany = dbCompanies.find((c) =>
+        isCompanyMatch(c.company_name, selectedCompany)
       )
       await loanService.exportCompanyLoans({
         borrowerId: matchedCompany ? matchedCompany.company_id : undefined,

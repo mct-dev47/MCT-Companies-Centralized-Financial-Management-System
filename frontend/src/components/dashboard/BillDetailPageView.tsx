@@ -4,10 +4,13 @@ import {
   Pencil,
   ChevronLeft,
   ChevronRight,
-  Check,
   AlertCircle,
   FileText,
   Coins,
+  Search,
+  X,
+  Building2,
+  Download,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,7 +26,30 @@ import {
   getBillPaymentOptions,
   type BillItem,
 } from '@/services/billsService'
+import { formatDisplayDate } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
+
+function formatPeriodDisplay(periodLabelOrKey?: string): string {
+  if (!periodLabelOrKey) return '—'
+  const trimmed = periodLabelOrKey.trim()
+  if (/[a-zA-Z]/.test(trimmed)) {
+    return trimmed
+  }
+  const dayMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (dayMatch) {
+    return formatDisplayDate(trimmed)
+  }
+  const monthMatch = trimmed.match(/^(\d{4})-(\d{2})$/)
+  if (monthMatch) {
+    const [, y, m] = monthMatch
+    const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1)
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    }
+  }
+  return trimmed
+}
 
 interface BillDetailPageViewProps {
   bill: BillItem
@@ -45,12 +71,12 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
   onMarkAudit,
   isAudit,
 }) => {
-  const [ledgerStatusFilter, setLedgerStatusFilter] = React.useState<'All' | 'Paid' | 'Pending'>('All')
+  const [searchQuery, setSearchQuery] = React.useState<string>('')
   const [ledgerPage, setLedgerPage] = React.useState<number>(1)
 
   React.useEffect(() => {
     setLedgerPage(1)
-  }, [bill.id, ledgerStatusFilter])
+  }, [bill.id, searchQuery])
 
   const options = getBillPaymentOptions(bill)
   const schedule = options.periods
@@ -65,26 +91,62 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
       ? 0
       : nextPayable?.remainingAmount !== undefined
       ? nextPayable.remainingAmount
-      : Math.max(0, bill.amount - (nextPayable?.paidAmount || 0))
+      : nextPayable?.billedAmount !== undefined
+      ? Math.max(0, nextPayable.billedAmount - (nextPayable?.paidAmount || 0))
+      : bill.latestAmount || bill.amount || 0
 
-  // Build unified ledger entries combining recorded payments and scheduled pending/overdue periods
+  // Pre-calculate per-period payment totals and statement amounts from transactions
+  const periodStatsMap = React.useMemo(() => {
+    const map = new Map<string, { totalPaid: number; statementAmount: number; isSettled: boolean }>()
+    payments.forEach((p) => {
+      const key = p.periodKey || p.paymentDate
+      const current = map.get(key) || { totalPaid: 0, statementAmount: 0, isSettled: false }
+      current.totalPaid += p.amount || 0
+      if (p.billedAmount !== undefined && p.billedAmount > current.statementAmount) {
+        current.statementAmount = p.billedAmount
+      }
+      map.set(key, current)
+    })
+
+    // Cross-reference with schedule if available
+    map.forEach((val, key) => {
+      const sp = schedule.find((item) => item.key === key)
+      if (sp) {
+        val.isSettled = sp.paid
+        if (sp.billedAmount && sp.billedAmount > val.statementAmount) {
+          val.statementAmount = sp.billedAmount
+        }
+      } else if (val.statementAmount > 0) {
+        val.isSettled = val.totalPaid >= val.statementAmount - 0.005
+      } else if (bill.amount > 0) {
+        val.isSettled = val.totalPaid >= bill.amount - 0.005
+      } else {
+        val.isSettled = true
+      }
+    })
+    return map
+  }, [payments, schedule, bill.amount])
+
+  // Build ledger entries from recorded payment transactions only
   const ledgerRows = React.useMemo(() => {
     const rows: Array<{
       id: string
       date: string
       periodLabel?: string
-      status: 'Paid' | 'Partially Paid' | 'Pending'
+      status: 'Paid' | 'Partially Paid'
       amount: number
       method: string
       referenceNo: string
       notes: string
     }> = []
 
-    const recordedPeriodKeys = new Set<string>()
     payments.forEach((p) => {
-      if (p.periodKey) recordedPeriodKeys.add(p.periodKey)
+      const key = p.periodKey || p.paymentDate
       const matchedPeriod = schedule.find((sp) => sp.key === p.periodKey)
-      const isPartial = Boolean(matchedPeriod?.partiallyPaid || (p.amount > 0 && p.amount < bill.amount))
+      const stats = periodStatsMap.get(key)
+      const isPeriodPaid = stats ? stats.isSettled : (matchedPeriod ? matchedPeriod.paid : true)
+      const isPartial = !isPeriodPaid
+
       rows.push({
         id: p.id,
         date: p.paymentDate,
@@ -92,37 +154,38 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
         status: isPartial ? 'Partially Paid' : 'Paid',
         amount: p.amount,
         method: p.paymentMethod || '—',
-        referenceNo: p.refNo || '—',
+        referenceNo: p.referenceNo || p.refNo || '—',
         notes: p.notes || '—',
       })
     })
 
-    // Add unpaid scheduled periods so "Pending" filter displays upcoming/unpaid schedule rows
-    schedule.forEach((sp) => {
-      if (!sp.paid && !recordedPeriodKeys.has(sp.key)) {
-        rows.push({
-          id: `sched-${sp.key}`,
-          date: sp.periodDate || `${sp.key}-${String(dueDay).padStart(2, '0')}`,
-          periodLabel: sp.label,
-          status: 'Pending',
-          amount: 0,
-          method: '—',
-          referenceNo: '—',
-          notes: `Scheduled (${sp.label})`,
-        })
-      }
-    })
-
     return rows
-  }, [payments, schedule, bill.amount, dueDay])
+  }, [payments, schedule, periodStatsMap])
 
   const filteredLedgerRows = React.useMemo(() => {
-    if (ledgerStatusFilter === 'All') return ledgerRows
-    if (ledgerStatusFilter === 'Paid') {
-      return ledgerRows.filter((r) => r.status === 'Paid' || r.status === 'Partially Paid')
-    }
-    return ledgerRows.filter((r) => r.status === 'Pending')
-  }, [ledgerRows, ledgerStatusFilter])
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return ledgerRows
+    return ledgerRows.filter((r) => {
+      const matchDate = (r.date || '').toLowerCase().includes(q)
+      const matchFormattedDate = formatDisplayDate(r.date).toLowerCase().includes(q)
+      const matchPeriod = (r.periodLabel || '').toLowerCase().includes(q)
+      const matchFormattedPeriod = formatPeriodDisplay(r.periodLabel || r.date).toLowerCase().includes(q)
+      const matchRef = (r.referenceNo || '').toLowerCase().includes(q)
+      const matchNotes = (r.notes || '').toLowerCase().includes(q)
+      const matchMethod = (r.method || '').toLowerCase().includes(q)
+      const matchStatus = (r.status || '').toLowerCase().includes(q)
+      return (
+        matchDate ||
+        matchFormattedDate ||
+        matchPeriod ||
+        matchFormattedPeriod ||
+        matchRef ||
+        matchNotes ||
+        matchMethod ||
+        matchStatus
+      )
+    })
+  }, [ledgerRows, searchQuery])
 
   const totalLedgerPages = Math.max(1, Math.ceil(filteredLedgerRows.length / LEDGER_ITEMS_PER_PAGE))
   const safeLedgerPage = Math.min(ledgerPage, totalLedgerPages)
@@ -130,6 +193,349 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
     (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE,
     safeLedgerPage * LEDGER_ITEMS_PER_PAGE
   )
+
+  const handleExportPdf = () => {
+    try {
+      const printWindow = window.open('', '_blank')
+      if (!printWindow) {
+        alert('Please allow pop-ups in your browser to export the Bill Details PDF.')
+        return
+      }
+
+    const exportDateStr = new Date().toLocaleDateString('en-PH', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    })
+
+    const recurrenceRuleText =
+      bill.billingCycle === 'Daily'
+        ? 'Every Day'
+        : bill.billingCycle === 'Yearly'
+        ? `Annual (${new Date((bill.initialDueDate || bill.dueDate) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`
+        : `Every ${dueDay}${dueDay === 1 ? 'st' : dueDay === 2 ? 'nd' : dueDay === 3 ? 'rd' : 'th'} of month`
+
+    const reminderText =
+      bill.billingCycle === 'Daily'
+        ? 'Daily alert on due date'
+        : `${bill.reminderDaysBefore || 5} days before due date`
+
+    const latestAmountStr =
+      bill.latestAmount && bill.latestAmount > 0
+        ? formatPHP(bill.latestAmount)
+        : bill.amount && bill.amount > 0
+        ? formatPHP(bill.amount)
+        : '—'
+
+    const currentDueStr =
+      bill.status === 'Paid'
+        ? '₱0.00'
+        : currentRemainingDue > 0
+        ? formatPHP(currentRemainingDue)
+        : '—'
+
+    const rowsHtml =
+      ledgerRows.length === 0
+        ? `<tr><td colspan="7" style="padding: 24px; text-align: center; color: #64748B; font-size: 11px; font-style: italic;">No payment transactions recorded yet.</td></tr>`
+        : ledgerRows
+            .map(
+              (r) => `
+          <tr>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; font-weight: 600; color: #0F172A;">
+              ${formatPeriodDisplay(r.periodLabel || r.date)}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; color: #475569;">
+              ${formatDisplayDate(r.date)}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 10px; text-align: center;">
+              <span style="display: inline-block; padding: 2px 7px; border-radius: 9999px; font-weight: 700; text-transform: uppercase; font-size: 9px; letter-spacing: 0.05em; ${
+                r.status === 'Paid'
+                  ? 'background-color: #ECFDF5; color: #047857; border: 1px solid #A7F3D0;'
+                  : 'background-color: #FFFBEB; color: #B45309; border: 1px solid #FDE68A;'
+              }">
+                ${r.status}
+              </span>
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; text-align: right; font-weight: 700; color: #047857;">
+              ${r.amount > 0 ? formatPHP(r.amount) : '—'}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; color: #0F172A;">
+              ${r.method || '—'}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; font-family: monospace; color: #475569;">
+              ${r.referenceNo || '—'}
+            </td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; color: #64748B;">
+              ${r.notes || '—'}
+            </td>
+          </tr>
+        `
+            )
+            .join('')
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Bill Details - ${bill.billerName} (${bill.company})</title>
+          <style>
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+              color: #0F172A;
+              padding: 28px;
+              background-color: #FFFFFF;
+              line-height: 1.4;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-start;
+              border-bottom: 2px solid #960C01;
+              padding-bottom: 14px;
+              margin-bottom: 20px;
+            }
+            .brand-title {
+              font-size: 20px;
+              font-weight: 800;
+              color: #960C01;
+              letter-spacing: -0.02em;
+              margin: 0 0 3px 0;
+            }
+            .report-title {
+              font-size: 13px;
+              font-weight: 600;
+              color: #475569;
+              margin: 0;
+            }
+            .meta-right {
+              text-align: right;
+              font-size: 11px;
+              color: #64748B;
+            }
+            .kpi-grid {
+              display: grid;
+              grid-template-columns: repeat(4, 1fr);
+              gap: 10px;
+              margin-bottom: 20px;
+            }
+            .kpi-card {
+              background-color: #F8FAFC;
+              border: 1px solid #E2E8F0;
+              border-radius: 8px;
+              padding: 10px 12px;
+            }
+            .kpi-label {
+              font-size: 9.5px;
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: 0.05em;
+              color: #64748B;
+              margin-bottom: 4px;
+            }
+            .kpi-value {
+              font-size: 15px;
+              font-weight: 800;
+              color: #0F172A;
+            }
+            .section-box {
+              background-color: #FFFFFF;
+              border: 1px solid #E2E8F0;
+              border-radius: 8px;
+              padding: 14px;
+              margin-bottom: 20px;
+            }
+            .section-heading {
+              font-size: 11px;
+              font-weight: 800;
+              text-transform: uppercase;
+              letter-spacing: 0.05em;
+              color: #0F172A;
+              border-bottom: 1px solid #E2E8F0;
+              padding-bottom: 6px;
+              margin-bottom: 10px;
+            }
+            .terms-grid {
+              display: grid;
+              grid-template-columns: repeat(2, 1fr);
+              gap: 8px 24px;
+              font-size: 11px;
+            }
+            .terms-item {
+              display: flex;
+              justify-content: space-between;
+              padding: 3px 0;
+              border-bottom: 1px solid #F1F5F9;
+            }
+            .terms-label {
+              color: #64748B;
+            }
+            .terms-val {
+              font-weight: 600;
+              color: #0F172A;
+              text-align: right;
+            }
+            .remarks-box {
+              margin-top: 10px;
+              padding: 8px 10px;
+              background-color: #F8FAFC;
+              border: 1px solid #E2E8F0;
+              border-radius: 6px;
+              font-size: 11px;
+              color: #334155;
+              white-space: pre-wrap;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 10px;
+            }
+            th {
+              background-color: #F8FAFC;
+              text-align: left;
+              padding: 8px 10px;
+              font-size: 9.5px;
+              font-weight: 700;
+              text-transform: uppercase;
+              letter-spacing: 0.05em;
+              color: #64748B;
+              border-bottom: 2px solid #CBD5E1;
+            }
+            .table-summary {
+              margin-top: 12px;
+              padding: 10px 12px;
+              background-color: #F8FAFC;
+              border: 1px solid #E2E8F0;
+              border-radius: 6px;
+              display: flex;
+              justify-content: space-between;
+              font-size: 11px;
+              font-weight: 700;
+            }
+            @media print {
+              body { padding: 6mm; }
+              @page { size: portrait; margin: 8mm; }
+              tr { page-break-inside: avoid; }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div>
+              <div class="brand-title">MCT Group of Companies</div>
+              <div class="report-title">Bill Particulars & Payment Ledger Report</div>
+            </div>
+            <div class="meta-right">
+              <div><strong>Export Date:</strong> ${exportDateStr}</div>
+              <div><strong>Biller:</strong> ${bill.billerName}</div>
+              <div><strong>Company:</strong> ${bill.company}</div>
+            </div>
+          </div>
+
+          <!-- Overview KPI Cards -->
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-label">Latest Billed / Paid</div>
+              <div class="kpi-value">${latestAmountStr}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Billing Cycle</div>
+              <div class="kpi-value">${bill.billingCycle}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Current Period Due</div>
+              <div class="kpi-value">${currentDueStr}</div>
+            </div>
+            <div class="kpi-card">
+              <div class="kpi-label">Next Due Date</div>
+              <div class="kpi-value">${formatDisplayDate(bill.dueDate)}</div>
+            </div>
+          </div>
+
+          <!-- Bill Particulars & Terms -->
+          <div class="section-box">
+            <div class="section-heading">Bill Particulars & Agreement Terms</div>
+            <div class="terms-grid">
+              <div class="terms-item">
+                <span class="terms-label">Biller / Vendor Name</span>
+                <span class="terms-val">${bill.billerName}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Assigned Subsidiary</span>
+                <span class="terms-val">${bill.company}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Recurrence Schedule</span>
+                <span class="terms-val">${bill.billingCycle}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Recurrence Rule</span>
+                <span class="terms-val">${recurrenceRuleText}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Scheduled Due Date</span>
+                <span class="terms-val">${formatDisplayDate(bill.dueDate)}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Due Date Reminder</span>
+                <span class="terms-val">${reminderText}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Current Bill Status</span>
+                <span class="terms-val">${bill.status}</span>
+              </div>
+              <div class="terms-item">
+                <span class="terms-label">Audit Status</span>
+                <span class="terms-val">${bill.auditStatus || 'Pending Audit'}${bill.auditDate ? ` (${bill.auditDate})` : ''}</span>
+              </div>
+            </div>
+
+            <div style="margin-top: 10px;">
+              <span style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B;">Remarks & Notes</span>
+              <div class="remarks-box">${bill.notes || 'No additional remarks recorded for this bill.'}</div>
+            </div>
+          </div>
+
+          <!-- Payment Schedule & History Table -->
+          <div class="section-box">
+            <div class="section-heading">Payment Schedule & History</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Billing Period</th>
+                  <th>Payment Date</th>
+                  <th style="text-align: center;">Status</th>
+                  <th style="text-align: right;">Amount Paid</th>
+                  <th>Method</th>
+                  <th>Reference No.</th>
+                  <th>Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+
+            <div class="table-summary">
+              <div>Total Payment Records: <strong>${ledgerRows.length}</strong></div>
+              <div>Total Amount Settled: <strong style="color: #047857;">${formatPHP(totalPaidAmount)}</strong></div>
+            </div>
+          </div>
+
+          <script>
+            window.onload = function() {
+              setTimeout(function() {
+                window.print();
+              }, 250);
+            };
+          </script>
+        </body>
+      </html>
+    `)
+      printWindow.document.close()
+    } catch (err: any) {
+      alert(formatUserFriendlyErrorMessage(err, 'Unable to export Bill Details PDF. Please try again.'))
+    }
+  }
 
   return (
     <div className="space-y-5 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-200">
@@ -154,18 +560,24 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
           <h1 className="text-xl sm:text-2xl font-bold text-focus tracking-tight">
             {bill.billerName}
           </h1>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-fg">
-            <span>
-              Schedule: <strong className="text-focus font-semibold">{bill.billingCycle}</strong>
-            </span>
-            <span>
-              Due Day: <strong className="text-focus font-semibold">Day {dueDay}</strong>
-            </span>
+          <div className="flex items-center gap-1.5 text-xs text-muted-fg font-medium">
+            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
+            <span className="font-semibold text-focus/90">{bill.company}</span>
           </div>
         </div>
 
         {/* Action Buttons in the same row as the Biller Name */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleExportPdf}
+            className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
+          >
+            <Download className="h-3.5 w-3.5 text-focus" />
+            <span>Export PDF</span>
+          </Button>
+
           {!isAudit && (
             <>
               <Button
@@ -212,14 +624,18 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
         </div>
       </div>
 
-      {/* 6 Financial Overview KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      {/* 4 Financial Overview KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-white border border-stroke/60 rounded-2xl p-4 shadow-2xs">
           <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-fg block">
-            Bill Amount
+            Latest Billed / Paid
           </span>
           <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-            {formatPHP(bill.amount)}
+            {bill.latestAmount && bill.latestAmount > 0
+              ? formatPHP(bill.latestAmount)
+              : bill.amount && bill.amount > 0
+              ? formatPHP(bill.amount)
+              : '—'}
           </span>
         </div>
 
@@ -237,25 +653,11 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
             Current Period Due
           </span>
           <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-            {formatPHP(bill.amount)}
-          </span>
-        </div>
-
-        <div className="bg-emerald-50/70 border border-emerald-200/70 rounded-2xl p-4 shadow-2xs">
-          <span className="text-[10.5px] font-bold uppercase tracking-wider text-emerald-800 block">
-            Amount Paid
-          </span>
-          <span className="text-base sm:text-lg font-extrabold text-emerald-700 tabular-nums mt-1 block">
-            {formatPHP(totalPaidAmount)}
-          </span>
-        </div>
-
-        <div className="bg-amber-50/70 border border-amber-200/70 rounded-2xl p-4 shadow-2xs">
-          <span className="text-[10.5px] font-bold uppercase tracking-wider text-amber-800 block">
-            Remaining Balance
-          </span>
-          <span className="text-base sm:text-lg font-extrabold text-amber-700 tabular-nums mt-1 block">
-            {formatPHP(currentRemainingDue)}
+            {bill.status === 'Paid'
+              ? '₱0.00'
+              : currentRemainingDue > 0
+              ? formatPHP(currentRemainingDue)
+              : '—'}
           </span>
         </div>
 
@@ -264,7 +666,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
             Next Due Date
           </span>
           <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-            {bill.dueDate}
+            {formatDisplayDate(bill.dueDate)}
           </span>
         </div>
       </div>
@@ -280,36 +682,49 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
 
           <div className="space-y-3 text-xs">
             <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Biller Name</span>
-              <span className="font-bold text-focus text-right truncate max-w-[160px]">{bill.billerName}</span>
-            </div>
-            <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Assigned Company</span>
-              <span className="font-semibold text-focus text-right truncate max-w-[160px]">{bill.company}</span>
-            </div>
-            <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Category</span>
-              <span className="font-semibold text-focus">{bill.category}</span>
-            </div>
-            <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Account No.</span>
-              <span className="font-mono font-semibold text-focus">{bill.accountNo || 'N/A'}</span>
-            </div>
-            <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Payment Frequency</span>
+              <span className="text-muted-fg">Recurrence Schedule</span>
               <span className="font-semibold text-focus">{bill.billingCycle}</span>
             </div>
             <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Due Day of Cycle</span>
-              <span className="font-mono font-semibold text-focus">Day {dueDay}</span>
+              <span className="text-muted-fg">Recurrence Rule</span>
+              <span className="font-semibold text-focus text-right">
+                {bill.billingCycle === 'Daily'
+                  ? 'Every Day'
+                  : bill.billingCycle === 'Yearly'
+                  ? `Annual (${new Date((bill.initialDueDate || bill.dueDate) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`
+                  : `Every ${dueDay}${dueDay === 1 ? 'st' : dueDay === 2 ? 'nd' : dueDay === 3 ? 'rd' : 'th'} of month`}
+              </span>
             </div>
             <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
               <span className="text-muted-fg">Scheduled Due Date</span>
-              <span className="font-mono font-semibold text-focus">{bill.dueDate}</span>
+              <span className="font-semibold text-focus">{formatDisplayDate(bill.dueDate)}</span>
             </div>
             <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-              <span className="text-muted-fg">Latest Settlement</span>
-              <span className="font-mono font-semibold text-focus">{bill.lastPaidDate || 'None'}</span>
+              <span className="text-muted-fg">Due Date Reminder</span>
+              <span className="font-medium text-amber-700">
+                {bill.billingCycle === 'Daily'
+                  ? 'Daily alert on due date'
+                  : `${bill.reminderDaysBefore || 5} days before due date`}
+              </span>
+            </div>
+            <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
+              <span className="text-muted-fg">Current Status</span>
+              <span
+                className={cn(
+                  'px-2 py-0.5 rounded text-[10.5px] font-bold border',
+                  bill.status === 'Paid'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : bill.status === 'Overdue'
+                    ? 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/25'
+                    : bill.status === 'Due Soon'
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : bill.status === 'Partially Paid'
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : 'bg-slate-100 text-slate-700 border-slate-200'
+                )}
+              >
+                {bill.status}
+              </span>
             </div>
             {bill.auditStatus && (
               <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
@@ -348,33 +763,29 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                   <span>Payment Schedule & History</span>
                 </h2>
                 <p className="text-[11px] text-muted-fg mt-0.5">
-                  Showing 5 records per page • Filter by Paid or Pending status
+                  Showing Payment Transactions made for this Bill
                 </p>
               </div>
 
-              {/* Status Filter Toggle (Paid / Pending) */}
-              <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs self-start sm:self-auto">
-                {(['All', 'Paid', 'Pending'] as const).map((statusOpt) => {
-                  const isActive = ledgerStatusFilter === statusOpt
-                  return (
-                    <button
-                      key={statusOpt}
-                      type="button"
-                      onClick={() => {
-                        setLedgerStatusFilter(statusOpt)
-                        setLedgerPage(1)
-                      }}
-                      className={cn(
-                        'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
-                        isActive
-                          ? 'bg-[#960C01] text-white shadow-xs'
-                          : 'text-muted-fg hover:text-focus'
-                      )}
-                    >
-                      {statusOpt}
-                    </button>
-                  )
-                })}
+              {/* Real-time Search Input */}
+              <div className="relative w-full sm:w-72">
+                <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search date, ref no, remarks..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full h-9 pl-8 pr-8 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus placeholder:text-muted-fg/70 focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -382,6 +793,9 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
               <Table>
                 <TableHeader>
                   <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
+                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
+                      Billing Period
+                    </TableHead>
                     <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
                       Payment Date
                     </TableHead>
@@ -405,8 +819,10 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                 <TableBody>
                   {paginatedLedger.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="h-36 text-center text-xs text-muted-fg">
-                        No payment records match your filter.
+                      <TableCell colSpan={7} className="h-36 text-center text-xs text-muted-fg">
+                        {searchQuery
+                          ? `No payment records found matching "${searchQuery}".`
+                          : 'No payment transactions recorded yet.'}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -420,17 +836,19 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
 
                       return (
                         <TableRow key={entry.id} className="hover:bg-slate-50/60 border-b border-slate-100">
-                          <TableCell className="py-3 px-3 font-mono text-xs font-semibold text-focus whitespace-nowrap">
-                            {entry.date}
+                          <TableCell className="py-3 px-3 text-xs font-semibold text-focus whitespace-nowrap">
+                            {formatPeriodDisplay(entry.periodLabel || entry.date)}
+                          </TableCell>
+                          <TableCell className="py-3 px-3 text-xs text-muted-fg whitespace-nowrap">
+                            {formatDisplayDate(entry.date)}
                           </TableCell>
                           <TableCell className="py-3 px-3 text-center whitespace-nowrap">
                             <span
                               className={cn(
-                                'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
                                 badgeStyle
                               )}
                             >
-                              {entry.status === 'Paid' && <Check className="h-2.5 w-2.5 stroke-[3]" />}
                               {entry.status}
                             </span>
                           </TableCell>

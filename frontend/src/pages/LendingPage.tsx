@@ -47,7 +47,7 @@ import {
 } from '@/components/ui/DateRangePicker'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP } from '@/lib/format'
-import { isDateInRange, formatToYYYYMMDD } from '@/utils/dateUtils'
+import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 import {
@@ -142,17 +142,11 @@ export const LendingPage: React.FC = () => {
   }, [])
 
   // Filter toolbar state matching SalesPage
-  const [dateRange, setDateRange] = React.useState<DateRange>(() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-      label: 'This Month',
-      preset: 'This Month',
-    }
+  const [dateRange, setDateRange] = React.useState<DateRange>({
+    startDate: null,
+    endDate: null,
+    label: 'All Dates',
+    preset: 'All Dates',
   })
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<'All' | 'Active' | 'Completed' | 'Overdue' | 'Pending'>('All')
@@ -400,11 +394,20 @@ export const LendingPage: React.FC = () => {
         if (!matchesLoanId && !matchesLoanRefNo && !matchesBorrowerRef && !matchesBorrower && !matchesNotes) return false
       }
 
-      // 4. Date Range filter (matches either dateBorrowed or dueDate)
-      if (dateRange.startDate && dateRange.endDate) {
+      // 4. Date Range filter (matches dateBorrowed, dueDate, active loan span overlap, or recorded payment dates)
+      if (dateRange.startDate || dateRange.endDate) {
+        const borrowedDate = normalizeDateToYYYYMMDD(item.dateBorrowed)
+        const dueDate = normalizeDateToYYYYMMDD(item.dueDate)
         const borrowedInRange = isDateInRange(item.dateBorrowed, dateRange.startDate, dateRange.endDate)
         const dueInRange = isDateInRange(item.dueDate, dateRange.startDate, dateRange.endDate)
-        if (!borrowedInRange && !dueInRange) return false
+        const spanOverlapsRange =
+          Boolean(borrowedDate && dueDate) &&
+          (!dateRange.endDate || borrowedDate <= dateRange.endDate) &&
+          (!dateRange.startDate || dueDate >= dateRange.startDate)
+        const paymentInRange = Object.keys(item.dailyPayments || {}).some((payDate) =>
+          isDateInRange(payDate, dateRange.startDate, dateRange.endDate)
+        )
+        if (!borrowedInRange && !dueInRange && !spanOverlapsRange && !paymentInRange) return false
       }
 
       return true

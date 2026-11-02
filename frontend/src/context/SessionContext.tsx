@@ -7,6 +7,7 @@ import {
   type Resend2FAResponse,
 } from '@/services/authService'
 import type { SignInFormValues } from '@/lib/validation/auth'
+import { clearNotificationCache } from '@/services/notificationService'
 
 export type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -69,11 +70,13 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
           setStatus('authenticated')
         } else {
           setUser(null)
+      clearNotificationCache()
           setStatus('unauthenticated')
         }
       } catch {
         if (!isMounted) return
         setUser(null)
+      clearNotificationCache()
         setStatus('unauthenticated')
       }
     }
@@ -121,6 +124,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
     } finally {
       // Regardless of outcome, clear session state in memory
       setUser(null)
+      clearNotificationCache()
       setStatus('unauthenticated')
     }
   }, [])

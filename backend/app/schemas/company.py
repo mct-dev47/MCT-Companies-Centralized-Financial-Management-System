@@ -42,6 +42,21 @@ class CompanyOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class AuthorizedCompanyOut(BaseModel):
+    id: int
+    name: str
+    location: str
+    contact_number: Optional[str] = None
+    phone: Optional[str] = None
+    starting_balance: float = 0.0
+    petty_cash: float = 0.0
+    logo_url: Optional[str] = None
+    role: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class HealthResponse(BaseModel):
     status: str
     service: str

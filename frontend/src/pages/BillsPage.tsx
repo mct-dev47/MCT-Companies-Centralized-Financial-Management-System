@@ -58,6 +58,8 @@ import { BillDetailPageView } from '@/components/dashboard/BillDetailPageView'
 import { RecordBillPaymentModal } from '@/components/dashboard/RecordBillPaymentModal'
 import { DashboardKpiCard } from '@/components/dashboard/DashboardKpiCard'
 import { isCompanyMatch } from '@/utils/companyUtils'
+import { formatDisplayDate } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 const DEFAULT_COMPANY_LIST = ['All Companies']
@@ -71,11 +73,12 @@ export const BillsPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isFinance = userRole === 'finance'
   const isCompanyScoped = !isAdmin && !isFinance
-  const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const assignedCompany = user?.assignedCompany || ''
 
   // Data states
   const [bills, setBills] = React.useState<BillItem[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
   const [companyList, setCompanyList] = React.useState<string[]>(DEFAULT_COMPANY_LIST)
 
   const { activeCompany, setActiveCompany } = useCompany()
@@ -197,22 +200,14 @@ export const BillsPage: React.FC = () => {
   // Load bills
   const loadBills = React.useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
       const data = await billsService.getBills()
-      let auditRecords: Record<string, any> = {}
-      try {
-        const stored = localStorage.getItem('bills_audit_records')
-        if (stored) auditRecords = JSON.parse(stored)
-      } catch { }
-      const merged = data.map((b) => {
-        if (auditRecords[b.id]) {
-          return { ...b, ...auditRecords[b.id] }
-        }
-        return b
-      })
-      setBills(merged)
-    } catch (err) {
+      setBills(data)
+    } catch (err: any) {
       console.error('Failed to load bills:', err)
+      setLoadError(formatUserFriendlyErrorMessage(err, 'Unable to load bills. Please try again.'))
+      setBills([])
     } finally {
       setLoading(false)
     }
@@ -235,14 +230,6 @@ export const BillsPage: React.FC = () => {
     setBills((prev) => prev.map((item) => (item.id === bill.id ? updated : item)))
     if (selectedDetailBill?.id === bill.id) {
       setSelectedDetailBill(updated)
-    }
-    try {
-      const stored = localStorage.getItem('bills_audit_records')
-      const records = stored ? JSON.parse(stored) : {}
-      records[bill.id] = { auditStatus: status, auditDate: timestamp, auditedBy: user?.fullName || 'Audit' }
-      localStorage.setItem('bills_audit_records', JSON.stringify(records))
-    } catch {
-      // ignore
     }
     setOpenMenuBillId(null)
     setMenuPosition(null)
@@ -289,16 +276,21 @@ export const BillsPage: React.FC = () => {
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim()
         const matchName = bill.billerName.toLowerCase().includes(q)
-        const matchAcc = (bill.accountNo || '').toLowerCase().includes(q)
         const matchComp = bill.company.toLowerCase().includes(q)
-        const matchCat = (bill.category || '').toLowerCase().includes(q)
         const matchNotes = (bill.notes || '').toLowerCase().includes(q)
-        if (!matchName && !matchAcc && !matchComp && !matchCat && !matchNotes) {
+        if (!matchName && !matchComp && !matchNotes) {
           return false
         }
       }
 
       return true
+    }).sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      if (timeA !== timeB) return timeB - timeA
+      const idA = parseInt(a.id, 10) || 0
+      const idB = parseInt(b.id, 10) || 0
+      return idB - idA
     })
   }, [bills, selectedCompany, statusFilter, searchQuery])
 
@@ -376,7 +368,7 @@ export const BillsPage: React.FC = () => {
       }
       setDeleteConfirmBill(null)
     } catch (err: any) {
-      alert(err?.message || 'Failed to delete bill')
+      alert(formatUserFriendlyErrorMessage(err, 'Unable to delete bill. Please try again.'))
     } finally {
       setIsDeleting(false)
     }
@@ -388,90 +380,100 @@ export const BillsPage: React.FC = () => {
   }
 
   const handleExportCsv = () => {
-    const compName = isCompanyScoped ? assignedCompany : selectedCompany
-    billsService.exportCsv(
-      filteredBills,
-      `monthly_bills_${compName.replace(/\s+/g, '_')}_${Date.now()}.csv`
-    )
-    setIsExportDropdownOpen(false)
+    try {
+      const compName = isCompanyScoped ? assignedCompany : selectedCompany
+      billsService.exportCsv(
+        filteredBills,
+        `monthly_bills_${compName.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    } catch (err: any) {
+      alert(formatUserFriendlyErrorMessage(err, 'Unable to export bills to CSV. Please try again.'))
+    } finally {
+      setIsExportDropdownOpen(false)
+    }
   }
 
   const handleExportPdf = () => {
     setIsExportDropdownOpen(false)
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) return
-    const companyTitle = isCompanyScoped ? assignedCompany : selectedCompany
-    const rowsHtml =
-      filteredBills.length === 0
-        ? `<tr><td colspan="7" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No monthly bills found matching the selected filters.</td></tr>`
-        : filteredBills
-          .map(
-            (b) => `
-        <tr>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${b.billerName}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${b.company}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${b.category}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${b.accountNo || '—'}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 600;">₱${b.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${b.dueDate}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${b.status}</td>
-        </tr>
-      `
-          )
-          .join('')
+    try {
+      const printWindow = window.open('', '_blank')
+      if (!printWindow) {
+        alert('Please allow pop-ups in your browser to export the Bills PDF.')
+        return
+      }
+      const companyTitle = isCompanyScoped ? assignedCompany : selectedCompany
+      const rowsHtml =
+        filteredBills.length === 0
+          ? `<tr><td colspan="6" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No bills found matching the selected filters.</td></tr>`
+          : filteredBills
+            .map(
+              (b) => `
+          <tr>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${b.billerName}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${b.company}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 600;">₱${b.amount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${b.dueDate}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${b.billingCycle}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${b.status}</td>
+          </tr>
+        `
+            )
+            .join('')
 
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Monthly Bills Report - ${companyTitle}</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
-            h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
-            p { font-size: 12px; color: #64748B; margin: 0 0 16px 0; }
-            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-            th { background-color: #F8FAFC; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; border-bottom: 2px solid #CBD5E1; }
-            .summary { margin-top: 20px; padding: 12px 16px; background-color: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; font-size: 12px; }
-            @media print {
-              body { padding: 10px; }
-              @page { size: landscape; margin: 10mm; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>MCT Group of Companies</h1>
-          <p>Monthly Bills Report for <strong>${companyTitle}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Biller Name</th>
-                <th>Company</th>
-                <th>Category</th>
-                <th>Account No</th>
-                <th style="text-align: right;">Amount</th>
-                <th style="text-align: center;">Due Date</th>
-                <th style="text-align: center;">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rowsHtml}
-            </tbody>
-          </table>
-          <div class="summary">
-            <div><strong>Total Records:</strong> ${filteredBills.length}</div>
-            <div><strong>Total Payable:</strong> ₱${stats.totalMonthlyAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
-            <div><strong>Total Paid:</strong> ₱${stats.paidAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
-            <div><strong>Overdue / Unpaid:</strong> ₱${(stats.overdueAmount + stats.unpaidAmount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
-          </div>
-          <script>
-            window.onload = function() {
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `)
-    printWindow.document.close()
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Bills Report - ${companyTitle}</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
+              h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
+              p { font-size: 12px; color: #64748B; margin: 0 0 16px 0; }
+              table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+              th { background-color: #F8FAFC; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; border-bottom: 2px solid #CBD5E1; }
+              .summary { margin-top: 20px; padding: 12px 16px; background-color: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; font-size: 12px; }
+              @media print {
+                body { padding: 10px; }
+                @page { size: landscape; margin: 10mm; }
+              }
+            </style>
+          </head>
+          <body>
+            <h1>MCT Group of Companies</h1>
+            <p>Bills Report for <strong>${companyTitle}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Biller Name</th>
+                  <th>Company</th>
+                  <th style="text-align: right;">Amount</th>
+                  <th style="text-align: center;">Due Date</th>
+                  <th style="text-align: center;">Cycle</th>
+                  <th style="text-align: center;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+            <div class="summary">
+              <div><strong>Total Records:</strong> ${filteredBills.length}</div>
+              <div><strong>Total Payable:</strong> ₱${stats.totalMonthlyAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+              <div><strong>Total Paid:</strong> ₱${stats.paidAmount.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+              <div><strong>Overdue / Unpaid:</strong> ₱${(stats.overdueAmount + stats.unpaidAmount).toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+            </div>
+            <script>
+              window.onload = function() {
+                window.print();
+              };
+            </script>
+          </body>
+        </html>
+      `)
+      printWindow.document.close()
+    } catch (err: any) {
+      alert(formatUserFriendlyErrorMessage(err, 'Unable to generate Bills PDF report. Please try again.'))
+    }
   }
 
   const filteredCompanyList = React.useMemo(() => {
@@ -595,7 +597,7 @@ export const BillsPage: React.FC = () => {
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                Monthly Bills
+                Company Bills
               </h1>
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
@@ -671,7 +673,7 @@ export const BillsPage: React.FC = () => {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
             <Input
               type="search"
-              placeholder="Search by biller, account number, company, category, or notes…"
+              placeholder="Search by biller, company, or notes…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
@@ -820,50 +822,6 @@ export const BillsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Top Metric KPI Containers (4 Cards) matching Dashboard */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Monthly Bills */}
-        <DashboardKpiCard
-          label="Total Monthly Bills"
-          value={loading ? '...' : formatPHP(stats.totalMonthlyAmount)}
-          icon={Receipt}
-          subtext={`Across ${stats.totalBillsCount} scheduled bills`}
-        />
-
-        {/* Paid / Settled */}
-        <DashboardKpiCard
-          label="Paid / Settled"
-          value={loading ? '...' : formatPHP(stats.paidAmount)}
-          icon={CheckCircle2}
-          subtext={`${stats.paidCount} of ${stats.totalBillsCount} bills settled`}
-          valueClassName="text-emerald-600"
-          iconContainerClassName="bg-emerald-50 text-emerald-600 border border-emerald-200/60"
-        />
-
-        {/* Unpaid / Outstanding */}
-        <DashboardKpiCard
-          label="Unpaid / Outstanding"
-          value={loading ? '...' : formatPHP(stats.unpaidAmount)}
-          icon={Clock}
-          subtext={`${stats.unpaidCount} bills pending payment`}
-          valueClassName="text-amber-600"
-          iconContainerClassName="bg-amber-50 text-amber-600 border border-amber-200/60"
-        />
-
-        {/* Urgent Reminders */}
-        <DashboardKpiCard
-          label="Urgent Reminders"
-          value={loading ? '...' : String(reminders.length)}
-          icon={BellRing}
-          subtext={
-            stats.overdueCount > 0
-              ? `${stats.overdueCount} overdue (${formatPHP(stats.overdueAmount)})`
-              : `${stats.dueSoonCount} due soon`
-          }
-          valueClassName="text-rose-600"
-          iconContainerClassName="bg-rose-50 text-rose-600 border border-rose-200/60"
-        />
-      </div>
 
       {/* 3. Due Date Reminders Banner (Alert section) */}
       {reminders.length > 0 && (
@@ -927,7 +885,13 @@ export const BillsPage: React.FC = () => {
                     <div className="text-[11px] opacity-75 mt-0.5 flex items-center gap-1.5">
                       <span>{rem.bill.company}</span>
                       <span>•</span>
-                      <span className="font-semibold">{formatPHP(rem.bill.amount)}</span>
+                      <span className="font-semibold">
+                        {rem.bill.latestAmount && rem.bill.latestAmount > 0
+                          ? formatPHP(rem.bill.latestAmount)
+                          : rem.bill.amount && rem.bill.amount > 0
+                          ? formatPHP(rem.bill.amount)
+                          : '—'}
+                      </span>
                     </div>
                   </div>
 
@@ -974,16 +938,16 @@ export const BillsPage: React.FC = () => {
                 <TableHead className="w-[28%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   BILLER
                 </TableHead>
-                <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   COMPANY
                 </TableHead>
-                <TableHead className="w-[18%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  MONTHLY AMOUNT
+                <TableHead className="w-[18%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  LATEST BILLED / PAID
                 </TableHead>
-                <TableHead className="w-[16%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[16%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   DUE DATE
                 </TableHead>
-                <TableHead className="w-[11%] px-2.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[11%] px-2.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   STATUS
                 </TableHead>
                 <TableHead className="w-[5%] px-1 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -996,26 +960,54 @@ export const BillsPage: React.FC = () => {
               {loading ? (
                 Array.from({ length: 5 }).map((_, idx) => (
                   <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3 py-4">
+                    <TableCell className="px-3 py-4 text-left">
                       <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
                     </TableCell>
-                    <TableCell className="px-3 py-4">
-                      <div className="h-4 w-24 bg-slate-200/80 animate-pulse rounded" />
+                    <TableCell className="px-3 py-4 text-center">
+                      <div className="h-4 w-24 bg-slate-200/80 animate-pulse rounded mx-auto" />
                     </TableCell>
-                    <TableCell className="px-3 py-4 text-right">
-                      <div className="h-4 w-20 bg-slate-200/80 animate-pulse rounded ml-auto" />
+                    <TableCell className="px-3 py-4 text-center">
+                      <div className="h-4 w-20 bg-slate-200/80 animate-pulse rounded mx-auto" />
                     </TableCell>
-                    <TableCell className="px-3 py-4">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded" />
+                    <TableCell className="px-3 py-4 text-center">
+                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded mx-auto" />
                     </TableCell>
-                    <TableCell className="px-2.5 py-4">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full" />
+                    <TableCell className="px-2.5 py-4 text-center">
+                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full mx-auto" />
                     </TableCell>
                     <TableCell className="px-1 py-4 text-center">
                       <div className="h-6 w-6 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
                     </TableCell>
                   </TableRow>
                 ))
+              ) : loadError ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
+                  >
+                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                      <div className="w-12 h-12 rounded-2xl bg-[#960C01]/10 flex items-center justify-center text-[#960C01] mb-1">
+                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
+                      </div>
+                      <p className="font-semibold text-focus text-sm sm:text-base">
+                        Failed to load bill records
+                      </p>
+                      <p className="text-xs text-[#960C01] leading-relaxed">
+                        {loadError}
+                      </p>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={loadBills}
+                        className="mt-2 text-xs font-semibold rounded-xl"
+                      >
+                        Try Again
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
               ) : paginatedBills.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1063,37 +1055,57 @@ export const BillsPage: React.FC = () => {
 
                       {/* Company */}
                       <TableCell
-                        className="w-[22%] px-3 py-3.5 text-xs font-semibold text-focus truncate text-left"
+                        className="w-[22%] px-3 py-3.5 text-xs font-semibold text-focus truncate text-center"
                         title={bill.company}
                       >
-                        <div className="flex items-center gap-1.5 min-w-0 truncate">
+                        <div className="flex items-center justify-center gap-1.5 min-w-0 truncate">
                           <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
                           <span className="truncate">{bill.company}</span>
                         </div>
                       </TableCell>
 
-                      {/* Monthly Amount */}
-                      <TableCell className="w-[18%] px-3 py-3.5 text-xs font-bold text-focus tabular-nums text-right truncate">
-                        <div className="truncate">{formatPHP(bill.amount)}</div>
-                        <div className="text-[10px] text-muted-fg font-normal truncate">
-                          {bill.billingCycle}
+                      {/* Latest Billed / Paid Amount & Recurrence */}
+                      <TableCell className="w-[18%] px-3 py-3.5 text-xs font-bold text-focus tabular-nums text-center truncate">
+                        <div className="truncate text-center">
+                          {bill.latestAmount && bill.latestAmount > 0
+                            ? formatPHP(bill.latestAmount)
+                            : bill.amount && bill.amount > 0
+                            ? formatPHP(bill.amount)
+                            : '—'}
+                        </div>
+                        <div className="text-[10px] font-normal truncate mt-0.5 flex justify-center">
+                          {bill.billingCycle === 'Daily' ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
+                              Daily
+                            </span>
+                          ) : bill.billingCycle === 'Yearly' ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200/60">
+                              Yearly (Annual)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+                              Monthly (Every {bill.dueDayOfMonth || (bill.dueDate ? parseInt(bill.dueDate.slice(8, 10), 10) : 1)})
+                            </span>
+                          )}
                         </div>
                       </TableCell>
 
                       {/* Due Date & Reminder */}
-                      <TableCell className="w-[16%] px-3 py-3.5 text-xs text-left truncate">
-                        <div className="flex flex-col min-w-0">
-                          <span className="font-medium text-focus truncate">{bill.dueDate}</span>
-                          <span className="text-[11px] text-amber-600 flex items-center gap-1 truncate font-medium">
+                      <TableCell className="w-[16%] px-3 py-3.5 text-xs text-center truncate">
+                        <div className="flex flex-col items-center justify-center min-w-0">
+                          <span className="font-semibold text-focus truncate">{formatDisplayDate(bill.dueDate)}</span>
+                          <span className="text-[11px] text-amber-600 flex items-center justify-center gap-1 truncate font-medium">
                             <BellRing className="w-2.5 h-2.5 shrink-0" />
-                            <span className="truncate">Remind {bill.reminderDaysBefore}d</span>
+                            <span className="truncate">
+                              {bill.billingCycle === 'Daily' ? 'Daily Alert' : `Remind ${bill.reminderDaysBefore}d`}
+                            </span>
                           </span>
                         </div>
                       </TableCell>
 
                       {/* Status */}
-                      <TableCell className="w-[10%] px-2.5 py-3.5 text-left truncate">
-                        <div className="flex flex-col gap-1 items-start">
+                      <TableCell className="w-[11%] px-2.5 py-3.5 text-center truncate">
+                        <div className="flex flex-col gap-1 items-center justify-center">
                           {isPaid ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold shadow-2xs">
                               <Check className="w-3 h-3 text-emerald-600 shrink-0" />
@@ -1116,7 +1128,7 @@ export const BillsPage: React.FC = () => {
                             </span>
                           )}
                           {bill.auditDate && (
-                            <span className="text-[10px] text-slate-500 font-normal flex items-center gap-1" title={`Audited at: ${bill.auditDate}`}>
+                            <span className="text-[10px] text-slate-500 font-normal flex items-center justify-center gap-1" title={`Audited at: ${bill.auditDate}`}>
                               <Clock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
                               <span className="truncate max-w-[110px]">{bill.auditDate}</span>
                             </span>

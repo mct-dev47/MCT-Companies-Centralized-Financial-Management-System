@@ -4,6 +4,7 @@
 // the calls throw and callers show the wallet as unavailable.
 
 import { websocketService } from './websocketService'
+import { notifyNotificationsUpdated } from './notificationService'
 
 export const PETTY_CASH_METHOD = 'Petty Cash'
 
@@ -238,6 +239,7 @@ const PC_CACHE_TTL = 30000
 export const pettyCashService = {
   invalidateCache(): void {
     pcCache.clear()
+    notifyNotificationsUpdated()
   },
 
   async getSummary(company: string, period: PettyCashPeriod = {}): Promise<PettyCashSummary> {

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, Optional, List
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -20,6 +20,15 @@ class AuthenticatedUser(TypedDict, total=False):
 
 
 VerifiedToken = Annotated[dict[str, Any], Depends(verify_token)]
+
+def _optional_positive_int(value: object) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value > 0:
+        return value
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return int(value)
+    return None
 
 # get the current authenticated user from the verified token claims and DB
 def get_current_user(
@@ -87,7 +96,7 @@ def get_current_user(
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
-# require an Audit or Administrator account (only they may save an audit review, spec 0014)
+# require an Audit or Administrator account (for audit actions where permitted)
 def require_audit_or_admin_user(user: CurrentUser) -> AuthenticatedUser:
     role = str(user.get("role") or "").lower()
     if role not in ("audit", "auditor", "admin") and not user.get("is_admin"):
@@ -99,6 +108,19 @@ def require_audit_or_admin_user(user: CurrentUser) -> AuthenticatedUser:
 
 
 AuditOrAdminUser = Annotated[AuthenticatedUser, Depends(require_audit_or_admin_user)]
+
+# require an Audit role account specifically
+def require_auditor_user(user: CurrentUser) -> AuthenticatedUser:
+    role = str(user.get("role") or "").lower()
+    if role not in ("audit", "auditor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Auditor accounts can perform this audit review action.",
+        )
+    return user
+
+
+AuditorUser = Annotated[AuthenticatedUser, Depends(require_auditor_user)]
 
 # require the current authenticated user to be a central administrator account.
 def require_admin_user(user: CurrentUser) -> AuthenticatedUser:
@@ -112,10 +134,23 @@ def require_admin_user(user: CurrentUser) -> AuthenticatedUser:
 
 AdminUser = Annotated[AuthenticatedUser, Depends(require_admin_user)]
 
+# require Finance role
+def require_finance_user(user: CurrentUser) -> AuthenticatedUser:
+    role = str(user.get("role") or "").lower()
+    if role != "finance":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Finance access is required.",
+        )
+    return user
+
+
+FinanceUser = Annotated[AuthenticatedUser, Depends(require_finance_user)]
+
 # require Finance or Administrator role
 def require_finance_or_admin_user(user: CurrentUser) -> AuthenticatedUser:
     role = user.get("role", "").lower()
-    if role not in ["finance", "audit", "admin"] and not user.get("is_admin"):
+    if role not in ["finance", "admin"] and not user.get("is_admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Finance or administrator access is required.",
@@ -124,6 +159,41 @@ def require_finance_or_admin_user(user: CurrentUser) -> AuthenticatedUser:
 
 
 FinanceOrAdminUser = Annotated[AuthenticatedUser, Depends(require_finance_or_admin_user)]
+
+# require Finance or Supervisor role for business record mutations (Admin and Auditor blocked)
+def require_business_writer(user: CurrentUser) -> AuthenticatedUser:
+    if user.get("is_admin") or user.get("role") == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts manage system configuration and users only; business operations are reserved for Finance and Supervisors.",
+        )
+    role = str(user.get("role") or "").lower()
+    if role in ("audit", "auditor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Auditor accounts have read-only access to business records.",
+        )
+    if role not in ("finance", "supervisor", "company"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Business mutation access requires Finance or Supervisor role.",
+        )
+    return user
+
+
+BusinessWriter = Annotated[AuthenticatedUser, Depends(require_business_writer)]
+
+# require business reader (Finance, Auditor, and Supervisor allowed; Admin blocked from business operations)
+def require_business_reader(user: CurrentUser) -> AuthenticatedUser:
+    if user.get("is_admin") or user.get("role") == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator accounts manage system configuration and users only; business operations are reserved for Finance and Supervisors.",
+        )
+    return user
+
+
+BusinessReader = Annotated[AuthenticatedUser, Depends(require_business_reader)]
 
 # require the current authenticated user to be a company account.
 def require_company_user(user: CurrentUser) -> AuthenticatedUser:
@@ -160,11 +230,45 @@ def check_company_access(user: AuthenticatedUser, target_company_id: int | None)
             detail="Access denied: You are not assigned to this company."
         )
 
-def _optional_positive_int(value: object) -> int | None:
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, int) and value > 0:
-        return value
-    if isinstance(value, str) and value.isdigit() and int(value) > 0:
-        return int(value)
-    return None
+
+def get_authorized_company_scope(
+    user: AuthenticatedUser,
+    requested_company_id: int | None = None,
+) -> list[int] | None:
+    """
+    Resolve the authorized company IDs for querying:
+    - Finance / Auditor: None (all companies) unless requested_company_id is specified.
+    - Supervisor: Returns [requested_company_id] if assigned, or all assigned company IDs.
+      Raises HTTP 403 Forbidden if requested_company_id is not assigned to the supervisor.
+    """
+    from app.core.company_resolver import normalize_company_id
+    role = str(user.get("role") or "").lower()
+    is_privileged = user.get("is_admin") or role in ("admin", "finance", "audit", "auditor")
+
+    req_cid = normalize_company_id(requested_company_id) if requested_company_id is not None else None
+
+    if is_privileged:
+        return [req_cid] if req_cid is not None else None
+
+    assigned = user.get("company_ids") or []
+    assigned_normalized = [normalize_company_id(cid) for cid in assigned if cid is not None]
+    if user.get("company_id"):
+        p_cid = normalize_company_id(user.get("company_id"))
+        if p_cid is not None and p_cid not in assigned_normalized:
+            assigned_normalized.insert(0, p_cid)
+
+    if not assigned_normalized:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Your account is not assigned to any company."
+        )
+
+    if req_cid is not None:
+        if req_cid not in assigned_normalized:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: You are not assigned to this company."
+            )
+        return [req_cid]
+
+    return assigned_normalized

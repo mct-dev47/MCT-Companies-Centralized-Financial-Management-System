@@ -2,33 +2,46 @@ import * as React from 'react'
 import { useSession } from '@/hooks/useSession'
 import { isLendingEnabledCompany } from '@/config/companyFeatures'
 
+export interface CompanyOption {
+  id: number
+  name: string
+  company_id?: number
+  company_name?: string
+}
+
 export interface CompanyContextValue {
   activeCompany: string
   setActiveCompany: (company: string) => void
   isLendingEnabled: boolean
   isCompanyScoped: boolean
   allCompanies: string[]
+  dbCompanies: CompanyOption[]
+  isLoadingCompanies: boolean
+  refreshCompanies: () => Promise<void>
 }
 
-export const ALL_COMPANIES_LIST = [
-  'All Companies',
-  'MCTolentino Hospitality Business Corporation',
-  'JK Global Printing Service',
-  'Speedfire Construction & Trading Corporation',
-  'JK Property and Ventures Corporation',
-  'Golden Jupiter Property Ventures Corporation',
-  'FILCAP Prime Holdings Corp.',
-  'MEDSYS Uni Horizon Pharma Corporation | Arcade',
-  'Far East Asia Trading Corporation',
-  'M.C Tolentino College Foundation, Incorporation',
-  'Bagong Bansa May Pag Asa Movement, Incorporation',
-  'Bookworld Systems Solutions & Technologies Corporation',
-  'MEDSYS Uni Horizon Pharma Corporation | Sapamanai',
-  'MEDSYS Uni Horizon Pharma Corporation | Regalado',
-  'MyCity.Kitchen Corporation',
-]
+// Default placeholder containing only the aggregate 'All Companies' option.
+// All specific companies are dynamically queried and retrieved from Supabase.
+export const ALL_COMPANIES_LIST: string[] = ['All Companies']
 
-const COMPANY_STORAGE_KEY = 'mct_selected_company'
+const COMPANY_STORAGE_KEY = 'mct_active_company_session'
+const DYNAMIC_COMPANIES_CACHE_KEY = 'mct_dynamic_companies_cache'
+
+const getCachedCompanies = (): string[] => {
+  if (typeof window === 'undefined') return ['All Companies']
+  try {
+    const raw = sessionStorage.getItem(DYNAMIC_COMPANIES_CACHE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed
+      }
+    }
+  } catch {
+    // Ignore cache parse error
+  }
+  return ['All Companies']
+}
 
 export const CompanyContext = React.createContext<CompanyContextValue | undefined>(undefined)
 
@@ -50,7 +63,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       return user.assignedCompany
     }
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem(COMPANY_STORAGE_KEY)
+      const saved = sessionStorage.getItem(COMPANY_STORAGE_KEY)
       if (saved) return saved
     }
     return (isCompanyScoped ? user?.assignedCompany : 'All Companies') || 'All Companies'
@@ -60,47 +73,71 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   React.useEffect(() => {
     if (isCompanyScoped && user?.assignedCompany && user.assignedCompany !== 'All Companies') {
       setActiveCompanyState(user.assignedCompany)
+    } else if (!isCompanyScoped) {
+      const saved = typeof window !== 'undefined' ? sessionStorage.getItem(COMPANY_STORAGE_KEY) : null
+      setActiveCompanyState(saved || 'All Companies')
     }
-  }, [isCompanyScoped, user?.assignedCompany])
+  }, [isCompanyScoped, user?.assignedCompany, user?.id])
 
-  const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>([])
+  const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>(getCachedCompanies)
+  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
+  const [isLoadingCompanies, setIsLoadingCompanies] = React.useState<boolean>(false)
 
-  // Dynamically load all registered companies from backend database
-  React.useEffect(() => {
-    let mounted = true
-    const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
-    fetch('/api/v1/companies', {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => {
-        if (mounted && Array.isArray(data) && data.length > 0) {
-          const names = data
-            .map((c: any) => c.company_name || c.name)
-            .filter(Boolean)
-          setDynamicCompanies(Array.from(new Set(['All Companies', ...names])))
+  // Dynamically load all registered companies from Supabase via backend endpoint
+  const loadCompanies = React.useCallback(async () => {
+    setIsLoadingCompanies(true)
+    try {
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+      const res = await fetch('/api/v1/companies', {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      if (Array.isArray(data) && data.length > 0) {
+        const mappedOptions: CompanyOption[] = data.map((c: any) => ({
+          id: c.id ?? c.company_id ?? 0,
+          name: c.name ?? c.company_name ?? '',
+          company_id: c.id ?? c.company_id ?? 0,
+          company_name: c.name ?? c.company_name ?? '',
+        }))
+        setDbCompanies(mappedOptions)
+        const names = mappedOptions.map((c) => c.name).filter(Boolean)
+        const combined = Array.from(new Set(['All Companies', ...names]))
+        setDynamicCompanies(combined)
+        if (typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(DYNAMIC_COMPANIES_CACHE_KEY, JSON.stringify(combined))
+          } catch {
+            // Ignore storage quota errors
+          }
         }
-      })
-      .catch((err) => {
-        console.warn('Failed to fetch dynamic companies in CompanyContext:', err)
-      })
-    return () => {
-      mounted = false
+      }
+    } catch (err) {
+      console.warn('Failed to fetch dynamic companies in CompanyContext:', err)
+    } finally {
+      setIsLoadingCompanies(false)
     }
-  }, [user])
+  }, [])
+
+  React.useEffect(() => {
+    void loadCompanies()
+  }, [loadCompanies, user?.id])
 
   const allCompanies = React.useMemo(() => {
     if (dynamicCompanies.length > 0) return dynamicCompanies
+    if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+      return ['All Companies', user.assignedCompany]
+    }
     return ALL_COMPANIES_LIST
-  }, [dynamicCompanies])
+  }, [dynamicCompanies, user?.assignedCompany])
 
   const setActiveCompany = React.useCallback((company: string) => {
     setActiveCompanyState(company)
     if (typeof window !== 'undefined') {
-      localStorage.setItem(COMPANY_STORAGE_KEY, company)
+      sessionStorage.setItem(COMPANY_STORAGE_KEY, company)
     }
   }, [])
 
@@ -115,8 +152,20 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isLendingEnabled,
       isCompanyScoped,
       allCompanies,
+      dbCompanies,
+      isLoadingCompanies,
+      refreshCompanies: loadCompanies,
     }),
-    [activeCompany, setActiveCompany, isLendingEnabled, isCompanyScoped, allCompanies]
+    [
+      activeCompany,
+      setActiveCompany,
+      isLendingEnabled,
+      isCompanyScoped,
+      allCompanies,
+      dbCompanies,
+      isLoadingCompanies,
+      loadCompanies,
+    ]
   )
 
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>

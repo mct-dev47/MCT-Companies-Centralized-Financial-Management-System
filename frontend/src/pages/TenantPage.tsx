@@ -45,10 +45,9 @@ import {
   DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
-import { useCompany } from '@/context/CompanyContext'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP } from '@/lib/format'
-import { isDateInRange, formatToYYYYMMDD } from '@/utils/dateUtils'
+import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFields'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
@@ -131,7 +130,6 @@ export const TenantPage: React.FC = () => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
-  const { activeCompany } = useCompany()
 
   // Leases come from the database. `loadError` is set when the last load failed: the page then shows
   // the last copy it had (if any) with a warning, and every save is refused by the server call.
@@ -218,18 +216,12 @@ export const TenantPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
   const [selectedStatus, setSelectedStatus] = React.useState<string>('All')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('Monthly')
-  const [dateRange, setDateRange] = React.useState<DateRange>((() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-      label: 'This Month',
-      preset: 'This Month',
-    }
-  })())
+  const [dateRange, setDateRange] = React.useState<DateRange>({
+    startDate: null,
+    endDate: null,
+    label: 'All Dates',
+    preset: 'All Dates',
+  })
 
   // Pagination states
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -406,14 +398,6 @@ export const TenantPage: React.FC = () => {
   const filteredTenants = React.useMemo(() => {
     return tenants
       .filter((tenant) => {
-        // Company check (JK Property and Ventures scope)
-        if (activeCompany && activeCompany !== 'All Companies') {
-          const matchesCompany =
-            tenant.companyName.toLowerCase().includes(activeCompany.toLowerCase()) ||
-            activeCompany.toLowerCase().includes('jk')
-          if (!matchesCompany) return false
-        }
-
         // Status check
         if (selectedStatus !== 'All' && tenant.status !== selectedStatus) {
           return false
@@ -434,9 +418,20 @@ export const TenantPage: React.FC = () => {
           }
         }
 
-        // Date range check
-        if (dateRange.startDate && dateRange.endDate) {
-          if (!isDateInRange(tenant.contractDate, dateRange.startDate, dateRange.endDate)) {
+        // Date range check (matches contractDate, dueDate, leaseEndDate, or active lease span overlap)
+        if (dateRange.startDate || dateRange.endDate) {
+          const contractDateNorm = normalizeDateToYYYYMMDD(tenant.contractDate)
+          const leaseEndBound = normalizeDateToYYYYMMDD(tenant.leaseEndDate || tenant.dueDate)
+          const contractInRange = isDateInRange(tenant.contractDate, dateRange.startDate, dateRange.endDate)
+          const dueInRange = isDateInRange(tenant.dueDate, dateRange.startDate, dateRange.endDate)
+          const endInRange = tenant.leaseEndDate
+            ? isDateInRange(tenant.leaseEndDate, dateRange.startDate, dateRange.endDate)
+            : false
+          const spanOverlapsRange =
+            Boolean(contractDateNorm && leaseEndBound) &&
+            (!dateRange.endDate || contractDateNorm <= dateRange.endDate) &&
+            (!dateRange.startDate || leaseEndBound >= dateRange.startDate)
+          if (!contractInRange && !dueInRange && !endInRange && !spanOverlapsRange) {
             return false
           }
         }
@@ -444,7 +439,7 @@ export const TenantPage: React.FC = () => {
         return true
       })
       .sort((a, b) => b.contractDate.localeCompare(a.contractDate))
-  }, [tenants, activeCompany, selectedStatus, searchQuery, dateRange, todayStr])
+  }, [tenants, selectedStatus, searchQuery, dateRange, todayStr])
 
   // Reset to page 1 on filter changes
   React.useEffect(() => {

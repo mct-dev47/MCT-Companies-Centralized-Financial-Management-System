@@ -135,9 +135,12 @@ class UserService:
         user_role = raw_role
 
         # Consolidate company IDs
-        company_ids = list(user_in.company_ids)
-        if user_in.company_id and user_in.company_id not in company_ids:
-            company_ids.append(user_in.company_id)
+        company_ids = []
+        seen = set()
+        for cid in list(user_in.company_ids) + ([user_in.company_id] if user_in.company_id else []):
+            if cid and cid not in seen:
+                seen.add(cid)
+                company_ids.append(cid)
 
         # If no numeric company ID provided, resolve from company_name
         if not company_ids and getattr(user_in, "company_name", None):
@@ -217,6 +220,13 @@ class UserService:
 
         company_ids = update_data.pop("company_ids", None)
         if company_ids is not None:
+            seen = set()
+            deduped_cids = []
+            for cid in company_ids:
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    deduped_cids.append(cid)
+            company_ids = deduped_cids
             self._validate_user_assignment(company_ids, update_data.get("is_admin", user.is_admin), update_data.get("role", user.role))
             # Delete old user_companies and re-insert
             self.db.query(UserCompany).filter(UserCompany.user_id == user_id).delete()

@@ -10,13 +10,28 @@ import {
   FileCheck2,
   Landmark,
   CheckCircle2,
+  Receipt,
+  Banknote,
+  Store,
+  Wallet,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { useSession } from '@/hooks/useSession'
+import { useCompany } from '@/context/CompanyContext'
+import { websocketService } from '@/services/websocketService'
 import {
   notificationService,
+  NOTIFICATION_UPDATED_EVENT,
+  READ_STORAGE_KEY_PREFIX,
+  getReadStorageKey,
+  getReadNotificationIds,
+  saveReadNotificationId,
+  saveAllReadNotificationIds,
   type NotificationItemOut,
 } from '@/services/notificationService'
+
+type NotificationCategory = 'all' | 'due_dates' | 'bills' | 'lending' | 'other'
 
 interface DisplayNotification {
   id: string
@@ -25,53 +40,25 @@ interface DisplayNotification {
   time: string
   unread: boolean
   type: string
+  category: 'bills' | 'lending' | 'other'
+  categoryLabel: string
+  isDueReminder: boolean
+  urgencyBadge?: {
+    label: string
+    className: string
+  }
   refType?: string | null
   refId?: number | null
   icon: React.ElementType
   iconColor: string
-}
-
-const READ_STORAGE_KEY = 'mct_read_notification_ids'
-
-function getReadIds(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
-  try {
-    const raw = localStorage.getItem(READ_STORAGE_KEY)
-    if (raw) {
-      return new Set(JSON.parse(raw))
-    }
-  } catch {
-    // ignore
-  }
-  return new Set()
-}
-
-function saveReadId(id: string) {
-  if (typeof window === 'undefined') return
-  try {
-    const set = getReadIds()
-    set.add(id)
-    localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore
-  }
-}
-
-function saveAllReadIds(ids: string[]) {
-  if (typeof window === 'undefined') return
-  try {
-    const set = getReadIds()
-    ids.forEach((i) => set.add(i))
-    localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore
-  }
+  iconBg: string
 }
 
 function formatRelativeTime(dateStr?: string | null): string {
   if (!dateStr) return 'Just now'
   try {
     const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return 'Recently'
     const now = new Date()
     const diffMs = now.getTime() - d.getTime()
     const diffMin = Math.floor(diffMs / 60000)
@@ -92,98 +79,302 @@ interface NotificationBellProps {
 
 export const NotificationBell: React.FC<NotificationBellProps> = ({ className }) => {
   const navigate = useNavigate()
+  const { user, status } = useSession()
+  const { activeCompany } = useCompany()
+
+  const userId = user?.id ?? null
+  const isAuthenticated = status === 'authenticated' && Boolean(user)
+
   const [isOpen, setIsOpen] = React.useState(false)
+  const [activeTab, setActiveTab] = React.useState<NotificationCategory>('all')
   const [notifications, setNotifications] = React.useState<DisplayNotification[]>([])
-  const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadIds())
+  const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
+  const [isLoading, setIsLoading] = React.useState(false)
   const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const isFetchingRef = React.useRef(false)
+  const mountedRef = React.useRef(true)
 
-  const fetchLiveNotifications = React.useCallback(async () => {
-    try {
-      const items: NotificationItemOut[] = await notificationService.getNotifications({ limit: 50 })
-      const readSet = getReadIds()
-
-      const mapped: DisplayNotification[] = items.map((item) => {
-        let IconComponent: React.ElementType = AlertCircle
-        let iconColor = 'text-primary'
-
-        if (item.notification_type === 'LOAN_PENDING_APPROVAL' || item.notification_type === 'LOAN_REQUEST_FINANCE') {
-          IconComponent = FileCheck2
-          iconColor = 'text-amber-600'
-        } else if (item.notification_type === 'LOAN_ENDORSED_AUDIT' || item.notification_type === 'PETTY_CASH_AUDIT') {
-          IconComponent = FileCheck2
-          iconColor = 'text-blue-600'
-        } else if (item.notification_type === 'LOAN_APPROVED_SUPERVISOR' || item.notification_type === 'PETTY_CASH_APPROVED' || item.notification_type === 'DEPOSIT_VERIFIED') {
-          IconComponent = CheckCircle2
-          iconColor = 'text-emerald-600'
-        } else if (item.notification_type === 'LOAN_REJECTED_SUPERVISOR' || item.notification_type === 'PETTY_CASH_REJECTED') {
-          IconComponent = AlertCircle
-          iconColor = 'text-rose-600'
-        } else if (item.notification_type === 'PETTY_CASH_REQUEST') {
-          IconComponent = Clock
-          iconColor = 'text-amber-600'
-        } else if (item.notification_type === 'LOAN_OVERDUE') {
-          IconComponent = AlertCircle
-          iconColor = 'text-red-600'
-        } else if (item.notification_type === 'LOAN_DUE_TODAY') {
-          IconComponent = Clock
-          iconColor = 'text-amber-500'
-        } else if (
-          item.notification_type === 'LOAN_DUE_TOMORROW' ||
-          item.notification_type === 'LOAN_DUE_SOON'
-        ) {
-          IconComponent = Calendar
-          iconColor = 'text-blue-600'
-        } else if (item.notification_type === 'LOAN_REPAYMENT_RECEIVED') {
-          IconComponent = CheckCircle2
-          iconColor = 'text-emerald-600'
-        } else if (item.notification_type === 'LOAN_REPAYMENT_SENT') {
-          IconComponent = Landmark
-          iconColor = 'text-slate-600'
-        } else if (item.notification_type === 'LOAN_FULLY_SETTLED') {
-          IconComponent = CheckCircle2
-          iconColor = 'text-emerald-600'
-        } else {
-          IconComponent = Building2
-          iconColor = 'text-primary'
-        }
-
-        const isUnread = !readSet.has(item.notification_id)
-
-        return {
-          id: item.notification_id,
-          title: item.title,
-          description: item.message,
-          time: formatRelativeTime(item.created_at),
-          unread: isUnread,
-          type: item.notification_type,
-          refType: item.reference_type,
-          refId: item.reference_id,
-          icon: IconComponent,
-          iconColor,
-        }
-      })
-
-      setNotifications(mapped)
-    } catch {
-      // ignore
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
     }
   }, [])
 
-  // Initial fetch and polling every 30s
+  // Sync readIds when user account changes
   React.useEffect(() => {
-    fetchLiveNotifications()
-    const timer = setInterval(fetchLiveNotifications, 30000)
-    return () => clearInterval(timer)
-  }, [fetchLiveNotifications])
-
-  // Refetch when dropdown opened
-  React.useEffect(() => {
-    if (isOpen) {
-      fetchLiveNotifications()
+    setReadIds(getReadNotificationIds(userId))
+    if (!isAuthenticated) {
+      setNotifications([])
     }
-  }, [isOpen, fetchLiveNotifications])
+  }, [userId, isAuthenticated])
+
+  const userRole = (user?.role || '').toLowerCase()
+  const isMultiCompanyRole =
+    userRole === 'admin' || userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
+  const scopedCompanyName = isMultiCompanyRole
+    ? activeCompany || 'All Companies'
+    : user?.assignedCompany || activeCompany || 'All Companies'
+
+  const fetchLiveNotifications = React.useCallback(
+    async (forceRefresh = false) => {
+      if (!isAuthenticated) {
+        return
+      }
+      // Prevent overlapping polling requests while a previous poll is still unresolved
+      if (isFetchingRef.current && !forceRefresh) {
+        return
+      }
+
+      isFetchingRef.current = true
+      setIsLoading((prev) => (notifications.length === 0 ? true : prev))
+
+      try {
+        const items: NotificationItemOut[] = await notificationService.getNotifications({
+          userId,
+          companyName: scopedCompanyName,
+          userRole: userRole || undefined,
+          limit: 100,
+          forceRefresh,
+        })
+
+        if (!mountedRef.current) return
+
+        const readSet = getReadNotificationIds(userId)
+
+        const mapped: DisplayNotification[] = items.map((item) => {
+          const nt = (item.notification_type || '').toUpperCase()
+          const refType = (item.reference_type || '').toLowerCase()
+
+          let IconComponent: React.ElementType = AlertCircle
+          let iconColor = 'text-primary'
+          let iconBg = 'bg-primary/10'
+          let category: 'bills' | 'lending' | 'other' = 'other'
+          let categoryLabel = 'General'
+          let isDueReminder = false
+          let urgencyBadge: { label: string; className: string } | undefined
+
+          // Determine category
+          if (refType === 'bill' || nt.startsWith('BILL_')) {
+            category = 'bills'
+            categoryLabel = 'Bills'
+          } else if (refType === 'lending' || refType === 'borrower' || nt.startsWith('LENDING_')) {
+            category = 'lending'
+            categoryLabel = 'Lending'
+          } else if (refType === 'loan' || refType === 'loan_repayment' || nt.startsWith('LOAN_')) {
+            category = 'other'
+            categoryLabel = 'Loan'
+          } else if (refType === 'tenant' || nt.startsWith('TENANT_')) {
+            category = 'other'
+            categoryLabel = 'Tenants'
+          } else if (refType === 'petty_cash' || nt.startsWith('PETTY_CASH_')) {
+            category = 'other'
+            categoryLabel = 'Petty Cash'
+          } else if (refType === 'deposit' || refType === 'sale' || nt.startsWith('DEPOSIT_')) {
+            category = 'other'
+            categoryLabel = 'Sales'
+          }
+
+          // Determine urgency / due reminder status & styling
+          if (nt.includes('OVERDUE')) {
+            isDueReminder = true
+            IconComponent = AlertCircle
+            iconColor = 'text-rose-600'
+            iconBg = 'bg-rose-50 border border-rose-200/70'
+            urgencyBadge = {
+              label: 'Overdue',
+              className: 'bg-rose-100 text-rose-700 border-rose-200',
+            }
+          } else if (nt.includes('DUE_TODAY')) {
+            isDueReminder = true
+            IconComponent = Clock
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+            urgencyBadge = {
+              label: 'Due Today',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
+            }
+          } else if (nt.includes('DUE_TOMORROW')) {
+            isDueReminder = true
+            IconComponent = Calendar
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50/70 border border-amber-200/60'
+            urgencyBadge = {
+              label: 'Due Tomorrow',
+              className: 'bg-amber-50 text-amber-700 border-amber-200',
+            }
+          } else if (nt.includes('DUE_SOON')) {
+            isDueReminder = true
+            IconComponent = Calendar
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
+            urgencyBadge = {
+              label: 'Due Soon',
+              className: 'bg-blue-50 text-blue-700 border-blue-200',
+            }
+          } else if (nt === 'PETTY_CASH_LOW_BALANCE') {
+            isDueReminder = true
+            IconComponent = Wallet
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+            urgencyBadge = {
+              label: 'Low Balance',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
+            }
+          } else if (category === 'bills') {
+            IconComponent = Receipt
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (category === 'lending') {
+            IconComponent = Banknote
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (categoryLabel === 'Tenants') {
+            IconComponent = Store
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (nt === 'LOAN_PENDING_APPROVAL' || nt === 'LOAN_REQUEST_FINANCE') {
+            IconComponent = FileCheck2
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+          } else if (nt === 'LOAN_ENDORSED_AUDIT' || nt === 'PETTY_CASH_AUDIT') {
+            IconComponent = FileCheck2
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
+          } else if (
+            nt === 'LOAN_APPROVED_SUPERVISOR' ||
+            nt === 'PETTY_CASH_APPROVED' ||
+            nt === 'DEPOSIT_VERIFIED' ||
+            nt === 'LOAN_REPAYMENT_RECEIVED' ||
+            nt === 'LOAN_FULLY_SETTLED'
+          ) {
+            IconComponent = CheckCircle2
+            iconColor = 'text-emerald-600'
+            iconBg = 'bg-emerald-50 border border-emerald-200/70'
+          } else if (nt === 'LOAN_REJECTED_SUPERVISOR' || nt === 'PETTY_CASH_REJECTED') {
+            IconComponent = AlertCircle
+            iconColor = 'text-rose-600'
+            iconBg = 'bg-rose-50 border border-rose-200/70'
+          } else if (nt === 'PETTY_CASH_REQUEST') {
+            IconComponent = Wallet
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+          } else if (nt === 'LOAN_REPAYMENT_SENT') {
+            IconComponent = Landmark
+            iconColor = 'text-slate-600'
+            iconBg = 'bg-slate-100 border border-slate-200'
+          } else {
+            IconComponent = Building2
+            iconColor = 'text-primary'
+            iconBg = 'bg-primary/10'
+          }
+
+          const isUnread = !readSet.has(item.notification_id)
+
+          return {
+            id: item.notification_id,
+            title: item.title,
+            description: item.message,
+            time: isDueReminder && urgencyBadge ? urgencyBadge.label : formatRelativeTime(item.created_at),
+            unread: isUnread,
+            type: nt,
+            category,
+            categoryLabel,
+            isDueReminder,
+            urgencyBadge,
+            refType: item.reference_type,
+            refId: item.reference_id,
+            icon: IconComponent,
+            iconColor,
+            iconBg,
+          }
+        })
+
+        setReadIds(readSet)
+        setNotifications(mapped)
+      } catch {
+        // Keep last known good notifications displayed
+      } finally {
+        isFetchingRef.current = false
+        if (mountedRef.current) {
+          setIsLoading(false)
+        }
+      }
+    },
+    [isAuthenticated, userId, scopedCompanyName, userRole, notifications.length]
+  )
+
+  // Initial fetch and polling every 30s (only when authenticated)
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+    void fetchLiveNotifications(false)
+    const timer = setInterval(() => {
+      void fetchLiveNotifications(false)
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [isAuthenticated, fetchLiveNotifications])
+
+  // Listen to custom notification update events, WebSocket broadcasts, and cross-tab storage sync
+  React.useEffect(() => {
+    if (!isAuthenticated) return
+
+    const handleRefresh = () => {
+      void fetchLiveNotifications(true)
+    }
+
+    const handleStorageSync = (event: StorageEvent) => {
+      const targetKey = getReadStorageKey(userId)
+      if (event.key === targetKey || event.key === READ_STORAGE_KEY_PREFIX) {
+        const latestReadSet = getReadNotificationIds(userId)
+        setReadIds(latestReadSet)
+        setNotifications((prev) =>
+          prev.map((n) => ({ ...n, unread: !latestReadSet.has(n.id) }))
+        )
+      }
+    }
+
+    window.addEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
+    window.addEventListener('storage', handleStorageSync)
+    const unsubs = [
+      websocketService.subscribe('LOANS_UPDATED', handleRefresh),
+      websocketService.subscribe('PETTY_CASH_UPDATED', handleRefresh),
+      websocketService.subscribe('TENANTS_UPDATED', handleRefresh),
+      websocketService.subscribe('AUDIT_UPDATED', handleRefresh),
+      websocketService.subscribe('SALES_UPDATED', handleRefresh),
+    ]
+    return () => {
+      window.removeEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
+      window.removeEventListener('storage', handleStorageSync)
+      unsubs.forEach((off) => off())
+    }
+  }, [isAuthenticated, userId, fetchLiveNotifications])
+
+  // Refetch when dropdown opened (uses 10s cache if fresh)
+  React.useEffect(() => {
+    if (isOpen && isAuthenticated) {
+      void fetchLiveNotifications(false)
+    }
+  }, [isOpen, isAuthenticated, fetchLiveNotifications])
 
   const unreadCount = notifications.filter((n) => n.unread).length
+  const dueRemindersCount = notifications.filter((n) => n.isDueReminder).length
+  const billsCount = notifications.filter((n) => n.category === 'bills').length
+  const lendingCount = notifications.filter((n) => n.category === 'lending').length
+
+  const filteredNotifications = React.useMemo(() => {
+    switch (activeTab) {
+      case 'due_dates':
+        return notifications.filter((n) => n.isDueReminder)
+      case 'bills':
+        return notifications.filter((n) => n.category === 'bills')
+      case 'lending':
+        return notifications.filter((n) => n.category === 'lending')
+      case 'other':
+        return notifications.filter((n) => n.category === 'other')
+      default:
+        return notifications
+    }
+  }, [notifications, activeTab])
 
   // Close on outside click
   React.useEffect(() => {
@@ -202,27 +393,41 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
   const markAllAsRead = () => {
     const allIds = notifications.map((n) => n.id)
-    saveAllReadIds(allIds)
+    saveAllReadNotificationIds(allIds, userId)
     setReadIds(new Set([...readIds, ...allIds]))
     setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
   }
 
   const handleItemClick = (item: DisplayNotification) => {
-    saveReadId(item.id)
+    saveReadNotificationId(item.id, userId)
     setReadIds((prev) => new Set([...prev, item.id]))
     setNotifications((prev) =>
       prev.map((n) => (n.id === item.id ? { ...n, unread: false } : n))
     )
 
-    // Navigate based on notification category
-    if (item.refType === 'petty_cash' || item.type.includes('PETTY_CASH')) {
-      setIsOpen(false)
+    setIsOpen(false)
+
+    // Navigate based on notification category / reference
+    if (item.category === 'bills' || item.refType === 'bill' || item.type.startsWith('BILL_')) {
+      if (item.refId && item.refId > 0) {
+        navigate(`/bills/${item.refId}`)
+      } else {
+        navigate('/bills')
+      }
+    } else if (
+      item.category === 'lending' ||
+      item.refType === 'lending' ||
+      item.refType === 'borrower' ||
+      item.type.startsWith('LENDING_')
+    ) {
+      navigate('/lending')
+    } else if (item.refType === 'tenant' || item.type.startsWith('TENANT_')) {
+      navigate('/tenant')
+    } else if (item.refType === 'petty_cash' || item.type.includes('PETTY_CASH')) {
       navigate('/petty-cash')
     } else if (item.refType === 'deposit' || item.type.includes('DEPOSIT') || item.refType === 'sale') {
-      setIsOpen(false)
       navigate('/sales')
-    } else if (item.refType === 'loan' || item.type.includes('LOAN')) {
-      setIsOpen(false)
+    } else if (item.refType === 'loan' || item.refType === 'loan_repayment' || item.type.includes('LOAN')) {
       navigate('/loan')
     }
   }
@@ -244,9 +449,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         <Bell className="h-5 w-5 sm:h-5.5 sm:w-5.5 text-[#0B0F2B]" />
         {unreadCount > 0 && (
           <span
-            className="absolute top-2 right-2 h-2.5 w-2.5 rounded-full bg-primary ring-2 ring-white animate-pulse"
-            aria-hidden="true"
-          />
+            className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center ring-2 ring-white"
+            aria-label={`${unreadCount} unread notifications`}
+          >
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
         )}
       </Button>
 
@@ -255,12 +462,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         <div
           role="region"
           aria-label="Notifications panel"
-          className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-white border border-stroke/30 shadow-2xl overflow-hidden z-50 animate-in fade-in-0 zoom-in-95 duration-150"
+          className="absolute right-0 mt-2 w-80 sm:w-[420px] rounded-2xl bg-white border border-stroke/30 shadow-2xl overflow-hidden z-50 animate-in fade-in-0 zoom-in-95 duration-150"
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-stroke/20 bg-surface/50">
             <div className="flex items-center gap-2">
-              <span className="font-semibold text-sm text-focus">Notifications</span>
+              <span className="font-semibold text-sm text-focus">Notifications & Reminders</span>
               {unreadCount > 0 && (
                 <span className="px-2 py-0.5 text-[11px] font-semibold bg-primary/10 text-primary rounded-full">
                   {unreadCount} new
@@ -279,14 +486,58 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             )}
           </div>
 
+          {/* Filter Tabs */}
+          <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-stroke/15 bg-slate-50/70 overflow-x-auto no-scrollbar">
+            {(
+              [
+                { id: 'all', label: 'All', count: notifications.length },
+                { id: 'due_dates', label: 'Due Dates', count: dueRemindersCount },
+                { id: 'bills', label: 'Bills', count: billsCount },
+                { id: 'lending', label: 'Lending', count: lendingCount },
+                { id: 'other', label: 'Other', count: notifications.filter((n) => n.category === 'other').length },
+              ] as const
+            ).map((tab) => {
+              const isActive = activeTab === tab.id
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={cn(
+                    'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all flex items-center gap-1 shrink-0 cursor-pointer',
+                    isActive
+                      ? 'bg-[#960C01] text-white shadow-2xs'
+                      : 'bg-white text-muted-fg hover:text-focus border border-stroke/20'
+                  )}
+                >
+                  <span>{tab.label}</span>
+                  {tab.count > 0 && (
+                    <span
+                      className={cn(
+                        'px-1.5 py-0.2 rounded-full text-[10px]',
+                        isActive ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
+                      )}
+                    >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
           {/* Notification List */}
-          <div className="max-h-80 overflow-y-auto divide-y divide-stroke/10">
-            {notifications.length === 0 ? (
-              <div className="p-6 text-center text-sm text-muted-fg">
-                No active notifications
+          <div className="max-h-96 overflow-y-auto divide-y divide-stroke/10">
+            {isLoading && notifications.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-fg">
+                Loading notifications...
+              </div>
+            ) : filteredNotifications.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-fg">
+                No notifications in this category
               </div>
             ) : (
-              notifications.map((item) => {
+              filteredNotifications.map((item) => {
                 const Icon = item.icon
                 return (
                   <div
@@ -300,29 +551,43 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     <div
                       className={cn(
                         'h-9 w-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5',
-                        item.unread
-                          ? 'bg-primary/10'
-                          : 'bg-muted/30'
+                        item.iconBg
                       )}
                     >
                       <Icon className={cn('h-4.5 w-4.5', item.iconColor)} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">
-                        <p
-                          className={cn(
-                            'text-xs sm:text-sm font-semibold truncate',
-                            item.unread ? 'text-focus' : 'text-muted-fg'
-                          )}
-                        >
-                          {item.title}
-                        </p>
-                        <span className="text-[11px] text-muted-fg/80 shrink-0 flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {item.time}
-                        </span>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 shrink-0">
+                            {item.categoryLabel}
+                          </span>
+                          <p
+                            className={cn(
+                              'text-xs sm:text-sm font-semibold truncate',
+                              item.unread ? 'text-focus' : 'text-muted-fg'
+                            )}
+                          >
+                            {item.title}
+                          </p>
+                        </div>
+                        {item.urgencyBadge ? (
+                          <span
+                            className={cn(
+                              'text-[10px] font-semibold px-1.5 py-0.5 rounded border shrink-0',
+                              item.urgencyBadge.className
+                            )}
+                          >
+                            {item.urgencyBadge.label}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-muted-fg/80 shrink-0 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {item.time}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-muted-fg mt-0.5 line-clamp-2 leading-relaxed">
+                      <p className="text-xs text-muted-fg mt-1 line-clamp-2 leading-relaxed">
                         {item.description}
                       </p>
                     </div>

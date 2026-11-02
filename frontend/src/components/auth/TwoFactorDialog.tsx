@@ -74,8 +74,24 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
 
   const handleContinue = async () => {
     await complete2FA()
+    const { authService } = await import('@/services/authService')
+    const sessionUser = await authService.getSession()
     resetState()
-    navigate('/dashboard', { replace: true })
+    const role = (sessionUser?.role || '').toLowerCase()
+    if (role === 'admin') {
+      navigate('/employee', { replace: true })
+    } else if (role === 'finance') {
+      navigate('/centralized-auth', { replace: true })
+    } else if (role === 'supervisor') {
+      const cids = sessionUser?.companyIds || []
+      if (cids.length > 1) {
+        navigate('/centralized-auth', { replace: true })
+      } else {
+        navigate('/dashboard', { replace: true })
+      }
+    } else {
+      navigate('/dashboard', { replace: true })
+    }
   }
 
   const isVerifyDisabled = code.length !== 6 || isLoading

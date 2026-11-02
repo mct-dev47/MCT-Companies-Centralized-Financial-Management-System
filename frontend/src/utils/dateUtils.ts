@@ -39,6 +39,25 @@ export function formatToYYYYMMDD(date: Date): string {
 }
 
 /**
+ * Formats any date input into human-readable "MMM D, YYYY" (e.g. "Oct 31, 2026")
+ */
+export function formatDisplayDate(dateInput: string | Date | null | undefined): string {
+  if (!dateInput) return '—'
+  const iso = normalizeDateToYYYYMMDD(dateInput)
+  if (!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    return typeof dateInput === 'string' ? dateInput : '—'
+  }
+  const [y, m, d] = iso.split('-')
+  const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10))
+  if (isNaN(date.getTime())) return iso
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+}
+
+/**
  * Normalizes any date string or Date object into ISO YYYY-MM-DD format
  */
 export function normalizeDateToYYYYMMDD(dateInput: string | Date | null | undefined): string {

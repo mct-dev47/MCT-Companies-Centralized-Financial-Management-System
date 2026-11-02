@@ -9,7 +9,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from app.core.cache import system_cache
 
 from app.core.company_resolver import resolve_company
 from app.core.dependencies import AuthenticatedUser, check_company_access
@@ -122,13 +123,13 @@ class SqlStore:
     def list_leases(self, company_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
         if company_ids is not None and not company_ids:
             return []
-        q = self.db.query(TenantLease)
+        q = self.db.query(TenantLease).options(selectinload(TenantLease.payments))
         if company_ids is not None:
             q = q.filter(TenantLease.company_id.in_(company_ids))
         return [self._lease_row(l) for l in q.order_by(TenantLease.lease_id.desc()).all()]
 
     def get_lease(self, lease_id: int) -> Optional[Dict[str, Any]]:
-        lease = self.db.query(TenantLease).filter(TenantLease.lease_id == lease_id).first()
+        lease = self.db.query(TenantLease).options(selectinload(TenantLease.payments)).filter(TenantLease.lease_id == lease_id).first()
         return self._lease_row(lease) if lease else None
 
     def list_refs(self, prefix: str) -> List[str]:
@@ -148,7 +149,7 @@ class SqlStore:
         return self._lease_row(lease)
 
     def update_lease(self, lease_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-        lease = self.db.query(TenantLease).filter(TenantLease.lease_id == lease_id).first()
+        lease = self.db.query(TenantLease).options(selectinload(TenantLease.payments)).filter(TenantLease.lease_id == lease_id).first()
         if lease is None:
             raise HTTPException(status_code=404, detail="Tenant lease not found.")
         for key, value in data.items():
@@ -166,7 +167,7 @@ class SqlStore:
         return self._lease_row(lease)
 
     def delete_lease(self, lease_id: int) -> None:
-        lease = self.db.query(TenantLease).filter(TenantLease.lease_id == lease_id).first()
+        lease = self.db.query(TenantLease).options(selectinload(TenantLease.payments)).filter(TenantLease.lease_id == lease_id).first()
         if lease is not None:
             self.db.delete(lease)
             self.db.commit()
@@ -511,6 +512,7 @@ class TenantService:
             data["tenant_ref"] = self._next_ref()
             try:
                 row = self._run("insert_lease", data)
+                system_cache.invalidate_tag("notifications")
                 return self.to_out(row)
             except HTTPException:
                 raise
@@ -556,11 +558,13 @@ class TenantService:
             update["notes"] = (provided["notes"] or "").strip() or None
         update.update(self._audit_reset(old))
         row = self._run("update_lease", lease_id, update)
+        system_cache.invalidate_tag("notifications")
         return self.to_out(row)
 
     def delete_lease(self, lease_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         row = self.get_row(lease_id, user)
         self._run("delete_lease", lease_id)
+        system_cache.invalidate_tag("notifications")
         return row
 
     # -- payments ---------------------------------------------------------
@@ -615,6 +619,7 @@ class TenantService:
         reset = self._audit_reset(lease)
         if reset:
             self._run("update_lease", lease["lease_id"], reset)
+        system_cache.invalidate_tag("notifications")
         return self.to_out(self._run("get_lease", lease["lease_id"]))
 
     def add_payment(self, lease_id: int, body: Any, user: AuthenticatedUser) -> Dict[str, Any]:
@@ -657,4 +662,5 @@ class TenantService:
                 "audit_remarks": (remarks or "").strip() or None,
             }
         row = self._run("update_lease", lease["lease_id"], data)
+        system_cache.invalidate_tag("notifications")
         return self.to_out(row)

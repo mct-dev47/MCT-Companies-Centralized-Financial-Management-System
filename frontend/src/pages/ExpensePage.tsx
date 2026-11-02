@@ -73,6 +73,7 @@ import { useNavigate } from 'react-router-dom'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 import { useCompany } from '@/context/CompanyContext'
+import { isCompanyMatch } from '@/utils/companyUtils'
 
 const DEFAULT_COMPANY_LIST = ['All Companies']
 
@@ -155,17 +156,11 @@ export const ExpensePage: React.FC = () => {
   >('All')
   const [selectedPeriod, setSelectedPeriod] =
     React.useState<PeriodOption>('Monthly')
-  const [dateRange, setDateRange] = React.useState<DateRange>(() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      preset: 'this_month',
-      label: 'This Month',
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-    }
+  const [dateRange, setDateRange] = React.useState<DateRange>({
+    preset: 'All Dates',
+    label: 'All Dates',
+    startDate: null,
+    endDate: null,
   })
   const [searchQuery, setSearchQuery] = React.useState('')
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -358,8 +353,7 @@ export const ExpensePage: React.FC = () => {
       .filter((item) => {
         if (
           targetCompany !== 'All Companies' &&
-          item.company.trim().toLowerCase() !==
-            targetCompany.trim().toLowerCase()
+          !isCompanyMatch(item.company, targetCompany)
         ) {
           return false
         }

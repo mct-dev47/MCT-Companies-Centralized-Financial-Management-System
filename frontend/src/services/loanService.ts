@@ -1,5 +1,6 @@
 import type { DashboardTransactionItem } from './dashboardService'
 import { websocketService } from './websocketService'
+import { notifyNotificationsUpdated } from './notificationService'
 
 export interface LoanRepaymentRecord {
   id: string
@@ -208,6 +209,7 @@ const LOAN_CACHE_TTL = 30000
 export const loanService = {
   invalidateCache(): void {
     loanCache.clear()
+    notifyNotificationsUpdated()
   },
 
   async getCompanyLoans(params: {

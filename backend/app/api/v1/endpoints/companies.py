@@ -1,19 +1,26 @@
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user
 from app.db.session import get_db
-from app.schemas.company import CompanyCreate, CompanyOut, CompanyUpdate
+from app.models.company import Company
+from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyOut, CompanyUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
 
 router = APIRouter()
 MAX_COMPANY_PICTURE_BYTES = 5 * 1024 * 1024
 
-# get all companies
+
+# get all companies (accessible to authenticated users)
 @router.get("", response_model=list[CompanyOut], summary="List all MCT companies")
-def get_companies(db: Session = Depends(get_db)):
+def get_companies(
+    _: CurrentUser,
+    db: Session = Depends(get_db),
+):
     try:
         return CompanyService(db).list_companies()
     except CompanyServiceError as error:
@@ -22,9 +29,73 @@ def get_companies(db: Session = Depends(get_db)):
             detail=str(error),
         ) from error
 
+
+# list authorized companies for centralized authentication portal
+# strictly returns data from the company table in the database
+@router.get("/authorized", response_model=list[AuthorizedCompanyOut], summary="List authorized companies for centralized auth")
+def get_authorized_companies(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    role = (current_user.get("role") or "").lower()
+    if role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin users manage companies at /employee and do not access centralized business portals.",
+        )
+
+    query = db.query(Company)
+
+    if role in ("finance", "audit", "auditor"):
+        user_role_label = "Finance" if role == "finance" else "Auditor"
+        companies = query.order_by(Company.company_id.asc()).all()
+    elif role == "supervisor":
+        user_role_label = "Supervisor"
+        allowed_ids = set()
+        if current_user.get("company_ids"):
+            for cid in current_user["company_ids"]:
+                try:
+                    if cid is not None:
+                        allowed_ids.add(int(cid))
+                except (ValueError, TypeError):
+                    pass
+        if current_user.get("company_id") is not None:
+            try:
+                allowed_ids.add(int(current_user["company_id"]))
+            except (ValueError, TypeError):
+                pass
+
+        if not allowed_ids:
+            return []
+        companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
+    else:
+        return []
+
+    return [
+        AuthorizedCompanyOut(
+            id=c.company_id,
+            name=c.company_name,
+            location=c.location,
+            contact_number=c.contact_number,
+            phone=c.phone,
+            starting_balance=float(c.starting_balance),
+            petty_cash=float(c.petty_cash or 0.0),
+            logo_url=c.logo_url,
+            role=user_role_label,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c in companies
+    ]
+
+
 # get company by ID
 @router.get("/{company_id}", response_model=CompanyOut, summary="Get company by ID")
-def get_company(company_id: int, db: Session = Depends(get_db)):
+def get_company(
+    company_id: int,
+    _: CurrentUser,
+    db: Session = Depends(get_db),
+):
     try:
         company = CompanyService(db).get_company_response(company_id)
     except CompanyServiceError as error:
@@ -36,9 +107,15 @@ def get_company(company_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     return company
 
-# create a new company
+
+# create a new company (Admin only)
 @router.post("", response_model=CompanyOut, status_code=status.HTTP_201_CREATED, summary="Create a new company")
-def create_company(company: CompanyCreate, request: Request, db: Session = Depends(get_db)):
+def create_company(
+    company: CompanyCreate,
+    request: Request,
+    admin: AdminUser,
+    db: Session = Depends(get_db),
+):
     try:
         result = CompanyService(db).create_company(company)
     except CompanyServiceError as error:
@@ -49,7 +126,7 @@ def create_company(company: CompanyCreate, request: Request, db: Session = Depen
 
     log_company_management(
         db, AuditAction.COMPANY_CREATED,
-        user_id=None,
+        user_id=admin.get("user_id"),
         company_id=result.id,
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
@@ -61,10 +138,11 @@ def create_company(company: CompanyCreate, request: Request, db: Session = Depen
     "/with-picture",
     response_model=CompanyOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Create a new company with a profile picture",
+    summary="Create a new company with a profile picture (Admin only)",
 )
 async def create_company_with_picture(
     request: Request,
+    admin: AdminUser,
     name: str = Form(...),
     location: str = Form(...),
     contact_number: str | None = Form(None),
@@ -111,19 +189,21 @@ async def create_company_with_picture(
     log_company_management(
         db,
         AuditAction.COMPANY_CREATED,
-        user_id=None,
+        user_id=admin.get("user_id"),
         company_id=result.id,
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
     return result
 
-# update an existing company
-@router.patch("/{company_id}", response_model=CompanyOut, summary="Update an existing company")
+
+# update an existing company (Admin only)
+@router.patch("/{company_id}", response_model=CompanyOut, summary="Update an existing company (Admin only)")
 def update_company(
     company_id: int,
     company_update: CompanyUpdate,
     request: Request,
+    admin: AdminUser,
     db: Session = Depends(get_db),
 ):
     service = CompanyService(db)
@@ -144,21 +224,23 @@ def update_company(
 
     log_company_management(
         db, AuditAction.COMPANY_UPDATED,
-        user_id=None,
+        user_id=admin.get("user_id"),
         company_id=result.id,
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
     return result
 
+
 @router.post(
     "/{company_id}/picture",
     response_model=CompanyOut,
-    summary="Upload or update profile picture for an existing company",
+    summary="Upload or update profile picture for an existing company (Admin only)",
 )
 async def upload_company_picture(
     company_id: int,
     request: Request,
+    admin: AdminUser,
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
@@ -194,16 +276,22 @@ async def upload_company_picture(
     log_company_management(
         db,
         AuditAction.COMPANY_UPDATED,
-        user_id=None,
+        user_id=admin.get("user_id"),
         company_id=result.id,
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name, "action": "update_picture"},
     )
     return result
 
-# delete a company
-@router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a company")
-def delete_company(company_id: int, request: Request, db: Session = Depends(get_db)):
+
+# delete a company (Admin only)
+@router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a company (Admin only)")
+def delete_company(
+    company_id: int,
+    request: Request,
+    admin: AdminUser,
+    db: Session = Depends(get_db),
+):
     try:
         deleted = CompanyService(db).delete_company(company_id)
     except CompanyServiceError as error:
@@ -216,7 +304,7 @@ def delete_company(company_id: int, request: Request, db: Session = Depends(get_
 
     log_company_management(
         db, AuditAction.COMPANY_DELETED,
-        user_id=None,
+        user_id=admin.get("user_id"),
         company_id=None,
         ip_address=request.client.host if request.client else "unknown",
         extra={"deleted_company_id": company_id},

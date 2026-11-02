@@ -64,6 +64,7 @@ import { useLocation } from 'react-router-dom'
 import { isDateInRange, normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/context/CompanyContext'
+import { isCompanyMatch } from '@/utils/companyUtils'
 
 
 const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly', 'Quarterly', 'Annually'] as const
@@ -139,18 +140,12 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   }, [activeCompany, isCompanyScoped])
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
   const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Approve')
-  const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('Monthly')
-  const [dateRange, setDateRange] = React.useState<DateRange>(() => {
-    const now = new Date()
-    const currYear = now.getFullYear()
-    const currMonth = String(now.getMonth() + 1).padStart(2, '0')
-    const lastDay = new Date(currYear, now.getMonth() + 1, 0).getDate()
-    return {
-      preset: 'This Month',
-      label: 'This Month',
-      startDate: `${currYear}-${currMonth}-01`,
-      endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-    }
+  const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
+  const [dateRange, setDateRange] = React.useState<DateRange>({
+    preset: 'All Dates',
+    label: 'All Dates',
+    startDate: null,
+    endDate: null,
   })
   const [searchQuery, setSearchQuery] = React.useState('')
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -416,14 +411,14 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
         // Tab separation: Borrower vs Lender
         const currentTargetCompany = isCompanyScoped
-          ? (assignedCompany || '').trim().toLowerCase()
-          : (selectedCompany || '').trim().toLowerCase()
+          ? (assignedCompany || '').trim()
+          : (selectedCompany || '').trim()
 
-        if (currentTargetCompany && currentTargetCompany !== 'all companies') {
+        if (currentTargetCompany && currentTargetCompany.toLowerCase() !== 'all companies') {
           if (loanType === 'Borrower') {
-            if ((item.borrower || '').trim().toLowerCase() !== currentTargetCompany) return false
+            if (!isCompanyMatch(item.borrower, currentTargetCompany)) return false
           } else {
-            if ((item.lender || '').trim().toLowerCase() !== currentTargetCompany) return false
+            if (!isCompanyMatch(item.lender, currentTargetCompany)) return false
           }
         }
 
