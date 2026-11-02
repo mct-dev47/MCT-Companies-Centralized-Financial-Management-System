@@ -23,6 +23,7 @@ import {
   Eye,
   Pencil,
   Lock,
+  Receipt,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
@@ -49,6 +50,7 @@ import {
 import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
+import { useReceivables } from '@/hooks/useReceivables'
 import {
   salesService,
   type SalesItem,
@@ -100,6 +102,7 @@ export const SalesPage: React.FC = () => {
   const isAuditor = isAudit
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+
 
   // Dynamic company list loaded strictly from the database
   const [companyList, setCompanyList] = React.useState<string[]>(() => {
@@ -164,6 +167,14 @@ export const SalesPage: React.FC = () => {
     label: 'All Dates',
     preset: 'All Dates',
   })
+
+  // Food Receivables store integration
+  const {
+    sales: utangSalesList,
+    people: receivablesPeople,
+    kpis: receivablesKpis,
+    addNewSale: addFoodSale,
+  } = useReceivables(dateRange)
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
@@ -411,11 +422,89 @@ export const SalesPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  // Map in-memory / local food utang sales to standard SalesItem structure
+  const mappedUtangSales = React.useMemo<SalesItem[]>(() => {
+    return utangSalesList.map((u) => {
+      const rawDate = u.date
+      const [year, month, day] = rawDate.split('-')
+      const displayDate =
+        month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
+
+      return {
+        id: u.id,
+        refNo: `FD-${u.id.replace('SALE-2026-', '')}`,
+        chequeNo:
+          u.payment_status === 'Paid'
+            ? 'PAID-IN-FULL'
+            : u.payment_status === 'Partial'
+              ? 'PARTIAL-CREDIT'
+              : 'PAY-LATER',
+        date: displayDate,
+        rawDate: u.date,
+        particulars: `${u.items_summary} (${u.customer_name} • ${u.customer_type})`,
+        withdrawal: 0,
+        deposit: u.total_amount,
+        netAmount: u.total_amount,
+        category: 'Food Sales',
+        paymentMethod:
+          u.payment_status === 'Paid'
+            ? 'Cash'
+            : u.payment_status === 'Partial'
+              ? 'Partial Credit'
+              : 'Utang (Pay Later)',
+        company: 'MCT Food Services',
+        items: [
+          ...(u.amount_paid > 0
+            ? [
+                {
+                  particulars: `${u.items_summary} (Downpayment)`,
+                  unitPrice: u.amount_paid,
+                  quantity: 1,
+                  total: u.amount_paid,
+                  status: 'Paid' as const,
+                },
+              ]
+            : []),
+          ...(u.balance > 0
+            ? [
+                {
+                  particulars: `${u.items_summary} (Utang Balance)`,
+                  unitPrice: u.balance,
+                  quantity: 1,
+                  total: u.balance,
+                  status: 'Unpaid' as const,
+                },
+              ]
+            : []),
+        ],
+        status: (u.payment_status === 'Paid' ? 'Paid' : u.payment_status === 'Partial' ? 'Pending' : 'Unpaid') as any,
+        auditStatus: 'Verified',
+        createdAt: `${u.date}T10:00:00Z`,
+        type: 'Sales' as const,
+        customer_name: u.customer_name,
+        customer_type: u.customer_type,
+        amount_paid: u.amount_paid,
+        balance: u.balance,
+        payment_status: u.payment_status,
+      } as SalesItem & {
+        customer_name?: string
+        customer_type?: string
+        amount_paid?: number
+        balance?: number
+        payment_status?: string
+      }
+    })
+  }, [utangSalesList])
+
+  const combinedSales = React.useMemo(() => {
+    return [...mappedUtangSales, ...sales]
+  }, [mappedUtangSales, sales])
+
   // 1. Base filtered sales (independent of Deposit / Sales Record tab so KPIs above stay constant)
   const baseFilteredSales = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
 
-    return sales
+    return combinedSales
       .filter((item) => {
         // 1. Company filter
         if (
@@ -530,8 +619,9 @@ export const SalesPage: React.FC = () => {
       totalSales: salesTotal,
       totalCash: cashTotal,
       totalIncome: salesTotal,
+      outstandingUtang: receivablesKpis.totalOutstanding,
     }
-  }, [baseFilteredSales])
+  }, [baseFilteredSales, receivablesKpis.totalOutstanding])
 
   // Effective status filter for particulars display in table & modal
   const effectiveParticularsStatusFilter = React.useMemo(() => {
@@ -684,12 +774,12 @@ export const SalesPage: React.FC = () => {
               )}
             </div>
 
-            {/* Add Sales Button */}
+            {/* Action Button: Add Sales */}
             {canAdd && (
               <Button
                 type="button"
                 onClick={() => navigate('/sales/add')}
-                className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                className="h-10 sm:h-11 px-3.5 sm:px-4 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
               >
                 <Plus className="h-4 w-4 shrink-0" />
                 <span>Add Sales</span>
@@ -995,12 +1085,12 @@ export const SalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Total Sales & Total Cash KPI Cards (Independent of Deposit / Sales Record Tab) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Total Sales Card */}
+      {/* 3. Three Numbers Kept Separate: Total Sales, Cash Collected & Outstanding Utang Side by Side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* 1. Total Sales (date) = all sales that day/period, paid and unpaid */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
-            <span className="text-xs font-medium text-muted-fg block">
+            <span className="text-xs font-semibold text-muted-fg block">
               Total Sales
             </span>
             {loading ? (
@@ -1014,8 +1104,7 @@ export const SalesPage: React.FC = () => {
                   {formatPHP(kpis.totalSales)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Total sales volume for {dateRange.label || 'the selected period'} in{' '}
-                  {displayedCompanyTitle}
+                  All sales volume (paid & credit) for {dateRange.label || 'selected period'}
                 </p>
               </>
             )}
@@ -1026,11 +1115,11 @@ export const SalesPage: React.FC = () => {
           </div>
         </Card>
 
-        {/* Total Cash (Collected) Card */}
+        {/* 2. Cash Collected (date) = payments received that day/period, including payments on old utang */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
-            <span className="text-xs font-medium text-muted-fg block">
-              Total Cash
+            <span className="text-xs font-semibold text-muted-fg block">
+              Cash Collected
             </span>
             {loading ? (
               <div className="space-y-1.5 mt-2">
@@ -1043,7 +1132,7 @@ export const SalesPage: React.FC = () => {
                   {formatPHP(kpis.totalCash)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Actual cash collected from paid sales in {displayedCompanyTitle}
+                  Cash collected today & on settled utang
                 </p>
               </>
             )}
@@ -1051,6 +1140,47 @@ export const SalesPage: React.FC = () => {
 
           <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-teal-600 shrink-0 shadow-2xs">
             <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </Card>
+
+        {/* 3. Outstanding Utang = sum of all unpaid balances */}
+        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40 group">
+          <div className="w-full max-w-[calc(100%-60px)]">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-muted-fg block">
+                Outstanding Utang
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate('/receivables')}
+                className="inline-flex items-center text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
+              >
+                View Ledger &rarr;
+              </button>
+            </div>
+            {loading ? (
+              <div className="space-y-1.5 mt-2">
+                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
+                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
+              </div>
+            ) : (
+              <>
+                <h3 className="text-xl sm:text-2xl font-bold text-rose-600 mt-1 tabular-nums tracking-tight">
+                  {formatPHP(receivablesKpis.totalOutstanding)}
+                </h3>
+                <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
+                  Ext: {formatPHP(receivablesKpis.totalExternalUtang)} &bull; Staff: {formatPHP(receivablesKpis.totalStaffUtang)}
+                </p>
+              </>
+            )}
+          </div>
+
+          <div
+            onClick={() => navigate('/receivables')}
+            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-rose-50 border border-rose-200/60 flex items-center justify-center text-rose-600 shrink-0 shadow-2xs cursor-pointer group-hover:bg-rose-100 transition-colors"
+            title="Open Receivables Page"
+          >
+            <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
       </div>
@@ -1329,31 +1459,66 @@ export const SalesPage: React.FC = () => {
                         {sale.chequeNo || '—'}
                       </TableCell>
 
-                      {/* 4. Particulars (filtered by statusFilter / tab, with yellow Pending badge) */}
+                      {/* 4. Particulars & Payment Status Badge (Paid = green, Partial = amber, Unpaid = red) */}
                       <TableCell
-                        className="w-[21%] px-3.5 py-3.5 text-xs text-focus/90 font-normal truncate text-left"
+                        className="w-[21%] px-3.5 py-3.5 text-xs text-focus/90 font-normal text-left"
                         title={sale.particulars}
                       >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="truncate block font-medium">
-                            {summary.firstItemName}
-                          </span>
-                          <span
-                            className={cn(
-                              'shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold border',
-                              summary.firstItemStatus === 'Paid'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : summary.firstItemStatus === 'Pending'
-                                  ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-                                  : 'bg-rose-50 text-rose-700 border-rose-200'
-                            )}
-                          >
-                            {summary.firstItemStatus}
-                          </span>
-                          {summary.count > 1 && (
-                            <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                              +{summary.count - 1} more
+                        <div className="flex flex-col gap-1 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="truncate block font-semibold text-focus">
+                              {summary.firstItemName}
                             </span>
+                            {/* Color-coded badge: Paid = green, Partial = amber, Unpaid = red */}
+                            {(() => {
+                              const st = (sale as any).payment_status || (sale.status === 'Overdue' ? 'Unpaid' : sale.status)
+                              const isPaid = st === 'Paid'
+                              const isPartial = st === 'Partial'
+                              const isUnpaid = st === 'Unpaid'
+
+                              return (
+                                <span
+                                  className={cn(
+                                    'shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold border tracking-wide uppercase',
+                                    isPaid && 'bg-emerald-50 text-emerald-700 border-emerald-300',
+                                    isPartial && 'bg-amber-50 text-amber-700 border-amber-300',
+                                    isUnpaid && 'bg-rose-50 text-rose-700 border-rose-300',
+                                    !isPaid && !isPartial && !isUnpaid && 'bg-yellow-100 text-yellow-800 border-yellow-300'
+                                  )}
+                                >
+                                  {st}
+                                </span>
+                              )
+                            })()}
+                            {summary.count > 1 && (
+                              <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                +{summary.count - 1} more
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Customer / Debtor details for food utang sales */}
+                          {(sale as any).customer_name && (
+                            <div className="flex items-center gap-1.5 text-[10px] text-muted-fg flex-wrap">
+                              <span className="font-medium text-slate-700">
+                                {(sale as any).customer_name}
+                              </span>
+                              <span>&bull;</span>
+                              <span className={cn(
+                                'font-semibold',
+                                (sale as any).customer_type === 'Staff' ? 'text-indigo-600' : 'text-slate-600'
+                              )}>
+                                {(sale as any).customer_type}
+                              </span>
+                              {((sale as any).balance || 0) > 0 && (
+                                <>
+                                  <span>&bull;</span>
+                                  <span className="font-bold text-rose-600">
+                                    Bal: {formatPHP((sale as any).balance)}
+                                  </span>
+                                </>
+                              )}
+                            </div>
                           )}
                         </div>
                       </TableCell>
@@ -1515,6 +1680,7 @@ export const SalesPage: React.FC = () => {
           </div>
         </div>
       </Card>
+
 
       {/* Add Sales Modal */}
       <AddSalesModal

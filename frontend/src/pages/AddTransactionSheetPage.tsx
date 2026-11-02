@@ -15,7 +15,10 @@ import {
   Tag,
   CreditCard,
   Landmark,
+  User,
+  Receipt,
 } from 'lucide-react'
+import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -51,6 +54,17 @@ import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
 import { bankService, type BankAccount } from '@/services/bankService'
 import { isCompanyMatch } from '@/utils/companyUtils'
+
+export interface UnpaidAssignmentRow {
+  rowId: string
+  particulars: string
+  quantity: number
+  unitPrice: number
+  total: number
+  customerType: CustomerType
+  customerName: string
+  contactOrRole: string
+}
 
 interface ParticularsRow {
   id: string
@@ -189,6 +203,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   // Payment Method state
   const [paymentMethod, setPaymentMethod] = React.useState<string>('Cash')
   const [chequeNo, setChequeNo] = React.useState<string>('')
+
+  // Multi-step workflow state: 'encode' (spreadsheet) vs 'assign_unpaid' (unpaid entries assignment page)
+  const [currentStep, setCurrentStep] = React.useState<'encode' | 'assign_unpaid'>('encode')
+  const [unpaidAssignments, setUnpaidAssignments] = React.useState<UnpaidAssignmentRow[]>([])
+
+
+  const [knownDebtors, setKnownDebtors] = React.useState(() =>
+    receivablesStore.getPeopleSummaries()
+  )
+
+  React.useEffect(() => {
+    setKnownDebtors(receivablesStore.getPeopleSummaries())
+  }, [])
 
   // Bank Accounts state initialized synchronously from cache for 0ms Deposit Bank availability
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>(() =>
@@ -480,34 +507,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }, [editItem])
 
-  // Excel-style rows state: initialize with 4 clean rows
+  // Excel-style rows state: start with exactly 1 row (user can add more rows as needed)
   const [rows, setRows] = React.useState<ParticularsRow[]>([
     {
       id: 'row-1',
-      pettyCashCategory: '',
-      particulars: '',
-      unitPrice: '',
-      quantity: 1,
-      status: 'Paid',
-    },
-    {
-      id: 'row-2',
-      pettyCashCategory: '',
-      particulars: '',
-      unitPrice: '',
-      quantity: 1,
-      status: 'Paid',
-    },
-    {
-      id: 'row-3',
-      pettyCashCategory: '',
-      particulars: '',
-      unitPrice: '',
-      quantity: 1,
-      status: 'Paid',
-    },
-    {
-      id: 'row-4',
       pettyCashCategory: '',
       particulars: '',
       unitPrice: '',
@@ -621,15 +624,22 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   const paidCashTotal = React.useMemo(() => {
     return calculatedRows
-      .filter((r) => r.isValid && r.status === 'Paid')
+      .filter((r) => r.rowTotal > 0 && r.status === 'Paid')
       .reduce((sum, r) => sum + r.rowTotal, 0)
   }, [calculatedRows])
 
   const unpaidPendingTotal = React.useMemo(() => {
     return calculatedRows
-      .filter((r) => r.isValid && r.status !== 'Paid')
+      .filter((r) => r.rowTotal > 0 && r.status !== 'Paid')
       .reduce((sum, r) => sum + r.rowTotal, 0)
   }, [calculatedRows])
+
+  const hasUnpaidItems = React.useMemo(() => {
+    if (transactionType !== 'Sales') return false
+    return rows.some(
+      (r) => r.status === 'Unpaid' || r.status === 'Pending'
+    )
+  }, [transactionType, rows])
 
   const validRowsCount = React.useMemo(() => {
     return calculatedRows.filter((r) => r.isValid).length
@@ -724,6 +734,41 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
 
+    // Check if there are unpaid items in Sales
+    const unpaidItems = validItems.filter(
+      (it) => it.status === 'Unpaid' || it.status === 'Pending'
+    )
+
+    // Step 1: If on encode step and unpaid items exist, redirect to the Unpaid Entries Assignment spreadsheet page!
+    if (transactionType === 'Sales' && unpaidItems.length > 0 && currentStep === 'encode') {
+      setUnpaidAssignments(
+        unpaidItems.map((it) => ({
+          rowId: it.id,
+          particulars: it.particulars.trim(),
+          quantity: it.numericQty,
+          unitPrice: it.numericPrice,
+          total: it.rowTotal,
+          customerType: 'External',
+          customerName: '',
+          contactOrRole: '',
+        }))
+      )
+      setCurrentStep('assign_unpaid')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
+
+    // Step 2: If on assign_unpaid step, ensure each unpaid item has a customer/staff name
+    if (currentStep === 'assign_unpaid') {
+      const missingIdx = unpaidAssignments.findIndex((u) => !u.customerName.trim())
+      if (missingIdx !== -1) {
+        setErrorMessage(
+          `Please provide a Customer or Staff Name for unpaid item #${missingIdx + 1}: "${unpaidAssignments[missingIdx].particulars}".`
+        )
+        return
+      }
+    }
+
     setIsSubmitting(true)
     try {
       // Map valid sheet rows to structured ParticularItems
@@ -767,6 +812,54 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             items: itemizedParticulars,
             bankAccountId: effectiveBankId || undefined,
           })
+
+          // Sync unpaid entries to Receivables Utang ledger grouped by customer
+          if (unpaidAssignments.length > 0) {
+            const customerGroups = new Map<string, {
+              customerName: string
+              customerType: CustomerType
+              contactOrRole: string
+              items: string[]
+              total: number
+            }>()
+
+            unpaidAssignments.forEach((u) => {
+              const rawType = String(u.customerType || '').toLowerCase()
+              const isStaff = rawType.includes('staff') || rawType.includes('internal') || rawType.includes('employee')
+              const resolvedType: CustomerType = isStaff ? 'Staff' : 'External'
+
+              const key = `${resolvedType}___${u.customerName.trim().toLowerCase()}`
+              if (!customerGroups.has(key)) {
+                customerGroups.set(key, {
+                  customerName: u.customerName.trim(),
+                  customerType: resolvedType,
+                  contactOrRole: u.contactOrRole.trim(),
+                  items: [],
+                  total: 0,
+                })
+              }
+              const g = customerGroups.get(key)!
+              g.items.push(u.particulars)
+              g.total += u.total
+            })
+
+            customerGroups.forEach((group) => {
+              receivablesStore.addNewSale({
+                customer_name: group.customerName,
+                customer_type: group.customerType,
+                customer_phone: group.customerType === 'External' ? group.contactOrRole : undefined,
+                customer_role: group.customerType === 'Staff' ? group.contactOrRole : undefined,
+                items_summary: group.items.join(', ') || 'Food Order',
+                total_amount: group.total,
+                payment_option: 'Pay Later',
+                amount_paid: 0,
+                payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
+                date: date,
+                notes: chequeNo.trim() ? `Ref: ${chequeNo.trim()}` : undefined,
+                company: companyToUse,
+              })
+            })
+          }
         } else {
           await expenseService.updateExpense(editItem.id, {
             company: companyToUse,
@@ -796,6 +889,54 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             items: itemizedParticulars,
             bankAccountId: effectiveBankId || undefined,
           })
+
+          // Sync unpaid entries to Receivables Utang ledger grouped by customer
+          if (unpaidAssignments.length > 0) {
+            const customerGroups = new Map<string, {
+              customerName: string
+              customerType: CustomerType
+              contactOrRole: string
+              items: string[]
+              total: number
+            }>()
+
+            unpaidAssignments.forEach((u) => {
+              const rawType = String(u.customerType || '').toLowerCase()
+              const isStaff = rawType.includes('staff') || rawType.includes('internal') || rawType.includes('employee')
+              const resolvedType: CustomerType = isStaff ? 'Staff' : 'External'
+
+              const key = `${resolvedType}___${u.customerName.trim().toLowerCase()}`
+              if (!customerGroups.has(key)) {
+                customerGroups.set(key, {
+                  customerName: u.customerName.trim(),
+                  customerType: resolvedType,
+                  contactOrRole: u.contactOrRole.trim(),
+                  items: [],
+                  total: 0,
+                })
+              }
+              const g = customerGroups.get(key)!
+              g.items.push(u.particulars)
+              g.total += u.total
+            })
+
+            customerGroups.forEach((group) => {
+              receivablesStore.addNewSale({
+                customer_name: group.customerName,
+                customer_type: group.customerType,
+                customer_phone: group.customerType === 'External' ? group.contactOrRole : undefined,
+                customer_role: group.customerType === 'Staff' ? group.contactOrRole : undefined,
+                items_summary: group.items.join(', ') || 'Food Order',
+                total_amount: group.total,
+                payment_option: 'Pay Later',
+                amount_paid: 0,
+                payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
+                date: date,
+                notes: chequeNo.trim() ? `Ref: ${chequeNo.trim()}` : undefined,
+                company: companyToUse,
+              })
+            })
+          }
         } else {
           await expenseService.addExpense({
             company: companyToUse,
@@ -846,30 +987,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         quantity: 1,
         status: 'Paid',
       },
-      {
-        id: 'row-2',
-        pettyCashCategory: '',
-        particulars: '',
-        unitPrice: '',
-        quantity: 1,
-        status: 'Paid',
-      },
-      {
-        id: 'row-3',
-        pettyCashCategory: '',
-        particulars: '',
-        unitPrice: '',
-        quantity: 1,
-        status: 'Paid',
-      },
-      {
-        id: 'row-4',
-        pettyCashCategory: '',
-        particulars: '',
-        unitPrice: '',
-        quantity: 1,
-        status: 'Paid',
-      },
     ])
     setErrorMessage(null)
   }
@@ -877,7 +994,255 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const isSales = transactionType === 'Sales'
 
   return (
-    <div className="space-y-6 pb-16 max-w-7xl mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-16 w-full max-w-[1800px] mx-auto px-2 sm:px-4 lg:px-6 animate-in fade-in duration-300">
+      {/* ========================================================================= */}
+      {/* STEP 2: DEDICATED UNPAID SPREADSHEET PAGE (ASSIGN CUSTOMER TYPE & NAME)   */}
+      {/* ========================================================================= */}
+      {currentStep === 'assign_unpaid' ? (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          {/* Header */}
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setErrorMessage(null)
+                setCurrentStep('encode')
+              }}
+              className="h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Edit Particulars Spreadsheet</span>
+            </Button>
+
+            <div>
+              <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
+                Assign Unpaid Entries (Receivables)
+              </h1>
+              <p className="text-xs sm:text-sm text-muted-fg font-normal mt-1">
+                The following items were marked as <strong>Unpaid</strong>. Assign the Customer Type and Name for each line item to automatically record them into the Receivables ledger.
+              </p>
+            </div>
+          </div>
+
+          {/* Error Message */}
+          {errorMessage && (
+            <div className="flex items-center gap-3 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-medium shadow-xs animate-in fade-in-50 duration-200">
+              <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {/* Unpaid Entries Spreadsheet Table */}
+          <Card className="rounded-[24px] bg-white border border-stroke/30 shadow-xs overflow-hidden">
+            <div className="p-4 sm:p-5 bg-rose-50/60 border-b border-rose-200/80 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-rose-600 text-white font-bold text-xs flex items-center justify-center font-mono shadow-xs">
+                  UTG
+                </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-focus leading-tight">
+                    Unpaid Entries Spreadsheet
+                  </h2>
+                  <p className="text-xs text-muted-fg">
+                    Specify who owes each unpaid food item. You can assign different customers per row.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <Table className="w-full border-collapse min-w-[980px]">
+                <TableHeader className="bg-slate-50/90 border-b border-slate-200/80">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-12 text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3">
+                      #
+                    </TableHead>
+                    <TableHead className="text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-4">
+                      UNPAID ITEM / PARTICULARS
+                    </TableHead>
+                    <TableHead className="w-20 text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2">
+                      QTY
+                    </TableHead>
+                    <TableHead className="w-32 text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-4">
+                      PRICE (₱)
+                    </TableHead>
+                    <TableHead className="w-36 text-right text-[11px] font-bold uppercase tracking-wider text-rose-700 border-r border-slate-200/60 py-3 px-4">
+                      TOTAL OWED (₱)
+                    </TableHead>
+                    <TableHead className="w-48 text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                      CUSTOMER TYPE <span className="text-red-500">*</span>
+                    </TableHead>
+                    <TableHead className="text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-4">
+                      CUSTOMER / STAFF NAME <span className="text-red-500">*</span>
+                    </TableHead>
+                    <TableHead className="w-48 text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3 px-3">
+                      CONTACT / ROLE
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+
+                <TableBody>
+                  {unpaidAssignments.map((row, idx) => (
+                    <TableRow key={row.rowId} className="border-b border-slate-200/60 hover:bg-slate-50/70 transition-colors">
+                      {/* Row Index */}
+                      <TableCell className="w-12 text-center text-xs font-mono font-bold text-muted-fg/70 bg-slate-50/50 border-r border-slate-200/60 select-none py-2 px-1">
+                        {idx + 1}
+                      </TableCell>
+
+                      {/* Particular Description */}
+                      <TableCell className="border-r border-slate-200/60 p-2.5 px-4 font-semibold text-xs sm:text-sm text-focus">
+                        <span className="block truncate max-w-xs sm:max-w-md" title={row.particulars}>
+                          {row.particulars}
+                        </span>
+                      </TableCell>
+
+                      {/* Qty */}
+                      <TableCell className="w-20 text-center border-r border-slate-200/60 p-2 font-mono text-xs sm:text-sm text-focus">
+                        {row.quantity}
+                      </TableCell>
+
+                      {/* Unit Price */}
+                      <TableCell className="w-32 text-right border-r border-slate-200/60 p-2 px-4 font-mono text-xs sm:text-sm text-focus">
+                        {formatPHP(row.unitPrice)}
+                      </TableCell>
+
+                      {/* Total Owed */}
+                      <TableCell className="w-36 text-right border-r border-slate-200/60 p-2 px-4 font-mono text-xs sm:text-sm font-bold text-rose-600 bg-rose-50/30">
+                        {formatPHP(row.total)}
+                      </TableCell>
+
+                      {/* Customer / Staff Type Input Field */}
+                      <TableCell className="w-48 border-r border-slate-200/60 p-1.5 px-3">
+                        <input
+                          type="text"
+                          value={row.customerType}
+                          onChange={(e) => {
+                            const val = e.target.value as CustomerType
+                            setUnpaidAssignments((prev) =>
+                              prev.map((u, i) => (i === idx ? { ...u, customerType: val } : u))
+                            )
+                          }}
+                          placeholder="e.g. External or Staff"
+                          className="w-full h-9 px-3 rounded-lg border border-stroke/60 bg-white text-xs text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus"
+                        />
+                      </TableCell>
+
+                      {/* Customer / Staff Name Input Field (Pure input, no dropdown) */}
+                      <TableCell className="border-r border-slate-200/60 p-1.5 px-3">
+                        <input
+                          type="text"
+                          value={row.customerName}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            const match = knownDebtors.find(
+                              (p) => p.name.toLowerCase() === val.trim().toLowerCase()
+                            )
+                            setUnpaidAssignments((prev) =>
+                              prev.map((u, i) =>
+                                i === idx
+                                  ? {
+                                      ...u,
+                                      customerName: val,
+                                      ...(match ? {
+                                        customerType: match.type,
+                                        contactOrRole: match.role_or_dept || match.phone || u.contactOrRole,
+                                      } : {}),
+                                    }
+                                  : u
+                              )
+                            )
+                          }}
+                          placeholder={row.customerType === 'Staff' ? 'e.g. Maria Santos' : 'e.g. Mang Jose Mercado'}
+                          className={cn(
+                            'w-full h-9 px-3 rounded-lg border text-xs text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus',
+                            !row.customerName.trim()
+                              ? 'border-rose-300 bg-rose-50/20'
+                              : 'border-stroke/60 bg-white'
+                          )}
+                        />
+                      </TableCell>
+
+                      {/* Contact / Role Input */}
+                      <TableCell className="w-48 p-1.5 px-3">
+                        <input
+                          type="text"
+                          value={row.contactOrRole}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setUnpaidAssignments((prev) =>
+                              prev.map((u, i) => (i === idx ? { ...u, contactOrRole: val } : u))
+                            )
+                          }}
+                          placeholder={row.customerType === 'Staff' ? 'e.g. Kitchen Cook' : 'e.g. 0917-xxx-xxxx'}
+                          className="w-full h-9 px-3 rounded-lg border border-stroke/60 bg-white text-xs text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus"
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+
+          {/* Step 2 Bottom Actions Bar */}
+          <Card className="rounded-[24px] bg-white border border-stroke/30 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-center gap-6">
+              <div>
+                <span className="text-xs font-medium text-muted-fg block">Total Sales</span>
+                <span className="text-lg sm:text-xl font-bold text-focus tabular-nums">{formatPHP(grandTotal)}</span>
+              </div>
+              <div className="border-l border-slate-200 pl-6">
+                <span className="text-xs font-medium text-muted-fg block">Paid in Cash</span>
+                <span className="text-lg sm:text-xl font-bold text-emerald-600 tabular-nums">{formatPHP(paidCashTotal)}</span>
+              </div>
+              <div className="border-l border-slate-200 pl-6">
+                <span className="text-xs font-medium text-rose-600 block">Total Utang (Owed)</span>
+                <span className="text-lg sm:text-xl font-bold text-rose-600 tabular-nums">{formatPHP(unpaidPendingTotal)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 self-end md:self-auto">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setErrorMessage(null)
+                  setCurrentStep('encode')
+                }}
+                disabled={isSubmitting}
+                className="h-11 px-5 rounded-xl border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
+              >
+                Back to Edit Particulars
+              </Button>
+
+              <Button
+                type="button"
+                onClick={handleSave}
+                disabled={isSubmitting}
+                className="h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Saving and Registering Receivables…</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Confirm & Complete Sales Record</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      ) : (
+        /* ========================================================================= */
+        /* STEP 1: MAIN PARTICULARS SPREADSHEET (PURE ENCODING)                      */
+        /* ========================================================================= */
+        <div className="space-y-6">
       {/* 1. Navigation & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">
@@ -1632,6 +1997,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           </div>
         </DialogContent>
       </Dialog>
+        </div>
+      )}
     </div>
   )
 }

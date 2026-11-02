@@ -105,16 +105,36 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Dynamically load all registered companies from Supabase via backend endpoint
   const loadCompanies = React.useCallback(async () => {
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    if (!token || !user?.id) {
+      return
+    }
+    // Prevent 401: verify token format and expiry before fetching
+    try {
+      const parts = token.split('.')
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          return
+        }
+      } else {
+        return
+      }
+    } catch {
+      return
+    }
     setIsLoadingCompanies(true)
     try {
-      const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
       const res = await fetch('/api/v1/companies', {
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        if (res.status === 401) return
+        throw new Error(`HTTP ${res.status}`)
+      }
       const data = await res.json()
       if (Array.isArray(data) && data.length > 0) {
         const mappedOptions: CompanyOption[] = data.map((c: any) => ({
@@ -140,10 +160,12 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       setIsLoadingCompanies(false)
     }
-  }, [])
+  }, [user?.id])
 
   React.useEffect(() => {
-    void loadCompanies()
+    if (user?.id) {
+      void loadCompanies()
+    }
   }, [loadCompanies, user?.id])
 
   const allCompanies = React.useMemo(() => {

@@ -6,6 +6,8 @@ import {
   Landmark,
   AlertCircle,
   Wallet,
+  Building2,
+  Users,
 } from 'lucide-react'
 import { WelcomeBanner } from '@/components/dashboard/WelcomeBanner'
 import {
@@ -20,6 +22,7 @@ import {
 import { ProfitLossMonthlyChart } from '@/components/dashboard/ProfitLossMonthlyChart'
 import { RecentTransactionsCard } from '@/components/dashboard/RecentTransactionsCard'
 import { DashboardSkeleton } from '@/components/dashboard/DashboardSkeleton'
+import { employeeService } from '@/services/employeeService'
 import {
   dashboardService,
   type DashboardData,
@@ -59,6 +62,39 @@ export const DashboardPage: React.FC = () => {
 
   // Dynamic companies list strictly from authorized assigned companies in CompanyContext
   const companyList = allCompanies
+
+  // Admin stats for Company & User KPI cards
+  const [adminStats, setAdminStats] = React.useState<{
+    companyCount: number
+    userCount: number
+  }>({
+    companyCount: allCompanies?.length || 0,
+    userCount: 0,
+  })
+  const [adminLoading, setAdminLoading] = React.useState<boolean>(false)
+
+  React.useEffect(() => {
+    if (!isAdmin) return
+    let mounted = true
+    setAdminLoading(true)
+    Promise.all([
+      employeeService.getCompanies().catch(() => []),
+      employeeService.getUsers().catch(() => []),
+    ])
+      .then(([comps, usrs]) => {
+        if (!mounted) return
+        setAdminStats({
+          companyCount: comps && comps.length > 0 ? comps.length : (allCompanies?.length || 0),
+          userCount: usrs && usrs.length > 0 ? usrs.length : 0,
+        })
+      })
+      .finally(() => {
+        if (mounted) setAdminLoading(false)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [isAdmin])
 
   const [filters, setFilters] = React.useState<DashboardFilterState>(() => ({
     dateRange: {
@@ -251,7 +287,7 @@ export const DashboardPage: React.FC = () => {
       }
     }, [filteredTransactions])
 
-  if (loading && !data) {
+  if (!isAdmin && loading && !data) {
     return <DashboardSkeleton />
   }
 
@@ -263,17 +299,19 @@ export const DashboardPage: React.FC = () => {
       {/* 1. Sleek Compact Welcome Greeting Banner & Company/Date Filter Bar */}
       <div className="space-y-3">
         <WelcomeBanner />
-        <DashboardHeader
-          filters={filters}
-          companies={companyList}
-          onFiltersChange={(newFilters) => {
-            setFilters(newFilters)
-            if (newFilters.company !== filters.company) {
-              setActiveCompany(newFilters.company)
-            }
-          }}
-          isCompanyScoped={isCompanyScoped}
-        />
+        {!isAdmin && (
+          <DashboardHeader
+            filters={filters}
+            companies={companyList}
+            onFiltersChange={(newFilters) => {
+              setFilters(newFilters)
+              if (!isCompanyScoped && newFilters.company !== filters.company) {
+                setActiveCompany(newFilters.company)
+              }
+            }}
+            isCompanyScoped={isCompanyScoped}
+          />
+        )}
       </div>
 
       {loadError && (
@@ -296,84 +334,129 @@ export const DashboardPage: React.FC = () => {
           5. Petty Cash Balance (current wallet balance, not date-filtered)
           All other values respond dynamically to the selected company and date range.
       */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-        <DashboardKpiCard
-          label="Total Cash"
-          value={formatPHP(totalIncome)}
-          loading={loading}
-          icon={TrendingUp}
-          valueClassName="text-emerald-600"
-          iconContainerClassName="bg-emerald-50 text-emerald-600 border border-emerald-200/60"
-        />
-        <DashboardKpiCard
-          label="Total Cash Expense"
-          value={formatPHP(totalExpenses)}
-          loading={loading}
-          icon={TrendingDown}
-          valueClassName="text-rose-600"
-          iconContainerClassName="bg-rose-50 text-rose-600 border border-rose-200/60"
-        />
-        <DashboardKpiCard
-          label="Net Income (Total Cash - Cash Expense)"
-          value={formatPHP(netIncome)}
-          loading={loading}
-          icon={Landmark}
-          valueClassName={netIncome >= 0 ? 'text-emerald-600' : 'text-rose-600'}
-          iconContainerClassName={
-            netIncome >= 0
-              ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/60'
-              : 'bg-rose-50 text-rose-600 border border-rose-200/60'
-          }
-        />
-        <DashboardKpiCard
-          label="Overdue / Due Soon"
-          value={`${overdueCount} / ${dueSoonCount}`}
-          loading={loading}
-          icon={AlertCircle}
-          valueClassName="text-amber-600"
-          iconContainerClassName="bg-amber-50 text-amber-600 border border-amber-200/60"
-        />
-        <Link
-          to="/petty-cash"
-          className="block rounded-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-label="Open petty cash"
-        >
+      {/* 3. KPI Cards:
+          Admin: Only Company and User KPI cards
+          Other roles: Income, Expenses, Net Income, Overdue / Due Soon, and Petty Cash
+      */}
+      {isAdmin ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Link
+            to="/employee"
+            className="block rounded-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label="Open company management"
+          >
+            <DashboardKpiCard
+              label="Companies"
+              value={adminLoading ? '...' : String(adminStats.companyCount)}
+              loading={adminLoading}
+              icon={Building2}
+              subtext="Registered Companies"
+              valueClassName="text-primary font-bold"
+              iconContainerClassName="bg-primary/10 text-primary border border-primary/20"
+              className="h-full cursor-pointer hover:border-primary/40"
+            />
+          </Link>
+          <Link
+            to="/users"
+            className="block rounded-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label="Open user management"
+          >
+            <DashboardKpiCard
+              label="Users"
+              value={adminLoading ? '...' : String(adminStats.userCount)}
+              loading={adminLoading}
+              icon={Users}
+              subtext="Active System Accounts"
+              valueClassName="text-blue-600 font-bold"
+              iconContainerClassName="bg-blue-50 text-blue-600 border border-blue-200/60"
+              className="h-full cursor-pointer hover:border-blue-400/40"
+            />
+          </Link>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
           <DashboardKpiCard
-            label="Petty Cash Balance"
-            value={pettyCash ? formatPHP(pettyCash.balance) : '—'}
-            loading={loading || pettyCashLoading}
-            icon={Wallet}
-            className="h-full"
-            valueClassName="text-blue-600"
-            iconContainerClassName="bg-blue-50 text-blue-600 border border-blue-200/60"
+            label="Total Cash"
+            value={formatPHP(totalIncome)}
+            loading={loading}
+            icon={TrendingUp}
+            valueClassName="text-emerald-600"
+            iconContainerClassName="bg-emerald-50 text-emerald-600 border border-emerald-200/60"
           />
-        </Link>
-      </div>
+          <DashboardKpiCard
+            label="Total Cash Expense"
+            value={formatPHP(totalExpenses)}
+            loading={loading}
+            icon={TrendingDown}
+            valueClassName="text-rose-600"
+            iconContainerClassName="bg-rose-50 text-rose-600 border border-rose-200/60"
+          />
+          <DashboardKpiCard
+            label="Net Income (Total Cash - Cash Expense)"
+            value={formatPHP(netIncome)}
+            loading={loading}
+            icon={Landmark}
+            valueClassName={netIncome >= 0 ? 'text-emerald-600' : 'text-rose-600'}
+            iconContainerClassName={
+              netIncome >= 0
+                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/60'
+                : 'bg-rose-50 text-rose-600 border border-rose-200/60'
+            }
+          />
+          <DashboardKpiCard
+            label="Overdue / Due Soon"
+            value={`${overdueCount} / ${dueSoonCount}`}
+            loading={loading}
+            icon={AlertCircle}
+            valueClassName="text-amber-600"
+            iconContainerClassName="bg-amber-50 text-amber-600 border border-amber-200/60"
+          />
+          <Link
+            to="/petty-cash"
+            className="block rounded-[15px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label="Open petty cash"
+          >
+            <DashboardKpiCard
+              label="Petty Cash Balance"
+              value={pettyCash ? formatPHP(pettyCash.balance) : '—'}
+              loading={loading || pettyCashLoading}
+              icon={Wallet}
+              className="h-full"
+              valueClassName="text-blue-600"
+              iconContainerClassName="bg-blue-50 text-blue-600 border border-blue-200/60"
+            />
+          </Link>
+        </div>
+      )}
 
-      {/* Monthly profit / loss (income - expenses), above the category summaries */}
-      <ProfitLossMonthlyChart transactions={filteredTransactions} />
+      {/* Financial charts and tables: Hidden for Admin as requested */}
+      {!isAdmin && (
+        <>
+          {/* Monthly profit / loss (income - expenses), above the category summaries */}
+          <ProfitLossMonthlyChart transactions={filteredTransactions} />
 
-      {/* 4. Income and Expense Summary Charts:
-          Two separate charts side by side (stacked on mobile):
-          1. Income Summary
-          2. Expense Summary
-          Each chart has its independent Bar/Pie toggle, defaults to Bar,
-          and breaks down by GCash, Maya, PayMongo, Panda, In-house with consistent colors.
-      */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <IncomeSummaryChart transactions={filteredTransactions} />
-        <ExpenseSummaryChart transactions={filteredTransactions} />
-      </div>
+          {/* 4. Income and Expense Summary Charts:
+              Two separate charts side by side (stacked on mobile):
+              1. Income Summary
+              2. Expense Summary
+              Each chart has its independent Bar/Pie toggle, defaults to Bar,
+              and breaks down by GCash, Maya, PayMongo, Panda, In-house with consistent colors.
+          */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <IncomeSummaryChart transactions={filteredTransactions} />
+            <ExpenseSummaryChart transactions={filteredTransactions} />
+          </div>
 
-      {/* 5. Recent Transactions Table:
-          Columns in order: Date, Cheque No., Particulars, Withdrawal, Deposit, Category
-          Admin and Company Auditor view: Category is read-only badge.
-          Updates when date range changes. Max 10 rows per page with working pagination.
-      */}
-      <RecentTransactionsCard
-        companyName={filters.company}
-        transactions={filteredTransactions}
-      />
+          {/* 5. Recent Transactions Table:
+              Columns in order: Date, Cheque No., Particulars, Withdrawal, Deposit, Category
+              Updates when date range changes. Max 10 rows per page with working pagination.
+          */}
+          <RecentTransactionsCard
+            companyName={filters.company}
+            transactions={filteredTransactions}
+          />
+        </>
+      )}
     </div>
   )
 }

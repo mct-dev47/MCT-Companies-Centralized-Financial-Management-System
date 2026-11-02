@@ -236,8 +236,7 @@ export const TransactionPage: React.FC = () => {
   })
   const [depositSortOrder, setDepositSortOrder] = React.useState<'desc' | 'asc'>('desc')
   const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
-  const [isDepositDirectionDropdownOpen, setIsDepositDirectionDropdownOpen] = React.useState(false)
-  const depositDirectionDropdownRef = React.useRef<HTMLDivElement>(null)
+
 
   // Independent Filters & Pagination for ALL TRANSACTIONS (accrual) Tab
   const [salesSearchQuery, setSalesSearchQuery] = React.useState('')
@@ -281,16 +280,15 @@ export const TransactionPage: React.FC = () => {
       if (salesTypeDropdownRef.current && !salesTypeDropdownRef.current.contains(target)) {
         setIsSalesTypeDropdownOpen(false)
       }
-      if (depositDirectionDropdownRef.current && !depositDirectionDropdownRef.current.contains(target)) {
-        setIsDepositDirectionDropdownOpen(false)
-      }
+
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
   // Fetch all transactions across Sales, Expenses, and Loans
-  const fetchAllTransactions = React.useCallback(async () => {
+  const fetchAllTransactions = React.useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const targetCompany = isCompanyScoped
         ? assignedCompany
@@ -372,8 +370,7 @@ export const TransactionPage: React.FC = () => {
   }, [isCompanyScoped, assignedCompany, activeCompany])
 
   React.useEffect(() => {
-    setLoading(true)
-    fetchAllTransactions()
+    fetchAllTransactions(false)
   }, [fetchAllTransactions])
 
   // Realtime: an Audit review of a sale or expense, or an Audit approval of a loan or petty cash
@@ -389,7 +386,7 @@ export const TransactionPage: React.FC = () => {
         expenseService.invalidateCache()
         loanService.invalidateCache()
         pettyCashService.invalidateCache()
-        void fetchAllTransactions()
+        void fetchAllTransactions(true)
       }, 250)
     }
     const unsubs = [
@@ -405,7 +402,7 @@ export const TransactionPage: React.FC = () => {
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
-    await fetchAllTransactions()
+    await fetchAllTransactions(false)
   }
 
   // 1. FILTERED CASH LEDGER
@@ -602,7 +599,6 @@ export const TransactionPage: React.FC = () => {
   const currentTab: 'deposit' | 'all' = activeTab
   const hasDepositActiveFilters =
     depositSearchQuery.trim().length > 0 ||
-    depositDirectionFilter !== 'All' ||
     (depositDateRange.startDate !== null && depositDateRange.endDate !== null)
 
   const hasSalesActiveFilters =
@@ -1003,58 +999,7 @@ export const TransactionPage: React.FC = () => {
 
           {/* Right Controls: Date Range Picker, Clear Button, and Tab Switcher */}
           <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Direction Filter Dropdown (All / Deposits / Withdrawals) */}
-            <div ref={depositDirectionDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsDepositDirectionDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  isDepositDirectionDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-semibold text-focus/90">
-                  {depositDirectionFilter === 'All' ? 'Flow: All' : `Flow: ${depositDirectionFilter}`}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-              </button>
 
-              {isDepositDirectionDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  <div className="space-y-1">
-                    {[
-                      { label: 'All Flows', value: 'All' as const, dot: 'bg-slate-400' },
-                      { label: 'Deposits', value: 'Deposits' as const, dot: 'bg-emerald-500' },
-                      { label: 'Withdrawals', value: 'Withdrawals' as const, dot: 'bg-rose-500' },
-                    ].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => {
-                          setDepositDirectionFilter(opt.value)
-                          setIsDepositDirectionDropdownOpen(false)
-                          setDepositCurrentPage(1)
-                        }}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          depositDirectionFilter === opt.value
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={cn('w-2 h-2 rounded-full shrink-0', opt.dot)} />
-                          <span>{opt.label}</span>
-                        </div>
-                        {depositDirectionFilter === opt.value && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
 
             <DateRangePicker
               value={depositDateRange}
@@ -1378,20 +1323,20 @@ export const TransactionPage: React.FC = () => {
             <TableBody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
-                  <TableRow key={i}>
+                  <TableRow key={i} className="border-b border-slate-100">
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-48 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
                     {activeTab === 'all' && (
-                      <TableCell className="px-4 py-3.5"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
+                      <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
                     )}
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
                     {isAdmin && (
                       <TableCell className="px-4 py-3.5 text-center">
                         <Skeleton className="h-6 w-16 rounded-md mx-auto" />

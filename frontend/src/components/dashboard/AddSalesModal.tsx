@@ -23,6 +23,7 @@ import {
 } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
 import { bankService } from '@/services/bankService'
+import { receivablesStore, type PaymentOption, type CustomerType } from '@/services/receivablesStore'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
@@ -65,6 +66,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+  // Food Utang / Payment Option states
+  const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
+  const [customerType, setCustomerType] = React.useState<CustomerType>('External')
+  const [customerName, setCustomerName] = React.useState('')
+  const [amountPaid, setAmountPaid] = React.useState('')
 
   // Confirmation dialogue state
   const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
@@ -75,6 +81,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     particulars?: string
     amount?: string
     category?: string
+    customerName?: string
+    amountPaid?: string
   }>({})
 
   // Load categories from database
@@ -141,6 +149,10 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setAmount('')
       setPaymentMethod('Cash')
       setCategory(DEFAULT_SALES_CATEGORIES[0])
+      setPaymentOption('Paid in full')
+      setCustomerType('External')
+      setCustomerName('')
+      setAmountPaid('')
       setError('')
       setFieldErrors({})
       setIsConfirmOpen(false)
@@ -157,7 +169,22 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       return
     }
 
-    const errors: { date?: string; particulars?: string; amount?: string; category?: string } = {}
+    const errors: { date?: string; particulars?: string; amount?: string; category?: string; customerName?: string; amountPaid?: string } = {}
+
+    if (paymentOption !== 'Paid in full') {
+      if (!customerName.trim()) {
+        errors.customerName = 'Customer or staff name is required for credit / utang sales.'
+      }
+      if (paymentOption === 'Partial') {
+        const parsedPaid = parseFloat(amountPaid)
+        const parsedTot = parseFloat(amount)
+        if (!amountPaid.trim() || isNaN(parsedPaid) || parsedPaid <= 0) {
+          errors.amountPaid = 'Amount paid must be greater than 0.'
+        } else if (parsedPaid >= parsedTot) {
+          errors.amountPaid = 'For partial payment, amount paid must be less than total amount.'
+        }
+      }
+    }
 
     const todayIso = getTodayIso()
     if (!date.trim()) {
@@ -198,6 +225,21 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
       }
 
+      const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Partial' : 'Unpaid'
+
+      // Also record in local Receivables Utang store so both pages sync immediately
+      receivablesStore.addNewSale({
+        customer_name: (paymentOption !== 'Paid in full' && customerName.trim()) ? customerName.trim() : 'Walk-in Customer',
+        customer_type: customerType,
+        items_summary: particulars.trim(),
+        total_amount: parsedAmount,
+        payment_option: paymentOption,
+        amount_paid: paymentOption === 'Paid in full' ? parsedAmount : paymentOption === 'Partial' ? (parseFloat(amountPaid) || 0) : 0,
+        payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
+        date: date.trim() || getTodayIso(),
+        notes: chequeNo.trim() ? `Cheque: ${chequeNo.trim()}` : undefined,
+      })
+
       const payload: NewSalesInput = {
         date: date.trim() || getTodayIso(),
         chequeNo: chequeNo.trim(),
@@ -206,7 +248,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         category: catTrimmed,
         paymentMethod: paymentMethod,
         company: assignedCompany,
-        status: 'Paid',
+        status: effectiveStatus as any,
       }
       const created = await salesService.addSale(payload)
 
@@ -380,6 +422,130 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   ))}
                 </select>
               </div>
+            </div>
+
+            {/* Payment Option: Paid in full | Partial | Pay Later (Utang) */}
+            <div className="space-y-2.5 p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/80">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-bold text-focus block">
+                  Payment Option <span className="text-red-500">*</span>
+                </Label>
+                <span className="text-[11px] text-muted-fg font-medium">
+                  {paymentOption === 'Paid in full' ? 'Cash collected in full' : paymentOption === 'Partial' ? 'Partial down payment' : 'Utang (Pay later)'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {(['Paid in full', 'Partial', 'Pay Later'] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => {
+                      setPaymentOption(opt)
+                      if (opt === 'Paid in full') {
+                        setAmountPaid(amount)
+                      } else if (opt === 'Pay Later') {
+                        setAmountPaid('0')
+                      }
+                    }}
+                    className={cn(
+                      'py-2 px-2 rounded-xl text-xs font-bold border transition-all text-center cursor-pointer',
+                      paymentOption === opt
+                        ? opt === 'Paid in full'
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                          : opt === 'Partial'
+                            ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                            : 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    )}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+
+              {/* If Partial or Pay Later, require Customer / Staff Member */}
+              {paymentOption !== 'Paid in full' && (
+                <div className="mt-3 space-y-3 pt-3 border-t border-slate-200/80">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] font-semibold text-slate-700 block">
+                        Customer Type <span className="text-red-500">*</span>
+                      </Label>
+                      <select
+                        value={customerType}
+                        onChange={(e) => setCustomerType(e.target.value as 'External' | 'Staff')}
+                        className="w-full h-9 px-2.5 rounded-lg border border-stroke/50 bg-white text-xs font-medium text-focus cursor-pointer"
+                      >
+                        <option value="External">External Customer</option>
+                        <option value="Staff">Internal Staff</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px] font-semibold text-slate-700 block">
+                        {customerType === 'Staff' ? 'Staff Member Name' : 'Customer Name'} <span className="text-red-500">*</span>
+                      </Label>
+                      <Input
+                        type="text"
+                        placeholder={customerType === 'Staff' ? 'e.g. Maria Santos (Kitchen)' : 'e.g. Mang Jose Mercado'}
+                        value={customerName}
+                        onChange={(e) => {
+                          setCustomerName(e.target.value)
+                          if (fieldErrors.customerName) {
+                            setFieldErrors((prev) => ({ ...prev, customerName: undefined }))
+                          }
+                        }}
+                        className={cn('h-9 rounded-lg border-stroke/50 text-xs', fieldErrors.customerName && 'border-red-500')}
+                      />
+                      {fieldErrors.customerName && (
+                        <p className="text-[10px] text-red-600 font-medium">{fieldErrors.customerName}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {paymentOption === 'Partial' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+                      <div className="space-y-1">
+                        <Label className="text-[11px] font-semibold text-slate-700 block">
+                          Amount Paid Now (PHP) <span className="text-red-500">*</span>
+                        </Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          max={amount || undefined}
+                          placeholder="0.00"
+                          value={amountPaid}
+                          onChange={(e) => {
+                            setAmountPaid(e.target.value)
+                            if (fieldErrors.amountPaid) {
+                              setFieldErrors((prev) => ({ ...prev, amountPaid: undefined }))
+                            }
+                          }}
+                          className={cn('h-9 rounded-lg border-stroke/50 text-xs font-semibold tabular-nums', fieldErrors.amountPaid && 'border-red-500')}
+                        />
+                        {fieldErrors.amountPaid && (
+                          <p className="text-[10px] text-red-600 font-medium">{fieldErrors.amountPaid}</p>
+                        )}
+                      </div>
+
+                      <div className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
+                        <span className="text-muted-fg block text-[10px]">Remaining Utang:</span>
+                        <span className="text-sm font-bold text-rose-600">
+                          {formatPHP(Math.max(0, (parseFloat(amount) || 0) - (parseFloat(amountPaid) || 0)))}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {paymentOption === 'Pay Later' && (
+                    <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium">
+                      Entire amount of {formatPHP(parseFloat(amount) || 0)} will be added as outstanding utang for {customerName || 'customer'}.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* 6. Category (Searchable / Configurable) */}

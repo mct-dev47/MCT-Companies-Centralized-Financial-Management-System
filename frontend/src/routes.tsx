@@ -60,6 +60,7 @@ const AddTransactionSheetPage = lazyPage(
   () => import('@/pages/AddTransactionSheetPage'),
   'AddTransactionSheetPage'
 )
+const ReceivablesPage = lazyPage(() => import('@/pages/ReceivablesPage'), 'ReceivablesPage')
 const CentralizedAuthPage = lazyPage(
   () => import('@/pages/CentralizedAuthPage'),
   'CentralizedAuthPage'
@@ -158,6 +159,15 @@ export const router = createBrowserRouter([
       {
         path: '/sales/add',
         element: <AddTransactionSheetPage initialType="Sales" />,
+      },
+            // Receivables routes (Food Utang Management)
+      {
+        path: '/receivables',
+        element: <ReceivablesPage />,
+      },
+      {
+        path: '/utang',
+        element: <Navigate to="/receivables" replace />,
       },
       // Expense routes
       {

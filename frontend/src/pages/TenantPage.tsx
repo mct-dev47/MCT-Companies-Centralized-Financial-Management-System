@@ -22,6 +22,7 @@ import {
   Calendar,
   Coins,
   Lock,
+  Receipt,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -214,7 +215,9 @@ export const TenantPage: React.FC = () => {
 
   // Filter states
   const [searchQuery, setSearchQuery] = React.useState('')
-  const [selectedStatus, setSelectedStatus] = React.useState<string>('All')
+  const [statusFilter, setStatusFilter] = React.useState<'All' | 'Paid' | 'Unpaid' | 'Pending'>('All')
+  const [detailTab, setDetailTab] = React.useState<'schedule' | 'history'>('schedule')
+  const [detailSearchQuery, setDetailSearchQuery] = React.useState('')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
@@ -398,9 +401,16 @@ export const TenantPage: React.FC = () => {
   const filteredTenants = React.useMemo(() => {
     return tenants
       .filter((tenant) => {
-        // Status check
-        if (selectedStatus !== 'All' && tenant.status !== selectedStatus) {
-          return false
+        // Status filter check (Paid, Unpaid, Pending)
+        if (statusFilter !== 'All') {
+          const fin = getLeaseFinancials(tenant, todayStr)
+          const isPaid = tenant.status === 'Completed' || (fin.remaining <= 0.005 && fin.amountPaid > 0)
+          const isPending = tenant.status === 'Pending'
+          const isUnpaid = !isPaid && !isPending
+
+          if (statusFilter === 'Paid' && !isPaid) return false
+          if (statusFilter === 'Unpaid' && !isUnpaid) return false
+          if (statusFilter === 'Pending' && !isPending) return false
         }
 
         // Search check
@@ -439,12 +449,12 @@ export const TenantPage: React.FC = () => {
         return true
       })
       .sort((a, b) => b.contractDate.localeCompare(a.contractDate))
-  }, [tenants, selectedStatus, searchQuery, dateRange, todayStr])
+  }, [tenants, statusFilter, searchQuery, dateRange, todayStr])
 
   // Reset to page 1 on filter changes
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [searchQuery, selectedStatus, selectedPeriod, dateRange])
+  }, [searchQuery, statusFilter, selectedPeriod, dateRange])
 
   // KPI calculations matching Sales & Expense
   // Lease totals per row, read through the schedule helper (stored values for leases that do not repeat)
@@ -1126,19 +1136,19 @@ export const TenantPage: React.FC = () => {
     printWindow.document.close()
   }
 
-  // Render Full-Page Tenant Details View (Matching Lending Page UI)
+  // Render Full-Page Tenant Details View (Matching FilCap Lending Page UI)
   const renderDetailsPage = () => {
     if (!activeTenant) return null
 
-    const LEDGER_ITEMS_PER_PAGE = 5
-    const dailyTarget = Math.max(500, Math.round(activeTenant.rentAmount / 30))
+    const LEDGER_ITEMS_PER_PAGE = 8
+    const SCHEDULE_ITEMS_PER_PAGE = 8
+    const HISTORY_ITEMS_PER_PAGE = 8
 
-    // Repeating leases read everything through the schedule (spec 0015); other leases are unchanged
     const fin = getFinancials(activeTenant)
     const repeatingLease = isRepeating(activeTenant) && fin.periodCount > 0
     const nextPeriod = fin.nextPeriod
 
-    // Build unified ledger combining recorded payments and scheduled pending dates
+    // For non-repeating leases: build unified payment and scheduled ledger
     const recordedDates = new Set<string>()
     const ledgerRows: Array<{
       id: string
@@ -1148,7 +1158,6 @@ export const TenantPage: React.FC = () => {
       method: string
       referenceNo: string
       notes: string
-      /** Set for rows that come from a saved payment record (these can be edited or removed). */
       recordId?: string
     }> = []
 
@@ -1167,7 +1176,7 @@ export const TenantPage: React.FC = () => {
       })
     })
 
-    // Generate upcoming scheduled pending dates up to dueDate so Pending filter shows upcoming schedule
+    const dailyTarget = Math.max(500, Math.round(activeTenant.rentAmount / 30))
     if (!repeatingLease && activeTenant.contractDate && activeTenant.dueDate && activeTenant.remainingBalance > 0) {
       const start = new Date(`${activeTenant.contractDate}T00:00:00`)
       const end = new Date(`${activeTenant.dueDate}T00:00:00`)
@@ -1193,12 +1202,85 @@ export const TenantPage: React.FC = () => {
       }
     }
 
+    // Filter non-repeating ledger by ledgerStatusFilter & detailSearchQuery
     const filteredLedger = ledgerRows.filter((r) => {
-      if (ledgerStatusFilter === 'All') return true
-      if (ledgerStatusFilter === 'Paid') return r.status === 'Paid'
-      return r.status === 'Pending'
+      if (ledgerStatusFilter === 'Paid' && r.status !== 'Paid') return false
+      if (ledgerStatusFilter === 'Pending' && r.status !== 'Pending') return false
+      if (detailSearchQuery.trim()) {
+        const q = detailSearchQuery.toLowerCase().trim()
+        if (
+          !r.date.toLowerCase().includes(q) &&
+          !r.notes.toLowerCase().includes(q) &&
+          !r.referenceNo.toLowerCase().includes(q)
+        ) {
+          return false
+        }
+      }
+      return true
     })
 
+    // Filter repeating periods
+    const filteredPeriods = fin.periods.filter((p) => {
+      if (ledgerStatusFilter === 'Paid') {
+        const isSettled = p.status === 'Paid' || p.status === 'Advance Paid'
+        if (!isSettled) return false
+      } else if (ledgerStatusFilter === 'Pending') {
+        const isSettled = p.status === 'Paid' || p.status === 'Advance Paid'
+        if (isSettled) return false
+      }
+      if (detailSearchQuery.trim()) {
+        const q = detailSearchQuery.toLowerCase().trim()
+        if (!p.label.toLowerCase().includes(q) && !p.dueDate.toLowerCase().includes(q)) {
+          return false
+        }
+      }
+      return true
+    })
+
+    // Filter repeating history records
+    const historyRecords = (activeTenant.dailyPayments || [])
+      .slice()
+      .sort((a, b) => {
+        const byDate = (b.date || '').localeCompare(a.date || '')
+        return byDate !== 0 ? byDate : (b.timestamp || '').localeCompare(a.timestamp || '')
+      })
+      .filter((rec) => {
+        if (detailSearchQuery.trim()) {
+          const q = detailSearchQuery.toLowerCase().trim()
+          const matchesDate = (rec.date || '').toLowerCase().includes(q)
+          const matchesRef = (rec.referenceNo || '').toLowerCase().includes(q)
+          const matchesNotes = (rec.notes || '').toLowerCase().includes(q)
+          if (!matchesDate && !matchesRef && !matchesNotes) return false
+        }
+        return true
+      })
+
+    // Track how many payments started at each period
+    const startedAtPeriod = new Map<number, number>()
+    ;(activeTenant.dailyPayments || []).forEach((r) => {
+      if (r.status === 'Missed' || !(r.amount > 0)) return
+      const idx = r.periodIndex || 1
+      startedAtPeriod.set(idx, (startedAtPeriod.get(idx) || 0) + 1)
+    })
+    const periodLabelByIndex = new Map(fin.periods.map((p) => [p.index, p.label]))
+
+    // Pagination for schedule periods
+    const totalSchedulePages = Math.max(1, Math.ceil(filteredPeriods.length / SCHEDULE_ITEMS_PER_PAGE))
+    const safeSchedulePage = Math.min(ledgerPage, totalSchedulePages)
+    const paginatedPeriods = filteredPeriods.slice(
+      (safeSchedulePage - 1) * SCHEDULE_ITEMS_PER_PAGE,
+      safeSchedulePage * SCHEDULE_ITEMS_PER_PAGE
+    )
+
+    // Pagination for history records
+    const totalHistoryPages = Math.max(1, Math.ceil(historyRecords.length / HISTORY_ITEMS_PER_PAGE))
+    const safeHistoryPage = Math.min(historyPage, totalHistoryPages)
+    const paginatedHistory = historyRecords.slice(
+      (safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE,
+      safeHistoryPage * HISTORY_ITEMS_PER_PAGE
+    )
+
+    // Pagination for non-repeating ledger
     const totalLedgerPages = Math.max(1, Math.ceil(filteredLedger.length / LEDGER_ITEMS_PER_PAGE))
     const safeLedgerPage = Math.min(ledgerPage, totalLedgerPages)
     const paginatedLedger = filteredLedger.slice(
@@ -1206,839 +1288,793 @@ export const TenantPage: React.FC = () => {
       safeLedgerPage * LEDGER_ITEMS_PER_PAGE
     )
 
-    // Repeating leases: Payment Schedule (one row per period) plus the list of recorded payments
-    const renderRepeatSchedulePanel = () => {
-      const filteredPeriods = fin.periods.filter((p) => {
-        if (ledgerStatusFilter === 'All') return true
-        const isSettled = p.status === 'Paid' || p.status === 'Advance Paid'
-        return ledgerStatusFilter === 'Paid' ? isSettled : !isSettled
-      })
-      const totalSchedulePages = Math.max(1, Math.ceil(filteredPeriods.length / SCHEDULE_ITEMS_PER_PAGE))
-      const safeSchedulePage = Math.min(ledgerPage, totalSchedulePages)
-      const scheduleRows = filteredPeriods.slice(
-        (safeSchedulePage - 1) * SCHEDULE_ITEMS_PER_PAGE,
-        safeSchedulePage * SCHEDULE_ITEMS_PER_PAGE
-      )
-
-      const historyRecords = (activeTenant.dailyPayments || [])
-        .slice()
-        .sort((a, b) => {
-          const byDate = (b.date || '').localeCompare(a.date || '')
-          return byDate !== 0 ? byDate : (b.timestamp || '').localeCompare(a.timestamp || '')
-        })
-      const totalHistoryPages = Math.max(1, Math.ceil(historyRecords.length / HISTORY_ITEMS_PER_PAGE))
-      const safeHistoryPage = Math.min(historyPage, totalHistoryPages)
-      const historyRows = historyRecords.slice(
-        (safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE,
-        safeHistoryPage * HISTORY_ITEMS_PER_PAGE
-      )
-      const periodLabelByIndex = new Map(fin.periods.map((p) => [p.index, p.label]))
-      // How many money payments started at each period (an untagged older payment starts at period 1)
-      const startedAtPeriod = new Map<number, number>()
-      ;(activeTenant.dailyPayments || []).forEach((r) => {
-        if (r.status === 'Missed' || !(r.amount > 0)) return
-        const idx = r.periodIndex || 1
-        startedAtPeriod.set(idx, (startedAtPeriod.get(idx) || 0) + 1)
-      })
-
-      return (
-        <div className="lg:col-span-3 space-y-4">
-          {/* Payment Schedule */}
-          <div className="bg-white border border-stroke/60 rounded-2xl p-5 shadow-2xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
-              <div>
-                <h2 className="text-sm font-bold text-focus flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-emerald-600" />
-                  <span>Payment Schedule</span>
-                </h2>
-                <p className="text-[11px] text-muted-fg mt-0.5">
-                  Periods paid{' '}
-                  <strong className="text-focus">
-                    {fin.periodsPaid} of {fin.periodCount}
-                  </strong>{' '}
-                  •{' '}
-                  {nextPeriod ? (
-                    <span className={cn(nextPeriod.isOverdue && 'text-rose-600 font-semibold')}>
-                      Next due {nextPeriod.dueDate} ({nextPeriod.label}
-                      {nextPeriod.isOverdue ? ', overdue' : ''})
-                    </span>
-                  ) : (
-                    <span className="text-emerald-700 font-semibold">Fully paid</span>
-                  )}
-                </p>
-              </div>
-
-              <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs self-start sm:self-auto">
-                {(['All', 'Paid', 'Pending'] as const).map((statusOpt) => {
-                  const isActive = ledgerStatusFilter === statusOpt
-                  return (
-                    <button
-                      key={statusOpt}
-                      type="button"
-                      onClick={() => {
-                        setLedgerStatusFilter(statusOpt)
-                        setLedgerPage(1)
-                      }}
-                      className={cn(
-                        'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
-                        isActive ? 'bg-[#960C01] text-white shadow-xs' : 'text-muted-fg hover:text-focus'
-                      )}
-                    >
-                      {statusOpt}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="overflow-x-auto rounded-xl border border-slate-100">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Period</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Due Date</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">Amount Due</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">Penalty</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">Paid</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">Remaining</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-center">Status</TableHead>
-                    {!isAudit && (
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-center">Actions</TableHead>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {scheduleRows.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={isAudit ? 7 : 8} className="h-36 text-center text-xs text-muted-fg">
-                        No periods match your filter.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    scheduleRows.map((period) => (
-                      <TableRow
-                        key={period.index}
-                        className={cn(
-                          'hover:bg-slate-50/60 border-b border-slate-100',
-                          period.status === 'Advance Paid' && 'bg-sky-50/20',
-                          period.status === 'Partially Paid' && 'bg-amber-50/20'
-                        )}
-                      >
-                        <TableCell className="py-3 px-3 text-xs font-semibold text-focus whitespace-nowrap">
-                          {period.label}
-                        </TableCell>
-                        <TableCell
-                          className={cn(
-                            'py-3 px-3 font-mono text-xs font-semibold whitespace-nowrap',
-                            period.isOverdue ? 'text-rose-600' : 'text-focus'
-                          )}
-                        >
-                          {period.dueDate}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-right text-xs font-bold tabular-nums text-focus whitespace-nowrap">
-                          {formatPHP(period.amountDue)}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-right text-xs tabular-nums whitespace-nowrap">
-                          {period.penalty > 0 ? (
-                            <span className="text-rose-600 font-semibold">{formatPHP(period.penalty)}</span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-right text-xs font-bold tabular-nums whitespace-nowrap">
-                          {period.paid > 0 ? (
-                            <span className={period.status === 'Advance Paid' ? 'text-sky-700' : 'text-emerald-700'}>
-                              {formatPHP(period.paid)}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-right text-xs font-bold tabular-nums text-amber-700 whitespace-nowrap">
-                          {period.remaining > 0 ? formatPHP(period.remaining) : <span className="text-slate-400">—</span>}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-center whitespace-nowrap">
-                          <span
-                            className={cn(
-                              'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
-                              PERIOD_STATUS_STYLES[period.status]
-                            )}
-                            title={period.status === 'Advance Paid' ? 'Covered by advance payment' : undefined}
-                          >
-                            {period.status === 'Paid' && <Check className="h-2.5 w-2.5 stroke-[3]" />}
-                            {period.status === 'Advance Paid' && <Lock className="h-2.5 w-2.5" />}
-                            {period.status}
-                          </span>
-                          {period.status === 'Advance Paid' && (
-                            <div className="text-[9.5px] text-muted-fg mt-0.5">Covered by advance payment</div>
-                          )}
-                        </TableCell>
-                        {!isAudit && (
-                          <TableCell className="py-3 px-3 text-center whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1.5">
-                              {period.remaining > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleMarkPeriodPaid(period)}
-                                  className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 cursor-pointer transition-colors"
-                                  title={`Record a payment for ${period.label} (${formatPHP(period.remaining)} still owed)`}
-                                >
-                                  Mark as Paid
-                                </button>
-                              )}
-                              {(startedAtPeriod.get(period.index) || 0) > 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRequestMarkUnpaid(period)}
-                                  className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer transition-colors"
-                                  title={`Remove the payments that started at ${period.label}`}
-                                >
-                                  Mark as Unpaid
-                                </button>
-                              ) : period.status === 'Advance Paid' ? (
-                                <span
-                                  className="text-[10px] text-muted-fg"
-                                  title="This period is covered by advance money from an earlier payment. Edit or remove that payment instead."
-                                >
-                                  Covered by advance
-                                </span>
-                              ) : null}
-                            </div>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-muted-fg">
-              <div>
-                Showing{' '}
-                <span className="font-semibold text-focus">
-                  {filteredPeriods.length === 0 ? 0 : (safeSchedulePage - 1) * SCHEDULE_ITEMS_PER_PAGE + 1}
-                </span>{' '}
-                to{' '}
-                <span className="font-semibold text-focus">
-                  {Math.min(safeSchedulePage * SCHEDULE_ITEMS_PER_PAGE, filteredPeriods.length)}
-                </span>{' '}
-                of <span className="font-semibold text-focus">{filteredPeriods.length}</span> periods
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={safeSchedulePage <= 1}
-                  onClick={() => setLedgerPage((p) => Math.max(1, p - 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                  Prev
-                </Button>
-                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-focus font-semibold text-xs">
-                  Page {safeSchedulePage} of {totalSchedulePages}
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={safeSchedulePage >= totalSchedulePages}
-                  onClick={() => setLedgerPage((p) => Math.min(totalSchedulePages, p + 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-                >
-                  Next
-                  <ChevronRight className="h-3.5 w-3.5 ml-1" />
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Payment History (the existing payment ledger, newest first) */}
-          <div className="bg-white border border-stroke/60 rounded-2xl p-5 shadow-2xs space-y-4">
-            <div className="border-b border-slate-100 pb-3">
-              <h2 className="text-sm font-bold text-focus flex items-center gap-2">
-                <Coins className="h-4 w-4 text-emerald-600" />
-                <span>Payment History ({historyRecords.length})</span>
-              </h2>
-              <p className="text-[11px] text-muted-fg mt-0.5">
-                Each payment starts at the period shown. Extra money flows forward into the next periods.
-              </p>
-            </div>
-
-            <div className="overflow-x-auto rounded-xl border border-slate-100">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Payment Date</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Starting Period</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">Amount Paid</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Method</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Reference No.</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">Remarks</TableHead>
-                    {!isAudit && (
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-center">Actions</TableHead>
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {historyRows.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={isAudit ? 6 : 7} className="h-28 text-center text-xs text-muted-fg">
-                        No payments recorded yet.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    historyRows.map((rec) => (
-                      <TableRow key={rec.id} className="hover:bg-slate-50/60 border-b border-slate-100">
-                        <TableCell className="py-3 px-3 font-mono text-xs font-semibold text-focus whitespace-nowrap">
-                          {rec.date}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-xs text-focus whitespace-nowrap">
-                          {rec.periodIndex ? periodLabelByIndex.get(rec.periodIndex) || `Period ${rec.periodIndex}` : '—'}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-right text-xs font-bold tabular-nums whitespace-nowrap">
-                          {rec.status === 'Missed' ? (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider bg-rose-50 text-rose-700 border-rose-200">
-                              Missed
-                            </span>
-                          ) : (
-                            <span className="text-emerald-700">{formatPHP(rec.amount)}</span>
-                          )}
-                        </TableCell>
-                        <TableCell className="py-3 px-3 text-xs text-focus whitespace-nowrap">{rec.method || '—'}</TableCell>
-                        <TableCell className="py-3 px-3 font-mono text-xs text-muted-fg whitespace-nowrap">
-                          {rec.referenceNo || '—'}
-                        </TableCell>
-                        <TableCell
-                          className="py-3 px-3 text-xs text-muted-fg max-w-[220px] truncate"
-                          title={rec.status === 'Missed' ? rec.missedReason || rec.notes : rec.notes}
-                        >
-                          {rec.status === 'Missed' ? rec.missedReason || rec.notes || '—' : rec.notes || '—'}
-                        </TableCell>
-                        {!isAudit && (
-                          <TableCell className="py-3 px-3 text-center whitespace-nowrap">
-                            <div className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditRecord(rec)}
-                                className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer transition-colors"
-                                title="Edit this payment"
-                                aria-label={`Edit payment of ${rec.date}`}
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setRemoveTarget({ kind: 'record', record: rec })}
-                                className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
-                                title="Remove this payment (the amount goes back to unpaid)"
-                                aria-label={`Remove payment of ${rec.date}`}
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-muted-fg">
-              <div>
-                Showing{' '}
-                <span className="font-semibold text-focus">
-                  {historyRecords.length === 0 ? 0 : (safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE + 1}
-                </span>{' '}
-                to{' '}
-                <span className="font-semibold text-focus">
-                  {Math.min(safeHistoryPage * HISTORY_ITEMS_PER_PAGE, historyRecords.length)}
-                </span>{' '}
-                of <span className="font-semibold text-focus">{historyRecords.length}</span> entries
-              </div>
-              <div className="flex items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={safeHistoryPage <= 1}
-                  onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                  Prev
-                </Button>
-                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-focus font-semibold text-xs">
-                  Page {safeHistoryPage} of {totalHistoryPages}
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={safeHistoryPage >= totalHistoryPages}
-                  onClick={() => setHistoryPage((p) => Math.min(totalHistoryPages, p + 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-                >
-                  Next
-                  <ChevronRight className="h-3.5 w-3.5 ml-1" />
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )
-    }
-
     return (
-      <div className="space-y-5 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-200">
-        {/* Top Action & Navigation Row */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setViewMode('list')}
-              className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-2 shadow-2xs cursor-pointer"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span>Back to Tenants</span>
-            </Button>
-          </div>
+      <div className="space-y-6 animate-in fade-in duration-200">
+        {/* Top navigation row */}
+        <div className="flex items-center justify-between gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setViewMode('list')}
+            className="h-10 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-stroke/60 bg-white text-focus hover:bg-surface flex items-center gap-2 cursor-pointer shadow-2xs self-start"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            <span>Back to Tenants</span>
+          </Button>
         </div>
 
-        {/* Main Details Header (No container background, no status badge, buttons in same row as name) */}
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 px-1">
-          <div className="space-y-1">
-            <h1 className="text-xl sm:text-2xl font-bold text-focus tracking-tight">
-              {activeTenant.tenantName}
-            </h1>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-fg">
-              <span>
-                Unit / Stall: <strong className="text-focus font-semibold">{activeTenant.unitName}</strong>
-              </span>
-              <span>
-                {repeatingLease ? 'Next Due: ' : 'Due Date: '}
-                <strong
-                  className={cn(
-                    'font-semibold',
-                    repeatingLease && nextPeriod?.isOverdue ? 'text-rose-600' : 'text-focus'
-                  )}
-                >
-                  {repeatingLease
-                    ? nextPeriod
-                      ? `${nextPeriod.dueDate} (${nextPeriod.label})`
-                      : 'Fully paid'
-                    : activeTenant.dueDate}
-                </strong>
-              </span>
+        {/* Tenant & Lease Header (Matching FilCap Lending exactly) */}
+        <div className="pt-1">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="text-2xl sm:text-3xl font-extrabold text-focus tracking-tight">
+                  {activeTenant.tenantName}
+                </h1>
+                {activeTenant.auditStatus && (
+                  <span
+                    className={cn(
+                      'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
+                      activeTenant.auditStatus === 'Verified'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
+                    )}
+                  >
+                    {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                <span className="text-xs sm:text-sm text-muted-fg font-medium">
+                  Ref No: <strong className="text-focus font-mono">{activeTenant.tenantId || `TN-${activeTenant.id}`}</strong>
+                </span>
+                <span className="text-muted-fg/40">•</span>
+                <span className="text-xs sm:text-sm text-muted-fg font-medium">
+                  Unit / Stall: <strong className="text-focus">{activeTenant.unitName}</strong>
+                </span>
+                <span className="text-muted-fg/40">•</span>
+                <span className="text-xs sm:text-sm text-muted-fg font-medium">
+                  Schedule: <strong className="text-focus">{repeatingLease ? describeRepeat(activeTenant.repeat as LeaseRepeat, activeTenant.dueDate, fin.periodCount) : 'One-Time Lease'}</strong>
+                </span>
+                {activeTenant.leaseEndDate && (
+                  <>
+                    <span className="text-muted-fg/40">•</span>
+                    <span className="text-xs sm:text-sm text-muted-fg font-medium">
+                      Lease End: <strong className="text-focus font-mono">{activeTenant.leaseEndDate}</strong>
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
 
-          {/* Action Buttons in the same row as the Tenant Name */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {!isAudit && (
-              <>
+            {/* Action Buttons in the same row as the Tenant Name */}
+            <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
+              {!isAudit && fin.remaining > 0 && (
                 <Button
                   type="button"
                   onClick={(e) => handleOpenDailyPayment(activeTenant, e)}
-                  disabled={fin.remaining <= 0}
-                  className="h-10 px-4 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+                  className="h-10 px-4 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
                 >
                   <Coins className="h-4 w-4" />
                   <span>Record Payment</span>
                 </Button>
+              )}
+
+              {!isAudit && (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={(e) => handleOpenEdit(activeTenant, e)}
-                  className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  className="h-10 px-3.5 rounded-xl border border-stroke/60 bg-white font-semibold text-xs flex items-center gap-1.5 cursor-pointer hover:bg-surface text-focus shadow-2xs"
                 >
                   <Pencil className="h-3.5 w-3.5" />
                   <span>Edit Terms</span>
                 </Button>
-              </>
-            )}
-
-            {isAudit && (
-              <>
-                <Button
-                  type="button"
-                  onClick={() => void saveAudit(activeTenant, 'Verified')}
-                  className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Mark as Audited</span>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void saveAudit(activeTenant, 'Flagged')}
-                  className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
-                >
-                  <AlertCircle className="h-4 w-4" />
-                  <span>Flag Discrepancy</span>
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* 6 Financial Overview KPI Cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <div className="bg-white border border-stroke/60 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-fg block">
-              Rental Rate
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-              {formatPHP(activeTenant.rentAmount)}
-            </span>
-          </div>
-
-          <div className="bg-white border border-stroke/60 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-fg block">
-              {repeatingLease ? 'Rent Per Payment' : 'Daily Target'}
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-              {formatPHP(repeatingLease ? activeTenant.rentAmount : dailyTarget)}
-            </span>
-          </div>
-
-          <div className="bg-white border border-stroke/60 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-fg block">
-              Total Payable
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-focus tabular-nums mt-1 block">
-              {formatPHP(fin.totalDue)}
-            </span>
-          </div>
-
-          <div className="bg-emerald-50/70 border border-emerald-200/70 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-emerald-800 block">
-              Amount Paid
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-emerald-700 tabular-nums mt-1 block">
-              {formatPHP(fin.amountPaid)}
-            </span>
-          </div>
-
-          <div className="bg-amber-50/70 border border-amber-200/70 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-amber-800 block">
-              Remaining Balance
-            </span>
-            <span className="text-base sm:text-lg font-extrabold text-amber-700 tabular-nums mt-1 block">
-              {formatPHP(fin.remaining)}
-            </span>
-          </div>
-
-          <div className="bg-white border border-stroke/60 rounded-2xl p-4 shadow-2xs">
-            <span className="text-[10.5px] font-bold uppercase tracking-wider text-muted-fg block">
-              {repeatingLease ? 'Next Due' : 'Due Date'}
-            </span>
-            <span
-              className={cn(
-                'text-base sm:text-lg font-extrabold tabular-nums mt-1 block',
-                repeatingLease && nextPeriod?.isOverdue ? 'text-rose-600' : 'text-focus'
               )}
-            >
-              {repeatingLease ? (nextPeriod ? nextPeriod.dueDate : 'Fully paid') : activeTenant.dueDate}
-            </span>
-          </div>
-        </div>
 
-        {/* Split Section: Lease Agreement & Terms (Left) + Payment Schedule & History (Right) */}
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          {/* Left 1 Column: Lease Agreement & Terms */}
-          <div className="lg:col-span-1 bg-white border border-stroke/60 rounded-2xl p-5 shadow-2xs space-y-4">
-            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
-              <FileText className="h-4 w-4 text-[#960C01]" />
-              <h2 className="text-sm font-bold text-focus">Lease Agreement & Terms</h2>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">Tenant ID</span>
-                <span className="font-mono font-bold text-[#960C01]">{activeTenant.tenantId}</span>
-              </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">Tenant / Lessee</span>
-                <span className="font-semibold text-focus text-right truncate max-w-[160px]">{activeTenant.tenantName}</span>
-              </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">Leased Unit</span>
-                <span className="font-semibold text-focus text-right truncate max-w-[160px]">{activeTenant.unitName}</span>
-              </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">Date Contracted</span>
-                <span className="font-mono font-semibold text-focus">{activeTenant.contractDate}</span>
-              </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">{repeatingLease ? 'First Due Date' : 'Maturity / Due Date'}</span>
-                <span className="font-mono font-semibold text-focus">{activeTenant.dueDate}</span>
-              </div>
-              {repeatingLease && (
+              {isAudit && (
                 <>
-                  <div className="flex items-start justify-between gap-3 py-1.5 border-b border-slate-100">
-                    <span className="text-muted-fg shrink-0">Repeat</span>
-                    <span className="font-semibold text-focus text-right">
-                      {describeRepeat(activeTenant.repeat as LeaseRepeat, activeTenant.dueDate, fin.periodCount)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-muted-fg">Lease End Date</span>
-                    <span className="font-mono font-semibold text-focus">{activeTenant.leaseEndDate}</span>
-                  </div>
-                  <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                    <span className="text-muted-fg">Late Penalty</span>
-                    <span className="font-semibold text-focus">
-                      {activeTenant.penaltyRate && activeTenant.penaltyRate > 0
-                        ? `${activeTenant.penaltyRate}% of a period's rent`
-                        : 'None'}
-                    </span>
-                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => void saveAudit(activeTenant, 'Verified')}
+                    className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>Mark as Audited</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void saveAudit(activeTenant, 'Flagged')}
+                    className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Flag Discrepancy</span>
+                  </Button>
                 </>
               )}
-              <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                <span className="text-muted-fg">Assigned Company</span>
-                <span className="font-semibold text-focus text-right truncate max-w-[160px]">{activeTenant.companyName}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Two Section Layout: Terms & Financial Receipt (Left) & Complete Schedule Ledger (Right) */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+          {/* Left Column: Lease Agreement & Terms Styled Like a Financial Receipt */}
+          <div className="lg:col-span-5 xl:col-span-4 bg-white border border-slate-200/90 rounded-2xl p-5 shadow-2xs flex flex-col justify-between h-full">
+            {/* Main Receipt Content with tight, natural receipt layout */}
+            <div className="space-y-3.5">
+              {/* Receipt Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-dashed border-slate-200">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-focus">
+                    <Receipt className="w-4 h-4 text-focus" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-focus">
+                      Lease Agreement & Terms
+                    </h3>
+                    <span className="text-[10px] text-muted-fg font-medium">Official Agreement Receipt</span>
+                  </div>
+                </div>
+                <span className="font-mono text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-semibold border border-slate-200">
+                  {activeTenant.tenantId || `TN-${activeTenant.id}`}
+                </span>
               </div>
-              {activeTenant.auditStatus && (
-                <div className="flex items-center justify-between py-1.5 border-b border-slate-100">
-                  <span className="text-muted-fg">Audit Status</span>
+
+              {/* Terms & Schedule Parameters */}
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
+                  <span className="text-muted-fg">Date Contracted:</span>
+                  <span className="font-mono text-focus">{activeTenant.contractDate}</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
+                  <span className="text-muted-fg">Maturity / Next Due:</span>
+                  <span className="font-mono text-focus">
+                    {repeatingLease
+                      ? nextPeriod
+                        ? `${nextPeriod.dueDate} (${nextPeriod.label})`
+                        : 'Fully paid'
+                      : activeTenant.dueDate}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
+                  <span className="text-muted-fg">Leased Unit / Stall:</span>
+                  <span className="font-semibold text-focus">{activeTenant.unitName}</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
+                  <span className="text-muted-fg">Schedule / Repeat:</span>
+                  <span className="font-semibold text-focus">
+                    {repeatingLease
+                      ? describeRepeat(activeTenant.repeat as LeaseRepeat, activeTenant.dueDate, fin.periodCount)
+                      : 'One-Time Lease'}
+                  </span>
+                </div>
+                {activeTenant.leaseEndDate && (
+                  <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
+                    <span className="text-muted-fg">Lease End Date:</span>
+                    <span className="font-mono text-focus">{activeTenant.leaseEndDate}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-muted-fg">Assigned Company:</span>
+                  <span className="font-semibold text-focus truncate max-w-[180px]">
+                    {activeTenant.companyName || 'JK Property and Ventures'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Dashed Perforation */}
+              <div className="border-t border-dashed border-slate-200" />
+
+              {/* Financial Breakdown */}
+              <div className="space-y-1.5 text-xs">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-fg mb-1">
+                  Financial Breakdown
+                </div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-muted-fg">Rental Rate:</span>
+                  <span className="font-mono font-bold text-focus">{formatPHP(activeTenant.rentAmount)}</span>
+                </div>
+                {repeatingLease && (
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Lease Duration:</span>
+                    <span className="font-mono font-bold text-focus">
+                      {fin.periodCount} {fin.periodCount === 1 ? 'Period' : 'Periods'}
+                    </span>
+                  </div>
+                )}
+                {activeTenant.penaltyRate && activeTenant.penaltyRate > 0 ? (
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Penalty Rate:</span>
+                    <span className="font-mono font-bold text-[#960C01]">
+                      {activeTenant.penaltyRate}%
+                    </span>
+                  </div>
+                ) : null}
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold text-sm">
+                  <span className="text-focus">Total Payable:</span>
+                  <span className="font-mono text-focus">{formatPHP(fin.totalDue)}</span>
+                </div>
+              </div>
+
+              {/* Dashed Perforation */}
+              <div className="border-t border-dashed border-slate-200" />
+
+              {/* Collections & Balances */}
+              <div className="space-y-2 text-xs">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-muted-fg mb-1">
+                  Collections & Balances
+                </div>
+                <div className="flex justify-between items-center py-0.5">
+                  <span className="text-muted-fg">Amount Paid:</span>
+                  <span className="font-mono font-bold text-emerald-600">{formatPHP(fin.amountPaid)}</span>
+                </div>
+                {(fin.totalPenalties || 0) > 0 && (
+                  <div className="flex justify-between items-center py-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-muted-fg">Late Penalty:</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-[#960C01]/10 text-[#960C01] font-bold border border-[#960C01]/20">
+                        Late Overdue
+                      </span>
+                    </div>
+                    <span className="font-mono font-bold text-[#960C01]">
+                      {formatPHP(fin.totalPenalties)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Remaining Balance Receipt Box */}
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex justify-between items-center">
+                  <div>
+                    <span className="text-xs font-bold text-focus block">Remaining Balance</span>
+                    <span className="text-[10px] text-muted-fg">Balance to complete</span>
+                  </div>
                   <span
                     className={cn(
-                      'px-2 py-0.5 rounded text-[10.5px] font-bold border',
-                      activeTenant.auditStatus === 'Verified'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-rose-50 text-rose-700 border-rose-200'
+                      'text-base font-mono font-extrabold',
+                      fin.remaining <= 0.005 ? 'text-emerald-600' : 'text-amber-600'
                     )}
                   >
-                    {activeTenant.auditStatus} {activeTenant.auditDate ? `(${activeTenant.auditDate})` : ''}
+                    {formatPHP(fin.remaining)}
                   </span>
+                </div>
+
+                {/* Target Receipt Box */}
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 flex justify-between items-center">
+                  <div>
+                    <span className="text-xs font-bold text-focus block">
+                      {repeatingLease ? 'Rent Per Period' : 'Target Rent'}
+                    </span>
+                    <span className="text-[10px] text-muted-fg">
+                      {repeatingLease ? `${activeTenant.repeat} cycle` : 'Target per payment'}
+                    </span>
+                  </div>
+                  <span className="text-sm font-mono font-bold text-focus">
+                    {formatPHP(activeTenant.rentAmount)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Agreement Notes (if any) */}
+              {activeTenant.notes && (
+                <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-muted-fg">
+                  <strong className="text-focus font-semibold block mb-0.5 text-[11px]">Agreement Notes:</strong>
+                  {activeTenant.notes}
                 </div>
               )}
             </div>
-
-            <div className="pt-1">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg block mb-1.5">
-                Remarks & Notes
-              </span>
-              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 text-xs text-focus min-h-[64px] whitespace-pre-wrap">
-                {activeTenant.notes || 'No additional remarks recorded for this tenant lease.'}
-              </div>
-            </div>
           </div>
 
-          {/* Right 3 Columns: Payment Schedule & History Table (repeating leases get the period schedule) */}
-          {repeatingLease ? (
-            renderRepeatSchedulePanel()
-          ) : (
-          <div className="lg:col-span-3 bg-white border border-stroke/60 rounded-2xl p-5 shadow-2xs flex flex-col justify-between space-y-4">
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="text-sm font-bold text-focus flex items-center gap-2">
-                    <Coins className="h-4 w-4 text-emerald-600" />
-                    <span>Payment Schedule & History</span>
-                  </h2>
-                  <p className="text-[11px] text-muted-fg mt-0.5">
-                    Showing 5 records per page • Filter by Paid or Pending status
-                  </p>
-                </div>
-
-                {/* Status Filter Toggle (All / Paid / Pending) */}
-                <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs self-start sm:self-auto">
-                  {(['All', 'Paid', 'Pending'] as const).map((statusOpt) => {
-                    const isActive = ledgerStatusFilter === statusOpt
-                    return (
+          {/* Right Column: Full Width Payment History & Schedule Table */}
+          <div className="lg:col-span-7 xl:col-span-8 bg-white border border-stroke/60 rounded-2xl p-5 shadow-2xs flex flex-col justify-between h-full">
+            <div className="flex-1 flex flex-col space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Coins className="h-4 w-4 text-emerald-600 shrink-0" />
+                  {repeatingLease ? (
+                    <div className="inline-flex items-center p-1 rounded-xl bg-slate-100 border border-stroke/40 shadow-2xs">
                       <button
-                        key={statusOpt}
                         type="button"
                         onClick={() => {
-                          setLedgerStatusFilter(statusOpt)
+                          setDetailTab('schedule')
                           setLedgerPage(1)
                         }}
                         className={cn(
-                          'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
-                          isActive
+                          'px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer',
+                          detailTab === 'schedule'
                             ? 'bg-[#960C01] text-white shadow-xs'
                             : 'text-muted-fg hover:text-focus'
                         )}
                       >
-                        {statusOpt}
+                        Payment Schedule ({filteredPeriods.length})
                       </button>
-                    )
-                  })}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDetailTab('history')
+                          setHistoryPage(1)
+                        }}
+                        className={cn(
+                          'px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer',
+                          detailTab === 'history'
+                            ? 'bg-[#960C01] text-white shadow-xs'
+                            : 'text-muted-fg hover:text-focus'
+                        )}
+                      >
+                        Payment History ({historyRecords.length})
+                      </button>
+                    </div>
+                  ) : (
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-focus">
+                      Payment Schedule & History ({filteredLedger.length})
+                    </h3>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+                  {/* Status Toggle: All, Paid, Pending */}
+                  <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs">
+                    {(['All', 'Paid', 'Pending'] as const).map((statusOpt) => {
+                      const isActive = ledgerStatusFilter === statusOpt
+                      return (
+                        <button
+                          key={statusOpt}
+                          type="button"
+                          onClick={() => {
+                            setLedgerStatusFilter(statusOpt)
+                            setLedgerPage(1)
+                          }}
+                          className={cn(
+                            'px-3 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
+                            isActive ? 'bg-[#960C01] text-white shadow-xs' : 'text-muted-fg hover:text-focus'
+                          )}
+                        >
+                          {statusOpt}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  {/* Search bar */}
+                  <div className="relative w-full sm:w-48">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-fg pointer-events-none" />
+                    <Input
+                      type="text"
+                      value={detailSearchQuery}
+                      onChange={(e) => {
+                        setDetailSearchQuery(e.target.value)
+                        setLedgerPage(1)
+                        setHistoryPage(1)
+                      }}
+                      placeholder="Search dates..."
+                      className="pl-8 pr-7 h-8 text-xs rounded-xl bg-slate-50 border-stroke/60 focus:bg-white"
+                    />
+                    {detailSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setDetailSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus text-xs p-0.5 cursor-pointer"
+                        title="Clear search"
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-xl border border-slate-100">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
-                        Payment Date
-                      </TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-center">
-                        Status
-                      </TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right">
-                        Amount Paid
-                      </TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
-                        Method
-                      </TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
-                        Reference No.
-                      </TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
-                        Remarks
-                      </TableHead>
-                      {!isAudit && (
-                        <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-center">
-                          Actions
-                        </TableHead>
-                      )}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginatedLedger.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={isAudit ? 6 : 7} className="h-36 text-center text-xs text-muted-fg">
-                          No payment records match your filter.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      paginatedLedger.map((entry) => {
-                        const badgeStyle =
-                          entry.status === 'Paid'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-
-                        return (
-                          <TableRow key={entry.id} className="hover:bg-slate-50/60 border-b border-slate-100">
-                            <TableCell className="py-3 px-3 font-mono text-xs font-semibold text-focus whitespace-nowrap">
-                              {entry.date}
-                            </TableCell>
-                            <TableCell className="py-3 px-3 text-center whitespace-nowrap">
-                              <span
+              {/* Table Body Area */}
+              <div className="flex-1 flex flex-col">
+                {repeatingLease && detailTab === 'schedule' ? (
+                  // Repeating Lease Schedule Periods Table
+                  filteredPeriods.length === 0 ? (
+                    <div className="flex-1 py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-3 text-emerald-600 shadow-2xs">
+                        <Coins className="w-7 h-7" />
+                      </div>
+                      <h4 className="text-sm font-bold text-focus">No Periods Found</h4>
+                      <p className="text-xs text-muted-fg max-w-md mt-1 mb-4 leading-relaxed">
+                        No scheduled lease periods match your current status or search filter.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 flex-1">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-muted-fg font-semibold">
+                          <tr>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Period</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Due Date</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Status</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Amount Due</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Penalty</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Paid</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Remaining</th>
+                            {!isAudit && (
+                              <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {paginatedPeriods.map((period) => (
+                            <tr
+                              key={period.index}
+                              className={cn(
+                                'hover:bg-slate-50/70 transition-colors',
+                                period.status === 'Advance Paid' && 'bg-sky-50/20',
+                                period.status === 'Partially Paid' && 'bg-amber-50/20'
+                              )}
+                            >
+                              <td className="py-2.5 px-3.5 font-medium text-focus whitespace-nowrap">
+                                {period.label}
+                              </td>
+                              <td
                                 className={cn(
-                                  'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
-                                  badgeStyle
+                                  'py-2.5 px-3.5 font-mono whitespace-nowrap font-medium',
+                                  period.isOverdue ? 'text-rose-600 font-semibold' : 'text-focus'
                                 )}
                               >
-                                {entry.status === 'Paid' && <Check className="h-2.5 w-2.5 stroke-[3]" />}
-                                {entry.status}
-                              </span>
-                            </TableCell>
-                            <TableCell className="py-3 px-3 text-right font-bold text-xs tabular-nums whitespace-nowrap">
-                              {entry.amount > 0 ? (
-                                <span className="text-emerald-700">{formatPHP(entry.amount)}</span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
+                                {period.dueDate}
+                              </td>
+                              <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                                    PERIOD_STATUS_STYLES[period.status]
+                                  )}
+                                >
+                                  {period.status === 'Paid' && <Check className="w-2.5 h-2.5 text-emerald-600 stroke-[3]" />}
+                                  {period.status === 'Advance Paid' && <Lock className="w-2.5 h-2.5" />}
+                                  {period.status}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right font-bold tabular-nums text-focus whitespace-nowrap">
+                                {formatPHP(period.amountDue)}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums whitespace-nowrap">
+                                {period.penalty > 0 ? (
+                                  <span className="text-rose-600 font-semibold">{formatPHP(period.penalty)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right font-bold tabular-nums whitespace-nowrap">
+                                {period.paid > 0 ? (
+                                  <span className={period.status === 'Advance Paid' ? 'text-sky-700' : 'text-emerald-700'}>
+                                    {formatPHP(period.paid)}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right font-bold tabular-nums text-amber-700 whitespace-nowrap">
+                                {period.remaining > 0 ? formatPHP(period.remaining) : <span className="text-slate-400">—</span>}
+                              </td>
+                              {!isAudit && (
+                                <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-1.5 justify-center">
+                                    {period.remaining > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleMarkPeriodPaid(period)}
+                                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 cursor-pointer transition-colors"
+                                        title={`Record a payment for ${period.label} (${formatPHP(period.remaining)} owed)`}
+                                      >
+                                        Mark as Paid
+                                      </button>
+                                    )}
+                                    {(startedAtPeriod.get(period.index) || 0) > 0 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRequestMarkUnpaid(period)}
+                                        className="h-7 px-2.5 rounded-lg text-[11px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer transition-colors"
+                                        title={`Remove the payments that started at ${period.label}`}
+                                      >
+                                        Mark as Unpaid
+                                      </button>
+                                    ) : period.status === 'Advance Paid' ? (
+                                      <span className="text-[10px] text-muted-fg">Covered</span>
+                                    ) : null}
+                                  </div>
+                                </td>
                               )}
-                            </TableCell>
-                            <TableCell className="py-3 px-3 text-xs text-focus whitespace-nowrap">
-                              {entry.method || '—'}
-                            </TableCell>
-                            <TableCell className="py-3 px-3 font-mono text-xs text-muted-fg whitespace-nowrap">
-                              {entry.referenceNo || '—'}
-                            </TableCell>
-                            <TableCell className="py-3 px-3 text-xs text-muted-fg max-w-[220px] truncate" title={entry.notes}>
-                              {entry.notes || '—'}
-                            </TableCell>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : repeatingLease && detailTab === 'history' ? (
+                  // Repeating Lease Payment History Table
+                  historyRecords.length === 0 ? (
+                    <div className="flex-1 py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-3 text-emerald-600 shadow-2xs">
+                        <Coins className="w-7 h-7" />
+                      </div>
+                      <h4 className="text-sm font-bold text-focus">No Payments Recorded Yet</h4>
+                      <p className="text-xs text-muted-fg max-w-md mt-1 mb-4 leading-relaxed">
+                        This tenant has not started paying yet. All recorded payment transactions will appear here.
+                      </p>
+                      {!isAudit && fin.remaining > 0 && (
+                        <Button
+                          type="button"
+                          onClick={(e) => handleOpenDailyPayment(activeTenant, e)}
+                          className="h-9 px-4 rounded-xl font-semibold text-xs bg-focus hover:bg-focus/90 text-white flex items-center gap-2 cursor-pointer shadow-2xs"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Record Payment</span>
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 flex-1">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-muted-fg font-semibold">
+                          <tr>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Payment Date</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Starting Period</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Status</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Amount Paid</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
+                            <th className="py-2.5 px-3.5 text-left">Remarks</th>
                             {!isAudit && (
-                              <TableCell className="py-3 px-3 text-center whitespace-nowrap">
-                                {entry.recordId ? (
-                                  <div className="inline-flex items-center gap-1">
+                              <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {paginatedHistory.map((rec) => (
+                            <tr key={rec.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="py-2.5 px-3.5 font-mono text-focus whitespace-nowrap font-medium">
+                                {rec.date}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-focus whitespace-nowrap font-medium">
+                                {rec.periodIndex ? periodLabelByIndex.get(rec.periodIndex) || `Period ${rec.periodIndex}` : '—'}
+                              </td>
+                              <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                {rec.status === 'Missed' ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                    <AlertCircle className="w-2.5 h-2.5 text-[#960C01]" />
+                                    <span>Missed</span>
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    <Check className="w-2.5 h-2.5 text-emerald-600 stroke-[3]" />
+                                    <span>Paid</span>
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right font-bold text-emerald-700 tabular-nums whitespace-nowrap">
+                                {formatPHP(rec.amount)}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-focus whitespace-nowrap">
+                                {rec.method || '—'}
+                              </td>
+                              <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap">
+                                {rec.referenceNo || '—'}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-muted-fg max-w-[200px] truncate" title={rec.notes}>
+                                {rec.notes || '—'}
+                              </td>
+                              {!isAudit && (
+                                <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                  <div className="inline-flex items-center gap-1 justify-center">
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const rec = activeTenant.dailyPayments.find((r) => r.id === entry.recordId)
-                                        if (rec) handleOpenEditRecord(rec)
-                                      }}
+                                      onClick={() => handleOpenEditRecord(rec)}
                                       className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer transition-colors"
                                       title="Edit this payment"
-                                      aria-label={`Edit payment of ${entry.date}`}
                                     >
                                       <Pencil className="h-3.5 w-3.5" />
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const rec = activeTenant.dailyPayments.find((r) => r.id === entry.recordId)
-                                        if (rec) setRemoveTarget({ kind: 'record', record: rec })
-                                      }}
+                                      onClick={() => setRemoveTarget({ kind: 'record', record: rec })}
                                       className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
-                                      title="Remove this payment (the amount goes back to unpaid)"
-                                      aria-label={`Remove payment of ${entry.date}`}
+                                      title="Remove this payment"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
                                   </div>
-                                ) : (
-                                  <span className="text-slate-300">—</span>
-                                )}
-                              </TableCell>
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                ) : (
+                  // Non-repeating Unified Ledger Table
+                  filteredLedger.length === 0 ? (
+                    <div className="flex-1 py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center text-center">
+                      <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-3 text-emerald-600 shadow-2xs">
+                        <Coins className="w-7 h-7" />
+                      </div>
+                      <h4 className="text-sm font-bold text-focus">No Records Found</h4>
+                      <p className="text-xs text-muted-fg max-w-md mt-1 mb-4 leading-relaxed">
+                        No payment or schedule records match your filter criteria.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl border border-slate-200 flex-1">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-muted-fg font-semibold">
+                          <tr>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Payment Date</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Status</th>
+                            <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Amount Paid</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
+                            <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
+                            <th className="py-2.5 px-3.5 text-left">Remarks</th>
+                            {!isAudit && (
+                              <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                             )}
-                          </TableRow>
-                        )
-                      })
-                    )}
-                  </TableBody>
-                </Table>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {paginatedLedger.map((entry) => (
+                            <tr key={entry.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="py-2.5 px-3.5 font-mono text-focus whitespace-nowrap font-medium">
+                                {entry.date}
+                              </td>
+                              <td className="py-2.5 px-3.5 whitespace-nowrap">
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                                    entry.status === 'Paid'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                                  )}
+                                >
+                                  {entry.status === 'Paid' && <Check className="w-2.5 h-2.5 stroke-[3] text-emerald-600" />}
+                                  {entry.status}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right font-bold tabular-nums whitespace-nowrap">
+                                {entry.amount > 0 ? (
+                                  <span className="text-emerald-700">{formatPHP(entry.amount)}</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-focus whitespace-nowrap">
+                                {entry.method || '—'}
+                              </td>
+                              <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap">
+                                {entry.referenceNo || '—'}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-muted-fg max-w-[200px] truncate" title={entry.notes}>
+                                {entry.notes || '—'}
+                              </td>
+                              {!isAudit && (
+                                <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                  {entry.recordId ? (
+                                    <div className="inline-flex items-center gap-1 justify-center">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const rec = activeTenant.dailyPayments.find((r) => r.id === entry.recordId)
+                                          if (rec) handleOpenEditRecord(rec)
+                                        }}
+                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer transition-colors"
+                                        title="Edit this payment"
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const rec = activeTenant.dailyPayments.find((r) => r.id === entry.recordId)
+                                          if (rec) setRemoveTarget({ kind: 'record', record: rec })
+                                        }}
+                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
+                                        title="Remove this payment"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-300">—</span>
+                                  )}
+                                </td>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )
+                )}
               </div>
             </div>
 
-            {/* 5-Row Pagination Controls */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-muted-fg">
-              <div>
-                Showing{' '}
-                <span className="font-semibold text-focus">
-                  {filteredLedger.length === 0
-                    ? 0
-                    : (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE + 1}
-                </span>{' '}
-                to{' '}
-                <span className="font-semibold text-focus">
-                  {Math.min(safeLedgerPage * LEDGER_ITEMS_PER_PAGE, filteredLedger.length)}
-                </span>{' '}
-                of <span className="font-semibold text-focus">{filteredLedger.length}</span> entries
-              </div>
+            {/* Pagination Footer (matching FilCap Lending) */}
+            <div className="pt-4 mt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
+              <span className="font-medium text-focus/80">
+                {repeatingLease && detailTab === 'schedule'
+                  ? filteredPeriods.length === 0
+                    ? 'Showing 0-0 of 0 periods'
+                    : `Showing ${(safeSchedulePage - 1) * SCHEDULE_ITEMS_PER_PAGE + 1}-${Math.min(safeSchedulePage * SCHEDULE_ITEMS_PER_PAGE, filteredPeriods.length)} of ${filteredPeriods.length} periods`
+                  : repeatingLease && detailTab === 'history'
+                  ? historyRecords.length === 0
+                    ? 'Showing 0-0 of 0 records'
+                    : `Showing ${(safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE + 1}-${Math.min(safeHistoryPage * HISTORY_ITEMS_PER_PAGE, historyRecords.length)} of ${historyRecords.length} records`
+                  : filteredLedger.length === 0
+                  ? 'Showing 0-0 of 0 records'
+                  : `Showing ${(safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE + 1}-${Math.min(safeLedgerPage * LEDGER_ITEMS_PER_PAGE, filteredLedger.length)} of ${filteredLedger.length} records`}
+              </span>
 
-              <div className="flex items-center gap-1.5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={safeLedgerPage <= 1}
-                  onClick={() => setLedgerPage((p) => Math.max(1, p - 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                  Prev
-                </Button>
-                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-focus font-semibold text-xs">
-                  Page {safeLedgerPage} of {totalLedgerPages}
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg font-medium">
+                  Page{' '}
+                  {repeatingLease && detailTab === 'schedule'
+                    ? safeSchedulePage
+                    : repeatingLease && detailTab === 'history'
+                    ? safeHistoryPage
+                    : safeLedgerPage}{' '}
+                  out of{' '}
+                  {repeatingLease && detailTab === 'schedule'
+                    ? totalSchedulePages
+                    : repeatingLease && detailTab === 'history'
+                    ? totalHistoryPages
+                    : totalLedgerPages}
                 </span>
+
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={safeLedgerPage >= totalLedgerPages}
-                  onClick={() => setLedgerPage((p) => Math.min(totalLedgerPages, p + 1))}
-                  className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
+                  disabled={
+                    repeatingLease && detailTab === 'schedule'
+                      ? safeSchedulePage <= 1
+                      : repeatingLease && detailTab === 'history'
+                      ? safeHistoryPage <= 1
+                      : safeLedgerPage <= 1
+                  }
+                  onClick={() => {
+                    if (repeatingLease && detailTab === 'schedule') {
+                      setLedgerPage((p) => Math.max(1, p - 1))
+                    } else if (repeatingLease && detailTab === 'history') {
+                      setHistoryPage((p) => Math.max(1, p - 1))
+                    } else {
+                      setLedgerPage((p) => Math.max(1, p - 1))
+                    }
+                  }}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                  aria-label="Previous page"
                 >
-                  Next
-                  <ChevronRight className="h-3.5 w-3.5 ml-1" />
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={
+                    repeatingLease && detailTab === 'schedule'
+                      ? safeSchedulePage >= totalSchedulePages
+                      : repeatingLease && detailTab === 'history'
+                      ? safeHistoryPage >= totalHistoryPages
+                      : safeLedgerPage >= totalLedgerPages
+                  }
+                  onClick={() => {
+                    if (repeatingLease && detailTab === 'schedule') {
+                      setLedgerPage((p) => Math.min(totalSchedulePages, p + 1))
+                    } else if (repeatingLease && detailTab === 'history') {
+                      setHistoryPage((p) => Math.min(totalHistoryPages, p + 1))
+                    } else {
+                      setLedgerPage((p) => Math.min(totalLedgerPages, p + 1))
+                    }
+                  }}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>
             </div>
           </div>
-          )}
         </div>
       </div>
     )
@@ -2072,16 +2108,16 @@ export const TenantPage: React.FC = () => {
     }
 
     return (
-      <form onSubmit={handleSubmitDailyPayment} className="space-y-5 mt-2">
+      <form onSubmit={handleSubmitDailyPayment} className="space-y-3.5 mt-1.5 flex flex-col flex-1 min-h-0">
         {paymentError && (
-          <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700 shrink-0" role="alert">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
             <span>{paymentError}</span>
           </div>
         )}
 
         {isDailyLease && (
-          <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs">
+          <div className="inline-flex items-center p-0.5 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs shrink-0 self-start">
             {(['Paid', 'Missed'] as const).map((opt) => (
               <button
                 key={opt}
@@ -2091,7 +2127,7 @@ export const TenantPage: React.FC = () => {
                   setPaymentStatusType(opt)
                 }}
                 className={cn(
-                  'px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
+                  'px-3.5 py-1 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
                   paymentStatusType === opt ? 'bg-[#960C01] text-white shadow-xs' : 'text-muted-fg hover:text-focus'
                 )}
               >
@@ -2101,7 +2137,7 @@ export const TenantPage: React.FC = () => {
           </div>
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start overflow-y-auto pr-1 flex-1 min-h-0">
           {/* Left: starting period and what it owes */}
           <div className="space-y-3.5">
             <div>
@@ -2155,15 +2191,15 @@ export const TenantPage: React.FC = () => {
             )}
 
             {!isMissedMark && allocation.length > 0 && (
-              <div className="p-3.5 border border-emerald-200/70 bg-emerald-50/50 rounded-xl space-y-1.5 text-xs" aria-live="polite">
-                <div className="font-bold text-emerald-800">Where this payment goes</div>
+              <div className="p-3 border border-emerald-200/70 bg-emerald-50/50 rounded-xl space-y-1 text-xs max-h-36 overflow-y-auto pr-1" aria-live="polite">
+                <div className="font-bold text-emerald-800 text-[11px] uppercase tracking-wider sticky top-0 bg-emerald-50/95 py-0.5">Where this payment goes</div>
                 {allocation.map((line) => (
-                  <div key={line.index} className="flex justify-between items-center">
-                    <span className="text-focus">
+                  <div key={line.index} className="flex justify-between items-center text-xs">
+                    <span className="text-focus truncate max-w-[150px]">
                       {line.label}
-                      {line.kind === 'advance' && <span className="text-sky-700 font-semibold"> (advance)</span>}
+                      {line.kind === 'advance' && <span className="text-sky-700 font-semibold"> (adv)</span>}
                     </span>
-                    <span className="font-semibold text-emerald-700">{formatPHP(line.amount)}</span>
+                    <span className="font-semibold text-emerald-700 tabular-nums">{formatPHP(line.amount)}</span>
                   </div>
                 ))}
               </div>
@@ -2171,7 +2207,7 @@ export const TenantPage: React.FC = () => {
           </div>
 
           {/* Right: payment details */}
-          <div className="space-y-3.5">
+          <div className="space-y-2.5">
             <div>
               <label htmlFor="payment-date" className="text-xs font-semibold text-focus block mb-1">
                 {isMissedMark ? 'Date Marked' : 'Payment Date'} <span className="text-red-500">*</span>
@@ -2184,7 +2220,7 @@ export const TenantPage: React.FC = () => {
                   setPaymentError('')
                   setPaymentDate(e.target.value)
                 }}
-                className="h-10 text-xs sm:text-sm rounded-xl"
+                className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl"
               />
             </div>
 
@@ -2194,9 +2230,9 @@ export const TenantPage: React.FC = () => {
                 <Input
                   value={missedReason}
                   onChange={(e) => setMissedReason(e.target.value)}
-                  className="h-10 text-xs sm:text-sm rounded-xl"
+                  className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl"
                 />
-                <p className="text-[10.5px] text-muted-fg mt-1">
+                <p className="text-[10px] text-muted-fg mt-1">
                   The day stays owed. It can still be paid later.
                 </p>
               </div>
@@ -2207,7 +2243,7 @@ export const TenantPage: React.FC = () => {
                     <label htmlFor="payment-amount" className="text-xs font-semibold text-focus">
                       Payment Amount (₱) <span className="text-red-500">*</span>
                     </label>
-                    <span className="text-[11px] text-muted-fg font-medium">Max: {formatPHP(maxAllowed)}</span>
+                    <span className="text-[10.5px] text-muted-fg font-medium">Max: {formatPHP(maxAllowed)}</span>
                   </div>
                   <Input
                     id="payment-amount"
@@ -2223,13 +2259,13 @@ export const TenantPage: React.FC = () => {
                       setPaymentAmount(e.target.value)
                     }}
                     placeholder="Enter payment amount"
-                    className="h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                   {paymentAmount && !isAmountValid && (
-                    <p className="text-[11px] text-rose-600 mt-1">
+                    <p className="text-[10.5px] text-rose-600 mt-1">
                       {amountNum <= 0 || isNaN(amountNum)
                         ? 'Payment amount must be greater than 0.'
-                        : `From ${selected?.label ?? 'this period'} onward the lease only has ${formatPHP(maxAllowed)} left to pay. Pick an earlier period to pay more.`}
+                        : `Lease has only ${formatPHP(maxAllowed)} left. Pick earlier period to pay more.`}
                     </p>
                   )}
                 </div>
@@ -2239,7 +2275,7 @@ export const TenantPage: React.FC = () => {
                   <select
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
+                    className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
                   >
                     <option value="Cash">Cash</option>
                     <option value="GCash">GCash</option>
@@ -2254,7 +2290,7 @@ export const TenantPage: React.FC = () => {
                     value={paymentRef}
                     onChange={(e) => setPaymentRef(e.target.value)}
                     placeholder="e.g. OR-JK-101"
-                    className="h-10 text-xs sm:text-sm rounded-xl font-mono"
+                    className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-mono"
                   />
                 </div>
               </>
@@ -2263,29 +2299,29 @@ export const TenantPage: React.FC = () => {
             <div>
               <label className="text-xs font-semibold text-focus block mb-1">Remarks / Notes</label>
               <textarea
-                rows={3}
+                rows={2}
                 value={paymentNotes}
                 onChange={(e) => setPaymentNotes(e.target.value)}
-                placeholder="Enter payment remarks or notes..."
-                className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
+                placeholder="Enter remarks or notes..."
+                className="w-full h-16 p-2.5 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
               />
             </div>
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+        <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
           <Button
             type="button"
             variant="outline"
             onClick={() => setIsUpdatePaymentModalOpen(false)}
-            className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+            className="h-9 sm:h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
           >
             Cancel
           </Button>
           <Button
             type="submit"
             disabled={!canSubmit}
-            className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+            className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
           >
             {isMissedMark ? 'Mark as Missed' : 'Review & Confirm Payment'}
           </Button>
@@ -2473,7 +2509,7 @@ export const TenantPage: React.FC = () => {
               )}
             </div>
 
-            {/* Status Dropdown */}
+            {/* Status Dropdown: Paid, Unpaid and Pending Filter (Matching FilCap Lending Page) */}
             <div ref={statusDropdownRef} className="relative inline-block">
               <button
                 type="button"
@@ -2484,7 +2520,7 @@ export const TenantPage: React.FC = () => {
                 )}
               >
                 <span className="font-medium text-focus/90">
-                  {selectedStatus === 'All' ? 'Status' : selectedStatus}
+                  {statusFilter === 'All' ? 'Status' : statusFilter}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -2496,23 +2532,23 @@ export const TenantPage: React.FC = () => {
 
               {isStatusDropdownOpen && (
                 <div className="absolute right-0 top-full mt-2 w-44 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  {['All', 'Active', 'Completed', 'Overdue', 'Pending'].map((st) => (
+                  {(['All', 'Paid', 'Unpaid', 'Pending'] as const).map((st) => (
                     <button
                       key={st}
                       type="button"
                       onClick={() => {
-                        setSelectedStatus(st)
+                        setStatusFilter(st)
                         setIsStatusDropdownOpen(false)
                       }}
                       className={cn(
                         'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        selectedStatus === st
+                        statusFilter === st
                           ? 'bg-primary/10 text-primary font-semibold'
                           : 'text-focus/80 hover:bg-slate-50'
                       )}
                     >
                       <span>{st === 'All' ? 'All Status' : st}</span>
-                      {selectedStatus === st && (
+                      {statusFilter === st && (
                         <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
                       )}
                     </button>
@@ -2527,12 +2563,6 @@ export const TenantPage: React.FC = () => {
               onChange={(newRange) => setDateRange(newRange)}
               hidePresets
             />
-
-            {/* Company Scope Pill for JK Property and Ventures */}
-            <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
-              <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-              <span className="font-semibold text-focus/90">JK Property and Ventures</span>
-            </div>
           </div>
         </div>
       </div>
@@ -2586,10 +2616,10 @@ export const TenantPage: React.FC = () => {
                 <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   RENT RATE
                 </TableHead>
-                <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  CONTRACT
+                <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  CONTRACT DATE
                 </TableHead>
-                <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DUE DATE
                 </TableHead>
                 <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
@@ -2676,15 +2706,15 @@ export const TenantPage: React.FC = () => {
                     </TableCell>
 
                     {/* 4. Contract Date */}
-                    <TableCell className="px-3.5 py-3.5 text-xs text-focus/90 text-center whitespace-nowrap">
+                    <TableCell className="px-3.5 py-3.5 text-xs text-focus/90 text-left whitespace-nowrap">
                       {tenant.contractDate}
                     </TableCell>
 
                     {/* 5. Due Date (next unpaid period for a repeating lease) */}
-                    <TableCell className="px-3.5 py-3.5 text-xs text-focus/90 text-center whitespace-nowrap">
+                    <TableCell className="px-3.5 py-3.5 text-xs text-focus/90 text-left whitespace-nowrap">
                       {repeatingRow ? (
                         fin.nextPeriod ? (
-                          <div className="flex flex-col items-center gap-0.5">
+                          <div className="flex flex-col items-start gap-0.5">
                             <span
                               className={cn(
                                 'font-semibold',
@@ -2729,14 +2759,23 @@ export const TenantPage: React.FC = () => {
                       <div className="flex flex-col gap-0.5 mt-0.5">
                         <span
                           className={cn(
-                            'inline-flex items-center px-1.5 py-0.2 rounded-full text-[10px] font-semibold w-fit',
-                            tenant.status === 'Active' && 'text-blue-700 bg-blue-50',
-                            tenant.status === 'Completed' && 'text-emerald-700 bg-emerald-50',
-                            tenant.status === 'Overdue' && 'text-rose-700 bg-rose-50',
-                            tenant.status === 'Pending' && 'text-amber-700 bg-amber-50'
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                            (tenant.status === 'Completed' || fin.remaining <= 0.005)
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : tenant.status === 'Pending'
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : tenant.status === 'Overdue'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : 'bg-rose-50/80 text-rose-600 border-rose-200'
                           )}
                         >
-                          {tenant.status}
+                          {tenant.status === 'Completed' || fin.remaining <= 0.005
+                            ? 'Paid'
+                            : tenant.status === 'Pending'
+                            ? 'Pending'
+                            : tenant.status === 'Overdue'
+                            ? 'Overdue'
+                            : 'Unpaid'}
                         </span>
                         {tenant.auditStatus && (
                           <div className="flex items-center gap-1">
@@ -3403,13 +3442,13 @@ export const TenantPage: React.FC = () => {
 
       {/* MODAL 4: Record Payment (Two-Column Layout Matching Lending Page) */}
       <Dialog open={isUpdatePaymentModalOpen} onOpenChange={setIsUpdatePaymentModalOpen}>
-        <DialogContent className="sm:max-w-[860px] md:max-w-[920px] max-h-[88vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 shadow-2xl">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[840px] md:max-w-[890px] max-h-[85vh] sm:max-h-[82vh] flex flex-col bg-white rounded-[24px] p-5 sm:p-6 shadow-2xl overflow-hidden">
+          <DialogHeader className="shrink-0 pb-2.5 border-b border-stroke/20 pr-8">
             <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
               <Coins className="h-5 w-5 text-emerald-600" />
               <span>Record Payment</span>
             </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
+            <DialogDescription className="text-xs text-muted-fg mt-0.5">
               Record payment remittance for{' '}
               <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.unitName}).
             </DialogDescription>
@@ -3444,16 +3483,16 @@ export const TenantPage: React.FC = () => {
               maxAllowed - currentPaymentNum > 0.005
 
             return (
-              <form onSubmit={handleSubmitDailyPayment} className="space-y-5 mt-2">
+              <form onSubmit={handleSubmitDailyPayment} className="space-y-3.5 mt-1.5 flex flex-col flex-1 min-h-0">
                 {paymentError && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700">
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700 shrink-0">
                     <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
                     <span>{paymentError}</span>
                   </div>
                 )}
 
                 {isDateAlreadySettled && (
-                  <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl space-y-1 text-xs text-amber-900">
+                  <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl space-y-1 text-xs text-amber-900 shrink-0">
                     <div className="flex items-center gap-1.5 font-bold text-amber-800">
                       <Lock className="w-4 h-4 shrink-0 text-amber-600" />
                       <span>Date Already Settled ({paymentDate})</span>
@@ -3465,7 +3504,7 @@ export const TenantPage: React.FC = () => {
                 )}
 
                 {/* Two-Column Layout: Left = Calendar, Right = Payment Fields */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start overflow-y-auto pr-1 flex-1 min-h-0">
                   {/* Left Column: Interactive Calendar Date Picker */}
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
@@ -3477,7 +3516,7 @@ export const TenantPage: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="border border-stroke/60 rounded-xl p-3.5 bg-white space-y-2.5">
+                    <div className="border border-stroke/60 rounded-xl p-3 bg-white space-y-2">
                       {/* Month Header & Controls */}
                       <div className="flex items-center justify-between px-1">
                         <span className="text-xs font-bold text-focus">
@@ -3512,7 +3551,7 @@ export const TenantPage: React.FC = () => {
                       </div>
 
                       {/* Weekday labels */}
-                      <div className="grid grid-cols-7 gap-1 text-center text-[10.5px] font-bold text-muted-fg uppercase py-1 border-b border-slate-100">
+                      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-muted-fg uppercase py-0.5 border-b border-slate-100">
                         <span>Su</span>
                         <span>Mo</span>
                         <span>Tu</span>
@@ -3540,7 +3579,7 @@ export const TenantPage: React.FC = () => {
                         return (
                           <div className="grid grid-cols-7 gap-1 text-center">
                             {Array.from({ length: firstDay }).map((_, i) => (
-                              <div key={`cal-empty-${i}`} className="h-9" />
+                              <div key={`cal-empty-${i}`} className="h-8" />
                             ))}
 
                             {Array.from({ length: totalDays }).map((_, i) => {
@@ -3568,7 +3607,7 @@ export const TenantPage: React.FC = () => {
                                     }
                                   }}
                                   className={cn(
-                                    'h-9 rounded-lg text-xs font-medium flex flex-col items-center justify-center relative transition-all',
+                                    'h-8 rounded-lg text-xs font-medium flex flex-col items-center justify-center relative transition-all',
                                     isSelected &&
                                       'bg-[#960C01] text-white font-bold shadow-xs ring-2 ring-[#960C01]/30 z-10',
                                     !isSelected &&
@@ -3597,9 +3636,9 @@ export const TenantPage: React.FC = () => {
                                   }
                                 >
                                   <span>{d}</span>
-                                  {isPaid && <Check className="h-2.5 w-2.5 text-emerald-600 -mt-0.5" />}
+                                  {isPaid && <Check className="h-2 w-2 text-emerald-600 -mt-0.5" />}
                                   {isPartial && !isSelected && (
-                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 absolute bottom-1" />
+                                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 absolute bottom-0.5" />
                                   )}
                                 </button>
                               )
@@ -3609,16 +3648,16 @@ export const TenantPage: React.FC = () => {
                       })()}
 
                       {/* Calendar Legend */}
-                      <div className="flex flex-wrap items-center justify-between text-[10px] text-muted-fg pt-2 border-t border-slate-100 gap-1.5">
+                      <div className="flex flex-wrap items-center justify-between text-[10px] text-muted-fg pt-1.5 border-t border-slate-100 gap-1.5">
                         <div className="flex items-center gap-2.5">
                           <span className="flex items-center gap-1 font-medium">
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Paid (Locked)
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Paid
                           </span>
                           <span className="flex items-center gap-1 font-medium">
                             <span className="w-2 h-2 rounded-full bg-[#960C01] inline-block" /> Selected
                           </span>
                           <span className="flex items-center gap-1 font-medium">
-                            <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Partially Paid
+                            <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Partial
                           </span>
                         </div>
                       </div>
@@ -3626,14 +3665,14 @@ export const TenantPage: React.FC = () => {
                   </div>
 
                   {/* Right Column: Payment Amount, Payment Method, Receipt No., Remarks/Notes */}
-                  <div className="space-y-3.5">
+                  <div className="space-y-2.5">
                     {/* Payment Amount Input */}
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="text-xs font-semibold text-focus">
                           Payment Amount (₱) <span className="text-red-500">*</span>
                         </label>
-                        <span className="text-[11px] text-muted-fg font-medium">
+                        <span className="text-[10.5px] text-muted-fg font-medium">
                           Target: {formatPHP(periodRemainingDue)} • Max: {formatPHP(maxAllowed)}
                         </span>
                       </div>
@@ -3651,21 +3690,21 @@ export const TenantPage: React.FC = () => {
                           setPaymentAmount(e.target.value)
                         }}
                         placeholder="Enter payment amount"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       {paymentAmount && !isAmountValid && (
-                        <p className="text-[11px] text-rose-600 mt-1">
+                        <p className="text-[10.5px] text-rose-600 mt-1">
                           {currentPaymentNum < 1
                             ? 'Payment amount cannot be lower than ₱1.00.'
                             : `Payment amount cannot exceed ${formatPHP(maxAllowed)}.`}
                         </p>
                       )}
                       {isAmountValid && (
-                        <div className="mt-2 flex items-center justify-between px-3 py-2 rounded-xl border text-xs bg-slate-50/80 border-slate-200/80">
-                          <span className="text-muted-fg font-medium">Transaction Status Tag:</span>
+                        <div className="mt-1.5 flex items-center justify-between px-3 py-1.5 rounded-xl border text-xs bg-slate-50/80 border-slate-200/80">
+                          <span className="text-muted-fg font-medium">Status Tag:</span>
                           {willBePartiallyPaid ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              Partially Paid ({formatPHP(Math.max(0, periodRemainingDue - currentPaymentNum))} short of target)
+                              Partially Paid ({formatPHP(Math.max(0, periodRemainingDue - currentPaymentNum))} short)
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -3685,7 +3724,7 @@ export const TenantPage: React.FC = () => {
                       <select
                         value={paymentMethod}
                         onChange={(e) => setPaymentMethod(e.target.value)}
-                        className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
+                        className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
                       >
                         <option value="Cash">Cash</option>
                         <option value="GCash">GCash</option>
@@ -3703,7 +3742,7 @@ export const TenantPage: React.FC = () => {
                         value={paymentRef}
                         onChange={(e) => setPaymentRef(e.target.value)}
                         placeholder="e.g. OR-JK-101"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-mono"
+                        className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-mono"
                       />
                     </div>
 
@@ -3713,30 +3752,30 @@ export const TenantPage: React.FC = () => {
                         Remarks / Notes
                       </label>
                       <textarea
-                        rows={3}
+                        rows={2}
                         value={paymentNotes}
                         onChange={(e) => setPaymentNotes(e.target.value)}
                         placeholder="Enter payment remarks or notes..."
-                        className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
+                        className="w-full h-16 p-2.5 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
                       />
                     </div>
                   </div>
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setIsUpdatePaymentModalOpen(false)}
-                    className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+                    className="h-9 sm:h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
                   >
                     Cancel
                   </Button>
                   <Button
                     type="submit"
                     disabled={!isAmountValid || isDateAlreadySettled || !paymentDate}
-                    className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+                    className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
                   >
                     Review & Confirm Payment
                   </Button>

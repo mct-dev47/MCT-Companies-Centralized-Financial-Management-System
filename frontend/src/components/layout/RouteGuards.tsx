@@ -13,7 +13,7 @@ import {
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { status } = useSession()
+  const { status, user } = useSession()
   const location = useLocation()
 
   if (status === 'loading') {
@@ -60,6 +60,15 @@ export const PublicOnlyRoute: React.FC<{ children: React.ReactNode }> = ({
     const role = (user?.role || '').toLowerCase()
     if (role === 'admin') {
       return <Navigate to="/employee" replace />
+    }
+    if (role === 'finance') {
+      return <Navigate to="/centralized-auth" replace />
+    }
+    if (role === 'supervisor') {
+      const cids = user?.companyIds || []
+      if (cids.length > 1) {
+        return <Navigate to="/centralized-auth" replace />
+      }
     }
     return <Navigate to="/dashboard" replace />
   }

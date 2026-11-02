@@ -1881,57 +1881,37 @@ export const LendingPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    BORROWER'S<br />NAME
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  BORROWER'S NAME
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    LOAN<br />AMOUNT
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  LOAN AMOUNT
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    DATE<br />BORROWED
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  DATE BORROWED
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    DUE<br />DATE
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  DUE DATE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    TOTAL AMOUNT<br />PAYABLE
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  TOTAL PAYABLE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    AMOUNT<br />PAID
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  AMOUNT PAID
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    REMAINING<br />BALANCE
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                  REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[7%] px-2.5 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom">
-                  <div className="leading-tight text-center">
-                    STATUS
-                  </div>
+                <TableHead className="w-[7%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                  STATUS
                 </TableHead>
                 {isAudit && (
-                  <TableHead className="w-[8.5%] px-2.5 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom">
-                    <div className="leading-tight text-center">
-                      AUDIT<br />TAG
-                    </div>
+                  <TableHead className="w-[8.5%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                    AUDIT TAG
                   </TableHead>
                 )}
-                <TableHead className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-2.5 text-[10.5px] font-bold uppercase tracking-wide text-muted-fg text-center align-bottom")}>
-                  <div className="leading-tight text-center">
-                    ACTIONS
-                  </div>
+                <TableHead className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap")}>
+                  ACTIONS
                 </TableHead>
               </TableRow>
             </TableHeader>
@@ -1970,11 +1950,11 @@ export const LendingPage: React.FC = () => {
                       title="Click row to view complete lending and borrower details"
                     >
                       {/* Borrower's Name & Borrower Ref No */}
-                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3 py-3 text-center")}>
-                        <div className="font-semibold text-xs text-focus truncate max-w-[190px] mx-auto text-center" title={facility.borrowerName}>
+                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left")}>
+                        <div className="font-semibold text-xs text-focus truncate max-w-[190px]" title={facility.borrowerName}>
                           {facility.borrowerName}
                         </div>
-                        <div className="flex items-center justify-center gap-1.5 mt-0.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {facility.borrowerContact && (
                             <span className="text-[10px] text-muted-fg truncate max-w-[120px]">
                               {facility.borrowerContact}
@@ -1984,19 +1964,19 @@ export const LendingPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Loan Amount */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3 py-3 text-center font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.loanAmount)}
                       </TableCell>
 
                       {/* 3. Date Borrowed */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3 py-3 text-center font-mono text-xs text-muted-fg whitespace-nowrap")}>
+                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left font-mono text-xs text-muted-fg whitespace-nowrap")}>
                         {facility.dateBorrowed}
                       </TableCell>
 
                       {/* 4. Due Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3 py-3 text-center text-xs whitespace-nowrap")}>
-                        <div className="font-mono text-muted-fg font-medium text-center">{facility.dueDate}</div>
-                        <div className="text-[10px] text-slate-400 font-sans mt-0.5 text-center">
+                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left text-xs whitespace-nowrap")}>
+                        <div className="font-mono text-muted-fg font-medium">{facility.dueDate}</div>
+                        <div className="text-[10px] text-slate-400 font-sans mt-0.5">
                           {(() => {
                             const isDaily = !facility.paymentFrequency || facility.paymentFrequency === 'Daily'
                             const t = facility.termDays || (isDaily ? 40 : 2)
@@ -2007,18 +1987,18 @@ export const LendingPage: React.FC = () => {
                       </TableCell>
 
                       {/* 5. Total Amount Payable */}
-                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3 py-3 text-center font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.totalAmountPayable)}
                       </TableCell>
 
                       {/* 6. Amount Paid */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3 py-3 text-center font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
+                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.amountPaid)}
                       </TableCell>
 
                       {/* 7. Remaining Balance */}
-                      <TableCell className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3 py-3 text-center font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap")}>
-                        <div className="text-center">{formatPHP(facility.remainingBalance)}</div>
+                      <TableCell className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-left font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap")}>
+                        <div>{formatPHP(facility.remainingBalance)}</div>
                       </TableCell>
 
                       {/* 8. Status */}

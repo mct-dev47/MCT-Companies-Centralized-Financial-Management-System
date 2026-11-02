@@ -938,13 +938,13 @@ export const BillsPage: React.FC = () => {
                 <TableHead className="w-[28%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   BILLER
                 </TableHead>
-                <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   COMPANY
                 </TableHead>
-                <TableHead className="w-[18%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[18%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   LATEST BILLED / PAID
                 </TableHead>
-                <TableHead className="w-[16%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[16%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DUE DATE
                 </TableHead>
                 <TableHead className="w-[11%] px-2.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -1055,25 +1055,25 @@ export const BillsPage: React.FC = () => {
 
                       {/* Company */}
                       <TableCell
-                        className="w-[22%] px-3 py-3.5 text-xs font-semibold text-focus truncate text-center"
+                        className="w-[22%] px-3 py-3.5 text-xs font-semibold text-focus truncate text-left"
                         title={bill.company}
                       >
-                        <div className="flex items-center justify-center gap-1.5 min-w-0 truncate">
+                        <div className="flex items-center justify-start gap-1.5 min-w-0 truncate">
                           <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
                           <span className="truncate">{bill.company}</span>
                         </div>
                       </TableCell>
 
                       {/* Latest Billed / Paid Amount & Recurrence */}
-                      <TableCell className="w-[18%] px-3 py-3.5 text-xs font-bold text-focus tabular-nums text-center truncate">
-                        <div className="truncate text-center">
+                      <TableCell className="w-[18%] px-3 py-3.5 text-xs font-bold text-focus tabular-nums text-left truncate">
+                        <div className="truncate text-left">
                           {bill.latestAmount && bill.latestAmount > 0
                             ? formatPHP(bill.latestAmount)
                             : bill.amount && bill.amount > 0
                             ? formatPHP(bill.amount)
                             : '—'}
                         </div>
-                        <div className="text-[10px] font-normal truncate mt-0.5 flex justify-center">
+                        <div className="text-[10px] font-normal truncate mt-0.5 flex justify-start">
                           {bill.billingCycle === 'Daily' ? (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
                               Daily
@@ -1091,10 +1091,10 @@ export const BillsPage: React.FC = () => {
                       </TableCell>
 
                       {/* Due Date & Reminder */}
-                      <TableCell className="w-[16%] px-3 py-3.5 text-xs text-center truncate">
-                        <div className="flex flex-col items-center justify-center min-w-0">
+                      <TableCell className="w-[16%] px-3 py-3.5 text-xs text-left truncate">
+                        <div className="flex flex-col items-start justify-center min-w-0">
                           <span className="font-semibold text-focus truncate">{formatDisplayDate(bill.dueDate)}</span>
-                          <span className="text-[11px] text-amber-600 flex items-center justify-center gap-1 truncate font-medium">
+                          <span className="text-[11px] text-amber-600 flex items-center justify-start gap-1 truncate font-medium">
                             <BellRing className="w-2.5 h-2.5 shrink-0" />
                             <span className="truncate">
                               {bill.billingCycle === 'Daily' ? 'Daily Alert' : `Remind ${bill.reminderDaysBefore}d`}

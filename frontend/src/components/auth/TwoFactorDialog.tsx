@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useSession } from '@/hooks/useSession'
 import { useCountdown } from '@/hooks/useCountdown'
+import { authService } from '@/services/authService'
 
 interface TwoFactorDialogProps {
   open: boolean

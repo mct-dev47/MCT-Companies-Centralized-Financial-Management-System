@@ -201,7 +201,8 @@ export const LandingPage: React.FC = () => {
 
   const handleAuthAction = () => {
     if (user) {
-      navigate('/dashboard')
+      const isFinance = (user.role || '').toLowerCase() === 'finance'
+      navigate(isFinance ? '/centralized-auth' : '/dashboard')
     } else {
       navigate('/login')
     }

@@ -12,6 +12,7 @@ import {
   Landmark,
   Store,
   Banknote,
+  Receipt,
 } from 'lucide-react'
 import type * as React from 'react'
 import { isFilCapCompany, isJKPropertyCompany } from '@/config/companyFeatures'
@@ -67,6 +68,13 @@ export const NAV_ITEM_SALES: NavItem = {
   title: 'Sales',
   href: '/sales',
   icon: BarChart3,
+}
+
+export const NAV_ITEM_RECEIVABLES: NavItem = {
+  id: 'receivables',
+  title: 'Receivables',
+  href: '/receivables',
+  icon: Receipt,
 }
 
 export const NAV_ITEM_EXPENSE: NavItem = {
@@ -195,7 +203,8 @@ export function getSidebarNavSections(
   if (!isAdmin) {
     // Filcap (Lending) and JK do not have the Sales page per business specifications
     if (!isFilCap && !isJK) {
-      operationsItems.push(NAV_ITEM_SALES)
+      // Sales and Food Receivables under Operations for Finance, Supervisors, and Audit
+      operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
     }
     operationsItems.push(NAV_ITEM_EXPENSE, NAV_ITEM_LOAN)
 
@@ -232,6 +241,7 @@ export const MAIN_NAV_ITEMS: readonly NavItem[] = [
   NAV_ITEM_BILLS,
   NAV_ITEM_TRANSACTIONS,
   NAV_ITEM_SALES,
+  NAV_ITEM_RECEIVABLES,
   NAV_ITEM_EXPENSE,
   NAV_ITEM_LOAN,
   NAV_ITEM_LENDING,
