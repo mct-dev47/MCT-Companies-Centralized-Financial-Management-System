@@ -1,3 +1,4 @@
+import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -45,6 +46,16 @@ def on_startup():
     from app.db.session import init_db
     init_db()
 
+    # Data retention policy: asynchronously purge activity logs older than 6 months (180 days)
+    def _run_retention_purge():
+        try:
+            from app.services.activity_log_service import activity_log_service
+            activity_log_service.cleanup_expired_logs(retention_days=180)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run_retention_purge, daemon=True, name="activity-retention-purge").start()
+
 @app.get("/", tags=["Root"])
 def root():
     return {
@@ -56,5 +67,3 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host=settings.HOST, port=settings.PORT, reload=True)
-
-

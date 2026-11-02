@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     company_id BIGINT REFERENCES company(company_id) ON DELETE SET NULL,
     user_id BIGINT REFERENCES users(user_id) ON DELETE SET NULL,
     action VARCHAR(255) NOT NULL,
+    action_category VARCHAR(50),
+    ip_address VARCHAR(45),
+    details TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

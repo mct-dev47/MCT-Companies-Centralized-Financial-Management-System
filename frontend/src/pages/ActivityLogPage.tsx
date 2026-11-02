@@ -15,13 +15,12 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
-import { employeeService, type ActivityLogItem } from '@/services/employeeService'
+import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 
 // Helper to parse date string like "Oct 6, 2026 · 9:15 AM" or "2026-10-05 08:14"
 function parseDateForFilter(dateStr: string): Date | null {
   if (!dateStr) return null
-  if (dateStr === 'Just now') return new Date('2026-10-06')
   const datePart = dateStr.includes('·') ? dateStr.split('·')[0].trim() : dateStr.split(' ')[0].trim()
   const parsed = Date.parse(datePart)
   if (!isNaN(parsed)) return new Date(parsed)
@@ -65,7 +64,7 @@ export const ActivityLogPage: React.FC = () => {
 
   const fetchLogs = React.useCallback(async () => {
     try {
-      const data = await employeeService.getActivityLogs()
+      const data = await activityLogService.getActivityLogs()
       setLogs(data)
       setLoadError('')
     } catch (err) {
@@ -80,6 +79,14 @@ export const ActivityLogPage: React.FC = () => {
   React.useEffect(() => {
     setLoading(true)
     fetchLogs()
+  }, [fetchLogs])
+
+  // Real-time synchronization via WebSockets
+  React.useEffect(() => {
+    const unsubscribe = activityLogService.subscribeToActivityLogs(() => {
+      fetchLogs()
+    })
+    return () => unsubscribe()
   }, [fetchLogs])
 
   const handleRefresh = async () => {
@@ -263,7 +270,7 @@ export const ActivityLogPage: React.FC = () => {
             Activity Log
           </h1>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {logs.length} system activity records tracked across all companies
+            {logs.length} system activity records tracked across all companies · 6-month retention policy
           </p>
         </div>
 

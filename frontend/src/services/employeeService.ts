@@ -1,5 +1,8 @@
 import { isCompanyMatch } from '@/utils/companyUtils'
 import type { AuthorizedCompany } from '@/config/centralizedCompanies'
+import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
+
+export type { ActivityLogItem }
 
 export interface Company {
   id: string
@@ -74,16 +77,7 @@ export interface UpdateUserPayload {
   status?: 'Active' | 'Inactive'
 }
 
-export interface ActivityLogItem {
-  id: string
-  company: string
-  /** Who did it (the signed in user's name, or the email on a login row). */
-  user: string
-  action: string
-  module: string
-  target: string
-  time: string
-}
+
 
 
 
@@ -523,33 +517,9 @@ export const employeeService = {
   },
 
   /**
-   * The real activity log: the newest rows of the `audit_logs` table (Admin only), with the user, company,
-   * a plain description, the module and the record reference worked out by the server (spec 0018).
+   * The real activity log: retrieved directly from Supabase via activityLogService.
    */
   async getActivityLogs(): Promise<ActivityLogItem[]> {
-    const response = await fetch('/api/v1/audit-logs?limit=1000', {
-      cache: 'no-store',
-      headers: getAuthHeaders(),
-    })
-    if (!response.ok) throw new Error(await getApiError(response))
-    const rows = (await response.json()) as Array<{
-      audit_log_id: number
-      action: string
-      created_at?: string | null
-      user_name?: string
-      company_name?: string
-      description?: string
-      module?: string
-      target?: string
-    }>
-    return rows.map((row) => ({
-      id: String(row.audit_log_id),
-      company: row.company_name || 'System',
-      user: row.user_name || 'System',
-      action: row.description || row.action,
-      module: row.module || 'General',
-      target: row.target || '-',
-      time: formatLogTime(row.created_at),
-    }))
+    return activityLogService.getActivityLogs()
   },
 }
