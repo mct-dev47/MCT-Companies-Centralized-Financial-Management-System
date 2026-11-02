@@ -302,6 +302,34 @@ class TestRBACPermissions(unittest.TestCase):
         res = self.client.get("/lending/borrowers?company_id=7")
         self.assertEqual(res.status_code, 200)
 
+    # 6. Centralized Authentication Authorized Companies API
+    def test_authorized_companies_centralized_auth(self):
+        with self.Session() as db:
+            # Admin is rejected from accessing centralized auth companies (403)
+            with self.assertRaises(Exception) as cm:
+                companies_endpoints.get_authorized_companies(current_user=ADMIN_USER, db=db)
+            self.assertEqual(cm.exception.status_code, 403)
+            self.assertIn("Admin users manage companies at /employee", cm.exception.detail)
+
+            # Finance user gets all companies strictly from the company table
+            finance_companies = companies_endpoints.get_authorized_companies(current_user=FINANCE_USER, db=db)
+            self.assertEqual(len(finance_companies), 4)
+            self.assertTrue(all(c.role == "Finance" for c in finance_companies))
+            self.assertTrue(all(hasattr(c, "name") and hasattr(c, "location") and hasattr(c, "starting_balance") for c in finance_companies))
+
+            # Auditor user gets all companies with role="Auditor"
+            auditor_companies = companies_endpoints.get_authorized_companies(current_user=AUDITOR_USER, db=db)
+            self.assertEqual(len(auditor_companies), 4)
+            self.assertTrue(all(c.role == "Auditor" for c in auditor_companies))
+
+            # Supervisor user receives strictly assigned companies (IDs 4 and 5)
+            sup_companies = companies_endpoints.get_authorized_companies(current_user=SUPERVISOR_USER, db=db)
+            sup_cids = [c.id for c in sup_companies]
+            self.assertEqual(sorted(sup_cids), [4, 5])
+            self.assertTrue(all(c.role == "Supervisor" for c in sup_companies))
+
+
+
 
 if __name__ == "__main__":
     unittest.main()

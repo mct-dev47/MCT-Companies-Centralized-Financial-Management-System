@@ -1,4 +1,5 @@
 import { isCompanyMatch } from '@/utils/companyUtils'
+import type { AuthorizedCompany } from '@/config/centralizedCompanies'
 
 export interface Company {
   id: string
@@ -236,6 +237,21 @@ export const employeeService = {
       console.warn('GET /api/v1/companies failed with status', response.status)
     } catch (error) {
       console.warn('Failed to fetch companies from the backend:', error)
+    }
+    return []
+  },
+
+  async getAuthorizedCompanies(): Promise<AuthorizedCompany[]> {
+    try {
+      const response = await fetch('/api/v1/companies/authorized', {
+        headers: getAuthHeaders(),
+      })
+      if (response.ok) {
+        return await response.json()
+      }
+      console.warn('GET /api/v1/companies/authorized failed with status', response.status)
+    } catch (error) {
+      console.warn('Failed to fetch authorized companies:', error)
     }
     return []
   },

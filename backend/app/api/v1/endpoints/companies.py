@@ -1,16 +1,19 @@
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import AdminUser, CurrentUser
+from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user
 from app.db.session import get_db
-from app.schemas.company import CompanyCreate, CompanyOut, CompanyUpdate
+from app.models.company import Company
+from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyOut, CompanyUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
 
 router = APIRouter()
 MAX_COMPANY_PICTURE_BYTES = 5 * 1024 * 1024
+
 
 # get all companies (accessible to authenticated users)
 @router.get("", response_model=list[CompanyOut], summary="List all MCT companies")
@@ -25,6 +28,66 @@ def get_companies(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(error),
         ) from error
+
+
+# list authorized companies for centralized authentication portal
+# strictly returns data from the company table in the database
+@router.get("/authorized", response_model=list[AuthorizedCompanyOut], summary="List authorized companies for centralized auth")
+def get_authorized_companies(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    role = (current_user.get("role") or "").lower()
+    if role == "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin users manage companies at /employee and do not access centralized business portals.",
+        )
+
+    query = db.query(Company)
+
+    if role in ("finance", "audit", "auditor"):
+        user_role_label = "Finance" if role == "finance" else "Auditor"
+        companies = query.order_by(Company.company_id.asc()).all()
+    elif role == "supervisor":
+        user_role_label = "Supervisor"
+        allowed_ids = set()
+        if current_user.get("company_ids"):
+            for cid in current_user["company_ids"]:
+                try:
+                    if cid is not None:
+                        allowed_ids.add(int(cid))
+                except (ValueError, TypeError):
+                    pass
+        if current_user.get("company_id") is not None:
+            try:
+                allowed_ids.add(int(current_user["company_id"]))
+            except (ValueError, TypeError):
+                pass
+
+        if not allowed_ids:
+            return []
+        companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
+    else:
+        return []
+
+    return [
+        AuthorizedCompanyOut(
+            id=c.company_id,
+            name=c.company_name,
+            location=c.location,
+            contact_number=c.contact_number,
+            phone=c.phone,
+            starting_balance=float(c.starting_balance),
+            petty_cash=float(c.petty_cash or 0.0),
+            logo_url=c.logo_url,
+            role=user_role_label,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c in companies
+    ]
+
 
 # get company by ID
 @router.get("/{company_id}", response_model=CompanyOut, summary="Get company by ID")
@@ -43,6 +106,7 @@ def get_company(
     if company is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     return company
+
 
 # create a new company (Admin only)
 @router.post("", response_model=CompanyOut, status_code=status.HTTP_201_CREATED, summary="Create a new company")
@@ -132,6 +196,7 @@ async def create_company_with_picture(
     )
     return result
 
+
 # update an existing company (Admin only)
 @router.patch("/{company_id}", response_model=CompanyOut, summary="Update an existing company (Admin only)")
 def update_company(
@@ -165,6 +230,7 @@ def update_company(
         extra={"company_name": result.name},
     )
     return result
+
 
 @router.post(
     "/{company_id}/picture",
@@ -216,6 +282,7 @@ async def upload_company_picture(
         extra={"company_name": result.name, "action": "update_picture"},
     )
     return result
+
 
 # delete a company (Admin only)
 @router.delete("/{company_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a company (Admin only)")
