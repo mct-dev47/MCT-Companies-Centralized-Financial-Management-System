@@ -53,6 +53,13 @@ const ROLES = [
   'Supervisor',
 ] as const
 
+const formatCompanyList = (names: string[]): string => {
+  if (!names || names.length === 0) return 'no company'
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
 
 export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   open,
@@ -223,6 +230,10 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         password: 'Password123!',
         avatarFile: avatarFile || undefined,
       })
+      if (!created.companyNames || created.companyNames.length === 0) {
+        created.companyNames = selectedCompanies
+        created.companyName = selectedCompanies.join(', ')
+      }
       onSuccess?.(created)
       setIsConfirmOpen(false)
       onOpenChange(false)
@@ -564,12 +575,30 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         onOpenChange={setIsConfirmOpen}
         title="Confirm User Creation"
         description={
-          <span>
-            Are you sure you want to add{' '}
-            <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
-            appointed to{' '}
-            <strong className="text-focus">{pendingValues?.assignedCompany}</strong> as{' '}
-            <strong className="text-focus">{pendingValues?.role}</strong>?
+          <span className="block space-y-2.5">
+            <span>
+              Are you sure you want to add{' '}
+              <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
+              appointed to{' '}
+              <strong className="text-focus">
+                {formatCompanyList(selectedCompanies)}
+              </strong>{' '}
+              as{' '}
+              <strong className="text-focus">{pendingValues?.role}</strong>?
+            </span>
+            {selectedCompanies.length > 0 && (
+              <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+                {selectedCompanies.map((cName) => (
+                  <span
+                    key={cName}
+                    className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
+                  >
+                    <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                    <span>{cName}</span>
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         }
         confirmLabel="Yes, Create User"

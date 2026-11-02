@@ -46,30 +46,36 @@ def get_authorized_companies(
 
     query = db.query(Company)
 
-    if role in ("finance", "audit", "auditor"):
-        user_role_label = "Finance" if role == "finance" else "Auditor"
-        companies = query.order_by(Company.company_id.asc()).all()
-    elif role == "supervisor":
-        user_role_label = "Supervisor"
-        allowed_ids = set()
-        if current_user.get("company_ids"):
-            for cid in current_user["company_ids"]:
-                try:
-                    if cid is not None:
-                        allowed_ids.add(int(cid))
-                except (ValueError, TypeError):
-                    pass
-        if current_user.get("company_id") is not None:
+    allowed_ids = set()
+    if current_user.get("company_ids"):
+        for cid in current_user["company_ids"]:
             try:
-                allowed_ids.add(int(current_user["company_id"]))
+                if cid is not None:
+                    allowed_ids.add(int(cid))
             except (ValueError, TypeError):
                 pass
+    if current_user.get("company_id") is not None:
+        try:
+            allowed_ids.add(int(current_user["company_id"]))
+        except (ValueError, TypeError):
+            pass
 
+    if role in ("finance", "audit", "auditor"):
+        user_role_label = "Finance" if role == "finance" else "Auditor"
+        if allowed_ids:
+            companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
+        else:
+            companies = query.order_by(Company.company_id.asc()).all()
+    elif role == "supervisor":
+        user_role_label = "Supervisor"
         if not allowed_ids:
             return []
         companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
     else:
-        return []
+        if not allowed_ids:
+            return []
+        user_role_label = role.capitalize()
+        companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
 
     return [
         AuthorizedCompanyOut(

@@ -148,6 +148,7 @@ def _update_application_user_login(user_id: int) -> None:
 def _application_user_response(user: dict[str, object]) -> UserResponse:
     company_name = None
     company_names: list[str] = []
+    company_ids: list[int] = []
     company_logo_url: str | None = None
     company_id = user.get("company_id")
 
@@ -158,6 +159,7 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
         db = SessionLocal()
         cid = int(company_id) if company_id is not None else None
         if cid:
+            company_ids.append(cid)
             comp = db.query(Company).filter(Company.company_id == cid).first()
             if comp:
                 company_name = comp.company_name
@@ -168,6 +170,8 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
         if uid:
             ucs = db.query(UserCompany).filter(UserCompany.user_id == int(uid)).all()
             for uc in ucs:
+                if uc.company_id and uc.company_id not in company_ids:
+                    company_ids.append(uc.company_id)
                 c = db.query(Company).filter(Company.company_id == uc.company_id).first()
                 if c and c.company_name not in company_names:
                     company_names.append(c.company_name)
@@ -188,6 +192,7 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
         email=str(user["email"]),
         name=str(user["name"]),
         company_id=int(company_id) if company_id is not None else None,
+        company_ids=company_ids,
         is_admin=is_admin_flag,
         role=user_role,
         photo_url=resolved_photo_url,
@@ -302,6 +307,7 @@ def create_jwt_token(
     email: str,
     is_admin: bool = False,
     company_id: Optional[int] = None,
+    company_ids: Optional[list[int]] = None,
     role: Optional[str] = None,
     expires_delta_seconds: int | None = None,
 ) -> str:
@@ -323,6 +329,7 @@ def create_jwt_token(
             "is_admin": is_admin,
             "role": user_role,
             "company_id": company_id,
+            "company_ids": company_ids or ([company_id] if company_id else []),
             "provider": "email",
         },
         "user_metadata": {
@@ -531,6 +538,7 @@ def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, c
         email=challenge["email"],
         is_admin=is_admin_flag,
         company_id=int(user["company_id"]) if user and user["company_id"] is not None else None,
+        company_ids=user_info.company_ids,
         role=user_role,
     )
 

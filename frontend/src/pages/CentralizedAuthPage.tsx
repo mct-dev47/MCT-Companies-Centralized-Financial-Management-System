@@ -65,14 +65,26 @@ export const CentralizedAuthPage: React.FC = () => {
     setError(null)
     try {
       const data = await employeeService.getAuthorizedCompanies()
-      setCompanies(data)
+      // Filter to assigned companies if the user has specific assigned companies
+      const userAssignedNames = user?.companyNames || []
+      const userAssignedIds = user?.companyIds || []
+      if (userAssignedNames.length > 0 || userAssignedIds.length > 0) {
+        const filtered = data.filter((comp) => {
+          const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
+          const nameMatch = userAssignedNames.some((cname) => cname.toLowerCase() === comp.name.toLowerCase())
+          return idMatch || nameMatch
+        })
+        setCompanies(filtered)
+      } else {
+        setCompanies(data)
+      }
     } catch (err: any) {
       console.error('Failed to load authorized companies:', err)
       setError(err?.message || 'Failed to retrieve companies from database.')
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [user?.companyNames, user?.companyIds])
 
   React.useEffect(() => {
     void loadAuthorizedCompanies()
