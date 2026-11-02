@@ -198,12 +198,20 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const handleConfirmSave = async () => {
     try {
       setIsSubmitting(true)
+      const resolvedCompanyIds = editSelectedCompanies
+        .map((name) => {
+          const comp = companies.find((c) => c.name === name || c.id === name)
+          return comp ? Number(comp.id) : null
+        })
+        .filter((id): id is number => id !== null && !isNaN(id))
+
       const updated = await employeeService.updateUser(user.id, {
         fullName: formData.fullName,
         email: formData.email,
         role: formData.role,
         assignedCompany: editSelectedCompanies[0] || '',
         assignedCompanies: editSelectedCompanies,
+        companyIds: resolvedCompanyIds,
         avatarFile: editAvatarFile || undefined,
         avatarUrl: editProfilePreview || formData.avatarUrl || user.avatarUrl,
       })

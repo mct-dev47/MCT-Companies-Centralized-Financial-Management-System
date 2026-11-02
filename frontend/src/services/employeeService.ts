@@ -211,6 +211,31 @@ function mapCompany(value: unknown): Company {
   }
 }
 
+function resolveCompanyId(nameOrId: string | number, companies: Company[]): number | null {
+  const str = String(nameOrId).trim()
+  const num = Number(str)
+  if (!isNaN(num) && num > 0) {
+    const byId = companies.find((c) => Number(c.id) === num)
+    if (byId) return num
+  }
+
+  // 1. Exact match by ID or exact company name (case-insensitive)
+  const exact = companies.find(
+    (c) => c.id === str || c.name.trim().toLowerCase() === str.toLowerCase()
+  )
+  if (exact && !isNaN(Number(exact.id))) {
+    return Number(exact.id)
+  }
+
+  // 2. Only fallback to fuzzy match if no company has an exact match
+  const fuzzy = companies.find((c) => isCompanyMatch(c.name, str))
+  if (fuzzy && !isNaN(Number(fuzzy.id))) {
+    return Number(fuzzy.id)
+  }
+
+  return null
+}
+
 export const employeeService = {
   async getUsers(): Promise<EmployeeUser[]> {
     const response = await fetch('/api/v1/users', {
@@ -256,25 +281,30 @@ export const employeeService = {
     return []
   },
 
+
   async createUser(payload: CreateUserPayload): Promise<EmployeeUser> {
     const companies = await employeeService.getCompanies()
     
-    // Resolve company IDs from assignedCompanies, assignedCompany, or companyIds
+    // Resolve company IDs from companyIds, assignedCompanies, or assignedCompany
     const companyIds: number[] = []
     if (payload.companyIds && payload.companyIds.length > 0) {
-      companyIds.push(...payload.companyIds)
+      for (const cid of payload.companyIds) {
+        const numId = Number(cid)
+        if (!isNaN(numId) && !companyIds.includes(numId)) {
+          companyIds.push(numId)
+        }
+      }
     } else if (payload.assignedCompanies && payload.assignedCompanies.length > 0) {
       for (const nameOrId of payload.assignedCompanies) {
-        const found = companies.find((c) => c.name === nameOrId || c.id === nameOrId || isCompanyMatch(c.name, nameOrId))
-        if (found && !isNaN(Number(found.id))) {
-          const numId = Number(found.id)
-          if (!companyIds.includes(numId)) companyIds.push(numId)
+        const resolved = resolveCompanyId(nameOrId, companies)
+        if (resolved !== null && !companyIds.includes(resolved)) {
+          companyIds.push(resolved)
         }
       }
     } else if (payload.assignedCompany) {
-      const found = companies.find((c) => c.name === payload.assignedCompany || c.id === payload.assignedCompany || isCompanyMatch(c.name, payload.assignedCompany))
-      if (found && !isNaN(Number(found.id))) {
-        companyIds.push(Number(found.id))
+      const resolved = resolveCompanyId(payload.assignedCompany, companies)
+      if (resolved !== null && !companyIds.includes(resolved)) {
+        companyIds.push(resolved)
       }
     }
 
@@ -337,24 +367,30 @@ export const employeeService = {
     }
 
     if (payload.companyIds !== undefined) {
-      body.company_ids = payload.companyIds
-      body.company_id = payload.companyIds[0] || null
+      const resolvedIds: number[] = []
+      for (const cid of payload.companyIds) {
+        const numId = Number(cid)
+        if (!isNaN(numId) && !resolvedIds.includes(numId)) {
+          resolvedIds.push(numId)
+        }
+      }
+      body.company_ids = resolvedIds
+      body.company_id = resolvedIds[0] || null
     } else if (payload.assignedCompanies !== undefined) {
       const resolvedIds: number[] = []
       for (const nameOrId of payload.assignedCompanies) {
-        const found = companies.find((c) => c.name === nameOrId || c.id === nameOrId || isCompanyMatch(c.name, nameOrId))
-        if (found && !isNaN(Number(found.id))) {
-          const numId = Number(found.id)
-          if (!resolvedIds.includes(numId)) resolvedIds.push(numId)
+        const resolved = resolveCompanyId(nameOrId, companies)
+        if (resolved !== null && !resolvedIds.includes(resolved)) {
+          resolvedIds.push(resolved)
         }
       }
       body.company_ids = resolvedIds
       body.company_id = resolvedIds[0] || null
     } else if (payload.assignedCompany !== undefined) {
-      const found = companies.find((c) => c.name === payload.assignedCompany || c.id === payload.assignedCompany || isCompanyMatch(c.name, payload.assignedCompany))
-      if (found && !isNaN(Number(found.id))) {
-        body.company_ids = [Number(found.id)]
-        body.company_id = Number(found.id)
+      const resolved = resolveCompanyId(payload.assignedCompany, companies)
+      if (resolved !== null) {
+        body.company_ids = [resolved]
+        body.company_id = resolved
       } else {
         body.company_ids = []
         body.company_id = null
