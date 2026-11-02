@@ -43,6 +43,7 @@ export const DashboardPage: React.FC = () => {
   const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const userRole = (user?.role || '').trim().toLowerCase()
+  const isAdmin = userRole === 'admin'
   const userAssignedCompanies = React.useMemo(() => {
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames
