@@ -4,6 +4,8 @@ import {
   Building2,
   CheckCircle2,
   X,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,6 +16,7 @@ import {
   employeeService,
   type Company,
 } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 export const EmployeePage: React.FC = () => {
@@ -30,13 +33,22 @@ export const EmployeePage: React.FC = () => {
 
   // Success message toast/banner
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load companies
   const loadData = React.useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const companyList = await employeeService.getCompanies()
       setCompanies(companyList)
+    } catch (err) {
+      setLoadError(
+        formatUserFriendlyErrorMessage(
+          err,
+          'Unable to load companies. Please check your connection and try again.'
+        )
+      )
     } finally {
       setLoading(false)
     }
@@ -137,6 +149,29 @@ export const EmployeePage: React.FC = () => {
         >
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
           <span>{successBanner}</span>
+        </div>
+      )}
+
+      {/* Error Notification Alert */}
+      {loadError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium animate-in fade-in-50 duration-200"
+        >
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => loadData()}
+            className="border-red-200 hover:bg-red-100 text-red-800 h-8 gap-1.5 rounded-lg shrink-0"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Retry</span>
+          </Button>
         </div>
       )}
 

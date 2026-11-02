@@ -37,6 +37,7 @@ import {
   type EmployeeUser,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { cn } from '@/lib/utils'
 
@@ -81,6 +82,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   // Multi-company selection state
   const [selectedCompanies, setSelectedCompanies] = React.useState<string[]>([])
   const [companyError, setCompanyError] = React.useState<string | null>(null)
+  const [submitError, setSubmitError] = React.useState<string | null>(null)
 
   const form = useForm<CreateUserFormValues>({
     resolver: zodResolver(createUserSchema),
@@ -114,6 +116,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       form.setValue('assignedCompanies', next)
       form.setValue('assignedCompany', next[0] || '')
       if (next.length > 0) setCompanyError(null)
+      setSubmitError(null)
       return next
     })
   }
@@ -205,6 +208,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       return
     }
     setCompanyError(null)
+    setSubmitError(null)
     setPendingValues(values)
     setIsConfirmOpen(true)
   }
@@ -238,7 +242,10 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to create user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create user. Please try again.')
+      setSubmitError(errorMsg)
+      setIsConfirmOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -256,6 +263,19 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               Register an employee and appoint them to a company
             </DialogDescription>
           </DialogHeader>
+
+          {submitError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{submitError}</span>
+              <button
+                type="button"
+                onClick={() => setSubmitError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">

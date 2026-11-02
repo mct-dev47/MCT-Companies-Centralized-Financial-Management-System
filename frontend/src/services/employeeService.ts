@@ -244,20 +244,12 @@ export const employeeService = {
   },
 
   async getCompanies(): Promise<Company[]> {
-    try {
-      const response = await fetch('/api/v1/companies', {
-        headers: getAuthHeaders(),
-      })
-      if (response.ok) {
-        return await mapApiResponse(response, (value) =>
-          (value as unknown[]).map(mapCompany)
-        )
-      }
-      console.warn('GET /api/v1/companies failed with status', response.status)
-    } catch (error) {
-      console.warn('Failed to fetch companies from the backend:', error)
-    }
-    return []
+    const response = await fetch('/api/v1/companies', {
+      headers: getAuthHeaders(),
+    })
+    return await mapApiResponse(response, (value) =>
+      (value as unknown[]).map(mapCompany)
+    )
   },
 
   async getAuthorizedCompanies(): Promise<AuthorizedCompany[]> {

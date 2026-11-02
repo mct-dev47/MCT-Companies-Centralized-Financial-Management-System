@@ -7,6 +7,8 @@ import {
   Building2,
   Shield,
   User as UserIcon,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +21,7 @@ import {
   type EmployeeUser,
   type Company,
 } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const UserManagementPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -44,17 +47,26 @@ export const UserManagementPage: React.FC = () => {
   // Success message toast/banner & confirmation modal
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
   const [successModal, setSuccessModal] = React.useState<{ title: string; message: React.ReactNode } | null>(null)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load users and companies
   const loadData = React.useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError(null)
       const [userList, companyList] = await Promise.all([
         employeeService.getUsers(),
         employeeService.getCompanies(),
       ])
       setUsers(userList)
       setCompanies(companyList)
+    } catch (err) {
+      setLoadError(
+        formatUserFriendlyErrorMessage(
+          err,
+          'Unable to load user management data. Please try again.'
+        )
+      )
     } finally {
       setLoading(false)
     }
@@ -244,6 +256,29 @@ export const UserManagementPage: React.FC = () => {
         >
           <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
           <span>{successBanner}</span>
+        </div>
+      )}
+
+      {/* Error Notification Alert */}
+      {loadError && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium animate-in fade-in-50 duration-200"
+        >
+          <div className="flex items-center gap-3">
+            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+            <span>{loadError}</span>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => loadData()}
+            className="border-red-200 hover:bg-red-100 text-red-800 h-8 gap-1.5 rounded-lg shrink-0"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Retry</span>
+          </Button>
         </div>
       )}
 

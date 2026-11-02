@@ -26,6 +26,7 @@ import {
   type UpdateUserPayload,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 
@@ -64,6 +65,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
 
   // Photo upload and cropping in edit mode
   const [editProfilePreview, setEditProfilePreview] = React.useState<string | null>(null)
@@ -110,6 +112,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setEditAvatarFile(null)
       setRawImageForCrop(null)
       setIsCropperOpen(false)
+      setActionError(null)
     }
   }, [user, open])
 
@@ -231,7 +234,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       onOpenChange(false)
       onUpdate?.(updated)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to update user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to update user. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmEditOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -249,7 +255,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setIsConfirmDeleteOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to delete user.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete user. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmDeleteOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -270,6 +279,19 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
           <DialogTitle className="sr-only">
             {user.fullName} Details
           </DialogTitle>
+
+          {actionError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           {isEditing ? (
             /* Edit Form View in Portrait Orientation */

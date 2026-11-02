@@ -23,6 +23,7 @@ import {
 } from '@/services/employeeService'
 import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 
 interface ViewCompanyModalProps {
@@ -44,6 +45,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
 
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [profilePreview, setProfilePreview] = React.useState<string | null>(null)
@@ -79,6 +81,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       setRawImageForCrop(null)
       setIsCropperOpen(false)
       setFormErrors({})
+      setActionError(null)
       setIsEditing(true)
     }
   }
@@ -169,7 +172,10 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       setIsEditing(false)
       setProfileFile(null)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to update company.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to update company. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmEditOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -183,7 +189,10 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       setIsConfirmDeleteOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to delete company.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please try again.')
+      setActionError(errorMsg)
+      setIsConfirmDeleteOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -196,6 +205,19 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
           <DialogTitle className="sr-only">
             {company.name} Details
           </DialogTitle>
+
+          {actionError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{actionError}</span>
+              <button
+                type="button"
+                onClick={() => setActionError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           {isEditing ? (
             /* Edit Form View in Portrait Orientation */

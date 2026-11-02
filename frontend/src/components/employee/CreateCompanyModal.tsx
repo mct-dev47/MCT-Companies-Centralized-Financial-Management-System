@@ -32,6 +32,7 @@ import {
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { employeeService, type Company } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 interface CreateCompanyModalProps {
@@ -51,6 +52,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
   const [profileFile, setProfileFile] = React.useState<File | null>(null)
   const [rawImageForCrop, setRawImageForCrop] = React.useState<string | null>(null)
   const [isCropperOpen, setIsCropperOpen] = React.useState(false)
+  const [submitError, setSubmitError] = React.useState<string | null>(null)
 
   const form = useForm<CreateCompanyFormValues>({
     resolver: zodResolver(createCompanySchema),
@@ -111,11 +113,13 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
       setIsCropperOpen(false)
       setPendingValues(null)
       setIsConfirmOpen(false)
+      setSubmitError(null)
     }
     onOpenChange(nextOpen)
   }
 
   const onSubmit = (values: CreateCompanyFormValues) => {
+    setSubmitError(null)
     setPendingValues(values)
     setIsConfirmOpen(true)
   }
@@ -138,7 +142,10 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Unable to create company.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create company. Please try again.')
+      setSubmitError(errorMsg)
+      setIsConfirmOpen(false)
+      window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -156,6 +163,19 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
               Add company to the group
             </DialogDescription>
           </DialogHeader>
+
+          {submitError && (
+            <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
+              <span>{submitError}</span>
+              <button
+                type="button"
+                onClick={() => setSubmitError(null)}
+                className="text-red-500 hover:text-red-700 font-bold ml-auto cursor-pointer"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
