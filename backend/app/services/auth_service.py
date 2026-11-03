@@ -420,7 +420,7 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
     except Exception as exc:
         authenticated = False
 
-        user = _get_application_user(email=normalized_email)
+    user = _get_application_user(email=normalized_email)
     if user:
         u_stat = str(user.get("status") or "ACTIVE").upper()
         if u_stat == "LOCKED":

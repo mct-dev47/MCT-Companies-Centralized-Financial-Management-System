@@ -13,6 +13,7 @@ class UserBase(BaseModel):
     company_id: Optional[int] = None
     company_name: Optional[str] = None
     company_ids: List[int] = Field(default_factory=list)
+    company_names: List[str] = Field(default_factory=list)
     is_admin: bool = False
     role: str = Field(default="supervisor", description="Role of the user: admin, audit, finance, supervisor")
     photo_url: Optional[str] = None
@@ -56,6 +57,7 @@ class UserUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
     company_id: Optional[int] = None
     company_ids: Optional[List[int]] = None
+    company_names: Optional[List[str]] = None
     role: Optional[str] = None
     photo_url: Optional[str] = None
     is_admin: Optional[bool] = None

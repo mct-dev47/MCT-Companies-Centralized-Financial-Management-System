@@ -10,6 +10,7 @@ import {
   Upload,
   User as UserIcon,
   Crop,
+  Send,
 } from 'lucide-react'
 import {
   Dialog,
@@ -262,6 +263,25 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       window.alert(errorMsg)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  const [isReinviting, setIsReinviting] = React.useState(false)
+  const [reinviteSuccess, setReinviteSuccess] = React.useState(false)
+
+  const handleReinvite = async () => {
+    if (!user) return
+    try {
+      setIsReinviting(true)
+      const updated = await employeeService.reinviteUser(user.id)
+      setReinviteSuccess(true)
+      onUpdate?.(updated)
+      setTimeout(() => setReinviteSuccess(false), 4000)
+    } catch (error) {
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to resend invitation. Please try again.')
+      window.alert(errorMsg)
+    } finally {
+      setIsReinviting(false)
     }
   }
 
@@ -634,6 +654,30 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                   </div>
                 ) : (
                   <>
+                    {(user.lastLogin === 'Never' || user.status !== 'Active') && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={isSubmitting || isReinviting}
+                        onClick={handleReinvite}
+                        className={cn(
+                          "h-11 px-4 rounded-xl border font-medium text-sm flex items-center gap-2 transition-colors cursor-pointer",
+                          reinviteSuccess
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                            : "border-sky-200 text-sky-700 hover:bg-sky-50"
+                        )}
+                      >
+                        {isReinviting ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                        ) : reinviteSuccess ? (
+                          <Check className="h-4 w-4 text-emerald-600" />
+                        ) : (
+                          <Send className="h-3.5 w-3.5 text-sky-600" />
+                        )}
+                        <span>{reinviteSuccess ? 'Invite Sent!' : isReinviting ? 'Sending...' : 'Resend Invitation'}</span>
+                      </Button>
+                    )}
+
                     <Button
                       type="button"
                       variant="outline"

@@ -219,7 +219,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       setIsSubmitting(true)
       const resolvedCompanyIds = selectedCompanies
         .map((name) => {
-          const comp = companies.find((c) => c.name === name || c.id === name)
+          const comp = companies.find((c) => c.name === name || c.id === name || c.name.trim().toLowerCase() === name.trim().toLowerCase())
           return comp ? Number(comp.id) : null
         })
         .filter((id): id is number => id !== null && !isNaN(id))
@@ -234,7 +234,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         // Single-use setup invitation generated on backend
         avatarFile: avatarFile || undefined,
       })
-      if (!created.companyNames || created.companyNames.length === 0) {
+      if (!created.companyNames || created.companyNames.length < selectedCompanies.length) {
         created.companyNames = selectedCompanies
         created.companyName = selectedCompanies.join(', ')
       }

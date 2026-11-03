@@ -148,20 +148,32 @@ class UserService:
                 seen.add(cid)
                 company_ids.append(cid)
 
-        # If no numeric company ID provided, resolve from company_name
-        if not company_ids and getattr(user_in, "company_name", None):
+        # Also resolve from company_names or company_name
+        c_names = list(getattr(user_in, "company_names", []) or [])
+        if getattr(user_in, "company_name", None) and user_in.company_name not in c_names:
+            c_names.append(user_in.company_name)
+
+        if c_names:
             try:
                 from app.core.company_resolver import resolve_company
-                resolved = resolve_company(self.db, company_name=user_in.company_name)
-                if resolved and resolved.company_id:
-                    company_ids.append(resolved.company_id)
+                for cname in c_names:
+                    resolved = resolve_company(self.db, company_name=cname)
+                    if resolved and resolved.company_id and resolved.company_id not in seen:
+                        seen.add(resolved.company_id)
+                        company_ids.append(resolved.company_id)
             except Exception:
                 pass
 
         self._validate_user_assignment(company_ids, False, user_role)
         self._ensure_email_available(user_in.email)
         primary_company_id = company_ids[0] if company_ids else user_in.company_id
-        auth_user_id = self._create_auth_user(user_in, user_in.email, company_id=primary_company_id, role=user_role)
+        auth_user_id = self._create_auth_user(
+            user_in,
+            user_in.email,
+            company_id=primary_company_id,
+            company_ids=company_ids,
+            role=user_role,
+        )
 
         user = User(
             name=user_in.name.strip(),
@@ -533,17 +545,28 @@ class UserService:
             self._ensure_company_exists(cid)
 
     @staticmethod
-    def _create_auth_user(user_in: UserCreate, email: str, company_id: Optional[int] = None, role: str = "supervisor") -> str:
+    def _create_auth_user(
+        user_in: UserCreate,
+        email: str,
+        company_id: Optional[int] = None,
+        company_ids: Optional[list[int]] = None,
+        role: str = "supervisor",
+    ) -> str:
         try:
+            cids = company_ids or ([company_id] if company_id else [])
             user_meta = {"name": user_in.name.strip()}
             if company_id is not None:
                 user_meta["company_id"] = company_id
+            if cids:
+                user_meta["company_ids"] = cids
             if role:
                 user_meta["role"] = role
 
             app_meta = {"is_admin": False}
             if company_id is not None:
                 app_meta["company_id"] = company_id
+            if cids:
+                app_meta["company_ids"] = cids
             if role:
                 app_meta["role"] = role
 
