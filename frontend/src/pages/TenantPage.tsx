@@ -26,6 +26,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -1328,7 +1329,7 @@ export const TenantPage: React.FC = () => {
     )
 
     return (
-      <div className="space-y-6 animate-in fade-in duration-200">
+      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <Button
@@ -2449,7 +2450,6 @@ export const TenantPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -2515,7 +2515,6 @@ export const TenantPage: React.FC = () => {
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">{selectedPeriod}</span>
                 <ChevronDown
                   className={cn(
@@ -2613,7 +2612,7 @@ export const TenantPage: React.FC = () => {
           <span className="text-xs font-medium text-muted-fg block">
             Total Tenant Receivables
           </span>
-          <h3 className="text-xl sm:text-2xl font-bold text-emerald-600 mt-1 tabular-nums tracking-tight">
+          <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
             {formatPHP(totalReceivables)}
           </h3>
           <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -2621,7 +2620,7 @@ export const TenantPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+        <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
           <Store className="h-5 w-5 sm:h-6 sm:w-6" />
         </div>
       </Card>
@@ -2678,7 +2677,9 @@ export const TenantPage: React.FC = () => {
             </TableHeader>
 
             <TableBody>
-              {paginatedTenants.length === 0 ? (
+              {isLoading ? (
+                <TableSkeleton rows={5} columns={9} />
+              ) : paginatedTenants.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={9}
@@ -2689,16 +2690,10 @@ export const TenantPage: React.FC = () => {
                         <AlertCircle className="w-6 h-6 stroke-[1.5]" />
                       </div>
                       <p className="font-semibold text-focus text-sm sm:text-base">
-                        {isLoading ? 'Loading tenant leases...' : 'No tenant lease records found'}
+                        No tenant lease records found
                       </p>
                       <p className="text-xs text-muted-fg leading-relaxed">
-                        {isLoading
-                          ? 'Getting the leases from the database.'
-                          : (
-                            <>
-                              There are no tenant leases recorded for JK Property and Ventures matching your current filters. {!isAudit && 'Click "New Tenant Lease" above to register a commercial lease.'}
-                            </>
-                          )}
+                        There are no tenant leases recorded for JK Property and Ventures matching your current filters. {!isAudit && 'Click "New Tenant Lease" above to register a commercial lease.'}
                       </p>
                     </div>
                   </TableCell>
@@ -2799,10 +2794,10 @@ export const TenantPage: React.FC = () => {
                     {/* 8. Balance & Status */}
                     <TableCell className="px-3.5 py-3.5 text-xs text-left tabular-nums whitespace-nowrap">
                       <div className="font-bold text-amber-600">{formatPHP(fin.remaining)}</div>
-                      <div className="flex flex-col gap-0.5 mt-0.5">
+                      <div className="flex flex-col items-start gap-0.5 mt-0.5">
                         <span
                           className={cn(
-                            'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                            'inline-flex items-center w-fit px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
                             (tenant.status === 'Completed' || fin.remaining <= 0.005)
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               : tenant.status === 'Pending'

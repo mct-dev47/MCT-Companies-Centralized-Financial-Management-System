@@ -2,13 +2,11 @@ import * as React from 'react'
 import {
   Search,
   Building2,
-  CheckCircle2,
   X,
-  AlertCircle,
-  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ErrorBanner } from '@/components/common'
 import { CreateCompanyModal } from '@/components/employee/CreateCompanyModal'
 import { ViewCompanyModal } from '@/components/employee/ViewCompanyModal'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -16,7 +14,10 @@ import {
   employeeService,
   type Company,
 } from '@/services/employeeService'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import {
+  formatUserFriendlyErrorMessage,
+  notifySuccess,
+} from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 export const EmployeePage: React.FC = () => {
@@ -55,7 +56,7 @@ export const EmployeePage: React.FC = () => {
   }, [])
 
   React.useEffect(() => {
-    loadData()
+    void loadData()
   }, [loadData])
 
   // Clear banner after 4 seconds
@@ -98,7 +99,9 @@ export const EmployeePage: React.FC = () => {
 
   const handleCompanyCreated = (newCompany: Company) => {
     setCompanies((prev) => [newCompany, ...prev])
-    setSuccessBanner(`Company "${newCompany.name}" has been created successfully.`)
+    const msg = `Company "${newCompany.name}" has been created successfully.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
   }
 
   const handleCompanyUpdated = (updated: Company) => {
@@ -106,13 +109,17 @@ export const EmployeePage: React.FC = () => {
       prev.map((c) => (c.id === updated.id ? updated : c))
     )
     setSelectedCompany(updated)
-    setSuccessBanner(`Company "${updated.name}" updated successfully.`)
+    const msg = `Company "${updated.name}" updated successfully.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
   }
 
   const handleCompanyDeleted = (companyId: string) => {
     const deletedName = companies.find((c) => c.id === companyId)?.name || 'Company'
     setCompanies((prev) => prev.filter((c) => c.id !== companyId))
-    setSuccessBanner(`"${deletedName}" has been removed from companies.`)
+    const msg = `"${deletedName}" has been removed from companies.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
   }
 
   return (
@@ -142,38 +149,18 @@ export const EmployeePage: React.FC = () => {
       </div>
 
       {/* Success Notification Alert */}
-      {successBanner && (
-        <div
-          role="status"
-          className="flex items-center gap-3 p-4 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-medium animate-in fade-in-50 duration-200"
-        >
-          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-          <span>{successBanner}</span>
-        </div>
-      )}
+      <ErrorBanner
+        variant="success"
+        message={successBanner}
+        onDismiss={() => setSuccessBanner(null)}
+      />
 
       {/* Error Notification Alert */}
-      {loadError && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium animate-in fade-in-50 duration-200"
-        >
-          <div className="flex items-center gap-3">
-            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
-            <span>{loadError}</span>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => loadData()}
-            className="border-red-200 hover:bg-red-100 text-red-800 h-8 gap-1.5 rounded-lg shrink-0"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Retry</span>
-          </Button>
-        </div>
-      )}
+      <ErrorBanner
+        message={loadError}
+        onRetry={() => void loadData()}
+        isRetrying={loading}
+      />
 
       {/* Filters Toolbar - Extended full-width search bar */}
       <div className="w-full">
@@ -249,7 +236,7 @@ export const EmployeePage: React.FC = () => {
 
                 {/* Right side: Company Name & Address */}
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-base sm:text-lg font-bold text-focus group-hover:text-primary transition-colors truncate">
+                  <h3 className="text-base sm:text-lg font-bold text-focus transition-colors truncate">
                     {comp.name}
                   </h3>
                   <p className="text-xs text-muted-fg leading-relaxed mt-1 line-clamp-2">
@@ -263,14 +250,12 @@ export const EmployeePage: React.FC = () => {
       </div>
 
       {/* Modals */}
-      {/* 1. Create Company Modal */}
       <CreateCompanyModal
         open={isCreateCompanyOpen}
         onOpenChange={setIsCreateCompanyOpen}
         onSuccess={handleCompanyCreated}
       />
 
-      {/* 2. View / Edit / Delete Company Modal */}
       <ViewCompanyModal
         open={isViewCompanyOpen}
         onOpenChange={setIsViewCompanyOpen}

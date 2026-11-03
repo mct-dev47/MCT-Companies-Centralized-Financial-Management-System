@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -502,70 +503,49 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       </Dialog>
 
       {/* 2. Confirmation Dialog */}
-      <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <DialogContent className="sm:max-w-[420px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4">
-          <DialogHeader className="text-left pb-2 pr-6">
-            <DialogTitle className="text-lg font-bold text-focus leading-tight">
-              Confirm Loan Submission
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg font-normal">
-              Please verify the inter-company loan details before submitting.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2 my-2">
-            <div className="flex justify-between">
-              <span className="text-muted-fg font-medium">Borrower:</span>
-              <span className="font-bold text-focus">{borrowerCompany}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-fg font-medium">Principal Amount:</span>
-              <span className="font-bold text-emerald-600 tabular-nums">
-                {formatPHP(parseFloat(amount.replace(/,/g, '')) || 0)}
-              </span>
-            </div>
-            {isFinanceUser && (
-              <div className="flex justify-between">
-                <span className="text-muted-fg font-medium">Interest Rate:</span>
-                <span className="font-bold text-primary">{parseFloat(interestRate) || 0}%</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-muted-fg font-medium">Date:</span>
-              <span className="font-medium text-focus">{date}</span>
-            </div>
-            <div className="pt-2 border-t border-slate-200">
-              <span className="text-muted-fg block">Purpose:</span>
-              <span className="font-medium text-focus italic">{particulars}</span>
-            </div>
+      <ConfirmModal
+        open={isConfirmOpen}
+        onOpenChange={setIsConfirmOpen}
+        title="Confirm Loan Submission"
+        description="Please verify the inter-company loan details before submitting."
+        confirmLabel="Confirm & Submit"
+        cancelLabel="Back"
+        variant="primary"
+        actionType="submit"
+        onConfirm={handleConfirmedSubmit}
+        isLoading={isSubmitting}
+        loadingLabel="Recording…"
+      >
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2 my-2">
+          <div className="flex justify-between">
+            <span className="text-muted-fg font-medium">Borrower:</span>
+            <span className="font-bold text-focus">{borrowerCompany}</span>
           </div>
-
-          <p className="text-2xs text-muted-fg">
-            * Note: This loan request will be placed in <strong>Pending Approval</strong> until confirmed by management.
-          </p>
-
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIsConfirmOpen(false)}
-              className="h-9 px-3 rounded-lg text-xs"
-            >
-              Back
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmedSubmit}
-              disabled={isSubmitting}
-              className="h-9 px-4 rounded-lg bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold shadow-xs"
-            >
-              {isSubmitting ? 'Recording…' : 'Confirm & Submit'}
-            </Button>
+          <div className="flex justify-between">
+            <span className="text-muted-fg font-medium">Principal Amount:</span>
+            <span className="font-bold text-emerald-600 tabular-nums">
+              {formatPHP(parseFloat(amount.replace(/,/g, '')) || 0)}
+            </span>
           </div>
-        </DialogContent>
-      </Dialog>
+          {isFinanceUser && (
+            <div className="flex justify-between">
+              <span className="text-muted-fg font-medium">Interest Rate:</span>
+              <span className="font-bold text-primary">{parseFloat(interestRate) || 0}%</span>
+            </div>
+          )}
+          <div className="flex justify-between">
+            <span className="text-muted-fg font-medium">Date:</span>
+            <span className="font-medium text-focus">{date}</span>
+          </div>
+          <div className="pt-2 border-t border-slate-200">
+            <span className="text-muted-fg block">Purpose:</span>
+            <span className="font-medium text-focus italic">{particulars}</span>
+          </div>
+        </div>
+        <p className="text-2xs text-muted-fg mt-2">
+          * Note: This loan request will be placed in <strong>Pending Approval</strong> until confirmed by management.
+        </p>
+      </ConfirmModal>
     </>
   )
 }

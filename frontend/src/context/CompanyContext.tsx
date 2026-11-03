@@ -50,7 +50,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { user } = useSession()
 
   const userRole = (user?.role || '').trim().toLowerCase()
-  const isMultiCompanyRole = userRole === 'admin' || userRole === 'finance'
+  const isMultiCompanyRole =
+    userRole === 'admin' ||
+    userRole === 'finance' ||
+    userRole === 'audit' ||
+    userRole.includes('auditor')
   const userAssignedCompanies = React.useMemo(() => {
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames

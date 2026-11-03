@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -671,77 +672,55 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       </Dialog>
 
       {/* 2. Confirmation Dialogue */}
-      <Dialog open={isConfirmOpen} onOpenChange={setIsConfirmOpen}>
-        <DialogContent className="sm:max-w-[460px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/20">
-            <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">
-              Confirm Expense Record
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg font-normal">
-              Please review and confirm this expense transaction entry before saving.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="py-4 space-y-3">
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="text-muted-fg font-medium">Company</span>
-                <span className="font-semibold text-focus">{assignedCompany}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-fg font-medium">Date</span>
-                <span className="font-semibold text-focus">{date}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-fg font-medium">Particulars</span>
-                <span className="font-semibold text-focus max-w-[220px] truncate text-right">
-                  {particulars}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-fg font-medium">Payment Method</span>
-                <span className="font-semibold text-focus">{paymentMethod}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-muted-fg font-medium">Category</span>
-                <span className="font-semibold text-focus">{category}</span>
-              </div>
-              {chequeNo && (
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-fg font-medium">Cheque No.</span>
-                  <span className="font-mono font-semibold text-focus">{chequeNo}</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between pt-2.5 border-t border-slate-200">
-                <span className="font-bold text-focus">Total Withdrawal Amount</span>
-                <span className="font-bold text-rose-600 text-base">
-                  {formatPHP(parseFloat(amount.replace(/,/g, '')) || 0)}
-                </span>
-              </div>
+      <ConfirmModal
+        open={isConfirmOpen}
+        onOpenChange={setIsConfirmOpen}
+        title="Confirm Expense Record"
+        description="Please review and confirm this expense transaction entry before saving."
+        confirmLabel="Confirm & Add"
+        variant="primary"
+        actionType="add"
+        onConfirm={handleConfirmedSubmit}
+        isLoading={isSubmitting}
+        loadingLabel="Recording…"
+      >
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-fg font-medium">Company</span>
+            <span className="font-semibold text-focus">{assignedCompany}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-fg font-medium">Date</span>
+            <span className="font-semibold text-focus">{date}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-fg font-medium">Particulars</span>
+            <span className="font-semibold text-focus max-w-[220px] truncate text-right">
+              {particulars}
+            </span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-fg font-medium">Payment Method</span>
+            <span className="font-semibold text-focus">{paymentMethod}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-fg font-medium">Category</span>
+            <span className="font-semibold text-focus">{category}</span>
+          </div>
+          {chequeNo && (
+            <div className="flex items-center justify-between">
+              <span className="text-muted-fg font-medium">Cheque No.</span>
+              <span className="font-mono font-semibold text-focus">{chequeNo}</span>
             </div>
+          )}
+          <div className="flex items-center justify-between pt-2.5 border-t border-slate-200">
+            <span className="font-bold text-focus">Total Withdrawal Amount</span>
+            <span className="font-bold text-rose-600 text-base">
+              {formatPHP(parseFloat(amount.replace(/,/g, '')) || 0)}
+            </span>
           </div>
-
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-stroke/15">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSubmitting}
-              onClick={() => setIsConfirmOpen(false)}
-              className="h-10 px-4 rounded-xl border-stroke/60 text-xs font-medium cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isSubmitting}
-              onClick={handleConfirmedSubmit}
-              className="h-10 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold shadow-xs cursor-pointer"
-            >
-              {isSubmitting ? 'Recording…' : 'Confirm & Add'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </ConfirmModal>
     </>
   )
 }

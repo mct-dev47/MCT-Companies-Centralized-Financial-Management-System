@@ -155,14 +155,17 @@ export const LendingRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chi
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
+  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
-  const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (!isLendingEnabledCompany(targetCompany)) {
-    return <Navigate to="/dashboard" replace />
+  if (!isAudit) {
+    const targetCompany = activeCompany || user?.assignedCompany || ''
+    if (!isLendingEnabledCompany(targetCompany)) {
+      return <Navigate to="/dashboard" replace />
+    }
   }
 
   return <>{children}</>
@@ -172,14 +175,17 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
+  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
-  const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (!isTenantEnabledCompany(targetCompany)) {
-    return <Navigate to="/dashboard" replace />
+  if (!isAudit) {
+    const targetCompany = activeCompany || user?.assignedCompany || ''
+    if (!isTenantEnabledCompany(targetCompany)) {
+      return <Navigate to="/dashboard" replace />
+    }
   }
 
   return <>{children}</>
