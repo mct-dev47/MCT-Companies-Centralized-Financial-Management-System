@@ -128,6 +128,7 @@ def get_notifications(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
     svc = NotificationService(db)
 
     # If cursor is supplied, return compound cursor response object
@@ -135,6 +136,8 @@ def get_notifications(
         return svc.get_notifications_feed(
             recipient_user_id=user_id,
             company_id=resolved_cid,
+            user_role=effective_role,
+            user_scope_key=user_scope_key,
             cursor=cursor,
             direction=direction,
             notification_type=notification_type,
@@ -145,6 +148,8 @@ def get_notifications(
     feed = svc.get_notifications_feed(
         recipient_user_id=user_id,
         company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
         notification_type=notification_type,
         limit=limit,
     )
@@ -172,10 +177,13 @@ def get_notifications_feed(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
     svc = NotificationService(db)
     return svc.get_notifications_feed(
         recipient_user_id=user_id,
         company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
         cursor=cursor,
         direction=direction,
         notification_type=notification_type,
@@ -210,10 +218,13 @@ def notification_count(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
     svc = NotificationService(db)
     count = svc.get_unread_count(
         recipient_user_id=user_id,
         company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
     )
     return NotificationCountOut(unread_count=count)
 

@@ -2,6 +2,7 @@ import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { salesService } from './salesService'
 import { expenseService } from './expenseService'
+import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from './tenantService'
 import type { ParticularItem } from '@/utils/particularsUtils'
 
 export type AuditStatus = 'Verified' | 'Pending Audit' | 'Flagged'
@@ -83,13 +84,80 @@ export const dashboardService = {
       return cached.data
     }
 
-    const [sales, expenses] = await Promise.all([
+    const shouldFetchTenants = !isSingleCompany || isCompanyMatch(TENANT_COMPANY_NAME, isSingleCompany)
+
+    const [sales, expenses, tenantLeases] = await Promise.all([
       salesService.getSales(isSingleCompany),
       expenseService.getExpenses({ company: isSingleCompany }),
+      shouldFetchTenants
+        ? tenantService.listLeases().catch((err) => {
+            console.warn('Tenant leases not available for dashboard:', err)
+            return [] as TenantLease[]
+          })
+        : Promise.resolve([] as TenantLease[]),
     ])
+
+    const tenantTransactions: DashboardTransactionItem[] = []
+    tenantLeases.forEach((lease) => {
+      const leaseCompany = lease.companyName || TENANT_COMPANY_NAME
+      if (isSingleCompany && !isCompanyMatch(leaseCompany, isSingleCompany)) return
+
+      if (lease.dailyPayments && lease.dailyPayments.length > 0) {
+        lease.dailyPayments.forEach((p) => {
+          if (p.status === 'Missed' || (p.amount || 0) <= 0) return
+          tenantTransactions.push({
+            id: `tenant_pmt_${p.id}`,
+            refNo: p.referenceNo || lease.tenantId,
+            date: p.date,
+            type: 'Income',
+            company: leaseCompany,
+            description: `Rental Collection - ${lease.tenantName} (${lease.unitName})`,
+            particulars: `Rental Payment - ${lease.tenantName} (${lease.unitName})`,
+            amount: p.amount,
+            withdrawal: 0,
+            deposit: p.amount,
+            category: 'Rental Income',
+            paymentMethod: p.method,
+            status: 'Paid',
+            auditStatus: (lease.auditStatus as any) || 'Verified',
+            auditedBy: lease.auditedBy,
+            auditNotes: lease.auditRemarks,
+            auditDate: lease.auditDate,
+            createdAt: p.timestamp || `${p.date}T00:00:00Z`,
+            isMirrorRow: true,
+            paidAmount: p.amount,
+          })
+        })
+      } else if (lease.amountPaid > 0) {
+        tenantTransactions.push({
+          id: `tenant_lease_${lease.id}`,
+          refNo: lease.tenantId,
+          date: lease.contractDate,
+          type: 'Income',
+          company: leaseCompany,
+          description: `Rental Collection - ${lease.tenantName} (${lease.unitName})`,
+          particulars: `Rental Payment - ${lease.tenantName} (${lease.unitName})`,
+          amount: lease.amountPaid,
+          withdrawal: 0,
+          deposit: lease.amountPaid,
+          category: 'Rental Income',
+          paymentMethod: 'Cash',
+          status: 'Paid',
+          auditStatus: (lease.auditStatus as any) || 'Verified',
+          auditedBy: lease.auditedBy,
+          auditNotes: lease.auditRemarks,
+          auditDate: lease.auditDate,
+          createdAt: `${lease.contractDate}T00:00:00Z`,
+          isMirrorRow: true,
+          paidAmount: lease.amountPaid,
+        })
+      }
+    })
+
     let transactions: DashboardTransactionItem[] = [
       ...sales.map((s) => salesService.toDashboardTransaction(s)),
       ...expenses.map((e) => expenseService.toDashboardTransaction(e)),
+      ...tenantTransactions,
     ]
     if (isSingleCompany) {
       transactions = transactions.filter((t) => isCompanyMatch(t.company, isSingleCompany))

@@ -18,7 +18,8 @@ import {
   History,
   Landmark,
   Loader2,
-  Plus,
+  Plus,
+  RefreshCw,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -48,7 +49,7 @@ import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { bankService, type BankAccount, type BankTransaction } from '@/services/bankService'
-import { websocketService } from '@/services/websocketService'
+import { websocketService, type ConnectionStatus } from '@/services/websocketService'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
@@ -139,38 +140,60 @@ export const BankManagementPage: React.FC = () => {
     }
   }, [])
 
-  // Synchronize bank accounts with database
-  const fetchAccounts = React.useCallback(async () => {
-    try {
-      // For company-scoped users, request their company accounts.
-      // Company filtering in memory is instantaneous and never fails on aliases.
-      const targetComp = isCompanyScoped ? assignedCompany : undefined
-      const data = await bankService.getAccounts(targetComp)
-      setAccounts(data || [])
-    } catch (err) {
-      console.warn('Bank accounts database fetch warning:', err)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [isCompanyScoped, assignedCompany])
-
-  React.useEffect(() => {
-    fetchAccounts()
-  }, [fetchAccounts])
-
-  // Realtime multi-tab WebSocket synchronization
-  React.useEffect(() => {
-    const unsubBank = websocketService.subscribe('BANK_UPDATED', () => {
-      fetchAccounts()
-    })
-    const unsubTx = websocketService.subscribe('TRANSACTION_UPDATED', () => {
-      fetchAccounts()
-    })
-    return () => {
-      unsubBank()
-      unsubTx()
-    }
-  }, [fetchAccounts])
+  // Real-time WebSocket connection status state
+  const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>(websocketService.getStatus())
+
+  // Synchronize bank accounts with database
+  const fetchAccounts = React.useCallback(async (forceRefresh = false) => {
+    try {
+      if (forceRefresh) {
+        bankService.invalidateCache()
+      }
+      // For company-scoped users, request their company accounts.
+      // Company filtering in memory is instantaneous and never fails on aliases.
+      const targetComp = isCompanyScoped ? assignedCompany : undefined
+      const data = await bankService.getAccounts(targetComp, { forceRefresh })
+      setAccounts(data || [])
+    } catch (err) {
+      console.warn('Bank accounts database fetch warning:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isCompanyScoped, assignedCompany])
+
+  React.useEffect(() => {
+    fetchAccounts()
+  }, [fetchAccounts])
+
+  // Realtime multi-tab WebSocket synchronization and status listener
+  React.useEffect(() => {
+    // Ensure active WebSocket connection
+    websocketService.connect()
+
+    const handleSync = () => {
+      bankService.invalidateCache()
+      void fetchAccounts(true)
+    }
+
+    const unsubs = [
+      websocketService.subscribe('BANK_UPDATED', handleSync),
+      websocketService.subscribe('TRANSACTION_UPDATED', handleSync),
+      websocketService.subscribe('EXPENSE_CREATED', handleSync),
+      websocketService.subscribe('EXPENSE_UPDATED', handleSync),
+      websocketService.subscribe('EXPENSE_DELETED', handleSync),
+      websocketService.subscribe('SALES_UPDATED', handleSync),
+      websocketService.subscribe('LOANS_UPDATED', handleSync),
+      websocketService.subscribe('PETTY_CASH_UPDATED', handleSync),
+      websocketService.subscribe('AUDIT_UPDATED', handleSync),
+      websocketService.subscribe('WS_STATUS_CHANGE', (newStatus) => {
+        setWsStatus(newStatus as ConnectionStatus)
+      }),
+    ]
+
+    return () => {
+      unsubs.forEach((unsub) => unsub())
+    }
+  }, [fetchAccounts])
 
   // Active selected bank account
   const [selectedAccountId, setSelectedAccountId] = React.useState<string>('')
@@ -816,6 +839,41 @@ export const BankManagementPage: React.FC = () => {
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
                 Bank Management
               </h1>
+              <div
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-colors select-none',
+                  wsStatus === 'connected'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
+                    : wsStatus === 'reconnecting'
+                    ? 'bg-amber-50 text-amber-700 border-amber-200/60'
+                    : 'bg-slate-100 text-slate-600 border-slate-200/60'
+                )}
+                title={
+                  wsStatus === 'connected'
+                    ? 'WebSocket real-time sync active: balances and transactions update automatically'
+                    : wsStatus === 'reconnecting'
+                    ? 'Reconnecting real-time sync...'
+                    : 'Real-time sync offline'
+                }
+              >
+                <span
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    wsStatus === 'connected'
+                      ? 'bg-emerald-500 animate-pulse'
+                      : wsStatus === 'reconnecting'
+                      ? 'bg-amber-500 animate-ping'
+                      : 'bg-slate-400'
+                  )}
+                />
+                <span className="font-semibold text-[11px]">
+                  {wsStatus === 'connected'
+                    ? 'Live Sync'
+                    : wsStatus === 'reconnecting'
+                    ? 'Reconnecting'
+                    : 'Sync Paused'}
+                </span>
+              </div>
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Manage corporate bank accounts, monitor active balance.
@@ -824,6 +882,19 @@ export const BankManagementPage: React.FC = () => {
 
           {/* Action Controls: Export and Add New Bank */}
           <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 self-start shrink-0">
+            {/* Manual Sync/Refresh Button */}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                bankService.invalidateCache()
+                void fetchAccounts(true)
+              }}
+              title="Refresh bank accounts"
+              className="h-10 sm:h-11 px-3 sm:px-3.5 rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface shadow-xs transition-all cursor-pointer box-border"
+            >
+              <RefreshCw className={cn('h-4 w-4 text-focus/70', isLoading && 'animate-spin text-primary')} />
+            </Button>
             {/* Export Dropdown Button (White for Finance since Add New Bank is red; Red for Supervisor/Audit) */}
             <div ref={exportDropdownRef} className="relative inline-block">
               <Button

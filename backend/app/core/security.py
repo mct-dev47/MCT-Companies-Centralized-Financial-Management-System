@@ -17,11 +17,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 _bearer_scheme = HTTPBearer(auto_error=False)
 _SUPPORTED_ALGORITHM = "HS256"
 _revoked_tokens: set[str] = set()
+_valid_token_cache: dict[str, float] = {}
 
 
 def revoke_access_token(token: str, db: Any | None = None) -> None:
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     _revoked_tokens.add(token_hash)
+    _valid_token_cache.pop(token_hash, None)
     try:
         from app.db.session import SessionLocal
         from app.models.security import RevokedToken
@@ -69,17 +71,24 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
     if token_hash in _revoked_tokens:
         raise _invalid_token("Access token has been revoked.")
 
-    try:
-        from app.db.session import SessionLocal
-        from app.models.security import RevokedToken
-        with SessionLocal() as db_session:
-            if db_session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first():
-                _revoked_tokens.add(token_hash)
-                raise _invalid_token("Access token has been revoked.")
-    except HTTPException:
-        raise
-    except Exception:
-        pass
+    now = time.time()
+    last_verified = _valid_token_cache.get(token_hash)
+    if last_verified is None or (now - last_verified) > 60.0:
+        if len(_valid_token_cache) > 5000:
+            _valid_token_cache.clear()
+        try:
+            from app.db.session import SessionLocal
+            from app.models.security import RevokedToken
+            with SessionLocal() as db_session:
+                if db_session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first():
+                    _revoked_tokens.add(token_hash)
+                    _valid_token_cache.pop(token_hash, None)
+                    raise _invalid_token("Access token has been revoked.")
+                _valid_token_cache[token_hash] = now
+        except HTTPException:
+            raise
+        except Exception:
+            pass
 
     try:
         header_segment, payload_segment, signature_segment = token.split(".")
