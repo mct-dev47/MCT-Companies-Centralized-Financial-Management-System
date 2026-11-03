@@ -6,6 +6,7 @@ import {
   type PersonLedgerSummary,
   type ReceivablesKPIs,
   type PaymentMethod,
+  type PaymentStatus,
   type CustomerType,
   type PaymentOption,
 } from '@/services/receivablesStore'
@@ -47,6 +48,9 @@ export function useReceivables(
       date: string
       method: PaymentMethod
       sale_id?: string
+      company?: string
+      company_id?: number
+      bank_account_id?: string
       notes?: string
     }) => {
       return receivablesStore.recordPayment(params)
@@ -55,31 +59,95 @@ export function useReceivables(
   )
 
   const settleStaffPayrollDeduction = React.useCallback(
-    (customer_name: string, notes?: string) => {
-      return receivablesStore.settleStaffPayrollDeduction(customer_name, notes)
+    (customer_name: string, notes?: string, company_id?: number, targetCompany?: string) => {
+      return receivablesStore.settleStaffPayrollDeduction(
+        customer_name,
+        notes,
+        company_id,
+        targetCompany ?? company
+      )
     },
-    []
+    [company]
   )
 
   const addNewSale = React.useCallback(
     (params: {
       customer_name: string
       customer_type: CustomerType
-      customer_phone?: string
-      customer_role?: string
       items_summary: string
       total_amount: number
       payment_option: PaymentOption
       amount_paid?: number
       payment_method?: PaymentMethod
+      bank_account_id?: string
       date?: string
       notes?: string
       company?: string
+      company_id?: number
+      sale_id?: number
+      sale_line_index?: number
+      expense_id?: number
     }) => {
       return receivablesStore.addNewSale(params)
     },
     []
   )
+
+  const editSale = React.useCallback(
+    (
+      saleId: string,
+      params: {
+        customer_name?: string
+        customer_type?: CustomerType
+        items_summary?: string
+        total_amount?: number
+        notes?: string
+        date?: string
+        payment_status?: PaymentStatus
+        payment_method?: string
+        bank_account_id?: string
+      }
+    ) => {
+      return receivablesStore.editSale(saleId, params)
+    },
+    []
+  )
+
+  const updateDebtor = React.useCallback(
+    (params: {
+      old_customer_name: string
+      new_customer_name: string
+      customer_type: CustomerType
+      company?: string
+      company_id?: number
+    }) => {
+      return receivablesStore.updateDebtor(params)
+    },
+    []
+  )
+
+  const deleteDebtor = React.useCallback(
+    (params: {
+      customer_name: string
+      company?: string
+      company_id?: number
+    }) => {
+      return receivablesStore.deleteDebtor(params)
+    },
+    []
+  )
+
+  const deleteSale = React.useCallback((saleId: string) => {
+    return receivablesStore.deleteSale(saleId)
+  }, [])
+
+  const deletePayment = React.useCallback((paymentId: string) => {
+    return receivablesStore.deletePayment(paymentId)
+  }, [])
+
+  const refreshFromBackend = React.useCallback(() => {
+    return receivablesStore.refreshFromBackend()
+  }, [])
 
   const resetToDefault = React.useCallback(() => {
     receivablesStore.resetToDefault()
@@ -93,7 +161,13 @@ export function useReceivables(
     recordPayment,
     settleStaffPayrollDeduction,
     addNewSale,
+    editSale,
+    updateDebtor,
+    deleteDebtor,
+    deleteSale,
+    deletePayment,
+    refresh: reload,
+    refreshFromBackend,
     resetToDefault,
   }
 }
-

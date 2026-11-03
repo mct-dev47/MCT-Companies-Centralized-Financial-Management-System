@@ -1,0 +1,37 @@
+# Verify: Receivables UI Refinements and Bidirectional Sales Sync · spec 0028 · updated 2026-11-04
+
+_Steps derived from spec 0028 acceptance criteria and value sourcing rules. `/check verify` runs these; `/test` locks the durable ones._
+
+## UI / manual
+
+- [ ] Open `/sales/add`, enter two unpaid food items, and proceed to the unpaid assignment step → `Customer Type` renders as a `<select>` dropdown defaulting to `External` with `Staff` as the second option, and no `Contact / Role` column appears anywhere on the sheet → AC-1, AC-2 (Value source: `Customer Type` dropdown mapping `External` to `'External'` and `Staff` to `'Internal'`)
+- [ ] Submit the multi item sale on `/sales/add` with row 1 paid and rows 2 and 3 unpaid → each unpaid row creates a `Receivable` storing its zero based `sale_line_index` matching its line position in `sales.particulars` → AC-1, AC-6 (Value source: `sale_line_index` emitted from `/sales/add`)
+- [ ] Inspect `/receivables`, `NewFoodSaleModal`, debtor edit dialog, `PersonLedgerDrawer`, and CSV and PDF exports → all `Contact / Role` columns, phone or role subtitles, search hints, and inputs are absent → AC-2
+- [ ] Sign in as a `Supervisor` or `Company` user assigned to Company A and open `/receivables` → Edit and Delete controls appear and succeed for Company A debtor rows and drawer orders, while requests targeting Company B return HTTP `403` and signing in as `Audit` hides all mutation buttons and returns HTTP `403` on write calls → AC-3 (Value source: `check_company_access` company write scope)
+- [ ] Open `PersonLedgerDrawer` on an unpaid order, click Edit Order, change `items_summary`, `total_amount`, `transaction_date`, and set `payment_status` to `Paid` → `Payment Method` (defaulting to `Cash`) and company filtered `Deposit Bank` fields appear, saving creates a `ReceivablePayment` for the remaining balance on today's local date plus a bank deposit when a bank account is chosen → AC-4 (Value source: settlement `ReceivablePayment` fields from remaining `balance`, dialog inputs, and `date.today()`)
+- [ ] Reopen Edit Order on that `Paid` receivable and change `payment_status` back to `Unpaid` → existing `ReceivablePayment` rows are deleted, any linked bank deposit records a matching reversal withdrawal on the same `bank_account_id`, `amount_paid` resets to `0.00`, and the linked `Sale` line returns to `[Unpaid]` → AC-4, AC-6 (Value source: reversal withdrawal amount and `bank_account_id` from existing `ReceivablePayment` rows)
+- [ ] Record a partial payment (for example ₱400 on a ₱1,000 unpaid receivable) while `/sales` is open in another browser tab → `/sales` updates automatically via WebSocket without manual reload, **Total Sales** keeps the full ₱1,000 gross amount, **Total Cash** increases immediately by ₱400 without double counting, and the linked `sales.particulars` line shows `[Pending]` until the remaining ₱600 is paid and flips to `[Paid]` → AC-5, AC-6, AC-10 (Value sources: `Sync Receivable → Sale`, **Total Sales** KPI, and **Total Cash** KPI)
+- [ ] Edit a `Sale` on `/sales` that has a partially paid linked receivable (for example changing an ₱800 line with ₱300 paid up to ₱1,000, or down below ₱300, or deleting one line from a multi line sale) → linked `Receivable` rows update `total_amount`, `balance`, `payment_status`, and `sale_line_index` (reversing excess payment if reduced below `amount_paid` or cascade deleting removed lines) with no infinite sync loop → AC-7 (Value source: `Sync Sale → Receivable`)
+- [ ] Use debtor row Edit and Delete buttons on `/receivables` for a customer with multiple non verified orders → `PUT /api/v1/receivables/debtor` updates customer name and type across all matching company rows, and `DELETE /api/v1/receivables/debtor` reverses linked bank deposits, removes or updates linked `Sale` lines, and deletes the debtor's receivables atomically → AC-9
+- [ ] Mark a `Sale` as `Verified` using an `Audit` account, then view `/sales` and `/receivables` as `Finance` → both the `Sale` and its linked `Receivable` and `ReceivablePayment` rows display locked read only badges with edit, pay, reverse, and delete buttons disabled, and direct `PUT`, `POST` payment, or `DELETE` API calls return HTTP `409 Conflict` → AC-8 (Value source: `is_locked` derived from `Sale.audit_status == 'Verified'`)
+- [ ] Temporarily disconnect WebSocket (or background the `/sales` tab), record a receivable payment in another session, then restore WebSocket connection or focus the `/sales` window → 250ms debounced cache invalidation silently refetches `/sales` and `/receivables` data so statuses and KPIs catch up automatically → AC-10
+
+## Commands
+
+- [ ] `python -c "import sqlite3; c=sqlite3.connect('backend/mct_financial.db'); cols=[r[1] for r in c.execute('PRAGMA table_info(receivables)')]; assert 'sale_line_index' in cols and 'customer_phone' not in cols and 'customer_role' not in cols; print('OK', cols)"` → prints `OK` confirming live schema dropped `customer_phone` and `customer_role` and added `sale_line_index` → AC-2
+- [ ] `cd backend; .\venv\Scripts\python.exe -m pytest tests/test_spec_0027.py` → exits `0` with all receivable lifecycle and company scoped permission tests passing → AC-2, AC-3, AC-5
+- [ ] `cd frontend; npm run build` → exits `0` with zero TypeScript or Vite bundle errors across updated sales and receivables modules → AC-1, AC-2, AC-4, AC-10
+
+## Acceptance-criteria coverage
+
+- AC-1 (Unpaid assignment `Customer Type` dropdown) covered by `/sales/add` manual dropdown check and frontend build
+- AC-2 (`Contact / Role` removal across UI and DB) covered by UI/export inspection, SQLite schema introspection command, `test_spec_0027.py`, and frontend build
+- AC-3 (Company scoped `BusinessWriter` permissions and `Audit` read only) covered by multi role and cross company check plus `test_spec_0027.py`
+- AC-4 (Order edit modal fields and direct `Paid` / `Unpaid` settlement and bank reversal) covered by `PersonLedgerDrawer` Edit Order settlement and reversal steps
+- AC-5 (Partial payment **Total Sales**, **Total Cash**, and `[Pending]` to `[Paid]` line lifecycle) covered by partial payment KPI and particulars verification step
+- AC-6 (Internal `SalesReceivablesSyncService` across Supabase and SQLite plus WebSocket broadcasts) covered by multi item `sale_line_index` creation, payment sync, and status reversal steps
+- AC-7 (Bidirectional `Sale` edit and delete sync to `Receivable` with partial payment handling and loop guard) covered by `/sales` edit and delete sync step
+- AC-8 (`Verified` audit lock across UI and `409 Conflict` backend enforcement) covered by `Audit` verification lock check on `/sales` and `/receivables`
+- AC-9 (Atomic batch debtor `PUT` and `DELETE` endpoints with bank reversal and sale sync) covered by debtor summary row batch edit and delete step
+- AC-10 (Realtime `SALES_UPDATED` and `RECEIVABLES_UPDATED` listeners plus reconnect and focus refetch) covered by live two tab WebSocket check and reconnect/focus recovery step
+

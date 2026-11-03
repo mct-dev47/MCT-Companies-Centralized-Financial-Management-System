@@ -9,6 +9,8 @@ from app.models.lending import Borrower, LendingTransaction
 from app.models.tenant import TenantLease, TenantLeasePayment
 from app.models.security import RevokedToken, LoginRateLimit
 from app.models.notification import Notification, NotificationOutbox
+from app.models.bank import BankAccount, BankTransaction
+from app.models.receivable import Receivable, ReceivablePayment
 
 # Alias for backward compatibility
 LendingFacility = Borrower
@@ -37,4 +39,8 @@ __all__ = [
     "LoginRateLimit",
     "Notification",
     "NotificationOutbox",
+    "BankAccount",
+    "BankTransaction",
+    "Receivable",
+    "ReceivablePayment",
 ]
