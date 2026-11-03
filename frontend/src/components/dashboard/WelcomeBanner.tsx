@@ -12,7 +12,7 @@ export const WelcomeBanner: React.FC<WelcomeBannerProps> = ({
   greetingName,
 }) => {
   const { user } = useSession()
-  const name = greetingName || user?.fullName || 'Remi Lee'
+  const name = greetingName || user?.fullName || 'User'
 
   const [now, setNow] = React.useState<Date>(() => new Date())
 
