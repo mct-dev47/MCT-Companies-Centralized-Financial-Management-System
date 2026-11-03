@@ -1,7 +1,10 @@
-"""Safer error responses (security audit, 2026-10-30)."""
+"""Safer error responses (security audit, 2026-10-30 & secret isolation hardening)."""
+import logging
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 
 async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -15,3 +18,16 @@ async def validation_exception_handler(_request: Request, exc: RequestValidation
         for err in exc.errors()
     ]
     return JSONResponse(status_code=422, content={"detail": errors})
+
+
+def global_unhandled_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """
+    Catch-all 500 handler that logs the error securely on the server
+    and returns a clean, sanitized generic response to prevent leaking
+    stack traces, environment variables, or internal credentials.
+    """
+    logger.exception("Unhandled server exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred. Please try again later."},
+    )

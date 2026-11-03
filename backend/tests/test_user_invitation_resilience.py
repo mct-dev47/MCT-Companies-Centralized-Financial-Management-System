@@ -29,6 +29,7 @@ from sqlalchemy.pool import StaticPool
 
 import app.models
 from app.schemas.user import UserCreate
+from app.core.config import settings
 from app.core.dependencies import get_current_user
 from app.core.encryption import decrypt_payload, encrypt_payload
 from app.core.resilience import CircuitBreaker, calculate_full_jitter_backoff
@@ -254,7 +255,7 @@ class TestUserInvitationResilience(unittest.TestCase):
     # =========================================================================
 
     def test_resend_failure_preserves_provisioned_user(self):
-        """When Resend fails with HTTP 500, the user account is NOT deleted."""
+        """When transactional email provider fails with HTTP 500, the user account is NOT deleted."""
         service = UserService(self.db)
         user_in = UserCreate(
             name="Bob Jones",
@@ -271,15 +272,16 @@ class TestUserInvitationResilience(unittest.TestCase):
         self.assertEqual(len(jobs), 1)
         job = jobs[0]
 
-        # Dispatch with simulated Resend 500 server error
+        # Dispatch with simulated Brevo 500 server error
         from urllib.error import HTTPError
-        with patch("urllib.request.urlopen", side_effect=HTTPError("https://api.resend.com/emails", 500, "Internal Server Error", {}, None)):
+        with patch.object(settings, "BREVO_API_KEY", "xkeysib-mock-test-key"), \
+             patch("urllib.request.urlopen", side_effect=HTTPError("https://api.brevo.com/v3/smtp/email", 500, "Internal Server Error", {}, None)):
             success = dispatcher.dispatch_job(job)
             self.assertFalse(success)
 
         # Refresh state from DB
         db_user = self.db.query(User).filter(User.user_id == user_id).first()
-        self.assertIsNotNone(db_user, "User must NOT be deleted when Resend fails")
+        self.assertIsNotNone(db_user, "User must NOT be deleted when email dispatch fails")
         self.assertEqual(db_user.status, "PROVISIONED")
 
         # Refresh outbox job

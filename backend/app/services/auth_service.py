@@ -214,38 +214,39 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
 
 def _send_login_otp(email: str, otp: str) -> None:
     logger.info("Login OTP generated for %s", _mask_email(email))
-    if not settings.RESEND_API_KEY or not settings.RESEND_FROM_EMAIL:
-        logger.warning("Resend email delivery is not configured for OTP.")
+    from app.core.config import unwrap_secret
+    if not (unwrap_secret(settings.BREVO_API_KEY) or unwrap_secret(settings.RESEND_API_KEY)):
+        logger.warning("Email delivery is not configured for OTP (missing BREVO_API_KEY).")
         return
 
+    from app.services.email_service import send_transactional_email
+    import html
+
     def _dispatch_email():
-        payload = json.dumps(
-            {
-                "from": settings.RESEND_FROM_EMAIL,
-                "to": [email],
-                "subject": "Your MCT login verification code",
-                "text": (
-                    f"Your MCT Financial Management System verification code is {otp}. "
-                    f"It expires in {settings.OTP_EXPIRES_SECONDS // 60} minutes."
-                ),
-            }
-        ).encode("utf-8")
-        request = Request(
-            "https://api.resend.com/emails",
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {settings.RESEND_API_KEY}",
-                "Content-Type": "application/json",
-                "User-Agent": "MCT-Financial-Management-System",
-            },
-            method="POST",
+        escaped_otp = html.escape(otp)
+        minutes = settings.OTP_EXPIRES_SECONDS // 60
+        subject = "Your MCT login verification code"
+        text_content = (
+            f"Your MCT Financial Management System verification code is {otp}. "
+            f"It expires in {minutes} minutes."
         )
-        try:
-            with urlopen(request, timeout=5) as response:
-                if response.status < 200 or response.status >= 300:
-                    logger.warning("Unexpected response from Resend for %s: %s", email, response.status)
-        except Exception as exc:
-            logger.warning("Resend email delivery failed for %s: %s", _mask_email(email), exc)
+        html_content = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 10px;">
+            <h2 style="color: #0f172a; margin-top: 0;">MCT Login Verification</h2>
+            <p style="color: #334155; font-size: 15px;">Your one-time verification code is:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #0284c7; padding: 12px 0;">{escaped_otp}</div>
+            <p style="color: #64748b; font-size: 13px;">This code expires in {minutes} minutes. For security reasons, do not share this code with anyone.</p>
+            <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+            <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
+        </div>
+        """
+        send_transactional_email(
+            to_email=email,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+            enforce_cooldown=False,
+        )
 
     threading.Thread(target=_dispatch_email, daemon=True).start()
 

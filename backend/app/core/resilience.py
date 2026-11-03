@@ -41,7 +41,7 @@ class CircuitBreaker:
 
     def __init__(
         self,
-        name: str = "ResendAPI",
+        name: str = "BrevoEmailAPI",
         failure_threshold: int = 5,
         recovery_timeout: float = 60.0,
         recovery_timeout_seconds: Optional[float] = None,
@@ -108,9 +108,11 @@ class CircuitBreaker:
                 )
 
 
-# Shared process-local circuit breaker for Resend API
-resend_circuit_breaker = CircuitBreaker(
-    name="ResendEmailDelivery",
+# Shared process-local circuit breaker for Transactional Email API (Brevo)
+email_circuit_breaker = CircuitBreaker(
+    name="BrevoEmailDelivery",
     failure_threshold=5,
     recovery_timeout=60.0,
 )
+# Backwards-compatibility alias
+resend_circuit_breaker = email_circuit_breaker

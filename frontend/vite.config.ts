@@ -1,10 +1,41 @@
 import path from 'path'
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+
+/**
+ * Build-time security guard that scans all generated client chunks
+ * to ensure no backend secrets or sensitive credential patterns are bundled.
+ */
+function secretLeakGuardPlugin(): Plugin {
+  const FORBIDDEN_SECRET_PATTERNS = [
+    /xkeysib-[a-zA-Z0-9_-]{20,}/i,
+    /re_[a-zA-Z0-9_-]{20,}/i,
+    /SUPABASE_SERVICE_ROLE_KEY/i,
+    /BREVO_API_KEY/i,
+  ]
+
+  return {
+    name: 'secret-leak-guard',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      for (const [fileName, chunk] of Object.entries(bundle)) {
+        if (chunk.type === 'chunk' && typeof chunk.code === 'string') {
+          for (const pattern of FORBIDDEN_SECRET_PATTERNS) {
+            if (pattern.test(chunk.code)) {
+              this.error(
+                `[SECURITY ALERT] Server secret pattern (${pattern}) detected in emitted client asset: ${fileName}!`
+              )
+            }
+          }
+        }
+      }
+    },
+  }
+}
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), secretLeakGuardPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

@@ -1,10 +1,20 @@
-from typing import List, Union
+from typing import List, Union, Optional
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import AnyHttpUrl, SecretStr, field_validator
 import json
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def unwrap_secret(val: Union[SecretStr, str, None]) -> str:
+    """Safely extract plain secret value from SecretStr or str without leaking in logs."""
+    if val is None:
+        return ""
+    if isinstance(val, SecretStr):
+        return val.get_secret_value()
+    return str(val)
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MCT Companies Centralized Financial Management System"
@@ -19,19 +29,28 @@ class Settings(BaseSettings):
     # Supabase settings
     SUPABASE_URL: str = ""
     SUPABASE_KEY: str = ""
-    SUPABASE_SERVICE_ROLE_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: SecretStr = SecretStr("")
     DATABASE_URL: str = ""
 
     # Supabase JWT settings
-    SUPABASE_JWT_SECRET: str = ""
+    SUPABASE_JWT_SECRET: SecretStr = SecretStr("")
     SUPABASE_JWT_AUDIENCE: str = "authenticated"
     SUPABASE_JWT_ISSUER: str = ""
 
     # Payload encryption key (Fernet)
-    PAYLOAD_ENCRYPTION_KEY: str = ""
+    PAYLOAD_ENCRYPTION_KEY: SecretStr = SecretStr("")
 
-    # Login OTP delivery via Resend
-    RESEND_API_KEY: str = ""
+    # Brevo (formerly Sendinblue) settings for transactional emails
+    BREVO_API_KEY: SecretStr = SecretStr("")
+    BREVO_FROM_EMAIL: str = ""
+    BREVO_FROM_NAME: str = "MCT Financial System"
+
+    # Email Security & Resilience Controls
+    EMAIL_DISPATCH_TIMEOUT_SECONDS: float = 8.0
+    EMAIL_COOLDOWN_SECONDS_PER_RECIPIENT: int = 15
+
+    # Login OTP delivery via Resend (deprecated fallback)
+    RESEND_API_KEY: SecretStr = SecretStr("")
     RESEND_FROM_EMAIL: str = ""
     OTP_COOKIE_SECURE: bool = False
 
@@ -42,6 +61,14 @@ class Settings(BaseSettings):
     OTP_RESEND_INTERVAL_SECONDS: int = 120
     OTP_EXPIRES_SECONDS: int = 180
     SESSION_IDLE_TIMEOUT_SECONDS: int = 7200
+
+    @property
+    def brevo_api_key_plain(self) -> str:
+        return unwrap_secret(self.BREVO_API_KEY)
+
+    @property
+    def resend_api_key_plain(self) -> str:
+        return unwrap_secret(self.RESEND_API_KEY)
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

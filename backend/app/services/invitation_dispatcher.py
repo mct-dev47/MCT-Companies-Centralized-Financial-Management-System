@@ -10,15 +10,18 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import html
 from sqlalchemy import and_, or_, text
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import settings, unwrap_secret
 from app.core.encryption import decrypt_payload
 from app.core.resilience import (
     calculate_full_jitter_backoff,
+    email_circuit_breaker,
     resend_circuit_breaker,
 )
+from app.services.email_service import mask_email, mask_sensitive_url
 from app.db.session import SessionLocal
 from app.models.invitation import InvitationOutbox, UserInvitation
 from app.models.user import User
@@ -30,7 +33,7 @@ DEFAULT_LEASE_DURATION_SECONDS = 60
 
 class InvitationDispatcher:
     """
-    Durable outbox dispatcher for single-use invitation emails via Resend.
+    Durable outbox dispatcher for single-use invitation emails via Brevo API v3.
     Enforces fencing lease ownership, circuit breaker mechanics, and full-jitter backoff.
     """
 
@@ -100,7 +103,7 @@ class InvitationDispatcher:
 
     def dispatch_job(self, job: InvitationOutbox) -> bool:
         """
-        Executes Resend email dispatch with claim verification and circuit breaker protection.
+        Executes Brevo email dispatch with claim verification and circuit breaker protection.
         """
         now = datetime.now(timezone.utc)
         claim_token = job.claim_token
@@ -127,9 +130,9 @@ class InvitationDispatcher:
             return False
 
         # 2. Check Circuit Breaker
-        if not resend_circuit_breaker.can_execute():
+        if not email_circuit_breaker.can_execute():
             logger.warning(
-                "Circuit breaker is OPEN for Resend. Postponing job %s without consuming retry.",
+                "Circuit breaker is OPEN for Email Delivery (Brevo). Postponing job %s without consuming retry.",
                 job.job_id,
             )
             # Postpone by 60s
@@ -138,7 +141,7 @@ class InvitationDispatcher:
                 claim_token,
                 next_delay=60.0,
                 increment_retry=False,
-                error_message="Postponed: Resend circuit breaker OPEN.",
+                error_message="Postponed: Email circuit breaker OPEN.",
             )
             return False
 
@@ -169,18 +172,20 @@ class InvitationDispatcher:
             )
             return False
 
-        # 4. Construct and Send Email to Resend API
-        resend_api_key = settings.RESEND_API_KEY
-        from_email = settings.RESEND_FROM_EMAIL or "onboarding@resend.dev"
+        # 4. Construct and Send Email to Brevo API
+        api_key = unwrap_secret(settings.BREVO_API_KEY) or unwrap_secret(settings.RESEND_API_KEY)
+        from_email = settings.BREVO_FROM_EMAIL or settings.RESEND_FROM_EMAIL
+        from_name = settings.BREVO_FROM_NAME or "MCT Financial System"
 
-        if not resend_api_key:
-            logger.warning("RESEND_API_KEY is not configured. Simulating delivery for local testing.")
+        if not api_key:
+            logger.warning("BREVO_API_KEY is not configured. Simulating delivery for local testing.")
             return self._finalize_success(job.job_id, claim_token, job.user_id)
 
+        safe_user_name = html.escape(user_name)
         email_body_html = f"""
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; rounded: 12px;">
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
             <h2 style="color: #0f172a;">Welcome to MCT Financial Management System</h2>
-            <p style="color: #334155; font-size: 15px;">Hello {user_name},</p>
+            <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
             <p style="color: #334155; font-size: 15px;">
                 An account has been created for you. To complete your account activation and access the system, please set your personal password by clicking the link below:
             </p>
@@ -197,29 +202,37 @@ class InvitationDispatcher:
         </div>
         """
 
-        # Log invitation setup link in server logs for testing and observability
+        # Log invitation setup link with masked PII and redacted sensitive token in server logs
         logger.info(
             "Account setup link generated for %s: %s",
-            job.recipient_email,
-            setup_url,
+            mask_email(job.recipient_email),
+            mask_sensitive_url(setup_url),
         )
 
         email_payload = json.dumps({
-            "from": from_email,
-            "to": [job.recipient_email],
+            "sender": {
+                "name": from_name,
+                "email": from_email,
+            },
+            "to": [
+                {
+                    "email": job.recipient_email,
+                    "name": safe_user_name,
+                }
+            ],
             "subject": "Complete Your Account Setup - MCT Financial Management System",
-            "html": email_body_html,
-            "text": f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)",
+            "htmlContent": email_body_html,
+            "textContent": f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)",
         }).encode("utf-8")
 
         req = urllib.request.Request(
-            "https://api.resend.com/emails",
+            "https://api.brevo.com/v3/smtp/email",
             data=email_payload,
             headers={
-                "Authorization": f"Bearer {resend_api_key}",
+                "api-key": api_key,
                 "Content-Type": "application/json",
-                "Idempotency-Key": job.idempotency_key,
-                "User-Agent": "resend-python/2.6.0",
+                "Accept": "application/json",
+                "User-Agent": "MCT-Financial-Management-System",
             },
             method="POST",
         )
@@ -227,22 +240,22 @@ class InvitationDispatcher:
         try:
             with urllib.request.urlopen(req, timeout=10.0) as resp:
                 if 200 <= resp.status < 300:
-                    resend_circuit_breaker.record_success()
+                    email_circuit_breaker.record_success()
                     return self._finalize_success(job.job_id, claim_token, job.user_id)
                 else:
                     return self._handle_provider_failure(job, claim_token, resp.status, f"HTTP {resp.status}")
         except urllib.error.HTTPError as he:
-            # Handle Resend testing domain restriction (403 when sending from onboarding@resend.dev to external emails)
             err_body = ""
             try:
                 err_body = he.read().decode("utf-8")
             except Exception:
                 pass
 
-            if he.code == 403 and ("testing emails" in err_body or "validation_error" in err_body or from_email == "onboarding@resend.dev"):
+            # Handle Brevo testing or unverified sender restriction (fallback to Supabase Auth if needed)
+            if he.code in (400, 403) and ("sender" in err_body.lower() or "unauthorized" in err_body.lower() or "domain" in err_body.lower()):
                 logger.warning(
-                    "Resend testing domain restriction encountered for %s. Executing Supabase Auth delivery fallback.",
-                    job.recipient_email,
+                    "Brevo sender restriction encountered for %s. Executing Supabase Auth delivery fallback.",
+                    mask_email(job.recipient_email),
                 )
                 sent_via_fallback = False
                 try:
@@ -250,42 +263,46 @@ class InvitationDispatcher:
                     sb_admin = get_supabase_admin_client()
                     sb_admin.auth.admin.invite_user_by_email(job.recipient_email)
                     sent_via_fallback = True
-                    logger.info("Successfully dispatched invitation email via Supabase Auth for %s", job.recipient_email)
+                    logger.info("Successfully dispatched invitation email via Supabase Auth for %s", mask_email(job.recipient_email))
                 except Exception as supa_err:
-                    logger.warning("Supabase Auth direct invite failed for %s: %s", job.recipient_email, supa_err)
+                    logger.warning("Supabase Auth direct invite failed for %s: %s", mask_email(job.recipient_email), supa_err)
 
                 # Send copy to registered admin email if configured
                 try:
                     admin_recipient = "gonzaga.reymie.lovete@gmail.com"
                     admin_notice_payload = json.dumps({
-                        "from": from_email,
-                        "to": [admin_recipient],
-                        "subject": f"[Setup Link for {job.recipient_email}] MCT Financial Management System",
-                        "html": f"""
+                        "sender": {
+                            "name": from_name,
+                            "email": from_email,
+                        },
+                        "to": [{"email": admin_recipient}],
+                        "subject": f"[Setup Link for {mask_email(job.recipient_email)}] MCT Financial Management System",
+                        "htmlContent": f"""
                         <div style="font-family: sans-serif; padding: 20px;">
                             <h2>User Invitation Setup Link</h2>
-                            <p>An account was created for <strong>{user_name}</strong> ({job.recipient_email}).</p>
+                            <p>An account was created for <strong>{safe_user_name}</strong> ({html.escape(job.recipient_email)}).</p>
                             <p>Direct setup link:</p>
                             <p><a href="{setup_url}">{setup_url}</a></p>
                         </div>
                         """,
-                        "text": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
+                        "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
                     }).encode("utf-8")
                     admin_req = urllib.request.Request(
-                        "https://api.resend.com/emails",
+                        "https://api.brevo.com/v3/smtp/email",
                         data=admin_notice_payload,
                         headers={
-                            "Authorization": f"Bearer {resend_api_key}",
+                            "api-key": api_key,
                             "Content-Type": "application/json",
-                            "User-Agent": "resend-python/2.6.0",
+                            "Accept": "application/json",
+                            "User-Agent": "MCT-Financial-Management-System",
                         },
                         method="POST",
                     )
                     with urllib.request.urlopen(admin_req, timeout=5.0):
-                        logger.info("Delivered invitation notice to admin inbox for %s", job.recipient_email)
+                        logger.info("Delivered invitation notice to admin inbox for %s", mask_email(job.recipient_email))
                         sent_via_fallback = True
                 except Exception as admin_err:
-                    logger.warning("Could not dispatch admin copy via Resend: %s", admin_err)
+                    logger.warning("Could not dispatch admin copy via Brevo: %s", admin_err)
 
                 if sent_via_fallback:
                     return self._finalize_success(job.job_id, claim_token, job.user_id)
@@ -338,7 +355,7 @@ class InvitationDispatcher:
         self, job: InvitationOutbox, claim_token: str, status_code: int, error_detail: str
     ) -> bool:
         logger.warning(
-            "Resend dispatch failed for job %s (code=%s): %s",
+            "Brevo dispatch failed for job %s (code=%s): %s",
             job.job_id,
             status_code,
             error_detail,
@@ -356,7 +373,7 @@ class InvitationDispatcher:
             return False
 
         # Transient failures (429, 500, 502, 503, 504)
-        resend_circuit_breaker.record_failure()
+        email_circuit_breaker.record_failure()
         new_retry_count = job.retry_count + 1
 
         if new_retry_count >= job.max_retries:
