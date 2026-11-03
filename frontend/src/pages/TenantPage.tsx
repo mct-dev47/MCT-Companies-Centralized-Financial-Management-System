@@ -27,6 +27,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -138,6 +139,8 @@ export const TenantPage: React.FC = () => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
 
   // Leases come from the database. `loadError` is set when the last load failed: the page then shows
   // the last copy it had (if any) with a warning, and every save is refused by the server call.
@@ -1334,7 +1337,7 @@ export const TenantPage: React.FC = () => {
     )
 
     return (
-      <div className="space-y-6 animate-in fade-in duration-200">
+      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <Button
@@ -1417,7 +1420,7 @@ export const TenantPage: React.FC = () => {
                 </Button>
               )}
 
-              {isAudit && (
+              {canAuditActions && (
                 <>
                   <Button
                     type="button"
@@ -2455,7 +2458,6 @@ export const TenantPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -2521,7 +2523,6 @@ export const TenantPage: React.FC = () => {
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">{selectedPeriod}</span>
                 <ChevronDown
                   className={cn(
@@ -2752,7 +2753,9 @@ export const TenantPage: React.FC = () => {
             </TableHeader>
 
             <TableBody>
-              {paginatedTenants.length === 0 ? (
+              {isLoading ? (
+                <TableSkeleton rows={5} columns={9} />
+              ) : paginatedTenants.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={9}
@@ -2763,16 +2766,10 @@ export const TenantPage: React.FC = () => {
                         <AlertCircle className="w-6 h-6 stroke-[1.5]" />
                       </div>
                       <p className="font-semibold text-focus text-sm sm:text-base">
-                        {isLoading ? 'Loading tenant leases...' : 'No tenant lease records found'}
+                        No tenant lease records found
                       </p>
                       <p className="text-xs text-muted-fg leading-relaxed">
-                        {isLoading
-                          ? 'Getting the leases from the database.'
-                          : (
-                            <>
-                              There are no tenant leases recorded for JK Property and Ventures matching your current filters. {!isAudit && 'Click "New Tenant Lease" above to register a commercial lease.'}
-                            </>
-                          )}
+                        There are no tenant leases recorded for JK Property and Ventures matching your current filters. {!isAudit && 'Click "New Tenant Lease" above to register a commercial lease.'}
                       </p>
                     </div>
                   </TableCell>
@@ -2931,33 +2928,37 @@ export const TenantPage: React.FC = () => {
                       className="px-3.5 py-3.5 text-center whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (menuOpenTenantId === tenant.id) {
-                            setMenuOpenTenantId(null)
-                            setMenuPosition(null)
-                            return
-                          }
-                          const rect = e.currentTarget.getBoundingClientRect()
-                          const windowHeight = window.innerHeight
-                          const spaceBelow = windowHeight - rect.bottom
-                          const openUpward = spaceBelow < 180
-                          setMenuPosition({
-                            top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                            right: Math.max(16, window.innerWidth - rect.right),
-                            openUpward,
-                          })
-                          setActiveTenant(tenant)
-                          setMenuOpenTenantId(tenant.id)
-                        }}
-                        className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
-                        title="Actions"
-                        aria-label="Tenant actions"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
+                      {isManuel ? (
+                        <span className="text-muted-fg text-xs">—</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (menuOpenTenantId === tenant.id) {
+                              setMenuOpenTenantId(null)
+                              setMenuPosition(null)
+                              return
+                            }
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const windowHeight = window.innerHeight
+                            const spaceBelow = windowHeight - rect.bottom
+                            const openUpward = spaceBelow < 180
+                            setMenuPosition({
+                              top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                              right: Math.max(16, window.innerWidth - rect.right),
+                              openUpward,
+                            })
+                            setActiveTenant(tenant)
+                            setMenuOpenTenantId(tenant.id)
+                          }}
+                          className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
+                          title="Actions"
+                          aria-label="Tenant actions"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      )}
                     </TableCell>
                   </TableRow>
                   )
@@ -3022,7 +3023,7 @@ export const TenantPage: React.FC = () => {
             className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-xl p-1.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"

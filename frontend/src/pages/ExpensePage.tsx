@@ -88,7 +88,7 @@ const ITEMS_PER_PAGE = 10
 export const ExpensePage: React.FC = () => {
   const navigate = useNavigate()
   const { user } = useSession()
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isCompanyUser =
@@ -97,6 +97,8 @@ export const ExpensePage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -105,7 +107,15 @@ export const ExpensePage: React.FC = () => {
 
   // Dynamic companies list populated directly from database
   const [companyList, setCompanyList] =
-    React.useState<string[]>(DEFAULT_COMPANY_LIST)
+    React.useState<string[]>(() => (
+      allCompanies && allCompanies.length > 0 ? allCompanies : DEFAULT_COMPANY_LIST
+    ))
+
+  React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
 
   React.useEffect(() => {
     let mounted = true
@@ -672,7 +682,7 @@ export const ExpensePage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
+
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -738,7 +748,6 @@ export const ExpensePage: React.FC = () => {
                     'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">
                   {selectedPeriod}
                 </span>
@@ -853,15 +862,8 @@ export const ExpensePage: React.FC = () => {
               hidePresets
             />
 
-            {/* Company Scope */}
-            {isCompanyScoped ? (
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">
-                  {assignedCompany}
-                </span>
-              </div>
-            ) : (
+            {/* Company Scope: ONLY Finance and Audit have the dropdown filter */}
+            {!isCompanyScoped && (
               <div ref={companyDropdownRef} className="relative inline-block">
                 <button
                   type="button"
@@ -873,7 +875,6 @@ export const ExpensePage: React.FC = () => {
                   )}
                   aria-label="Filter expenses by company"
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[150px]">
                     {selectedCompany}
                   </span>
@@ -1067,9 +1068,14 @@ export const ExpensePage: React.FC = () => {
               </div>
               <div className="h-9 w-28 bg-slate-200/60 animate-pulse rounded-xl" />
             </div>
-            <div className="h-56 sm:h-64 w-full bg-slate-50/70 rounded-2xl flex flex-col items-center justify-center gap-3">
-              <div className="w-20 h-20 rounded-full border-4 border-slate-200 border-t-red-400 animate-spin opacity-60" />
-              <div className="h-3.5 w-40 bg-slate-200/70 animate-pulse rounded" />
+            <div className="h-56 sm:h-64 w-full bg-slate-50/70 rounded-2xl flex items-end justify-between p-6 gap-3">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="w-full bg-slate-200/70 animate-pulse rounded-t-lg"
+                  style={{ height: `${25 + ((i * 17) % 65)}%` }}
+                />
+              ))}
             </div>
           </Card>
         ) : (
@@ -1364,7 +1370,7 @@ export const ExpensePage: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1">
-                          {isAudit ? (
+                          {canAuditActions ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -1399,6 +1405,8 @@ export const ExpensePage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
+                          ) : isManuel ? (
+                            <span className="text-muted-fg text-xs">—</span>
                           ) : expense.auditStatus === 'Verified' ? (
                             <span
                               className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"

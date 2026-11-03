@@ -499,18 +499,8 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-2.5 border-t border-slate-100 shrink-0">
-          <div className="text-[11px] text-muted-fg">
-            Food credit ledger updated automatically on each transaction.
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="h-9 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-          >
-            Close Ledger
-          </Button>
+        <div className="pt-2.5 border-t border-slate-100 shrink-0 text-[11px] text-muted-fg">
+          Food credit ledger updated automatically on each transaction.
         </div>
       </DialogContent>
     </Dialog>

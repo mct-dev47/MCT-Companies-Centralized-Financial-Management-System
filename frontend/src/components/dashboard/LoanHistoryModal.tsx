@@ -283,18 +283,6 @@ export const LoanHistoryModal: React.FC<LoanHistoryModalProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Modal Footer: View-Only, Simple Close Button */}
-        <div className="flex items-center justify-end gap-2.5 pt-3 mt-3 border-t border-stroke/20">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="h-9 px-5 text-xs font-semibold rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface cursor-pointer shadow-xs transition-colors"
-          >
-            Close
-          </Button>
-        </div>
       </DialogContent>
     </Dialog>
   )

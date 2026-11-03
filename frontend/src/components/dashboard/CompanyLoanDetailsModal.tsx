@@ -281,9 +281,11 @@ export const CompanyLoanDetailsModal: React.FC<CompanyLoanDetailsModalProps> = (
             </div>
 
             {loadingTimeline ? (
-              <div className="p-8 text-center rounded-xl border border-slate-200 bg-slate-50/50">
-                <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-2" />
-                <p className="text-xs text-muted-fg">Loading repayment timeline…</p>
+              <div className="p-5 rounded-xl border border-slate-200/80 bg-white space-y-3">
+                <div className="h-4 w-36 bg-slate-200/70 rounded animate-pulse" />
+                <div className="h-9 w-full bg-slate-100 rounded-lg animate-pulse" />
+                <div className="h-9 w-full bg-slate-100 rounded-lg animate-pulse" />
+                <div className="h-9 w-full bg-slate-100 rounded-lg animate-pulse" />
               </div>
             ) : timeline.length === 0 ? (
               <div className="p-6 text-center rounded-xl border border-dashed border-slate-200 bg-slate-50/60">
@@ -333,18 +335,6 @@ export const CompanyLoanDetailsModal: React.FC<CompanyLoanDetailsModalProps> = (
               </div>
             )}
           </div>
-        </div>
-
-        {/* 5. Footer */}
-        <div className="pt-4 mt-2 flex items-center justify-end border-t border-stroke/20">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="h-10 px-5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
-          >
-            Close
-          </Button>
         </div>
       </DialogContent>
     </Dialog>

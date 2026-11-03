@@ -24,6 +24,7 @@ import {
   Loader2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -104,11 +105,15 @@ export const LendingPage: React.FC = () => {
   const userRole = (user?.role || '').toLowerCase()
   const isFinance = userRole === 'finance'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
 
   // Set document title
   React.useEffect(() => {
     document.title = 'Lending - MCT Centralized Financial Management'
   }, [])
+
+  const [isLoading, setIsLoading] = React.useState(true)
 
   // Load facilities from backend or empty cache
   const [facilities, setFacilities] = React.useState<LendingFacility[]>(() => {
@@ -117,6 +122,7 @@ export const LendingPage: React.FC = () => {
 
   // Sync with backend lending service on mount
   React.useEffect(() => {
+    setIsLoading(true)
     lendingService
       .getFacilities()
       .then((data) => {
@@ -126,6 +132,9 @@ export const LendingPage: React.FC = () => {
       })
       .catch((err) => {
         console.warn('Lending backend sync notice:', err)
+      })
+      .finally(() => {
+        setIsLoading(false)
       })
   }, [])
 
@@ -1203,7 +1212,7 @@ export const LendingPage: React.FC = () => {
       : 'Months'
 
     return (
-      <div className="space-y-6 animate-in fade-in duration-200">
+      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <Button
@@ -1660,7 +1669,6 @@ export const LendingPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -1737,7 +1745,6 @@ export const LendingPage: React.FC = () => {
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">{selectedPeriod}</span>
                 <ChevronDown
                   className={cn(
@@ -1833,12 +1840,6 @@ export const LendingPage: React.FC = () => {
               onChange={(newRange) => setDateRange(newRange)}
               hidePresets
             />
-
-            {/* Company Scope Pill for FilCap Prime Holdings Corp. (matching Tenant page) */}
-            <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
-              <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-              <span className="font-semibold text-focus/90">FilCap Prime Holdings Corp.</span>
-            </div>
           </div>
         </div>
       </div>
@@ -1916,7 +1917,9 @@ export const LendingPage: React.FC = () => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedFacilities.length === 0 ? (
+              {isLoading ? (
+                <TableSkeleton rows={5} columns={isAudit ? 10 : 9} />
+              ) : paginatedFacilities.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={isAudit ? 10 : 9} className="h-44 text-center py-8">
                     <div className="flex flex-col items-center justify-center text-muted-fg">
@@ -2045,33 +2048,37 @@ export const LendingPage: React.FC = () => {
 
                       {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
                       <TableCell className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")} onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (openMenuFacilityId === facility.id) {
-                              setOpenMenuFacilityId(null)
-                              setMenuPosition(null)
-                              setActiveMenuFacility(null)
-                            } else {
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              const openUpward = rect.bottom + 140 > window.innerHeight
-                              setMenuPosition({
-                                top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                right: Math.max(12, window.innerWidth - rect.right),
-                                openUpward,
-                              })
-                              setActiveMenuFacility(facility)
-                              setOpenMenuFacilityId(facility.id)
-                            }
-                          }}
-                          className="lending-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
-                          title="Actions"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </Button>
+                        {isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuFacilityId === facility.id) {
+                                setOpenMenuFacilityId(null)
+                                setMenuPosition(null)
+                                setActiveMenuFacility(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 140 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuFacility(facility)
+                                setOpenMenuFacilityId(facility.id)
+                              }
+                            }}
+                            className="lending-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
+                            title="Actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -2138,7 +2145,7 @@ export const LendingPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"

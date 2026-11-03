@@ -1,31 +1,34 @@
 import * as React from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
   Building2,
   Mail,
   Phone,
   User,
   MapPin,
-  Lock,
   Bell,
   Camera,
   Crop,
   Trash2,
-  CheckCircle2,
-  ChevronDown,
   RotateCcw,
   Save,
-  Check,
-  ArrowLeft,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
-import { ImageCropperModal } from '@/components/common/ImageCropperModal'
+import {
+  BackButton,
+  DropdownFilter,
+  ErrorBanner,
+  ImageCropperModal,
+} from '@/components/common'
 import { useSession } from '@/hooks/useSession'
 import { employeeService, type Company } from '@/services/employeeService'
-import { cn } from '@/lib/utils'
+import {
+  notifyError,
+  notifySuccess,
+  notifyWarning,
+} from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 interface NotificationSettings {
@@ -36,19 +39,9 @@ interface NotificationSettings {
 }
 
 export const SettingsPage: React.FC = () => {
-  const navigate = useNavigate()
   const { user, updateUser } = useSession()
   const isAuditor = user?.role === 'Supervisor'
-  const isRestrictedRole = user?.role === 'Admin' || user?.role === 'Finance' || user?.role === 'Audit'
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
-
-  const handleBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1)
-    } else {
-      navigate('/dashboard')
-    }
-  }
 
   // Company data states
   const [companies, setCompanies] = React.useState<Company[]>([])
@@ -56,8 +49,6 @@ export const SettingsPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
   // Form Fields
@@ -80,6 +71,17 @@ export const SettingsPage: React.FC = () => {
       auditAlerts: true,
     })
 
+  // Populate state with target company
+  const populateCompanyData = (target: Company) => {
+    setSelectedCompanyId(target.id)
+    setCompanyName(target.name)
+    setContactPerson(target.contactPerson || '')
+    setTelephoneNumber(target.telephoneNumber || target.contactNumber || '')
+    setEmail(target.email || '')
+    setAddress(target.address)
+    setLogoUrl(target.logoUrl || logo2Url)
+  }
+
   // Load companies from employeeService
   const loadCompanies = React.useCallback(async () => {
     try {
@@ -87,7 +89,6 @@ export const SettingsPage: React.FC = () => {
       const list = await employeeService.getCompanies()
       setCompanies(list)
 
-      // Determine initial company
       let target: Company | undefined
       if (isAuditor) {
         target = list.find(
@@ -107,39 +108,8 @@ export const SettingsPage: React.FC = () => {
   }, [isAuditor, assignedCompany])
 
   React.useEffect(() => {
-    loadCompanies()
+    void loadCompanies()
   }, [loadCompanies])
-
-  // Populate state with target company
-  const populateCompanyData = (target: Company) => {
-    setSelectedCompanyId(target.id)
-    setCompanyName(target.name)
-    setContactPerson(target.contactPerson || '')
-    setTelephoneNumber(target.telephoneNumber || target.contactNumber || '')
-    setEmail(target.email || '')
-    setAddress(target.address)
-    setLogoUrl(target.logoUrl || logo2Url)
-  }
-
-  // Switch company (Admin only)
-  const handleSelectCompany = (comp: Company) => {
-    populateCompanyData(comp)
-    setIsCompanyDropdownOpen(false)
-  }
-
-  // Handle outside click for company dropdown
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        companyDropdownRef.current &&
-        !companyDropdownRef.current.contains(e.target as Node)
-      ) {
-        setIsCompanyDropdownOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   // Auto-dismiss success banner
   React.useEffect(() => {
@@ -154,9 +124,8 @@ export const SettingsPage: React.FC = () => {
     const file = event.target.files?.[0]
     if (!file) return
 
-    // Check size (< 5MB)
     if (file.size > 5 * 1024 * 1024) {
-      alert('File size exceeds 5MB limit. Please upload a smaller image.')
+      notifyWarning('File size exceeds 5MB limit. Please upload a smaller image.')
       return
     }
 
@@ -222,7 +191,6 @@ export const SettingsPage: React.FC = () => {
       }
       updateUser({ avatarUrl: finalAvatar })
 
-      // Update local company list copy
       setCompanies((prev) =>
         prev.map((c) =>
           c.id === selectedCompanyId
@@ -239,10 +207,11 @@ export const SettingsPage: React.FC = () => {
         )
       )
 
-      setSuccessBanner('Company profile and settings have been saved successfully.')
+      const msg = 'Company profile and settings have been saved successfully.'
+      setSuccessBanner(msg)
+      notifySuccess(msg)
     } catch (err) {
-      console.error('Failed to save settings:', err)
-      alert('Failed to save settings. Please try again.')
+      notifyError(err, 'Failed to save settings. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -257,21 +226,17 @@ export const SettingsPage: React.FC = () => {
   }
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId)
+  const companyOptions = React.useMemo(
+    () => companies.map((c) => ({ value: c.id, label: c.name })),
+    [companies]
+  )
 
   return (
     <div className="space-y-6 sm:space-y-8 max-w-[1600px] w-full mx-auto pb-16 animate-in fade-in duration-300">
-      {/* 1. Header Toolbar (Identical unified level matching other pages) */}
+      {/* 1. Header Toolbar */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
-          <button
-            type="button"
-            onClick={handleBack}
-            className="inline-flex items-center gap-1.5 h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold rounded-xl hover:bg-slate-100 transition-colors cursor-pointer mb-1.5"
-            aria-label="Go back to previous page"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back</span>
-          </button>
+          <BackButton className="mb-2" />
           <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
             Settings
           </h1>
@@ -284,58 +249,18 @@ export const SettingsPage: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto shrink-0">
           {/* Company Selector Dropdown (Admin only) */}
           {!isAuditor && companies.length > 0 && (
-            <div ref={companyDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-                aria-label="Select company to configure"
-              >
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90 truncate max-w-[170px]">
-                  {companyName || 'Select Company'}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isCompanyDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isCompanyDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  <div className="px-2.5 py-1.5 border-b border-stroke/20 mb-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                      Configuring Company
-                    </span>
-                  </div>
-                  <div className="space-y-0.5 max-h-56 overflow-y-auto">
-                    {companies.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => handleSelectCompany(c)}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          selectedCompanyId === c.id
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <span className="truncate">{c.name}</span>
-                        {selectedCompanyId === c.id && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
+            <DropdownFilter
+              value={selectedCompanyId}
+              placeholder="Select Company"
+              menuTitle="Configuring Company"
+              icon={Building2}
+              options={companyOptions}
+              onChange={(companyId) => {
+                const found = companies.find((c) => c.id === companyId)
+                if (found) populateCompanyData(found)
+              }}
+              ariaLabel="Select company to configure"
+            />
           )}
 
           {/* Discard Changes Button */}
@@ -353,7 +278,7 @@ export const SettingsPage: React.FC = () => {
           {/* Save Changes Button */}
           <Button
             type="button"
-            onClick={() => handleSaveChanges()}
+            onClick={() => void handleSaveChanges()}
             disabled={saving || loading}
             className="h-10 sm:h-11 px-5 rounded-full bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
           >
@@ -373,12 +298,11 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* Success Notification Banner */}
-      {successBanner && (
-        <div className="flex items-center gap-3 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-medium animate-in fade-in slide-in-from-top-2 duration-200 shadow-xs">
-          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-          <span>{successBanner}</span>
-        </div>
-      )}
+      <ErrorBanner
+        variant="success"
+        message={successBanner}
+        onDismiss={() => setSuccessBanner(null)}
+      />
 
       {/* 2. Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8 items-stretch">
@@ -446,7 +370,7 @@ export const SettingsPage: React.FC = () => {
                         variant="outline"
                         size="sm"
                         onClick={() => fileInputRef.current?.click()}
-                        className="h-9 px-3.5 rounded-full text-xs font-semibold text-focus hover:bg-white border-stroke/60 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                        className="h-9 px-3.5 rounded-full text-xs font-semibold text-focus hover:bg-surface border-stroke/60 cursor-pointer flex items-center gap-1.5 shadow-2xs"
                       >
                         <Camera className="h-3.5 w-3.5 text-muted-fg" />
                         <span>Upload New Image</span>
@@ -457,7 +381,7 @@ export const SettingsPage: React.FC = () => {
                           variant="outline"
                           size="sm"
                           onClick={handleOpenCropperForCurrent}
-                          className="h-9 px-3 rounded-full text-xs font-semibold text-focus hover:bg-white border-stroke/60 cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                          className="h-9 px-3 rounded-full text-xs font-semibold text-focus hover:bg-surface border-stroke/60 cursor-pointer flex items-center gap-1.5 shadow-2xs"
                         >
                           <Crop className="h-3.5 w-3.5 text-muted-fg" />
                           <span>Crop / Zoom</span>
@@ -591,7 +515,7 @@ export const SettingsPage: React.FC = () => {
 
             <div className="flex-1 flex flex-col justify-between py-2 space-y-4">
               {/* Transaction Outflow Alerts */}
-              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 transition-colors">
+              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover-item">
                 <div className="space-y-0.5">
                   <span className="text-xs sm:text-sm font-semibold text-focus block">
                     Large Transaction Alerts
@@ -614,7 +538,7 @@ export const SettingsPage: React.FC = () => {
               </div>
 
               {/* Loan Due Date Reminders */}
-              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 transition-colors">
+              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover-item">
                 <div className="space-y-0.5">
                   <span className="text-xs sm:text-sm font-semibold text-focus block">
                     Loan Due Date Reminders
@@ -637,7 +561,7 @@ export const SettingsPage: React.FC = () => {
               </div>
 
               {/* Daily Financial Summary */}
-              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 transition-colors">
+              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover-item">
                 <div className="space-y-0.5">
                   <span className="text-xs sm:text-sm font-semibold text-focus block">
                     Daily Financial Digest
@@ -660,7 +584,7 @@ export const SettingsPage: React.FC = () => {
               </div>
 
               {/* Audit & Modification Alerts */}
-              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 transition-colors">
+              <div className="flex items-start justify-between gap-3 p-3 rounded-xl hover-item">
                 <div className="space-y-0.5">
                   <span className="text-xs sm:text-sm font-semibold text-focus block">
                     Audit Status Updates

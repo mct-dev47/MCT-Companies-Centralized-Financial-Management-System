@@ -32,7 +32,7 @@ import {
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { employeeService, type Company } from '@/services/employeeService'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 interface CreateCompanyModalProps {
@@ -145,7 +145,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create company. Please try again.')
       setSubmitError(errorMsg)
       setIsConfirmOpen(false)
-      window.alert(errorMsg)
+      notifyError(error, 'Unable to create company. Please try again.')
     } finally {
       setIsSubmitting(false)
     }

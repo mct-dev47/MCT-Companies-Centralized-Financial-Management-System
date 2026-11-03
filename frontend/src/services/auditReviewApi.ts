@@ -1,3 +1,5 @@
+import { notifyError } from '@/utils/errorUtils'
+
 // Saves an Audit review of a sale or expense on the server (spec 0014).
 // The server decides who audited and when; the browser only sends the status and a remark.
 
@@ -46,8 +48,5 @@ export async function saveAuditReview(
 
 /** Tell the user an audit save failed. The caller then reloads the real status from the server. */
 export function reportAuditSaveFailure(err: unknown): void {
-  const message = err instanceof Error ? err.message : 'Could not save the audit status.'
-  if (typeof window !== 'undefined') {
-    window.alert(`The audit status was not saved. ${message}`)
-  }
+  notifyError(err, 'The audit status was not saved. Please try again.')
 }
