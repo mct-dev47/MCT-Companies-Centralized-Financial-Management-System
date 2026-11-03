@@ -726,7 +726,6 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
             {editSelectedCompanies.length > 0 && (
               <span className="block text-xs text-muted-fg">
                 Appointed to:{' '}
-                <strong className="text-focus">{formatCompanyList(editSelectedCompanies)}</strong>
               </span>
             )}
             {editSelectedCompanies.length > 0 && (

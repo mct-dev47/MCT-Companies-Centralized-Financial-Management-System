@@ -6,22 +6,51 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
+const scrubUrlToken = () => {
+  if (typeof window === 'undefined') return
+  if (window.location.hash || window.location.search) {
+    try {
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        window.location.pathname
+      )
+    } catch {
+      // ignore
+    }
+  }
+}
+
 const extractTokenFromUrl = (): string => {
   if (typeof window === 'undefined') return ''
   try {
+    let extracted = ''
     // 1. Read token from URL hash (#token=... or #/auth/setup-password?token=...)
     if (window.location.hash) {
       const match = window.location.hash.match(/token=([^&]+)/)
-      if (match) return decodeURIComponent(match[1])
+      if (match) extracted = decodeURIComponent(match[1])
     }
     // 2. Read token from query parameters (?token=...)
-    if (window.location.search) {
+    if (!extracted && window.location.search) {
       const params = new URLSearchParams(window.location.search)
       const qToken = params.get('token')
-      if (qToken) return qToken
+      if (qToken) extracted = qToken
     }
     // 3. Fallback to tab sessionStorage (preserves token across StrictMode double runs and accidental page refresh)
-    return sessionStorage.getItem('mct_setup_token') || ''
+    if (!extracted) {
+      extracted = sessionStorage.getItem('mct_setup_token') || ''
+    }
+
+    if (extracted) {
+      try {
+        sessionStorage.setItem('mct_setup_token', extracted)
+      } catch {
+        // ignore
+      }
+      scrubUrlToken()
+    }
+
+    return extracted
   } catch {
     return ''
   }
@@ -56,9 +85,29 @@ export const SetupPasswordPage: React.FC = () => {
       } catch {
         // ignore storage errors
       }
-      // Scrub token from browser address bar and history
-      if (window.location.hash.includes('token=') || window.location.search.includes('token=')) {
-        window.history.replaceState({}, document.title, window.location.pathname)
+      scrubUrlToken()
+      const t0 = setTimeout(scrubUrlToken, 0)
+      const t1 = setTimeout(scrubUrlToken, 50)
+      const t2 = setTimeout(scrubUrlToken, 200)
+
+      const handleHashOrPopState = () => {
+        const freshToken = extractTokenFromUrl()
+        if (freshToken) {
+          setToken(freshToken)
+          scrubUrlToken()
+        }
+      }
+
+      window.addEventListener('hashchange', handleHashOrPopState)
+      window.addEventListener('popstate', handleHashOrPopState)
+
+      return () => {
+        clearTimeout(t0)
+        clearTimeout(t1)
+        clearTimeout(t2)
+        window.removeEventListener('hashchange', handleHashOrPopState)
+        window.removeEventListener('popstate', handleHashOrPopState)
+        document.head.removeChild(meta)
       }
     } else {
       setError('No invitation token found in link. Please check your invitation email or request a new one.')

@@ -458,7 +458,7 @@ export const CentralizedAuthPage: React.FC = () => {
 
                         {/* Info from Database */}
                         <div className="min-w-0 flex-1">
-                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors line-clamp-1 leading-tight">
+                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors leading-snug break-words">
                             {company.name}
                           </h3>
                           <p className="text-xs text-gray-400 font-medium mt-0.5">
@@ -507,8 +507,8 @@ export const CentralizedAuthPage: React.FC = () => {
                           </AvatarFallback>
                         </Avatar>
 
-                        <div className="min-w-0">
-                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors truncate">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors leading-snug break-words">
                             {company.name}
                           </h3>
                           <div className="flex items-center gap-3 text-xs text-gray-400 mt-0.5">
