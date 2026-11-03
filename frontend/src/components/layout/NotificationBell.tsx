@@ -118,8 +118,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   }, [userId, isAuthenticated])
 
   const userRole = (user?.role || '').toLowerCase()
+  if (userRole === 'admin') {
+    return null
+  }
+
   const isMultiCompanyRole =
-    userRole === 'admin' || userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
+    userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
   const scopedCompanyName = isMultiCompanyRole
     ? activeCompany || 'All Companies'
     : user?.assignedCompany || activeCompany || 'All Companies'

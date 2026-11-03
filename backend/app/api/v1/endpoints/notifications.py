@@ -124,6 +124,11 @@ def get_notifications(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    if effective_role == "admin":
+        if cursor:
+            return NotificationListResponse(items=[], next_cursor=None, has_more=False, total_unread=0)
+        return []
+
     svc = NotificationService(db)
 
     # If cursor is supplied, return compound cursor response object
@@ -168,6 +173,9 @@ def get_notifications_feed(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    if effective_role == "admin":
+        return NotificationListResponse(items=[], next_cursor=None, has_more=False, total_unread=0)
+
     svc = NotificationService(db)
     return svc.get_notifications_feed(
         recipient_user_id=user_id,
@@ -201,12 +209,8 @@ def notification_count(
         company_id_param=company_id,
         company_name_param=company_name,
     )
-    svc = NotificationService(db)
-    count = svc.get_unread_count(
-        recipient_user_id=user_id,
-        company_id=resolved_cid,
-    )
-    return NotificationCountOut(unread_count=count)
+    if effective_role == "admin":
+        return NotificationCountOut(unread_count=0)
 
 
 @router.post(
@@ -259,6 +263,9 @@ def mark_all_read(
         company_id_param=company_id,
         company_name_param=company_name,
     )
+    if effective_role == "admin":
+        return {"updated_count": 0}
+
     svc = NotificationService(db)
     updated = svc.mark_all_as_read(recipient_user_id=user_id, company_id=resolved_cid)
     return {"updated_count": updated}

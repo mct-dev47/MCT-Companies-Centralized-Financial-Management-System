@@ -170,12 +170,20 @@ export const router = createBrowserRouter([
       },
       {
         path: '/sales/add',
-        element: <AddTransactionSheetPage initialType="Sales" />,
+        element: (
+          <NonAdminRouteGuard>
+            <AddTransactionSheetPage initialType="Sales" />
+          </NonAdminRouteGuard>
+        ),
       },
-            // Receivables routes (Food Utang Management)
+      // Receivables routes (Food Utang Management)
       {
         path: '/receivables',
-        element: <ReceivablesPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <ReceivablesPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/utang',
@@ -184,16 +192,28 @@ export const router = createBrowserRouter([
       // Expense routes
       {
         path: '/expense',
-        element: <ExpensePage />,
+        element: (
+          <NonAdminRouteGuard>
+            <ExpensePage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/expense/add',
-        element: <AddTransactionSheetPage initialType="Expense" />,
+        element: (
+          <NonAdminRouteGuard>
+            <AddTransactionSheetPage initialType="Expense" />
+          </NonAdminRouteGuard>
+        ),
       },
       // Loan routes
       {
         path: '/loan',
-        element: <LoanPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <LoanPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/loan/company',
@@ -201,11 +221,19 @@ export const router = createBrowserRouter([
       },
       {
         path: '/loan/borrower',
-        element: <LoanPage initialType="Borrower" />,
+        element: (
+          <NonAdminRouteGuard>
+            <LoanPage initialType="Borrower" />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/loan/lender',
-        element: <LoanPage initialType="Lender" />,
+        element: (
+          <NonAdminRouteGuard>
+            <LoanPage initialType="Lender" />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/lending',
@@ -229,20 +257,36 @@ export const router = createBrowserRouter([
       },
       {
         path: '/bank-management',
-        element: <BankManagementPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <BankManagementPage />
+          </NonAdminRouteGuard>
+        ),
       },
       // Operations & Management
       {
         path: '/petty-cash',
-        element: <PettyCashPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <PettyCashPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/bills',
-        element: <BillsPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <BillsPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/bills/:billId',
-        element: <BillsPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <BillsPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/loan/bills',
@@ -250,7 +294,11 @@ export const router = createBrowserRouter([
       },
       {
         path: '/transaction',
-        element: <TransactionPage />,
+        element: (
+          <NonAdminRouteGuard>
+            <TransactionPage />
+          </NonAdminRouteGuard>
+        ),
       },
       {
         path: '/transactions',

@@ -225,7 +225,7 @@ def _send_login_otp(email: str, otp: str) -> None:
     def _dispatch_email():
         escaped_otp = html.escape(otp)
         minutes = settings.OTP_EXPIRES_SECONDS // 60
-        subject = "Your MCT login verification code"
+        subject = "Your MCT Financial Management login verification code"
         text_content = (
             f"Your MCT Financial Management System verification code is {otp}. "
             f"It expires in {minutes} minutes."
@@ -234,7 +234,7 @@ def _send_login_otp(email: str, otp: str) -> None:
         <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 10px;">
             <h2 style="color: #0f172a; margin-top: 0;">MCT Login Verification</h2>
             <p style="color: #334155; font-size: 15px;">Your one-time verification code is:</p>
-            <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #0284c7; padding: 12px 0;">{escaped_otp}</div>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; color: #960C01; padding: 12px 0;">{escaped_otp}</div>
             <p style="color: #64748b; font-size: 13px;">This code expires in {minutes} minutes. For security reasons, do not share this code with anyone.</p>
             <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
             <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
