@@ -291,7 +291,8 @@ def _ensure_ip_available(db: Session, ip_address: str) -> None:
 
 
 def _get_jwt_secret() -> str:
-    secret = settings.SUPABASE_JWT_SECRET or settings.SUPABASE_KEY
+    from app.core.config import unwrap_secret
+    secret = unwrap_secret(settings.SUPABASE_JWT_SECRET) or settings.SUPABASE_KEY
     if not secret:
         secret = "mct-centralized-financial-system-secret-key-32chars!"
     return secret

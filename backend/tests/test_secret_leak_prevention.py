@@ -2,7 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from pydantic import SecretStr
 from fastapi import Request
 
@@ -92,6 +92,16 @@ class TestSecretLeakPrevention(unittest.TestCase):
         payload_str = json.dumps(data)
         for pattern in FORBIDDEN_SECRET_PATTERNS:
             self.assertNotIn(pattern, payload_str)
+
+    def test_supabase_admin_client_accepts_secretstr_without_header_typeerror(self):
+        """Regression test: Ensures SecretStr service role key is unwrapped to str when creating Supabase client."""
+        from app.db.supabase import get_supabase_admin_client
+        with patch.object(settings, "SUPABASE_SERVICE_ROLE_KEY", SecretStr("test-service-key")), \
+             patch.object(settings, "SUPABASE_URL", "https://test.supabase.co"):
+            client = get_supabase_admin_client()
+            # .table() initializes postgrest headers which previously failed with TypeError
+            table_builder = client.table("audit_logs")
+            self.assertIsNotNone(table_builder)
 
 
 if __name__ == "__main__":
