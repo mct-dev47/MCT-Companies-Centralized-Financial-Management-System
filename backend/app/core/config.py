@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ]
     HOST: str = "127.0.0.1"
     PORT: int = 8000
+    ENVIRONMENT: str = "development"
 
     # Supabase settings
     SUPABASE_URL: str = ""
@@ -42,6 +43,15 @@ class Settings(BaseSettings):
     OTP_RESEND_INTERVAL_SECONDS: int = 120
     OTP_EXPIRES_SECONDS: int = 180
     SESSION_IDLE_TIMEOUT_SECONDS: int = 7200
+
+    @field_validator("SUPABASE_JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v: str) -> str:
+        if not v or len(v.strip()) < 32:
+            raise ValueError(
+                "Configuration error: SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters."
+            )
+        return v.strip()
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

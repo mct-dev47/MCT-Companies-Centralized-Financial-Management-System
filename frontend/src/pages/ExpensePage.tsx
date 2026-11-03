@@ -306,10 +306,15 @@ export const ExpensePage: React.FC = () => {
         void loadExpenses(true)
       }, 250)
     }
-    const unsubAudit = websocketService.subscribe('AUDIT_UPDATED', reload)
+    const unsubs = [
+      websocketService.subscribe('AUDIT_UPDATED', reload),
+      websocketService.subscribe('EXPENSE_CREATED', reload),
+      websocketService.subscribe('EXPENSE_UPDATED', reload),
+      websocketService.subscribe('EXPENSE_DELETED', reload),
+    ]
     return () => {
       if (timer) window.clearTimeout(timer)
-      unsubAudit()
+      unsubs.forEach((unsub) => unsub())
     }
   }, [loadExpenses])
 

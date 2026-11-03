@@ -50,5 +50,6 @@ class PettyCashWallet(Base):
         unique=True,
         index=True,
     )
+    balance = Column(Numeric(15, 2), nullable=True, default=0)
     low_balance_threshold = Column(Numeric(15, 2), nullable=False, default=1000)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

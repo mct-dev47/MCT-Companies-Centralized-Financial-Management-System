@@ -41,6 +41,7 @@ import { expenseService } from '@/services/expenseService'
 import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
 import { useSession } from '@/hooks/useSession'
+import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import {
@@ -165,8 +166,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useSession()
+  const { activeCompany } = useCompany()
   const isAuditor = user?.role === 'Supervisor'
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const isCompanyLocked = isAuditor || Boolean(activeCompany && activeCompany !== 'All Companies')
 
   const editItem =
     (location.state as any)?.editSale ||
@@ -187,18 +190,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Top header metadata form fields
   const [date, setDate] = React.useState(() => formatToYYYYMMDD(new Date()))
-  const initialCompany = isAuditor
-    ? assignedCompany
-    : editItem?.company || 'MCT Kitchen'
+  const initialCompany = React.useMemo(() => {
+    if (isAuditor) return assignedCompany
+    if (editItem?.company) return editItem.company
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return 'MCT Kitchen'
+  }, [isAuditor, assignedCompany, editItem?.company, activeCompany])
   const [selectedCompany, setSelectedCompany] =
     React.useState<string>(initialCompany)
 
-  // Keep selectedCompany in sync if user profile loads after initial render
+  // Keep selectedCompany in sync if user profile or active company changes
   React.useEffect(() => {
     if (isAuditor && user?.assignedCompany) {
       setSelectedCompany(user.assignedCompany)
+    } else if (activeCompany && activeCompany !== 'All Companies') {
+      setSelectedCompany(activeCompany)
     }
-  }, [isAuditor, user?.assignedCompany])
+  }, [isAuditor, user?.assignedCompany, activeCompany])
 
   // Payment Method state
   const [paymentMethod, setPaymentMethod] = React.useState<string>('Cash')
@@ -316,7 +324,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         const names = companies.map((c) => c.company_name).filter(Boolean)
         setDbCompanies(names)
         if (!selectedCompany && names.length > 0) {
-          setSelectedCompany(names[0])
+          if (activeCompany && activeCompany !== 'All Companies') {
+            setSelectedCompany(activeCompany)
+          } else {
+            setSelectedCompany(names[0])
+          }
         }
       }
     })
@@ -1336,9 +1348,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               <Building2 className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>Company</span>
             </label>
-            {isAuditor ? (
-              <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs sm:text-sm text-focus font-medium flex items-center truncate">
-                {assignedCompany}
+            {isCompanyLocked ? (
+              <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs sm:text-sm text-focus font-medium flex items-center truncate shadow-2xs select-none">
+                {isAuditor ? assignedCompany : (activeCompany && activeCompany !== 'All Companies' ? activeCompany : selectedCompany)}
               </div>
             ) : (
               <select

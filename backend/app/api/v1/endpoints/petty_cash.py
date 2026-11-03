@@ -125,9 +125,10 @@ def create_topup(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    target_comp = PettyCashService(db).resolve_company(topup_in.company_id, topup_in.company_name)
+    company_identifier = topup_in.company_name or topup_in.company
+    target_comp = PettyCashService(db).resolve_company(topup_in.company_id, company_identifier)
     check_company_access(current_user, target_comp.company_id)
-    topup = PettyCashService(db).create_topup(topup_in)
+    topup = PettyCashService(db).create_topup(topup_in, current_user=current_user)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
         user_id=current_user.get("user_id"), company_id=topup.company_id,

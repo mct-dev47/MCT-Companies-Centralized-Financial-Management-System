@@ -53,15 +53,15 @@ def _company_scope(
     if role in ("finance", "audit", "auditor"):
         return [JK_PROPERTY_COMPANY_ID]
 
-    # For supervisor, ensure JK Property is in their assigned companies
+    # For supervisor / company user, scope to their assigned companies
     user_companies = [cid for cid in (user.get("company_ids") or []) if cid is not None]
     if user.get("company_id") and user["company_id"] not in user_companies:
         user_companies.append(user["company_id"])
 
-    if JK_PROPERTY_COMPANY_ID in user_companies:
-        return [JK_PROPERTY_COMPANY_ID]
+    if user_companies:
+        return user_companies
 
-    return [-1]  # No access if not assigned to JK Property
+    return [-1]  # No access if not assigned to any company
 
 
 def _log(db: Session, request: Request, user: AuthenticatedUser, action: AuditAction, lease: dict, extra: Optional[dict] = None) -> None:
@@ -108,6 +108,11 @@ def create_lease(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
+    name = (body.company_name or "").strip()
+    if not body.company_id and (not name or name.lower() == "all companies"):
+        raise HTTPException(status_code=400, detail="A company is required for a tenant lease.")
+    resolved_company = resolve_company(db, company_id=body.company_id, company_name=body.company_name)
+    body.company_id = resolved_company.company_id
     require_company_feature_access(COMPANY_FEATURE_TENANTS, body.company_id)
     check_company_access(current_user, body.company_id)
     lease = TenantService(db).create_lease(body, current_user)

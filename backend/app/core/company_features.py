@@ -54,6 +54,6 @@ def require_company_feature_access(
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied: The {feature_name} module is exclusively authorized for {target_name}.",
+            detail=f"Access denied: {feature_name} is only available for {target_name}.",
         )
 

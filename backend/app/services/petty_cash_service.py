@@ -440,23 +440,44 @@ class PettyCashService:
         output.company_name = topup.company.company_name if topup.company else None
         return output
 
-    def create_topup(self, topup_in: PettyCashTopUpCreate) -> PettyCashTopUpOut:
-        company = self.resolve_company(topup_in.company_id, topup_in.company)
-        status_to_use = topup_in.status or "Pending Finance Endorsement"
+    def create_topup(self, topup_in: PettyCashTopUpCreate, current_user: Optional[AuthenticatedUser] = None) -> PettyCashTopUpOut:
+        company = self.resolve_company(topup_in.company_id, topup_in.company_name or topup_in.company)
+        role = (current_user.get("role") or "").lower() if current_user else ""
+        is_finance = role in ("finance", "admin", "superadmin")
+        is_direct_endorse = (
+            (topup_in.status or "").lower() == "pending audit approval"
+            or (is_finance and bool(topup_in.bank_account_id))
+        )
+        status_to_use = "Pending Audit Approval" if is_direct_endorse else (topup_in.status or "Pending Finance Endorsement")
+        endorser_name = None
+        endorsed_time = None
+        fin_remark = None
+        bank_id = None
+        if is_direct_endorse:
+            endorser_name = (
+                current_user.get("full_name")
+                or current_user.get("email")
+                or "Finance Officer"
+            ) if current_user else "Finance Officer"
+            endorsed_time = func.now()
+            fin_remark = topup_in.finance_remark or topup_in.endorsement_remark or "Endorsed upon creation by Finance"
+            bank_id = str(topup_in.bank_account_id).strip() if topup_in.bank_account_id else None
+
         topup = PettyCashTopUp(
             company_id=company.company_id,
             amount=topup_in.amount,
             topup_date=topup_in.topup_date,
             reference_no=(topup_in.reference_no or "").strip() or None,
             description=(topup_in.description or "").strip() or None,
+            bank_account_id=bank_id,
             status=status_to_use,
-            endorsed_by=None,
-            endorsed_at=None,
-            finance_remark=None,
+            endorsed_by=endorser_name,
+            endorsed_at=endorsed_time,
+            finance_remark=fin_remark,
             remark=None,
             reviewed_by=None,
             reviewed_at=None,
-            created_by=topup_in.created_by,
+            created_by=topup_in.created_by or (current_user.get("user_id") if current_user else None),
         )
         self.db.add(topup)
         self.db.commit()
@@ -603,18 +624,31 @@ class PettyCashService:
             # Fallback when the account has no company_id: match by company name.
             is_own_account = (funding_acc.company_name or "").strip().lower() == company_name.strip().lower()
 
-        if is_own_account:
-            # Own-account funding: no bank movement. Only the wallet is credited (via status).
-            return
-
         ref = topup.reference_no or f"PC-{topup.topup_id}"
         c_disp = company_name or f"Company #{topup.company_id}"
+        tx_date = topup.topup_date.strftime("%m/%d/%y") if topup.topup_date else datetime.now().strftime("%m/%d/%y")
+
+        if is_own_account:
+            # Own-account funding: withdraw from the company's own bank account to fund the petty cash wallet.
+            try:
+                withdraw_req = BankDepositWithdrawRequest(
+                    amount=amount,
+                    date=tx_date,
+                    particulars=f"Petty Cash Replenishment for {c_disp} (Ref: {ref})",
+                    category="Bank Transfer",
+                    reference_no=ref,
+                )
+                bank_svc.withdraw(funding_acc.id, withdraw_req)
+                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Bank withdrawal for petty cash failed: {exc}")
+            return
 
         try:
             # 1. Withdraw from the outside funding bank.
             withdraw_req = BankDepositWithdrawRequest(
                 amount=amount,
-                date=datetime.now().strftime("%m/%d/%y"),
+                date=tx_date,
                 particulars=f"Petty Cash Funding for {c_disp} (Ref: {ref})",
                 category="Bank Transfer",
                 reference_no=ref,
@@ -632,7 +666,7 @@ class PettyCashService:
             try:
                 deposit_req = BankDepositWithdrawRequest(
                     amount=amount,
-                    date=datetime.now().strftime("%m/%d/%y"),
+                    date=tx_date,
                     particulars=f"Petty Cash Top-up received (Ref: {ref})",
                     category="Bank Transfer",
                     reference_no=ref,

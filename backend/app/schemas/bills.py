@@ -1,18 +1,21 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional, Literal
+from typing import Any, List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BillBase(BaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
     bill_name: str = Field(..., min_length=1, max_length=255)
+    category: Optional[str] = Field(None, max_length=100)
+    frequency: Optional[str] = Field(None, max_length=50)
+    is_recurring: Optional[bool] = None
     amount: Optional[Decimal] = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
-    recurring: Literal["daily", "monthly", "yearly"] = Field(
+    recurring: Literal["daily", "monthly", "yearly", "one-time"] = Field(
         default="monthly",
-        description="daily, monthly, or yearly",
+        description="daily, monthly, yearly, or one-time",
     )
     due_date: date
     due_date_reminder: int = Field(
@@ -25,6 +28,34 @@ class BillBase(BaseModel):
         default="unpaid",
         description="unpaid, paid, overdue, due soon, or partially paid",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_bill_name(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "bill_name" not in data and "vendor_name" in data:
+                data["bill_name"] = data["vendor_name"]
+            elif "bill_name" not in data and "name" in data:
+                data["bill_name"] = data["name"]
+            if "status" in data and isinstance(data["status"], str):
+                s = data["status"].strip().lower()
+                if s in ("due", "pending", "unpaid"):
+                    data["status"] = "unpaid"
+                elif s in ("paid", "overdue", "due soon", "partially paid"):
+                    data["status"] = s
+            if "recurring" in data and isinstance(data["recurring"], str):
+                r = data["recurring"].strip().lower()
+                if r in ("one-time", "once", "onetime", "one_time"):
+                    data["recurring"] = "one-time"
+                elif r in ("daily", "monthly", "yearly"):
+                    data["recurring"] = r
+            if "frequency" in data and ("recurring" not in data or not data.get("recurring")):
+                freq = str(data["frequency"]).strip().lower()
+                if freq in ("one-time", "once", "onetime", "one_time"):
+                    data["recurring"] = "one-time"
+                elif freq in ("daily", "monthly", "yearly"):
+                    data["recurring"] = freq
+        return data
 
 
 class BillCreate(BillBase):
@@ -57,6 +88,10 @@ class BillPaymentOut(BillPaymentCreate):
     bill_id: int
     created_at: Optional[datetime] = None
 
+    @property
+    def payment_id(self) -> int:
+        return self.bill_payment_id
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -87,6 +122,10 @@ class BillOut(BillBase):
     next_period_label: Optional[str] = None
     next_period_date: Optional[date] = None
     periods: Optional[List[BillPeriodOut]] = None
+
+    @property
+    def payment_history(self) -> List[BillPaymentOut]:
+        return self.payments
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -73,8 +73,12 @@ def _resolve_authorized_scope(
     explicit_cid: Optional[int] = normalize_company_id(company_id_param) if company_id_param is not None else None
     clean_cname = (company_name_param or "").strip()
     if explicit_cid is None and clean_cname and clean_cname.lower() != "all companies":
-        comp = resolve_company(db, None, clean_cname)
-        explicit_cid = comp.company_id
+        # Fail closed if an unknown company name is requested; never fall back to None (All Companies)
+        try:
+            comp = resolve_company(db, None, clean_cname)
+            explicit_cid = comp.company_id
+        except HTTPException:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found.")
 
     if is_multi_company:
         resolved_cid = explicit_cid
@@ -188,6 +192,11 @@ def get_notifications_feed(
     "/unread-count",
     response_model=NotificationCountOut,
     include_in_schema=False,
+)
+@router.get(
+    "/unread-count",
+    response_model=NotificationCountOut,
+    summary="Get unread notification count",
 )
 def notification_count(
     current_user: CurrentUser,

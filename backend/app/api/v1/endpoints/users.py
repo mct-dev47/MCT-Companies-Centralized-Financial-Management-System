@@ -98,6 +98,19 @@ async def upload_user_picture(
             detail="Profile picture must be 5 MB or smaller.",
         )
 
+    # Validate image signature via byte inspection
+    is_valid_image = (
+        picture_data.startswith(b"\xff\xd8\xff")  # JPEG
+        or picture_data.startswith(b"\x89PNG\r\n\x1a\n")  # PNG
+        or (picture_data.startswith(b"RIFF") and picture_data[8:12] == b"WEBP")  # WEBP
+        or picture_data.startswith(b"GIF87a") or picture_data.startswith(b"GIF89a")  # GIF
+    )
+    if not is_valid_image:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Profile picture must be a valid image file (JPEG, PNG, or WEBP).",
+        )
+
     try:
         result = UserService(db).upload_user_picture(
             user_id,
@@ -144,7 +157,7 @@ def delete_user(user_id: int, _: AdminUser, db: Session = Depends(get_db)):
 
 # get user profile picture (redirects to active signed URL)
 @router.get("/{user_id}/picture", summary="Get user profile picture")
-def get_user_picture(user_id: int, db: Session = Depends(get_db)):
+def get_user_picture(user_id: int, _: CurrentUser, db: Session = Depends(get_db)):
     user = UserService(db).get_user(user_id)
     if not user or not user.photo_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile picture not found")

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from pathlib import PurePosixPath
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -7,12 +8,48 @@ from sqlalchemy.orm import Session
 from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.company import Company
-from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyOut, CompanyUpdate
+from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLookupOut, CompanyOut, CompanyUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
 
 router = APIRouter()
+ALLOWED_COMPANY_PICTURE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_COMPANY_PICTURE_BYTES = 5 * 1024 * 1024
+
+
+def _validate_image_file(picture: UploadFile, picture_data: bytes) -> None:
+    if not picture.content_type or not picture.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Company picture must be an image.",
+        )
+
+    filename = picture.filename or ""
+    extension = PurePosixPath(filename).suffix.lower()
+    if extension not in ALLOWED_COMPANY_PICTURE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Company picture must have a valid image extension (.jpg, .jpeg, .png, .webp).",
+        )
+
+    if len(picture_data) > MAX_COMPANY_PICTURE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Company picture must be 5 MB or smaller.",
+        )
+
+    is_valid_image = (
+        picture_data.startswith(b"\xff\xd8\xff")  # JPEG
+        or picture_data.startswith(b"\x89PNG\r\n\x1a\n")  # PNG
+        or (picture_data.startswith(b"RIFF") and picture_data[8:12] == b"WEBP")  # WEBP
+        or picture_data.startswith(b"GIF87a")
+        or picture_data.startswith(b"GIF89a")  # GIF
+    )
+    if not is_valid_image:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Company picture content does not match a valid image signature (JPEG, PNG, WEBP, or GIF).",
+        )
 
 
 # get all companies (accessible to authenticated users)
@@ -23,6 +60,21 @@ def get_companies(
 ):
     try:
         return CompanyService(db).list_companies()
+    except CompanyServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(error),
+        ) from error
+
+
+# fast lightweight lookup for company dropdowns and selectors
+@router.get("/lookup", response_model=list[CompanyLookupOut], summary="Fast company lookup for dropdowns")
+def lookup_companies(
+    _: AuthenticatedUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return CompanyService(db).list_companies_lookup()
     except CompanyServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -158,18 +210,8 @@ async def create_company_with_picture(
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    if not picture.content_type or not picture.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Company picture must be an image.",
-        )
-
     picture_data = await picture.read()
-    if len(picture_data) > MAX_COMPANY_PICTURE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Company picture must be 5 MB or smaller.",
-        )
+    _validate_image_file(picture, picture_data)
 
     company = CompanyCreate(
         name=name,
@@ -250,18 +292,8 @@ async def upload_company_picture(
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    if not picture.content_type or not picture.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Company picture must be an image.",
-        )
-
     picture_data = await picture.read()
-    if len(picture_data) > MAX_COMPANY_PICTURE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Company picture must be 5 MB or smaller.",
-        )
+    _validate_image_file(picture, picture_data)
 
     try:
         result = CompanyService(db).upload_company_picture(

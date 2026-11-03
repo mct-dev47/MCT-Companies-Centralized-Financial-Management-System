@@ -18,6 +18,17 @@ app = FastAPI(
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 # CORS Middleware setup
+
+# Cache prevention middleware for API endpoints to prevent disk and intermediary caching of financial records
+@app.middleware("http")
+async def add_security_cache_headers(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -26,10 +37,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Real-time WebSocket endpoint for instant multi-tab sync
+# Real-time WebSocket endpoint for instant multi-tab sync (requires authentication)
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await ws_manager.connect(websocket)
+    token = websocket.query_params.get("token")
+    if not token and "authorization" in websocket.headers:
+        auth_header = websocket.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+        else:
+            token = auth_header.strip()
+
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    try:
+        from app.core.security import verify_token
+        claims = verify_token(token)
+    except Exception:
+        await websocket.close(code=1008)
+        return
+
+    await ws_manager.connect(websocket, claims=claims)
     try:
         while True:
             data = await websocket.receive_text()

@@ -183,6 +183,46 @@ export function periodLabel(frequency: LeaseRepeat, index: number): string {
   return `${periodUnit(frequency)} ${index}`
 }
 
+/**
+ * Automatically calculate first due date and default lease end date based on repeat mode.
+ * - Daily: first due date = tomorrow (+1 day), default 30-day lease end date.
+ * - Monthly: first due date = 1 month after today, default 12-month lease end date.
+ * - Quarterly: first due date = 1 quarter (3 months) after today, default 4-quarter lease end date.
+ * - Annually: first due date = 1 year after today, default 3-year lease end date.
+ * - None: first due date = base date, lease end date = empty string.
+ */
+export function getDefaultDatesForRepeat(
+  repeat: LeaseRepeat,
+  baseDateStr?: string
+): { dueDate: string; leaseEndDate: string } {
+  const base = baseDateStr || formatYmd({
+    y: new Date().getFullYear(),
+    m: new Date().getMonth() + 1,
+    d: new Date().getDate(),
+  })
+  if (repeat === 'Daily') {
+    const firstDue = addPeriodClamped(base, 'Daily', 1)
+    const end = addPeriodClamped(firstDue, 'Daily', 29)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Monthly') {
+    const firstDue = addPeriodClamped(base, 'Monthly', 1)
+    const end = addPeriodClamped(firstDue, 'Monthly', 11)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Quarterly') {
+    const firstDue = addPeriodClamped(base, 'Quarterly', 1)
+    const end = addPeriodClamped(firstDue, 'Quarterly', 3)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Annually') {
+    const firstDue = addPeriodClamped(base, 'Annually', 1)
+    const end = addPeriodClamped(firstDue, 'Annually', 2)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  return { dueDate: base, leaseEndDate: '' }
+}
+
 function ordinal(n: number): string {
   const mod100 = n % 100
   if (mod100 >= 11 && mod100 <= 13) return `${n}th`

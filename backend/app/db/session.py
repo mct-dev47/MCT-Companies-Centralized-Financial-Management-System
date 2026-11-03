@@ -59,6 +59,7 @@ def init_db():
     import app.models.petty_cash
     import app.models.bank
     import app.models.lending
+    import app.models.security
     import app.models.notification
     from app.models.company import Company
 
@@ -95,6 +96,13 @@ def init_db():
             )
 
     
+    try:
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE petty_cash_wallets ADD COLUMN IF NOT EXISTS balance NUMERIC(15, 2) DEFAULT 0.00"))
+    except Exception:
+        pass
+
     import threading
 
     def _sync_companies_from_supabase():

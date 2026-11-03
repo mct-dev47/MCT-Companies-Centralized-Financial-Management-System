@@ -99,7 +99,7 @@ def get_expenses(
     db: Session = Depends(get_db)
 ):
     user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("audit", "finance", "auditor")
+    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -371,6 +371,19 @@ def create_expense(
             extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat()},
         )
 
+        try:
+            from app.core.websocket import ws_manager
+            ws_manager.broadcast_sync({
+                "type": "EXPENSE_CREATED",
+                "payload": {
+                    "expense_id": sb_expense_id,
+                    "company_id": target_company_id,
+                    "company": target_company_name,
+                }
+            })
+        except Exception:
+            pass
+
         return ExpenseOut(
             expense_id=created_row["expense_id"],
             company_id=created_row.get("company_id"),
@@ -451,6 +464,19 @@ def create_expense(
             record_id=expense.expense_id, record_type="expense",
             extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat()},
         )
+
+        try:
+            from app.core.websocket import ws_manager
+            ws_manager.broadcast_sync({
+                "type": "EXPENSE_CREATED",
+                "payload": {
+                    "expense_id": expense.expense_id,
+                    "company_id": target_company.company_id,
+                    "company": target_company.company_name,
+                }
+            })
+        except Exception:
+            pass
 
         return ExpenseOut(
             expense_id=expense.expense_id,
@@ -665,6 +691,18 @@ def update_expense(
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense_id, record_type="expense",
         )
+
+        try:
+            from app.core.websocket import ws_manager
+            ws_manager.broadcast_sync({
+                "type": "EXPENSE_UPDATED",
+                "payload": {
+                    "expense_id": expense_id,
+                    "company_id": updated_row.get("company_id"),
+                }
+            })
+        except Exception:
+            pass
         return ExpenseOut(
             expense_id=updated_row["expense_id"],
             company_id=updated_row.get("company_id"),
@@ -698,6 +736,18 @@ def update_expense(
         ip_address=request.client.host if request.client else "unknown",
         record_id=expense_id, record_type="expense",
     )
+
+    try:
+        from app.core.websocket import ws_manager
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_UPDATED",
+            "payload": {
+                "expense_id": expense_id,
+                "company_id": expense.company_id,
+            }
+        })
+    except Exception:
+        pass
     return ExpenseOut(
         expense_id=expense.expense_id,
         company_id=expense.company_id,
@@ -739,6 +789,18 @@ def review_expense_audit(
         record_id=expense_id, record_type="expense_audit_review",
         extra={"audit_status": review_in.audit_status},
     )
+
+    try:
+        from app.core.websocket import ws_manager
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_UPDATED",
+            "payload": {
+                "expense_id": expense_id,
+                "audit_status": review_in.audit_status,
+            }
+        })
+    except Exception:
+        pass
     return get_expense(expense_id, current_user, db)
 @router.delete("/{expense_id}", status_code=status.HTTP_200_OK, summary="Delete an expense")
 def delete_expense(
@@ -789,6 +851,18 @@ def delete_expense(
         )
     except Exception as e:
         print(f"Audit log error on expense delete: {e}")
+
+    try:
+        from app.core.websocket import ws_manager
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_DELETED",
+            "payload": {
+                "expense_id": expense_id,
+                "company_id": deleted_company_id,
+            }
+        })
+    except Exception:
+        pass
 
     return {
         "message": "Expense deleted successfully",

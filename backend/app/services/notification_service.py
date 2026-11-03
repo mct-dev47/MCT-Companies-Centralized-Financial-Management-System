@@ -67,7 +67,8 @@ class NotificationType:
     LOAN_REPAYMENT_RECEIVED     = "LOAN_REPAYMENT_RECEIVED"
     LOAN_REPAYMENT_SENT         = "LOAN_REPAYMENT_SENT"
     LOAN_FULLY_SETTLED          = "LOAN_FULLY_SETTLED"
-    LOAN_REQUEST_FINANCE        = "LOAN_REQUEST_FINANCE"
+    LOAN_REQUEST_FINANCE        = "LOAN_PENDING_FINANCE"
+    LOAN_PENDING_FINANCE        = "LOAN_PENDING_FINANCE"
     LOAN_ENDORSED_AUDIT         = "LOAN_ENDORSED_AUDIT"
     LOAN_APPROVED_SUPERVISOR    = "LOAN_APPROVED_SUPERVISOR"
     LOAN_REJECTED_SUPERVISOR    = "LOAN_REJECTED_SUPERVISOR"
@@ -487,6 +488,8 @@ class NotificationService:
                                 reference_id=b.bill_id,
                                 is_read=False,
                                 created_at=now_utc - timedelta(minutes=min(days_overdue, 60)),
+                                due_date=due_d.isoformat() if due_d else None,
+                                remaining_amount=float(rem_amt) if rem_amt else None,
                             ))
                         elif diff_days == 0:
                             results.append(NotificationOut(
@@ -502,6 +505,8 @@ class NotificationService:
                                 reference_id=b.bill_id,
                                 is_read=False,
                                 created_at=now_utc,
+                                due_date=due_d.isoformat() if due_d else None,
+                                remaining_amount=float(rem_amt) if rem_amt else None,
                             ))
                         elif diff_days == 1:
                             results.append(NotificationOut(
@@ -517,6 +522,8 @@ class NotificationService:
                                 reference_id=b.bill_id,
                                 is_read=False,
                                 created_at=now_utc - timedelta(minutes=5),
+                                due_date=due_d.isoformat() if due_d else None,
+                                remaining_amount=float(rem_amt) if rem_amt else None,
                             ))
                         elif 1 < diff_days <= reminder_window:
                             results.append(NotificationOut(
@@ -532,6 +539,8 @@ class NotificationService:
                                 reference_id=b.bill_id,
                                 is_read=False,
                                 created_at=now_utc - timedelta(minutes=10 + diff_days),
+                                due_date=due_d.isoformat() if due_d else None,
+                                remaining_amount=float(rem_amt) if rem_amt else None,
                             ))
 
                     # Recent bill payments (top 2 newest)
@@ -552,6 +561,7 @@ class NotificationService:
                             if p.payment_date
                             else now_utc
                         )
+                        rem_p = p_period.get("remaining_amount") if p_period else None
                         results.append(NotificationOut(
                             notification_id=_make_id(ntype, b.bill_id, p.bill_payment_id),
                             notification_type=ntype,
@@ -565,6 +575,8 @@ class NotificationService:
                             reference_id=b.bill_id,
                             is_read=False,
                             created_at=ts,
+                            paid_amount=float(p_amount) if p_amount else None,
+                            remaining_amount=float(rem_p) if rem_p is not None else (float(rem_amt) if rem_amt else None),
                         ))
                 except Exception as inner_exc:
                     logger.warning("Bill notification error for bill %s: %s", getattr(b, "bill_id", "?"), inner_exc)
@@ -1305,7 +1317,7 @@ class NotificationService:
             if role in ("finance", "admin"):
                 pending_finance = [
                     l for l in loans
-                    if l.status in ("Pending Finance Endorsement", "Pending Approval")
+                    if (l.status and any(k in l.status.lower() for k in ("pending finance", "pending approval")))
                     and (company_id is None or l.borrower == company_id or l.lender == company_id)
                 ][:20]
                 for loan in pending_finance:
@@ -1734,6 +1746,7 @@ class NotificationService:
                         reference_id=cid,
                         is_read=False,
                         created_at=now_utc - timedelta(minutes=15),
+                        amount=float(balance),
                     ))
         except Exception as exc:
             logger.warning("Error computing petty cash low balance notifications: %s", exc)
