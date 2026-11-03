@@ -171,7 +171,7 @@ function mapUser(value: unknown): EmployeeUser {
       ? new Date(user.last_login_at).toLocaleString()
       : 'Never',
     isAdmin: user.is_admin,
-    isProtected: Boolean(user.is_protected || user.user_id === 1 || user.email.toLowerCase() === 'admin@mct.com'),
+    isProtected: Boolean(user.is_protected || user.is_admin || user.user_id === 1 || (user.role && user.role.toLowerCase() === 'admin')),
     avatarUrl: user.photo_url || undefined,
   }
 }

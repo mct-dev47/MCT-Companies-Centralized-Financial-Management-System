@@ -42,7 +42,7 @@ class UserService:
         """Check if user is the protected primary Admin account."""
         if not user:
             return False
-        return user.user_id == 1 or (user.email and user.email.strip().lower() == "admin@mct.com")
+        return bool(user.user_id == 1 or user.is_admin or (user.role and user.role.strip().lower() == "admin"))
 
     def _extract_storage_path(self, photo_url: Optional[str]) -> Optional[str]:
         if not photo_url:

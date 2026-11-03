@@ -68,5 +68,6 @@ class UserResponse(UserBase):
     updated_at: datetime
     status: str = "ACTIVE"
     must_change_password: bool = False
+    is_protected: bool = False
 
     model_config = ConfigDict(from_attributes=True)

@@ -56,7 +56,7 @@ def get_current_user(
         db_user = db.query(User).filter(func.lower(User.email) == resolved_email.lower()).first()
         if db_user:
             user_id = db_user.user_id
-            is_admin = db_user.is_admin or db_user.user_id == 1 or (db_user.email and db_user.email.lower() == "admin@mct.com")
+            is_admin = bool(db_user.is_admin or db_user.user_id == 1 or (db_user.role and db_user.role.lower() == "admin"))
             role = "admin" if is_admin else (db_user.role or "supervisor").lower()
             if role in ("company", "company employee"):
                 role = "supervisor"
@@ -75,7 +75,7 @@ def get_current_user(
                 if supa_res.data:
                     su = supa_res.data[0]
                     user_id = su.get("user_id")
-                    is_admin = su.get("is_admin") is True or resolved_email == "admin@mct.com"
+                    is_admin = bool(su.get("is_admin") is True or (su.get("role") and su.get("role").lower() == "admin") or user_id == 1)
                     role = "admin" if is_admin else (su.get("role") or "supervisor").lower()
                     if role in ("company", "company employee"):
                         role = "supervisor"

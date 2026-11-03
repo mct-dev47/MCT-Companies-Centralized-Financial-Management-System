@@ -90,7 +90,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const isProtectedAdmin = Boolean(
     user?.isProtected ||
     user?.id === '1' ||
-    (user?.email && user.email.toLowerCase() === 'admin@mct.com')
+    user?.isAdmin ||
+    user?.role?.toLowerCase() === 'admin'
   )
 
   React.useEffect(() => {
