@@ -391,3 +391,18 @@ def test_a_failed_save_does_not_leak_database_text(env, monkeypatch):
     r = client.post("/tenants/leases", json=lease_body())
     assert r.status_code == 500
     assert "secret_constraint" not in r.text and "db.internal" not in r.text and "tenant_leases" not in r.text
+
+
+def test_delete_lease_is_idempotent_on_repeated_requests(env):
+    client, holder = env
+    holder["user"] = FINANCE
+    created = client.post("/tenants/leases", json=lease_body()).json()
+    lease_id = created["lease_id"]
+
+    # First delete returns 204
+    r1 = client.delete(f"/tenants/leases/{lease_id}")
+    assert r1.status_code == 204
+
+    # Second concurrent or duplicate delete on same lease_id also returns 204 (idempotent)
+    r2 = client.delete(f"/tenants/leases/{lease_id}")
+    assert r2.status_code == 204

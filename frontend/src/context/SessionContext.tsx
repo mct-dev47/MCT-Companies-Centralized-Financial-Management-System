@@ -8,6 +8,7 @@ import {
 } from '@/services/authService'
 import type { SignInFormValues } from '@/lib/validation/auth'
 import { clearNotificationCache } from '@/services/notificationService'
+import { websocketService } from '@/services/websocketService'
 
 export type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -32,6 +33,15 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
   const [status, setStatus] = React.useState<SessionStatus>('loading')
   const [user, setUser] = React.useState<User | null>(null)
   const idleTimer = React.useRef<number | null>(null)
+
+  // Manage real-time WebSocket connection lifecycle based on authentication status
+  React.useEffect(() => {
+    if (status === 'authenticated') {
+      websocketService.connect()
+    } else if (status === 'unauthenticated') {
+      websocketService.disconnect()
+    }
+  }, [status])
 
   const resetIdleTimer = React.useCallback(() => {
     authService.touchSessionActivity()
@@ -70,13 +80,13 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
           setStatus('authenticated')
         } else {
           setUser(null)
-      clearNotificationCache()
+          clearNotificationCache()
           setStatus('unauthenticated')
         }
       } catch {
         if (!isMounted) return
         setUser(null)
-      clearNotificationCache()
+        clearNotificationCache()
         setStatus('unauthenticated')
       }
     }

@@ -1828,6 +1828,8 @@ def _extend_service(cls):
         self,
         recipient_user_id: int,
         company_id: Optional[int] = None,
+        user_role: Optional[str] = None,
+        user_scope_key: Optional[str] = None,
         cursor: Optional[str] = None,
         direction: str = "before",
         notification_type: Optional[str] = None,
@@ -1872,7 +1874,13 @@ def _extend_service(cls):
         
         # If persistent table has no items for this user yet, fallback to computed items
         if not items and not cursor:
-            computed = self.get_notifications(company_id=company_id, notification_type=notification_type, limit=limit)
+            computed = self.get_notifications(
+                company_id=company_id,
+                user_role=user_role,
+                user_scope_key=user_scope_key,
+                notification_type=notification_type,
+                limit=limit,
+            )
             return NotificationListResponse(
                 items=computed,
                 next_cursor=None,
@@ -1890,9 +1898,12 @@ def _extend_service(cls):
             next_cursor = f"{c_dt}|{last.notification_id}"
 
         # Get total unread count for this recipient & company scope
+        effective_scope_key = user_scope_key or (f"u:{recipient_user_id}:r:{user_role}:c:{company_id}" if user_role else f"u:{recipient_user_id}:c:{company_id}")
         unread_count = self.get_unread_count(
             company_id=company_id,
-            user_scope_key=f"u:{recipient_user_id}:c:{company_id}",
+            user_role=user_role,
+            user_scope_key=effective_scope_key,
+            recipient_user_id=recipient_user_id,
         )
 
         return NotificationListResponse(

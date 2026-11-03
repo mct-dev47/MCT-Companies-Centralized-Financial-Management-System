@@ -97,9 +97,13 @@ def init_db():
 
     
     try:
-        from sqlalchemy import text
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE petty_cash_wallets ADD COLUMN IF NOT EXISTS balance NUMERIC(15, 2) DEFAULT 0.00"))
+        from sqlalchemy import inspect as sqla_inspect, text
+        inspector = sqla_inspect(engine)
+        if "petty_cash_wallets" in inspector.get_table_names():
+            existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}
+            if "balance" not in existing_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE petty_cash_wallets ADD COLUMN balance NUMERIC(15, 2) DEFAULT 0.00"))
     except Exception:
         pass
 

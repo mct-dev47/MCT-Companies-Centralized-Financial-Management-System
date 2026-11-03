@@ -59,8 +59,8 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
 
-    await ws_manager.connect(websocket, claims=claims)
     try:
+        await ws_manager.connect(websocket, claims=claims)
         while True:
             data = await websocket.receive_text()
             if data == "ping":
@@ -75,6 +75,12 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 def on_startup():
     from app.db.session import init_db
     init_db()
+
+    try:
+        import asyncio
+        ws_manager._loop = asyncio.get_event_loop()
+    except Exception:
+        pass
 
     # Data retention policy: asynchronously purge activity logs older than 6 months (180 days)
     def _run_retention_purge():

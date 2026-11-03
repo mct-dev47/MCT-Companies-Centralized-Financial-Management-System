@@ -26,7 +26,14 @@ class ConnectionInfo:
         all_cids = list(raw_cids)
         if cid is not None and cid not in all_cids:
             all_cids.append(cid)
-        self.company_ids = {int(c) for c in all_cids if c is not None}
+        parsed_cids = set()
+        for c in all_cids:
+            if c is not None and str(c).strip().isdigit():
+                try:
+                    parsed_cids.add(int(c))
+                except (ValueError, TypeError):
+                    pass
+        self.company_ids = parsed_cids
 
         # Resolve user_id if present in claims
         uid = claims.get("user_id") or app_meta.get("user_id") or claims.get("sub")

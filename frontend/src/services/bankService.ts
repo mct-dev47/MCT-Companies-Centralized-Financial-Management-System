@@ -1,4 +1,7 @@
+import { websocketService, type SyncEventType } from './websocketService'
+
 export interface BankTransaction {
+
   id: string
   bankAccountId?: string
   date: string
@@ -76,6 +79,26 @@ if (typeof window !== 'undefined') {
   } catch {
     // ignore storage errors
   }
+}
+
+// Automatically invalidate bank cache when real-time updates arrive
+if (typeof window !== 'undefined') {
+  const bankEvents: SyncEventType[] = [
+    'BANK_UPDATED',
+    'TRANSACTION_UPDATED',
+    'EXPENSE_CREATED',
+    'EXPENSE_UPDATED',
+    'EXPENSE_DELETED',
+    'SALES_UPDATED',
+    'LOANS_UPDATED',
+    'PETTY_CASH_UPDATED',
+    'AUDIT_UPDATED',
+  ]
+  bankEvents.forEach((ev) => {
+    websocketService.subscribe(ev, () => {
+      clearBankCache()
+    })
+  })
 }
 
 function clearBankCache(): void {
