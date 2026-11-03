@@ -105,6 +105,8 @@ export const LendingPage: React.FC = () => {
   const userRole = (user?.role || '').toLowerCase()
   const isFinance = userRole === 'finance'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
 
   // Set document title
   React.useEffect(() => {
@@ -2046,33 +2048,37 @@ export const LendingPage: React.FC = () => {
 
                       {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
                       <TableCell className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")} onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (openMenuFacilityId === facility.id) {
-                              setOpenMenuFacilityId(null)
-                              setMenuPosition(null)
-                              setActiveMenuFacility(null)
-                            } else {
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              const openUpward = rect.bottom + 140 > window.innerHeight
-                              setMenuPosition({
-                                top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                right: Math.max(12, window.innerWidth - rect.right),
-                                openUpward,
-                              })
-                              setActiveMenuFacility(facility)
-                              setOpenMenuFacilityId(facility.id)
-                            }
-                          }}
-                          className="lending-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
-                          title="Actions"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </Button>
+                        {isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuFacilityId === facility.id) {
+                                setOpenMenuFacilityId(null)
+                                setMenuPosition(null)
+                                setActiveMenuFacility(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 140 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuFacility(facility)
+                                setOpenMenuFacilityId(facility.id)
+                              }
+                            }}
+                            className="lending-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
+                            title="Actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -2139,7 +2145,7 @@ export const LendingPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"

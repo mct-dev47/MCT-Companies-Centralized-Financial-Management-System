@@ -1639,7 +1639,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAuditor ? (
+            {canAuditActions ? (
               <>
                 {activeMenuLoan.status === 'Pending Audit Approval' && (
                   <>

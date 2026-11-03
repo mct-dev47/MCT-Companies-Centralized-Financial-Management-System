@@ -103,6 +103,8 @@ export const SalesPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -1516,7 +1518,7 @@ export const SalesPage: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1">
-                          {isAudit ? (
+                          {canAuditActions ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -1551,6 +1553,8 @@ export const SalesPage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
+                          ) : isManuel ? (
+                            <span className="text-muted-fg text-xs">—</span>
                           ) : sale.auditStatus === 'Verified' ? (
                             <span
                               className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"

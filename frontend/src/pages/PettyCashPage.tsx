@@ -88,6 +88,8 @@ export const PettyCashPage: React.FC = () => {
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
   const isCompanyScoped = isSupervisor && !isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -1112,7 +1114,7 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 9. Actions */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {isAudit ? (
+                        {canAuditActions ? (
                           <Button
                             type="button"
                             variant="ghost"
@@ -1132,6 +1134,8 @@ export const PettyCashPage: React.FC = () => {
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
+                        ) : isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
                         ) : isPendingFinance && entry.type === 'topup' ? (
                           <div className="flex items-center justify-center gap-1">
                             <Button
@@ -1438,7 +1442,7 @@ export const PettyCashPage: React.FC = () => {
                 )}
 
                 {/* Audit Team Actions: Approve or Disapprove */}
-                {isAudit && targetEntry.status === 'Pending Audit Approval' && (
+                {canAuditActions && targetEntry.status === 'Pending Audit Approval' && (
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"

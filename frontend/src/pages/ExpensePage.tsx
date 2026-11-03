@@ -97,6 +97,8 @@ export const ExpensePage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -680,7 +682,7 @@ export const ExpensePage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
+
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -1368,7 +1370,7 @@ export const ExpensePage: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1">
-                          {isAudit ? (
+                          {canAuditActions ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -1403,6 +1405,8 @@ export const ExpensePage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
+                          ) : isManuel ? (
+                            <span className="text-muted-fg text-xs">—</span>
                           ) : expense.auditStatus === 'Verified' ? (
                             <span
                               className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"

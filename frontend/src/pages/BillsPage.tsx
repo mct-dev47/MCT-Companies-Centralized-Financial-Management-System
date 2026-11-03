@@ -73,6 +73,8 @@ export const BillsPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isFinance = userRole === 'finance'
   const isCompanyScoped = !isAdmin && !isFinance
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const assignedCompany = user?.assignedCompany || ''
 
   // Data states
@@ -549,7 +551,7 @@ export const BillsPage: React.FC = () => {
           onPay={() => setPaymentBill(selectedDetailBill)}
           onEdit={() => setEditingBill(selectedDetailBill)}
           onDelete={() => setDeleteConfirmBill(selectedDetailBill)}
-          onMarkAudit={(status) => handleMarkBillAudit(selectedDetailBill, status)}
+          onMarkAudit={canAuditActions ? (status) => handleMarkBillAudit(selectedDetailBill, status) : undefined}
           isAudit={isAudit}
         />
 
@@ -1131,33 +1133,37 @@ export const BillsPage: React.FC = () => {
                         className="w-[5%] px-1 py-3.5 text-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (openMenuBillId === bill.id) {
-                              setOpenMenuBillId(null)
-                              setMenuPosition(null)
-                              setActiveMenuBill(null)
-                            } else {
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              const openUpward = rect.bottom + 120 > window.innerHeight
-                              setMenuPosition({
-                                top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                right: Math.max(12, window.innerWidth - rect.right),
-                                openUpward,
-                              })
-                              setActiveMenuBill(bill)
-                              setOpenMenuBillId(bill.id)
-                            }
-                          }}
-                          className="bill-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center"
-                          title="Actions"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </Button>
+                        {isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuBillId === bill.id) {
+                                setOpenMenuBillId(null)
+                                setMenuPosition(null)
+                                setActiveMenuBill(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 120 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuBill(bill)
+                                setOpenMenuBillId(bill.id)
+                              }
+                            }}
+                            className="bill-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center"
+                            title="Actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -1191,7 +1197,7 @@ export const BillsPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"

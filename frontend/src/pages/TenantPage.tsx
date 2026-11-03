@@ -134,6 +134,8 @@ export const TenantPage: React.FC = () => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
 
   // Leases come from the database. `loadError` is set when the last load failed: the page then shows
   // the last copy it had (if any) with a warning, and every save is refused by the server call.
@@ -1412,7 +1414,7 @@ export const TenantPage: React.FC = () => {
                 </Button>
               )}
 
-              {isAudit && (
+              {canAuditActions && (
                 <>
                   <Button
                     type="button"
@@ -2842,33 +2844,37 @@ export const TenantPage: React.FC = () => {
                       className="px-3.5 py-3.5 text-center whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (menuOpenTenantId === tenant.id) {
-                            setMenuOpenTenantId(null)
-                            setMenuPosition(null)
-                            return
-                          }
-                          const rect = e.currentTarget.getBoundingClientRect()
-                          const windowHeight = window.innerHeight
-                          const spaceBelow = windowHeight - rect.bottom
-                          const openUpward = spaceBelow < 180
-                          setMenuPosition({
-                            top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                            right: Math.max(16, window.innerWidth - rect.right),
-                            openUpward,
-                          })
-                          setActiveTenant(tenant)
-                          setMenuOpenTenantId(tenant.id)
-                        }}
-                        className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
-                        title="Actions"
-                        aria-label="Tenant actions"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                      </button>
+                      {isManuel ? (
+                        <span className="text-muted-fg text-xs">—</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (menuOpenTenantId === tenant.id) {
+                              setMenuOpenTenantId(null)
+                              setMenuPosition(null)
+                              return
+                            }
+                            const rect = e.currentTarget.getBoundingClientRect()
+                            const windowHeight = window.innerHeight
+                            const spaceBelow = windowHeight - rect.bottom
+                            const openUpward = spaceBelow < 180
+                            setMenuPosition({
+                              top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                              right: Math.max(16, window.innerWidth - rect.right),
+                              openUpward,
+                            })
+                            setActiveTenant(tenant)
+                            setMenuOpenTenantId(tenant.id)
+                          }}
+                          className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center transition-colors"
+                          title="Actions"
+                          aria-label="Tenant actions"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+                      )}
                     </TableCell>
                   </TableRow>
                   )
@@ -2933,7 +2939,7 @@ export const TenantPage: React.FC = () => {
             className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-xl p-1.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"
