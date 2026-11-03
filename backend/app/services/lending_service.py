@@ -34,12 +34,44 @@ def parse_date(val: Any) -> Optional[date]:
         return None
 
 
+class hybrid_method:
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, instance, owner):
+        def wrapper(*args, **kwargs):
+            return self.func(instance, *args, **kwargs)
+        return wrapper
+
+
+class LendingServiceResult(dict):
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(f"'LendingServiceResult' object has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+
 class LendingService:
     """
     Centralized lending business logic service.
     Contains pure calculations, schedule generators, period locking rules,
     and database persistence operations for borrowers.
     """
+
+    def __init__(self, db: Optional[Session] = None):
+        self.db = db
+
+    def get_transactions(self, *args, **kwargs):
+        db = kwargs.pop("db", self.db)
+        return self.__class__.get_transactions(db, *args, **kwargs)
+
+    def get_transaction(self, transaction_id: int, *args, **kwargs):
+        db = kwargs.pop("db", self.db)
+        return self.__class__.get_transaction(db, transaction_id, *args, **kwargs)
 
     # -------------------------------------------------------------------------
     # 1. PURE CALCULATION & SCHEDULE HELPERS
@@ -598,15 +630,24 @@ class LendingService:
         }
         return json.dumps(data)
 
-    @classmethod
+    @hybrid_method
     def get_borrowers(
-        cls,
-        db: Session,
-        borrower_query: Optional[str] = None,
-        company_id: Optional[int] = None,
-        borrower_id: Optional[int] = None,
+        self_or_none,
+        *args,
+        **kwargs,
     ) -> List[Dict[str, Any]]:
         """Retrieve borrowers with calculated summary balances, accrued penalties, and schedules."""
+        if self_or_none is not None:
+            db = kwargs.pop("db", self_or_none.db)
+            borrower_query = args[0] if len(args) > 0 else kwargs.pop("borrower_query", None)
+            company_id = args[1] if len(args) > 1 else kwargs.pop("company_id", None)
+            borrower_id = args[2] if len(args) > 2 else kwargs.pop("borrower_id", None)
+        else:
+            db = args[0] if len(args) > 0 else kwargs.pop("db", None)
+            borrower_query = args[1] if len(args) > 1 else kwargs.pop("borrower_query", None)
+            company_id = args[2] if len(args) > 2 else kwargs.pop("company_id", None)
+            borrower_id = args[3] if len(args) > 3 else kwargs.pop("borrower_id", None)
+        cls = LendingService
         b_query = db.query(Borrower).options(selectinload(Borrower.transactions))
         if borrower_id is not None:
             b_query = b_query.filter(Borrower.borrower_id == borrower_id)
@@ -1083,23 +1124,44 @@ class LendingService:
             "next_installment": next_installment,
         }
 
-    @classmethod
+    @hybrid_method
     def create_borrower(
-        cls,
-        db: Session,
-        borrower_name: str,
-        principal_amount: Decimal | float,
-        interest_rate: Decimal | float = Decimal("20.00"),
-        frequency: str = "Daily",
-        date_borrowed_val: Any = None,
-        due_date_val: Any = None,
-        term_days_val: Optional[int] = None,
-        borrower_contact: Optional[str] = None,
-        borrower_address: Optional[str] = None,
-        notes: Optional[str] = None,
+        self_or_none,
+        *args,
         **kwargs,
     ) -> Dict[str, Any]:
         """Create a new borrower record in the borrowers database table."""
+        if self_or_none is not None:
+            db = kwargs.pop("db", self_or_none.db)
+            borrower_name = args[0] if len(args) > 0 else kwargs.pop("borrower_name", None)
+            principal_amount = args[1] if len(args) > 1 else kwargs.pop("principal_amount", None)
+        else:
+            db = args[0] if len(args) > 0 else kwargs.pop("db", None)
+            borrower_name = args[1] if len(args) > 1 else kwargs.pop("borrower_name", None)
+            principal_amount = args[2] if len(args) > 2 else kwargs.pop("principal_amount", None)
+
+        interest_rate = kwargs.pop("interest_rate", Decimal("20.00"))
+        frequency = kwargs.pop("frequency", "Daily")
+        date_borrowed_val = kwargs.pop("date_borrowed_val", None)
+        due_date_val = kwargs.pop("due_date_val", None)
+        term_days_val = kwargs.pop("term_days_val", None)
+        borrower_contact = kwargs.pop("borrower_contact", None)
+        borrower_address = kwargs.pop("borrower_address", None)
+        notes = kwargs.pop("notes", None)
+
+        if hasattr(borrower_name, "borrower_name"):
+            data = borrower_name
+            borrower_name = data.borrower_name
+            principal_amount = getattr(data, "loan_amount", principal_amount)
+            interest_rate = getattr(data, "interest_rate", interest_rate)
+            frequency = getattr(data, "payment_frequency", frequency)
+            date_borrowed_val = getattr(data, "date_borrowed", date_borrowed_val)
+            due_date_val = getattr(data, "due_date", due_date_val)
+            term_days_val = getattr(data, "term_days", term_days_val)
+            borrower_contact = getattr(data, "borrower_contact", borrower_contact)
+            borrower_address = getattr(data, "borrower_address", borrower_address)
+            notes = getattr(data, "notes", notes)
+
         p = quantize(principal_amount)
         if p < Decimal("1.00"):
             raise HTTPException(status_code=400, detail="Principal amount must be at least 1.00.")
@@ -1109,7 +1171,7 @@ class LendingService:
         term_days = int(term_days_val) if term_days_val and int(term_days_val) > 0 else (40 if freq == "Daily" else 2)
         due = parse_date(due_date_val)
 
-        terms = cls.calculate_terms(p, interest_rate, freq, start, due, term_days)
+        terms = LendingService.calculate_terms(p, interest_rate, freq, start, due, term_days)
         due = parse_date(terms["due_date"])
 
         ref_no = f"LN-{datetime.now().strftime('%Y%m%d')}-{int(datetime.now().timestamp() % 10000):04d}"
@@ -1135,7 +1197,7 @@ class LendingService:
         db.refresh(new_borrower)
         system_cache.invalidate_tag("notifications")
 
-        return {
+        return LendingServiceResult({
             "id": str(new_borrower.borrower_id),
             "borrower_id": new_borrower.borrower_id,
             "borrower_ref_no": new_borrower.borrower_ref_no,
@@ -1165,7 +1227,7 @@ class LendingService:
             "missedCyclesCount": 0,
             "notes": notes or "",
             "dailyPayments": [],
-        }
+        })
 
     @classmethod
     def update_borrower(
@@ -1286,26 +1348,49 @@ class LendingService:
 
         raise HTTPException(status_code=404, detail="Borrower not found.")
 
-    @classmethod
+    @hybrid_method
     def record_payment(
-        cls,
-        db: Session,
-        borrower_id: int,
-        payment_date_val: Any,
-        amount_val: Decimal | float,
-        penalty_amount_val: Optional[Decimal | float | int | str] = None,
-        method: str = "Cash",
-        reference_no: Optional[str] = None,
-        notes: Optional[str] = None,
-        recorded_by: Optional[str] = None,
-        transaction_type: str = "Repayment",
-        cycle_due_date_val: Optional[Any] = None,
-        cycle_index_val: Optional[int] = None,
+        self_or_none,
+        *args,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Record a payment remittance in the lending_transactions table with period settlement locking.
         Penalty charges are user-inputted (or 0 if waived) and are NOT deducted from the contractual total payable.
         """
+        cls = LendingService
+        if self_or_none is not None:
+            db = kwargs.pop("db", self_or_none.db)
+            borrower_id = args[0] if len(args) > 0 else kwargs.pop("borrower_id", None)
+            payment_date_val = args[1] if len(args) > 1 else kwargs.pop("payment_date_val", None)
+            amount_val = args[2] if len(args) > 2 else kwargs.pop("amount_val", None)
+        else:
+            db = args[0] if len(args) > 0 else kwargs.pop("db", None)
+            borrower_id = args[1] if len(args) > 1 else kwargs.pop("borrower_id", None)
+            payment_date_val = args[2] if len(args) > 2 else kwargs.pop("payment_date_val", None)
+            amount_val = args[3] if len(args) > 3 else kwargs.pop("amount_val", None)
+
+        penalty_amount_val = kwargs.pop("penalty_amount_val", None)
+        method = kwargs.pop("method", "Cash")
+        reference_no = kwargs.pop("reference_no", None)
+        notes = kwargs.pop("notes", None)
+        recorded_by = kwargs.pop("recorded_by", None)
+        transaction_type = kwargs.pop("transaction_type", "Repayment")
+        cycle_due_date_val = kwargs.pop("cycle_due_date_val", None)
+        cycle_index_val = kwargs.pop("cycle_index_val", None)
+
+        if hasattr(borrower_id, "borrower_id"):
+            data = borrower_id
+            borrower_id = data.borrower_id
+            payment_date_val = getattr(data, "payment_date", payment_date_val)
+            amount_val = getattr(data, "amount", amount_val)
+            penalty_amount_val = getattr(data, "penalty_amount", penalty_amount_val)
+            method = getattr(data, "method", getattr(data, "payment_method", method))
+            reference_no = getattr(data, "reference_no", reference_no)
+            notes = getattr(data, "notes", notes)
+            recorded_by = getattr(data, "recorded_by", recorded_by)
+            cycle_due_date_val = getattr(data, "cycle_due_date", cycle_due_date_val)
+            cycle_index_val = getattr(data, "cycle_index", cycle_index_val)
         b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
 
         if b:
@@ -1465,7 +1550,7 @@ class LendingService:
             db.refresh(b)
             system_cache.invalidate_tag("notifications")
 
-            return {
+            return LendingServiceResult({
                 "transaction_id": new_tx.transaction_id,
                 "transaction_ref_no": new_tx.transaction_ref_no,
                 "transactionRefNo": new_tx.transaction_ref_no,
@@ -1484,7 +1569,7 @@ class LendingService:
                 "payment_method": new_tx.payment_method,
                 "reference_no": ref_clean or "",
                 "notes": notes or "",
-            }
+            })
 
         # Fallback to legacy loan table
         loan = db.query(Loan).filter(Loan.loan_id == borrower_id).first()
@@ -1577,7 +1662,7 @@ class LendingService:
         db.refresh(new_repayment)
         system_cache.invalidate_tag("notifications")
 
-        return {
+        return LendingServiceResult({
             "transaction_id": new_repayment.loan_repayment_id,
             "repayment_id": new_repayment.loan_repayment_id,
             "borrower_id": loan.loan_id,
@@ -1589,7 +1674,7 @@ class LendingService:
             "payment_method": method.strip(),
             "reference_no": ref_text or "",
             "notes": notes or "",
-        }
+        })
 
     @classmethod
     def get_transactions(

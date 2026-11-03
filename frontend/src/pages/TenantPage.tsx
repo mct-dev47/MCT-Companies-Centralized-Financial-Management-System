@@ -23,6 +23,7 @@ import {
   Coins,
   Lock,
   Receipt,
+  Loader2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -54,6 +55,7 @@ import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFiel
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import {
   buildSchedule,
+  getDefaultDatesForRepeat,
   countPeriods,
   describeRepeat,
   getLeaseFinancials,
@@ -84,7 +86,7 @@ export type { DailyRentRecord, TenantLease }
 // so the old copy is deleted and never read.
 removeLegacyTenantStorage()
 
-const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
+const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly', 'Quarterly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 const ITEMS_PER_PAGE = 10
@@ -219,6 +221,10 @@ export const TenantPage: React.FC = () => {
   const [detailTab, setDetailTab] = React.useState<'schedule' | 'history'>('schedule')
   const [detailSearchQuery, setDetailSearchQuery] = React.useState('')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('Monthly')
+  const [isSubmittingAdd, setIsSubmittingAdd] = React.useState(false)
+  const [isSubmittingEdit, setIsSubmittingEdit] = React.useState(false)
+  const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
+  const [isSubmittingRecord, setIsSubmittingRecord] = React.useState(false)
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
     endDate: null,
@@ -359,14 +365,23 @@ export const TenantPage: React.FC = () => {
     }
   }, [])
 
-  // Period change handler matching Sales and Expense pages
+  // Period change handler matching Sales and Expense pages (AC-7 dynamic period calculations)
   const handlePeriodChange = (period: PeriodType) => {
     setSelectedPeriod(period)
     setIsPeriodDropdownOpen(false)
     const currentToday = formatToYYYYMMDD(new Date())
     const [currYear, currMonth, currDay] = currentToday.split('-')
+    const yNum = Number(currYear)
+    const mNum = Number(currMonth)
 
-    if (period === 'Daily') {
+    if (period === 'All Periods') {
+      setDateRange({
+        startDate: null,
+        endDate: null,
+        label: 'All Dates',
+        preset: 'All Dates',
+      })
+    } else if (period === 'Daily') {
       setDateRange({
         startDate: currentToday,
         endDate: currentToday,
@@ -374,17 +389,23 @@ export const TenantPage: React.FC = () => {
         preset: 'Daily',
       })
     } else if (period === 'Monthly') {
+      const lastDayOfMonth = new Date(yNum, mNum, 0).getDate()
       setDateRange({
         startDate: `${currYear}-${currMonth}-01`,
-        endDate: `${currYear}-${currMonth}-31`,
+        endDate: `${currYear}-${currMonth}-${String(lastDayOfMonth).padStart(2, '0')}`,
         label: 'This Month',
         preset: 'This Month',
       })
     } else if (period === 'Quarterly') {
+      const q = Math.ceil(mNum / 3)
+      const qStartMonth = String((q - 1) * 3 + 1).padStart(2, '0')
+      const qEndMonthNum = q * 3
+      const qEndMonth = String(qEndMonthNum).padStart(2, '0')
+      const qEndDay = new Date(yNum, qEndMonthNum, 0).getDate()
       setDateRange({
-        startDate: `${currYear}-10-01`,
-        endDate: `${currYear}-12-31`,
-        label: 'Q4 2026',
+        startDate: `${currYear}-${qStartMonth}-01`,
+        endDate: `${currYear}-${qEndMonth}-${String(qEndDay).padStart(2, '0')}`,
+        label: `Q${q} ${currYear}`,
         preset: 'This Quarter',
       })
     } else if (period === 'Annually') {
@@ -401,6 +422,11 @@ export const TenantPage: React.FC = () => {
   const filteredTenants = React.useMemo(() => {
     return tenants
       .filter((tenant) => {
+        // Period frequency filter check (AC-7)
+        if (selectedPeriod !== 'All Periods') {
+          if (tenant.repeat !== selectedPeriod) return false
+        }
+
         // Status filter check (Paid, Unpaid, Pending)
         if (statusFilter !== 'All') {
           const fin = getLeaseFinancials(tenant, todayStr)
@@ -642,11 +668,13 @@ export const TenantPage: React.FC = () => {
     return Object.keys(errors).length === 0
   }
 
-  // Submit Add
+  // Submit Add (AC-1 submission lock)
   const handleSubmitAdd = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmittingAdd) return
     if (!validateForm()) return
 
+    setIsSubmittingAdd(true)
     const rent = parseFloat(formData.rentAmount)
     const repeating = formData.repeat !== 'None'
     const payable = getFormPayable()
@@ -670,6 +698,8 @@ export const TenantPage: React.FC = () => {
     } catch (err) {
       setFormErrors({ form: messageOf(err) })
       return
+    } finally {
+      setIsSubmittingAdd(false)
     }
 
     applyLease(newTenant)
@@ -690,11 +720,13 @@ export const TenantPage: React.FC = () => {
     }, 100)
   }
 
-  // Submit Edit
+  // Submit Edit (AC-1 submission lock)
   const handleSubmitEdit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmittingEdit) return
     if (!activeTenant || !validateForm(activeTenant)) return
 
+    setIsSubmittingEdit(true)
     const rent = parseFloat(formData.rentAmount)
     const repeating = formData.repeat !== 'None'
     const payable = getFormPayable()
@@ -718,6 +750,8 @@ export const TenantPage: React.FC = () => {
     } catch (err) {
       setFormErrors({ form: messageOf(err) })
       return
+    } finally {
+      setIsSubmittingEdit(false)
     }
 
     applyLease(updatedTenant)
@@ -740,9 +774,10 @@ export const TenantPage: React.FC = () => {
     setViewMode('list')
   }
 
-  // Submit Daily Payment / Missed Record
+  // Submit Daily Payment / Missed Record (AC-1 submission lock)
   const handleSubmitDailyPayment = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmittingPayment) return
     if (!activeTenant) return
 
     if (!paymentDate) {
@@ -838,6 +873,7 @@ export const TenantPage: React.FC = () => {
       }
     }
 
+    setIsSubmittingPayment(true)
     try {
       let updated = await tenantService.addPayment(activeTenant.id, input)
       updated = await syncStatus(updated)
@@ -845,6 +881,8 @@ export const TenantPage: React.FC = () => {
     } catch (err) {
       setPaymentError(messageOf(err))
       return
+    } finally {
+      setIsSubmittingPayment(false)
     }
     setHistoryPage(1)
     setLedgerPage(1)
@@ -879,6 +917,7 @@ export const TenantPage: React.FC = () => {
 
   const handleSubmitEditRecord = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSubmittingRecord) return
     if (!activeTenant || !editingRecord) return
     const lease = activeTenant
     const repeating = isRepeating(lease)
@@ -996,7 +1035,7 @@ export const TenantPage: React.FC = () => {
 
   // Due Date text shared by the table and both exports (AC-8): next unpaid period for a repeating lease
   const getDueDateText = (lease: TenantLease, fin: LeaseFinancials): string => {
-    if (!isRepeating(lease) || fin.periodCount === 0) return lease.dueDate
+    if (!isRepeating(lease) || fin.periodCount === 0) return `${lease.dueDate} (One Time)`
     if (!fin.nextPeriod) return 'Fully paid'
     return `${fin.nextPeriod.dueDate} (${fin.nextPeriod.label})`
   }
@@ -2320,10 +2359,11 @@ export const TenantPage: React.FC = () => {
           </Button>
           <Button
             type="submit"
-            disabled={!canSubmit}
-            className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+            disabled={!canSubmit || isSubmittingPayment}
+            className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-2"
           >
-            {isMissedMark ? 'Mark as Missed' : 'Review & Confirm Payment'}
+            {isSubmittingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+            <span>{isSubmittingPayment ? 'Saving...' : (isMissedMark ? 'Mark as Missed' : 'Review & Confirm Payment')}</span>
           </Button>
         </div>
       </form>
@@ -2739,7 +2779,10 @@ export const TenantPage: React.FC = () => {
                           </span>
                         )
                       ) : (
-                        tenant.dueDate
+                        <div className="flex flex-col items-start gap-0.5">
+                          <span className="font-semibold text-focus">{tenant.dueDate}</span>
+                          <span className="text-[10px] text-muted-fg">One Time</span>
+                        </div>
                       )}
                     </TableCell>
 
@@ -3063,13 +3106,14 @@ export const TenantPage: React.FC = () => {
                   step="any"
                   placeholder="30000"
                   value={formData.rentAmount}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      rentAmount: e.target.value,
-                      totalAmountPayable: formData.totalAmountPayable || e.target.value,
-                    })
-                  }
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setFormData((prev) => ({
+                      ...prev,
+                      rentAmount: val,
+                      totalAmountPayable: prev.repeat === 'None' ? val : prev.totalAmountPayable,
+                    }))
+                  }}
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.rentAmount && 'border-red-500')}
                 />
                 {formErrors.rentAmount && (
@@ -3112,7 +3156,16 @@ export const TenantPage: React.FC = () => {
 
             <RepeatSelect
               value={formData.repeat}
-              onChange={(repeat) => setFormData({ ...formData, repeat })}
+              onChange={(repeat) => {
+                const defaults = getDefaultDatesForRepeat(repeat, todayStr)
+                setFormData((prev) => ({
+                  ...prev,
+                  repeat,
+                  dueDate: defaults.dueDate,
+                  leaseEndDate: defaults.leaseEndDate,
+                  totalAmountPayable: repeat === 'None' ? prev.rentAmount : prev.totalAmountPayable,
+                }))
+              }}
               error={formErrors.repeat}
             />
 
@@ -3192,9 +3245,11 @@ export const TenantPage: React.FC = () => {
               </Button>
               <Button
                 type="submit"
-                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer"
+                disabled={isSubmittingAdd}
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Create Lease
+                {isSubmittingAdd && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
+                <span>{isSubmittingAdd ? 'Saving...' : 'Create Lease'}</span>
               </Button>
             </div>
           </form>
@@ -3258,7 +3313,14 @@ export const TenantPage: React.FC = () => {
                   type="number"
                   step="any"
                   value={formData.rentAmount}
-                  onChange={(e) => setFormData({ ...formData, rentAmount: e.target.value })}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setFormData((prev) => ({
+                      ...prev,
+                      rentAmount: val,
+                      totalAmountPayable: prev.repeat === 'None' ? val : prev.totalAmountPayable,
+                    }))
+                  }}
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.rentAmount && 'border-red-500')}
                 />
               </div>
@@ -3302,7 +3364,13 @@ export const TenantPage: React.FC = () => {
                 <>
                   <RepeatSelect
                     value={formData.repeat}
-                    onChange={(repeat) => setFormData({ ...formData, repeat })}
+                    onChange={(repeat) => {
+                      if (repeat === 'Daily') {
+                        setFormData({ ...formData, repeat, dueDate: todayStr })
+                      } else {
+                        setFormData({ ...formData, repeat })
+                      }
+                    }}
                     disabled={periodsLocked}
                     lockedReason="Locked because payments are already recorded against this schedule."
                     error={formErrors.repeat}
@@ -3394,9 +3462,11 @@ export const TenantPage: React.FC = () => {
               </Button>
               <Button
                 type="submit"
-                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer"
+                disabled={isSubmittingEdit}
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
-                Save Changes
+                {isSubmittingEdit && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
+                <span>{isSubmittingEdit ? 'Saving...' : 'Save Changes'}</span>
               </Button>
             </div>
           </form>
@@ -3774,10 +3844,11 @@ export const TenantPage: React.FC = () => {
                   </Button>
                   <Button
                     type="submit"
-                    disabled={!isAmountValid || isDateAlreadySettled || !paymentDate}
-                    className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+                    disabled={!isAmountValid || isDateAlreadySettled || !paymentDate || isSubmittingPayment}
+                    className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-2"
                   >
-                    Review & Confirm Payment
+                    {isSubmittingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
+                    <span>{isSubmittingPayment ? 'Saving...' : 'Review & Confirm Payment'}</span>
                   </Button>
                 </div>
               </form>

@@ -32,7 +32,8 @@ def login(
     response: Response,
 ):
     result, cookie = login_user(db=None, login_data=login_data, ip_address=request.client.host if request.client else "unknown")
-    response.set_cookie("mct_login_otp", cookie, httponly=True, secure=settings.OTP_COOKIE_SECURE, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
+    is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
+    response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result
 
 @router.post("/login/verify-otp", response_model=TokenResponse, summary="Verify Login OTP")
@@ -51,7 +52,8 @@ def resend_otp(
     response: Response,
 ):
     result, cookie = resend_login_otp(db=None, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
-    response.set_cookie("mct_login_otp", cookie, httponly=True, secure=settings.OTP_COOKIE_SECURE, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
+    is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
+    response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result
 
 # logout user

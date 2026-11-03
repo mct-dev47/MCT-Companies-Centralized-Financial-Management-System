@@ -129,12 +129,12 @@ export const LendingPage: React.FC = () => {
       })
   }, [])
 
-  // Save to localStorage whenever facilities update
+  // Save to sessionStorage whenever facilities update
   const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
     setFacilities(newFacilities)
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newFacilities))
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(newFacilities))
       } catch (err) {
         console.error('Error saving lending facilities:', err)
       }
@@ -2161,7 +2161,7 @@ export const LendingPage: React.FC = () => {
                       )
                       setFacilities(updated)
                       if (typeof window !== 'undefined') {
-                        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
+                        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
                       }
                       setOpenMenuFacilityId(null)
                       setMenuPosition(null)
@@ -2195,7 +2195,7 @@ export const LendingPage: React.FC = () => {
                       )
                       setFacilities(updated)
                       if (typeof window !== 'undefined') {
-                        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
+                        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
                       }
                       setOpenMenuFacilityId(null)
                       setMenuPosition(null)

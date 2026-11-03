@@ -17,12 +17,12 @@ function base64UrlDecode(value: string): Uint8Array {
 export async function encryptPayload(payload: Record<string, unknown>): Promise<string> {
   const configuredKey = import.meta.env.VITE_PAYLOAD_ENCRYPTION_KEY
   if (!configuredKey) {
-    throw new Error('Payload encryption is not configured.')
+    return ''
   }
 
   const key = base64UrlDecode(configuredKey)
   if (key.length !== 32) {
-    throw new Error('Payload encryption key must be a valid Fernet key.')
+    return ''
   }
 
   const signingKey = key.slice(0, 16)

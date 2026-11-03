@@ -211,12 +211,12 @@ export const INITIAL_FACILITIES: LendingFacility[] = []
 
 class LendingServiceGateway {
   /**
-   * Load facilities from localStorage cache.
+   * Load facilities from sessionStorage cache.
    */
   loadFromStorage(): LendingFacility[] {
     if (typeof window !== 'undefined') {
       try {
-        const saved = localStorage.getItem(LENDING_STORAGE_KEY)
+        const saved = sessionStorage.getItem(LENDING_STORAGE_KEY)
         if (saved) {
           const parsed = JSON.parse(saved)
           if (Array.isArray(parsed)) {
@@ -231,12 +231,12 @@ class LendingServiceGateway {
   }
 
   /**
-   * Save facilities to localStorage cache.
+   * Save facilities to sessionStorage cache.
    */
   saveToStorage(facilities: LendingFacility[]): void {
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(LENDING_STORAGE_KEY, JSON.stringify(facilities))
+        sessionStorage.setItem(LENDING_STORAGE_KEY, JSON.stringify(facilities))
         window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
       } catch (err) {
         console.error('Error saving lending facilities to storage:', err)
@@ -301,7 +301,7 @@ class LendingServiceGateway {
   }
 
   /**
-   * Fetch borrowers list from backend with localStorage fallback.
+   * Fetch borrowers list from backend with sessionStorage fallback.
    */
   async getFacilities(companyId?: number): Promise<LendingFacility[]> {
     try {

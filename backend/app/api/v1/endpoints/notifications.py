@@ -21,7 +21,7 @@ from app.db.session import get_db
 from app.schemas.notification import NotificationCountOut, NotificationOut
 from app.services.notification_service import NotificationService
 
-router = APIRouter(prefix="/notifications", tags=["Notifications"])
+router = APIRouter(tags=["Notifications"])
 
 MULTI_COMPANY_ROLES = {"admin", "finance", "audit", "auditor"}
 
@@ -59,8 +59,11 @@ def _resolve_authorized_scope(
     clean_cname = (company_name_param or "").strip()
     if explicit_cid is None and clean_cname and clean_cname.lower() != "all companies":
         # Fail closed if an unknown company name is requested; never fall back to None (All Companies)
-        comp = resolve_company(db, None, clean_cname)
-        explicit_cid = comp.company_id
+        try:
+            comp = resolve_company(db, None, clean_cname)
+            explicit_cid = comp.company_id
+        except HTTPException:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found.")
 
     if is_multi_company:
         resolved_cid = explicit_cid
@@ -129,6 +132,11 @@ def get_notifications(
     "/count",
     response_model=NotificationCountOut,
     summary="Get total active notification count",
+)
+@router.get(
+    "/unread-count",
+    response_model=NotificationCountOut,
+    summary="Get unread notification count",
 )
 def notification_count(
     current_user: CurrentUser,

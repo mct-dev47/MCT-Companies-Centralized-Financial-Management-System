@@ -17,6 +17,7 @@ import {
   ChevronRight,
   AlertCircle,
   X,
+  XCircle,
   CheckCircle2,
   HandCoins,
   Clock,
@@ -114,11 +115,19 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }, [isAdmin, loanType])
 
-  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
+  const { activeCompany, setActiveCompany, dbCompanies: contextDbCompanies } = useCompany()
+
+  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>(() => {
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      return contextDbCompanies.map((c) => ({
+        company_id: c.company_id ?? c.id,
+        company_name: c.company_name ?? c.name,
+      }))
+    }
+    return []
+  })
   const [loans, setLoans] = React.useState<LoanItem[]>([])
   const [loading, setLoading] = React.useState(true)
-
-  const { activeCompany, setActiveCompany } = useCompany()
 
   // Filter state
   const [selectedCompany, setSelectedCompany] = React.useState<string>(
@@ -139,7 +148,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }, [activeCompany, isCompanyScoped])
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
-  const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Approve')
+  const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     preset: 'All Dates',
@@ -243,18 +252,27 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     setOpenMenuLoanId(null)
   }
 
-  // Fetch Companies from Database
+  // Fetch Companies from Database (or populate from context)
   React.useEffect(() => {
     let mounted = true
-    loanService.getCompanies().then((res) => {
-      if (mounted && res.length > 0) {
-        setDbCompanies(res)
-      }
-    })
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      setDbCompanies(
+        contextDbCompanies.map((c) => ({
+          company_id: c.company_id ?? c.id,
+          company_name: c.company_name ?? c.name,
+        }))
+      )
+    } else {
+      loanService.getCompanies().then((res) => {
+        if (mounted && res.length > 0) {
+          setDbCompanies(res)
+        }
+      })
+    }
     return () => {
       mounted = false
     }
-  }, [])
+  }, [contextDbCompanies])
 
   const companyNamesList = React.useMemo(() => {
     const list = dbCompanies.map((c) => c.company_name).filter(Boolean)
@@ -562,6 +580,14 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
     setCurrentPage(1)
     setHighlightedLoanId(newItem.id)
+
+    // Automatically redirect Finance/Admin to the Loan Details modal to endorse to audit
+    if (canApprove) {
+      if (loanType !== 'Borrower') {
+        setLoanType('Borrower')
+      }
+      setViewLoanItem(newItem)
+    }
 
     setTimeout(() => {
       tableCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1607,10 +1633,43 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   Close
                 </Button>
 
+                {isAuditor && viewLoanItem.status === 'Pending Audit Approval' && (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        const target = viewLoanItem
+                        setViewLoanItem(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Disapprove</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        const target = viewLoanItem
+                        setViewLoanItem(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Approve</span>
+                    </Button>
+                  </>
+                )}
+
                 {!isAuditor &&
                   canApprove &&
                   (viewLoanItem.status === 'Pending Finance Endorsement' ||
-                    viewLoanItem.status === 'Pending Approval') && (
+                    viewLoanItem.status === 'Pending Approval' ||
+                    ((viewLoanItem.status || '').toLowerCase().includes('pending') &&
+                      !(viewLoanItem.status || '').toLowerCase().includes('audit'))) && (
                     <Button
                       type="button"
                       size="sm"
@@ -1681,6 +1740,39 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           >
             {isAuditor ? (
               <>
+                {activeMenuLoan.status === 'Pending Audit Approval' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuLoan
+                        setOpenMenuLoanId(null)
+                        setMenuPosition(null)
+                        setActiveMenuLoan(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Approve</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuLoan
+                        setOpenMenuLoanId(null)
+                        setMenuPosition(null)
+                        setActiveMenuLoan(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Disapprove</span>
+                    </button>
+                    <div className="h-px bg-slate-100 my-1" />
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => handleMarkLoanAudit(activeMenuLoan, 'Verified')}
@@ -1705,11 +1797,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                     setOpenMenuLoanId(null)
                     setMenuPosition(null)
                     setActiveMenuLoan(null)
-                    if (target.status === 'Pending Audit Approval') {
-                      setAuditReviewLoanItem(target)
-                    } else {
-                      setViewLoanItem(target)
-                    }
+                    setViewLoanItem(target)
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >

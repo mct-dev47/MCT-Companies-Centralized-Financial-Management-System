@@ -70,6 +70,7 @@ class Expense(Base):
     amount = Column(Numeric(15, 2), nullable=False)
     amount_paid = Column(Numeric(15, 2), default=0.00)
     description = Column(Text, nullable=True)
+    particulars = synonym("description")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     # Audit review result (spec 0014): saved on the server so every account sees the same status.
@@ -77,6 +78,11 @@ class Expense(Base):
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
+
+    def __init__(self, **kwargs):
+        if "particulars" in kwargs and "description" not in kwargs:
+            kwargs["description"] = kwargs.pop("particulars")
+        super().__init__(**kwargs)
 
     category = relationship("Category", back_populates="expenses")
 

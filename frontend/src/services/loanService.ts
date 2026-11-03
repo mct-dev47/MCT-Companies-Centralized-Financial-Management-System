@@ -338,7 +338,7 @@ export const loanService = {
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
-      const res = await fetch('/api/v1/companies', {
+      const res = await fetch('/api/v1/companies/lookup', {
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),

@@ -259,46 +259,69 @@ def _record_failed_login(db: Session, ip_address: str, email: str = "") -> None:
     if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
         return
     now = datetime.now(timezone.utc)
-    state = _rate_limits.setdefault(ip_address, {"attempts": 0, "locked_until": None})
-    locked_until = state["locked_until"]
-    if isinstance(locked_until, datetime) and locked_until > now:
+    from app.models.security import LoginRateLimit
+    rate_row = db.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+    if not rate_row:
+        rate_row = LoginRateLimit(ip_address=ip_address, failed_attempts=0, last_attempt_at=now)
+        db.add(rate_row)
+        db.commit()
+
+    if rate_row.locked_until and rate_row.locked_until > now:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
         )
-    if isinstance(locked_until, datetime):
-        state["attempts"] = 0
-        state["locked_until"] = None
-    state["attempts"] = int(state["attempts"]) + 1
-    if int(state["attempts"]) >= settings.LOGIN_MAX_ATTEMPTS:
-        state["locked_until"] = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+    if rate_row.locked_until and rate_row.locked_until <= now:
+        rate_row.failed_attempts = 0
+        rate_row.locked_until = None
+
+    rate_row.failed_attempts += 1
+    rate_row.last_attempt_at = now
+    if rate_row.failed_attempts >= settings.LOGIN_MAX_ATTEMPTS:
+        rate_row.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
         try:
             log_account_locked(db, ip_address=ip_address, email=email)
         except Exception:
             pass
+    db.commit()
 
 
 def _ensure_ip_available(db: Session, ip_address: str) -> None:
     if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
         return
     now = datetime.now(timezone.utc)
-    state = _rate_limits.get(ip_address)
-    locked_until = state.get("locked_until") if state else None
-    if isinstance(locked_until, datetime) and locked_until > now:
+    from app.models.security import LoginRateLimit
+    rate_row = db.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+    if rate_row and rate_row.locked_until and rate_row.locked_until > now:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
         )
-    if state and isinstance(locked_until, datetime):
-        state["attempts"] = 0
-        state["locked_until"] = None
+    if rate_row and rate_row.locked_until and rate_row.locked_until <= now:
+        rate_row.failed_attempts = 0
+        rate_row.locked_until = None
+        db.commit()
+
+
+def _reset_ip_attempts(db: Session, ip_address: str) -> None:
+    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
+        return
+    try:
+        from app.models.security import LoginRateLimit
+        rate_row = db.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+        if rate_row:
+            rate_row.failed_attempts = 0
+            rate_row.locked_until = None
+            db.commit()
+    except Exception:
+        pass
 
 
 def _get_jwt_secret() -> str:
-    secret = settings.SUPABASE_JWT_SECRET or settings.SUPABASE_KEY
-    if not secret:
-        secret = "mct-centralized-financial-system-secret-key-32chars!"
-    return secret
+    secret = settings.SUPABASE_JWT_SECRET
+    if not secret or len(secret.strip()) < 32:
+        raise RuntimeError("SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters.")
+    return secret.strip()
 
 
 # create jwt token
@@ -425,27 +448,7 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
     except Exception as exc:
         authenticated = False
 
-    # Flexible password matching for seeded accounts (supports Password123!, password123, or TempEmployee2026!)
-    allowed_seeded_passwords = ["password123", "password123!", "tempemployee2026!", "tempemployee2026", "password", "employee", "employee123", "password!"]
-    if not authenticated and password.lower() in allowed_seeded_passwords:
-        for try_pwd in ["TempEmployee2026!", "Password123!", "password123"]:
-            try:
-                supabase = get_supabase_client()
-                auth_response = supabase.auth.sign_in_with_password({
-                    "email": normalized_email,
-                    "password": try_pwd,
-                })
-                authenticated = bool(auth_response and auth_response.session)
-                if authenticated:
-                    break
-            except Exception:
-                pass
-
     user = _get_application_user(email=normalized_email)
-
-    # Master/default password check for application and seeded accounts
-    if not authenticated and user and password.lower() in allowed_seeded_passwords:
-        authenticated = True
 
     if not authenticated or not user:
         try:
@@ -458,6 +461,8 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password." if not authenticated else "Application user profile not found.",
         )
+
+    _reset_ip_attempts(db, ip_address)
 
     otp = f"{secrets.randbelow(1_000_000):06d}"
     now = datetime.now(timezone.utc)
@@ -523,6 +528,7 @@ def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, c
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code.")
 
     challenge_state["consumed"] = True
+    _reset_ip_attempts(db, ip_address)
     user_id = challenge.get("user_id")
     user = _get_application_user(user_id=int(user_id)) if user_id else None
     if user:

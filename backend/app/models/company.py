@@ -9,7 +9,7 @@ class Company(Base):
 
     company_id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     company_name = Column(String(100), nullable=False)
-    location = Column(String(100), nullable=False)
+    location = Column(String(100), nullable=True, default="Manila")
     contact_number = Column(String(11), nullable=True)
     phone = Column(String(8), nullable=True)
     starting_balance = Column(Numeric(15, 2), nullable=False)

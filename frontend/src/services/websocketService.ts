@@ -9,6 +9,10 @@ type SyncEventType =
   | 'BANK_UPDATED'
   | 'AUDIT_UPDATED'
   | 'TENANTS_UPDATED'
+  | 'SALES_UPDATED'
+  | 'EXPENSE_CREATED'
+  | 'EXPENSE_UPDATED'
+  | 'EXPENSE_DELETED'
   | 'ALL'
 type Listener = (payload?: any) => void
 
@@ -35,17 +39,33 @@ class WebSocketService {
     }
   }
 
+  private getToken(): string | null {
+    if (typeof window === 'undefined') return null
+    return (
+      sessionStorage.getItem('mct_access_token') ||
+      sessionStorage.getItem('auth_token') ||
+      localStorage.getItem('auth_token')
+    )
+  }
+
   public connect(): void {
     if (typeof window === 'undefined') return
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return
     }
     if (this.isConnecting) return
+
+    const token = this.getToken()
+    if (!token) {
+      // Avoid connecting without authorization token to prevent 1008 policy violation
+      return
+    }
+
     this.isConnecting = true
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Connect via relative proxy (/ws) or fallback to localhost:8000
-    const wsUrl = `${protocol}//${window.location.host}/ws`
+    // Connect via relative proxy (/ws) with auth token query param
+    const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`
 
     try {
       this.socket = new WebSocket(wsUrl)
@@ -89,6 +109,23 @@ class WebSocketService {
     }
   }
 
+  public disconnect(): void {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
+    this.stopPing()
+    this.isConnecting = false
+    if (this.socket) {
+      try {
+        this.socket.close()
+      } catch {
+        // ignore
+      }
+      this.socket = null
+    }
+  }
+
   private startPing(): void {
     this.stopPing()
     this.pingInterval = window.setInterval(() => {
@@ -107,10 +144,13 @@ class WebSocketService {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) return
+    const token = this.getToken()
+    if (!token) return
+
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null
       this.connect()
-    }, 3000)
+    }, 5000)
   }
 
   public subscribe(eventType: SyncEventType, callback: Listener): () => void {

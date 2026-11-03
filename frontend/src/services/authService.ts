@@ -393,13 +393,29 @@ export const authService = {
    * Validates credentials and starts an email OTP challenge.
    */
   async signIn(values: SignInFormValues): Promise<SignInResult> {
-    const encryptedPayload = await encryptPayload({
+    const configuredKey = import.meta.env.VITE_PAYLOAD_ENCRYPTION_KEY
+    let body: Record<string, unknown> = {
       email: values.email,
       password: values.password,
-    })
+    }
+
+    if (configuredKey) {
+      try {
+        const encryptedPayload = await encryptPayload({
+          email: values.email,
+          password: values.password,
+        })
+        if (encryptedPayload) {
+          body = { encrypted_payload: encryptedPayload }
+        }
+      } catch {
+        // Fall back to direct payload over HTTPS
+      }
+    }
+
     const response = await request<{
       email: string
-    }>('/login', { encrypted_payload: encryptedPayload })
+    }>('/login', body)
     return { status: '2fa_required', email: response.email }
   },
 

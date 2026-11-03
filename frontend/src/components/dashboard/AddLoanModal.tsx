@@ -17,6 +17,7 @@ import {
   Building2,
 } from 'lucide-react'
 import { useSession } from '@/hooks/useSession'
+import { useCompany } from '@/context/CompanyContext'
 import {
   loanService,
   type NewLoanInput,
@@ -44,23 +45,42 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
   companies: propsCompanies,
 }) => {
   const { user } = useSession()
-  const isFinanceUser = (user?.role || '').toLowerCase() === 'finance'
+  const { activeCompany, dbCompanies: contextDbCompanies } = useCompany()
+  const userRole = (user?.role || '').toLowerCase()
+  const isFinanceUser = userRole === 'finance' || userRole === 'admin'
   const isCompanyUser = !isFinanceUser
 
-  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
+  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>(() => {
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      return contextDbCompanies.map((c) => ({
+        company_id: c.company_id ?? c.id,
+        company_name: c.company_name ?? c.name,
+      }))
+    }
+    return []
+  })
 
-  // Fetch companies from DB
+  // Fetch companies from DB or context cache
   React.useEffect(() => {
     let mounted = true
-    loanService.getCompanies().then((res) => {
-      if (mounted && res.length > 0) {
-        setDbCompanies(res)
-      }
-    })
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      setDbCompanies(
+        contextDbCompanies.map((c) => ({
+          company_id: c.company_id ?? c.id,
+          company_name: c.company_name ?? c.name,
+        }))
+      )
+    } else {
+      loanService.getCompanies().then((res) => {
+        if (mounted && res.length > 0) {
+          setDbCompanies(res)
+        }
+      })
+    }
     return () => {
       mounted = false
     }
-  }, [])
+  }, [contextDbCompanies])
 
   const allCompanyNames = React.useMemo(() => {
     if (dbCompanies.length > 0) {
@@ -72,10 +92,28 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
     return []
   }, [dbCompanies, propsCompanies])
 
-  const defaultBorrower =
-    assignedCompany && assignedCompany !== 'All Companies'
-      ? assignedCompany
-      : allCompanyNames[0] || ''
+  const defaultBorrower = React.useMemo(() => {
+    if (activeCompany && activeCompany !== 'All Companies') {
+      return activeCompany
+    }
+    if (assignedCompany && assignedCompany !== 'All Companies') {
+      return assignedCompany
+    }
+    return allCompanyNames[0] || ''
+  }, [activeCompany, assignedCompany, allCompanyNames])
+
+  const handleBorrowerChange = (newBorrower: string) => {
+    setBorrowerCompany(newBorrower)
+    if (fieldErrors.borrower) {
+      setFieldErrors((p) => ({ ...p, borrower: undefined }))
+    }
+    if (lenderCompany.toLowerCase() === newBorrower.toLowerCase()) {
+      const remaining = allCompanyNames.filter(
+        (co) => co.toLowerCase() !== newBorrower.toLowerCase()
+      )
+      setLenderCompany(remaining[0] || '')
+    }
+  }
 
   const [date, setDate] = React.useState(formatToYYYYMMDD(new Date()))
   const [interestRate, setInterestRate] = React.useState('0')
@@ -274,20 +312,42 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                 {fieldErrors.date && <p className="text-2xs text-red-500">{fieldErrors.date}</p>}
               </div>
 
-              {/* 2. Borrower Company (Automatic from account) */}
+              {/* 2. Borrower Company */}
               <div className="space-y-1.5 col-span-1 sm:col-span-2">
                 <Label className="text-xs font-semibold text-focus block">
-                  Borrower Company
+                  Borrower Company <span className="text-red-500">*</span>
                 </Label>
-                <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-focus/90 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xs select-none">
-                  <div className="flex items-center gap-2 truncate">
-                    <Building2 className="w-4 h-4 text-primary shrink-0" />
-                    <span className="truncate font-semibold">{borrowerCompany}</span>
+                {isFinanceUser ? (
+                  <div className="relative">
+                    <select
+                      value={borrowerCompany}
+                      onChange={(e) => handleBorrowerChange(e.target.value)}
+                      className={cn(
+                        'w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer',
+                        fieldErrors.borrower && 'border-red-500'
+                      )}
+                    >
+                      {allCompanyNames.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <span className="text-[11px] text-muted-fg font-normal px-2 py-0.5 rounded-md bg-white border border-stroke/30 shrink-0">
-                    Automatic (Account)
-                  </span>
-                </div>
+                ) : (
+                  <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-focus/90 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xs select-none">
+                    <div className="flex items-center gap-2 truncate">
+                      <Building2 className="w-4 h-4 text-primary shrink-0" />
+                      <span className="truncate font-semibold">{borrowerCompany}</span>
+                    </div>
+                    <span className="text-[11px] text-muted-fg font-normal px-2 py-0.5 rounded-md bg-white border border-stroke/30 shrink-0">
+                      Automatic (Account)
+                    </span>
+                  </div>
+                )}
+                {fieldErrors.borrower && (
+                  <p className="text-2xs text-red-500">{fieldErrors.borrower}</p>
+                )}
               </div>
 
               {/* 4. Lender Company */}

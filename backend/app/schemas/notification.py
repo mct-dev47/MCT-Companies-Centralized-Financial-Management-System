@@ -24,8 +24,12 @@ class NotificationOut(BaseModel):
     reference_id: Optional[int] = None
     is_read: bool = False                   # always False from the server
     created_at: Optional[datetime] = None
+    due_date: Optional[str] = None
+    amount: Optional[float] = None
+    remaining_amount: Optional[float] = None
+    paid_amount: Optional[float] = None
 
-    model_config = ConfigDict(from_attributes=False)
+    model_config = ConfigDict(from_attributes=False, extra="allow")
 
 
 class NotificationCountOut(BaseModel):

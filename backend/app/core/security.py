@@ -19,16 +19,31 @@ _SUPPORTED_ALGORITHM = "HS256"
 _revoked_tokens: set[str] = set()
 
 
-def revoke_access_token(token: str) -> None:
-    _revoked_tokens.add(hashlib.sha256(token.encode("utf-8")).hexdigest())
+def revoke_access_token(token: str, db: Any | None = None) -> None:
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _revoked_tokens.add(token_hash)
+    try:
+        from app.db.session import SessionLocal
+        from app.models.security import RevokedToken
+        session = db or SessionLocal()
+        try:
+            existing = session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first()
+            if not existing:
+                session.add(RevokedToken(token_hash=token_hash))
+                session.commit()
+        finally:
+            if db is None:
+                session.close()
+    except Exception:
+        pass
 
-#get
+
 def get_access_token(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)
     ],
 ) -> str:
-    #Return the bearer token or reject an unauthenticated request.
+    # Return the bearer token or reject an unauthenticated request.
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -38,7 +53,7 @@ def get_access_token(
 
     return credentials.credentials
 
-# get the access token from the Authorization header, validate it, and return its claims.
+
 def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, Any]:
     """Validate a Supabase HS256 JWT and return its claims.
 
@@ -47,10 +62,24 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
     expired timestamps, an invalid audience, or an invalid issuer.
     """
     secret = settings.SUPABASE_JWT_SECRET
-    if not secret:
-        raise RuntimeError("SUPABASE_JWT_SECRET is not configured. Set it in backend/.env.")
-    if hashlib.sha256(token.encode("utf-8")).hexdigest() in _revoked_tokens:
+    if not secret or len(secret.strip()) < 32:
+        raise RuntimeError("SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters.")
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    if token_hash in _revoked_tokens:
         raise _invalid_token("Access token has been revoked.")
+
+    try:
+        from app.db.session import SessionLocal
+        from app.models.security import RevokedToken
+        with SessionLocal() as db_session:
+            if db_session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first():
+                _revoked_tokens.add(token_hash)
+                raise _invalid_token("Access token has been revoked.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     try:
         header_segment, payload_segment, signature_segment = token.split(".")
@@ -88,11 +117,11 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
 
     return payload
 
-#decode a base64url-encoded JWT segment, and raise a ValueError if the decoded value is not valid base64.
+
 def _decode_segment(segment: str) -> bytes:
     return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
 
-#get json object from a base64url-encoded JWT segment, and raise a ValueError if the decoded value is not a JSON object.
+
 def _decode_json_segment(segment: str) -> dict[str, Any]:
     decoded = _decode_segment(segment)
     value = json.loads(decoded.decode("utf-8"))
@@ -100,7 +129,7 @@ def _decode_json_segment(segment: str) -> dict[str, Any]:
         raise ValueError("JWT segment is not an object.")
     return value
 
-#check if the numeric timestamp claim is present and valid, and raise an HTTPException if it is not.
+
 def _validate_numeric_timestamp(
     payload: dict[str, Any],
     claim: str,
@@ -121,7 +150,7 @@ def _validate_numeric_timestamp(
     if claim == "nbf" and now < value:
         raise _invalid_token("Access token is not active yet.")
 
-# return an HTTPException for an invalid token with a 401 status code and a WWW-Authenticate header.
+
 def _invalid_token(detail: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

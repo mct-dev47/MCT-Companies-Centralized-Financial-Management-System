@@ -8,16 +8,20 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class PettyCashTopUpCreate(BaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
+    company_name: Optional[str] = Field(None, min_length=1, max_length=100)
     amount: Decimal = Field(..., ge=1, decimal_places=2)
     topup_date: date
     reference_no: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = None
     status: Optional[str] = "Pending Finance Endorsement"
     created_by: Optional[int] = None
+    bank_account_id: Optional[str] = None
+    finance_remark: Optional[str] = None
+    endorsement_remark: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_fields(self):
-        if not self.company_id and not self.company:
+        if not self.company_id and not self.company and not self.company_name:
             raise ValueError("Company identifier (company_id or company name) is required.")
         if self.topup_date > date.today():
             raise ValueError("Top-up date cannot be in the future.")

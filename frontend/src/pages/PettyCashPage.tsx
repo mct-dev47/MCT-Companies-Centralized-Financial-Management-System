@@ -70,16 +70,6 @@ export type PettyCashTransaction = PettyCashLedgerEntry
 
 const COMPANY_LIST = [
   'All Companies',
-  'MCT Kitchen',
-  'MCT Hotel',
-  'JK Cafe',
-  'Annex Nine',
-  'Merillon',
-  'JK Printing',
-  'Speedbox',
-  'JK Property and Ventures',
-  'Golden Sunburst Ventures',
-  'FilCap Prime Holdings Corp.',
 ]
 
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
@@ -120,7 +110,7 @@ export const PettyCashPage: React.FC = () => {
     loanService.getCompanies().then((companies) => {
       if (mounted && companies.length > 0) {
         const names = companies.map((c) => c.company_name).filter(Boolean)
-        const combined = Array.from(new Set(['All Companies', ...names, ...COMPANY_LIST]))
+        const combined = Array.from(new Set(['All Companies', ...names]))
         setCompanyList(combined)
       }
     })
@@ -225,7 +215,7 @@ export const PettyCashPage: React.FC = () => {
     try {
       setIsLoading(true)
       const compParam = selectedCompany !== 'All Companies' ? selectedCompany : undefined
-      const [summaries, ledgerData] = await Promise.all([
+      const [summariesRes, ledgerRes] = await Promise.allSettled([
         pettyCashService.getAllSummaries(),
         pettyCashService.getLedger(compParam, {
           startDate: dateRange.startDate || undefined,
@@ -233,12 +223,21 @@ export const PettyCashPage: React.FC = () => {
         }),
       ])
 
-      const balanceMap: Record<string, number> = {}
-      summaries.forEach((s) => {
-        balanceMap[s.companyName] = s.balance
-      })
-      setBalances(balanceMap)
-      setLedger(ledgerData)
+      if (summariesRes.status === 'fulfilled') {
+        const balanceMap: Record<string, number> = {}
+        summariesRes.value.forEach((s) => {
+          balanceMap[s.companyName] = s.balance
+        })
+        setBalances(balanceMap)
+      } else {
+        console.error('Failed to load petty cash summaries from backend:', summariesRes.reason)
+      }
+
+      if (ledgerRes.status === 'fulfilled') {
+        setLedger(ledgerRes.value)
+      } else {
+        console.error('Failed to load petty cash ledger from backend:', ledgerRes.reason)
+      }
     } catch (err: any) {
       console.error('Failed to load petty cash data from backend:', err)
     } finally {
@@ -528,7 +527,7 @@ export const PettyCashPage: React.FC = () => {
     setStatusFilter('All')
     setSearchQuery('')
     await loadData()
-    setApprovalFeedback('Petty cash request submitted to the Finance team successfully.')
+    setApprovalFeedback(isFinance ? 'Petty cash top up endorsed directly to Internal Audit.' : 'Petty cash request submitted to the Finance team successfully.')
     setTimeout(() => setApprovalFeedback(null), 5000)
   }
 
@@ -1832,6 +1831,7 @@ export const PettyCashPage: React.FC = () => {
         company={selectedCompany === 'All Companies' ? (user?.assignedCompany || 'MCT Kitchen') : selectedCompany}
         currentBalance={currentBalance}
         companies={companyList}
+        bankAccounts={bankAccounts}
         onSuccess={handleTopUpSuccess}
       />
 

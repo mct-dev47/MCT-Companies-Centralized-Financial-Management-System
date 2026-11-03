@@ -9,6 +9,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 from app.core.cache import system_cache
 
@@ -134,7 +135,27 @@ class SqlStore:
 
     def list_refs(self, prefix: str) -> List[str]:
         rows = self.db.query(TenantLease.tenant_ref).filter(TenantLease.tenant_ref.like(f"{prefix}%")).all()
-        return [r[0] for r in rows]
+        return [r[0] for r in rows if r[0]]
+
+    def find_recent_duplicate(self, company_id: int, tenant_name: str, unit_name: str, seconds: int = 5, contract_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        q = self.db.query(TenantLease).filter(
+            TenantLease.company_id == company_id,
+            func.lower(TenantLease.tenant_name) == tenant_name.strip().lower(),
+            func.lower(TenantLease.unit_name) == unit_name.strip().lower(),
+        )
+        c_d = _to_date(contract_date) if contract_date else None
+        if c_d is not None:
+            q = q.filter(TenantLease.contract_date == c_d)
+        leases = q.order_by(TenantLease.lease_id.desc()).all()
+        now = datetime.now(timezone.utc)
+        for lease in leases:
+            if lease.created_at:
+                created = lease.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if abs((now - created).total_seconds()) <= seconds:
+                    return self._lease_row(lease)
+        return None
 
     def insert_lease(self, data: Dict[str, Any]) -> Dict[str, Any]:
         lease = TenantLease(**{k: (_to_date(v) if k in ("contract_date", "due_date", "lease_end_date") else v)
@@ -285,6 +306,23 @@ def _supabase_client() -> Any:
         return None
     from app.db.supabase import get_supabase_admin_client
     return get_supabase_admin_client()
+
+
+def extract_company_code(company_name: Optional[str]) -> str:
+    """Extract clean company code for tenant reference formatting."""
+    if not company_name:
+        return "JK"
+    name = company_name.strip()
+    upper = name.upper()
+    if upper.startswith("JK"):
+        return "JK"
+    if upper.startswith("FILCAP") or upper.startswith("FILCAM"):
+        return "FILCAP"
+    if upper.startswith("MCT"):
+        return "MCT"
+    parts = name.split()
+    first_word = "".join(c for c in parts[0] if c.isalnum()).upper()
+    return first_word if first_word else "JK"
 
 
 class TenantService:
@@ -471,11 +509,19 @@ class TenantService:
         return {"audit_status": PENDING_AUDIT, "audited_by": None, "audited_at": None, "audit_remarks": None}
 
     # -- leases -----------------------------------------------------------
-    def _next_ref(self) -> str:
-        prefix = f"TNT-JK-{date.today().year}-"
+    def _next_ref(self, company_code: str = "JK") -> str:
+        year = date.today().year
+        prefix = f"TNT-{company_code}-{year}-"
         refs = self._run("list_refs", prefix)
-        numbers = [int(r[len(prefix):]) for r in refs if r.startswith(prefix) and r[len(prefix):].isdigit()]
-        return f"{prefix}{(max(numbers) if numbers else 0) + 1:03d}"
+        numbers = []
+        for r in refs:
+            if r.startswith(prefix):
+                suffix = r[len(prefix):]
+                parts = suffix.split("-")
+                if parts[0].isdigit():
+                    numbers.append(int(parts[0]))
+        next_num = (max(numbers) if numbers else 0) + 1
+        return f"{prefix}{next_num:03d}"
 
     def create_lease(self, body: Any, user: AuthenticatedUser) -> Dict[str, Any]:
         # The resolver falls back to the first company when none is named. A lease must never land in a
@@ -485,6 +531,7 @@ class TenantService:
             raise HTTPException(status_code=400, detail="A company is required for a tenant lease.")
         company = resolve_company(self.db, company_id=body.company_id, company_name=body.company_name)
         check_company_access(user, company.company_id)
+
         merged = self._normalise_lease({
             "tenant_name": body.tenant_name.strip(),
             "unit_name": body.unit_name.strip(),
@@ -496,6 +543,26 @@ class TenantService:
             "penalty_rate": body.penalty_rate,
             "total_amount_payable": body.total_amount_payable,
         })
+
+        # Check duplicate submission within 5-second window (AC-2)
+        norm_name = body.tenant_name.strip().lower()
+        norm_unit = body.unit_name.strip().lower()
+        c_date = str(body.contract_date or "")
+        dedup_key = f"tenant_lease_create:{company.company_id}:{norm_name}:{norm_unit}:{c_date}"
+
+        if system_cache.get(dedup_key):
+            raise HTTPException(
+                status_code=409,
+                detail="A lease for this tenant and unit was recently submitted. Please wait a moment before trying again.",
+            )
+
+        recent_dup = self._run("find_recent_duplicate", company.company_id, norm_name, norm_unit, 5, c_date)
+        if recent_dup:
+            raise HTTPException(
+                status_code=409,
+                detail="A lease for this tenant and unit was recently submitted. Please wait a moment before trying again.",
+            )
+
         data = {
             **merged,
             "company_id": company.company_id,
@@ -507,18 +574,26 @@ class TenantService:
             "audit_remarks": None,
             "created_by": user.get("user_id"),
         }
+
+        # Set deduplication lock in cache before insert attempt
+        system_cache.set(dedup_key, True, ttl=5)
+
+        company_code = extract_company_code(company.company_name)
         last_error: Optional[Exception] = None
-        for _ in range(4):
-            data["tenant_ref"] = self._next_ref()
+        for _ in range(5):
+            data["tenant_ref"] = self._next_ref(company_code)
             try:
                 row = self._run("insert_lease", data)
                 system_cache.invalidate_tag("notifications")
                 return self.to_out(row)
             except HTTPException:
+                system_cache._delete_key(dedup_key)
                 raise
-            except Exception as exc:  # most likely a duplicate reference from a parallel request
+            except Exception as exc:  # collision on tenant_ref or concurrent insert
                 last_error = exc
                 logger.warning("Tenant lease insert retry: %s", exc)
+
+        system_cache._delete_key(dedup_key)
         # Keep the database's own error text in the server log only. It can name tables, columns or hosts.
         logger.error("Tenant lease could not be saved after retries: %s", last_error)
         raise HTTPException(status_code=500, detail="Could not save the tenant lease. Please try again.")
