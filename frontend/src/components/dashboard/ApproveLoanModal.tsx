@@ -29,6 +29,7 @@ import {
 } from '@/services/bankService'
 import { formatPHP } from '@/lib/format'
 import { formatCreatedAt } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 interface ApproveLoanModalProps {
@@ -155,7 +156,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
       onSuccess(endorsed)
       onOpenChange(false)
     } catch (err: any) {
-      setError(err?.message || 'Failed to endorse loan request.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to endorse loan request.'))
     } finally {
       setIsSubmitting(false)
     }
@@ -177,7 +178,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
       onSuccess(rejected)
       onOpenChange(false)
     } catch (err: any) {
-      setError(err?.message || 'Failed to reject loan request.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to reject loan request.'))
     } finally {
       setIsSubmitting(false)
     }

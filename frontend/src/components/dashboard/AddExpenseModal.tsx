@@ -25,6 +25,7 @@ import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { pettyCashService } from '@/services/pettyCashService'
 import { bankService } from '@/services/bankService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 import { PREDEFINED_PETTY_CASH_CATEGORIES } from '@/pages/AddTransactionSheetPage'
 
@@ -324,7 +325,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       onOpenChange(false)
       onSuccess(created)
     } catch (err: any) {
-      setError(err?.message || 'Failed to record expense entry.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to record expense entry.'))
       setIsConfirmOpen(false)
     } finally {
       setIsSubmitting(false)

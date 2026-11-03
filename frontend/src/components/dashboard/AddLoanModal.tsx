@@ -26,6 +26,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 interface AddLoanModalProps {
   open: boolean
@@ -204,7 +205,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       onOpenChange(false)
       onSuccess(created)
     } catch (err: any) {
-      setError(err?.message || 'Failed to record loan entry.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to record loan entry.'))
       setIsConfirmOpen(false)
     } finally {
       setIsSubmitting(false)

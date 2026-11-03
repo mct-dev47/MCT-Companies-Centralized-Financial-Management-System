@@ -26,6 +26,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { expenseService, type ExpenseItem } from '@/services/expenseService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 export interface RecordPaymentModalProps {
@@ -175,7 +176,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         }, 800)
       }
     } catch (err: any) {
-      setError(err?.message || 'Failed to record payment. Please try again.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to record payment. Please try again.'))
     } finally {
       setIsSubmitting(false)
     }

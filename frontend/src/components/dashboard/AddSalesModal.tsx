@@ -27,6 +27,7 @@ import { receivablesStore, type PaymentOption, type CustomerType } from '@/servi
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 interface AddSalesModalProps {
   open: boolean
@@ -259,7 +260,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       // Trigger callback to redirect & highlight newly added row in table
       onSuccess(created)
     } catch (err: any) {
-      setError(err?.message || 'Failed to record sales entry.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to record sales entry.'))
       setIsConfirmOpen(false)
     } finally {
       setIsSubmitting(false)

@@ -20,6 +20,7 @@ import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { type AuthorizedCompany, getCompanyInitials } from '@/config/centralizedCompanies'
 import { employeeService } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
 import logo2Url from '@/assets/LOGO2.png'
@@ -80,7 +81,7 @@ export const CentralizedAuthPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to load authorized companies:', err)
-      setError(err?.message || 'Failed to retrieve companies from database.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to retrieve companies from database.'))
     } finally {
       setIsLoading(false)
     }

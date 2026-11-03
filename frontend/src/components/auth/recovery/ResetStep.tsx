@@ -23,6 +23,7 @@ import {
   type ResetPasswordFormValues,
 } from '@/lib/validation/recovery'
 import { passwordRecoveryService } from '@/services/passwordRecoveryService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 interface ResetStepProps {
@@ -39,7 +40,8 @@ export const ResetStep: React.FC<ResetStepProps> = ({
 
   const form = useForm<ResetPasswordFormValues>({
     resolver: zodResolver(resetPasswordSchema),
-    mode: 'onChange',
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
     defaultValues: {
       password: '',
       confirmPassword: '',
@@ -51,7 +53,6 @@ export const ResetStep: React.FC<ResetStepProps> = ({
 
   const rules = validatePasswordRules(passwordValue)
   const passwordsMatch =
-    passwordValue.length > 0 &&
     confirmPasswordValue.length > 0 &&
     passwordValue === confirmPasswordValue
 
@@ -65,9 +66,7 @@ export const ResetStep: React.FC<ResetStepProps> = ({
       await passwordRecoveryService.resetPassword(resetToken, values.password)
       onResetComplete()
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unable to reset password. Please try again.'
-      setServerError(message)
+      setServerError(formatUserFriendlyErrorMessage(err, 'Unable to reset password. Please try again.'))
     } finally {
       setIsLoading(false)
     }
@@ -83,8 +82,8 @@ export const ResetStep: React.FC<ResetStepProps> = ({
           <DialogTitle className="text-2xl font-bold tracking-tight text-[#0B0F2B]">
             Reset Password
           </DialogTitle>
-          <DialogDescription className="text-sm text-gray-500">
-            Create a new, strong password for your account.
+          <DialogDescription className="text-sm text-[#4E5BA6] max-w-sm mx-auto">
+            Choose a strong password to secure your account.
           </DialogDescription>
         </DialogHeader>
       </div>
@@ -93,7 +92,7 @@ export const ResetStep: React.FC<ResetStepProps> = ({
         <div
           role="alert"
           aria-live="assertive"
-          className="flex items-center gap-3 rounded-lg border border-error/30 bg-error/10 p-3 text-sm text-error"
+          className="flex items-center gap-3 rounded-xl border border-error/30 bg-error/10 p-3.5 text-xs sm:text-sm text-error font-medium"
         >
           <AlertCircle className="h-5 w-5 shrink-0" />
           <span>{serverError}</span>
@@ -102,7 +101,6 @@ export const ResetStep: React.FC<ResetStepProps> = ({
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" noValidate>
-          {/* New Password */}
           <FormField
             control={form.control}
             name="password"
@@ -112,7 +110,7 @@ export const ResetStep: React.FC<ResetStepProps> = ({
                 <FormControl>
                   <PasswordInput
                     id="new-password"
-                    placeholder="New Password"
+                    placeholder="Enter new password"
                     autoComplete="new-password"
                     error={!!fieldState.error}
                     {...field}
@@ -123,7 +121,6 @@ export const ResetStep: React.FC<ResetStepProps> = ({
             )}
           />
 
-          {/* Confirm Password */}
           <FormField
             control={form.control}
             name="confirmPassword"
@@ -133,7 +130,7 @@ export const ResetStep: React.FC<ResetStepProps> = ({
                 <FormControl>
                   <PasswordInput
                     id="confirm-password"
-                    placeholder="Confirm Password"
+                    placeholder="Confirm new password"
                     autoComplete="new-password"
                     error={!!fieldState.error}
                     {...field}
@@ -144,59 +141,48 @@ export const ResetStep: React.FC<ResetStepProps> = ({
             )}
           />
 
-          {/* Live Requirements Checklist */}
-          <div
-            className="rounded-lg border-[0.5px] border-stroke/50 bg-surface/50 p-4 space-y-2.5 text-sm"
-            aria-label="Password requirements"
-          >
-            <p className="font-semibold text-focus text-xs tracking-wider uppercase">
-              Password Requirements
-            </p>
-
-            <ul className="space-y-2">
-              {/* Requirement 1: Minimum of 8 characters */}
+          {/* Real-time Checklist of Password Rules */}
+          <div className="rounded-xl bg-surface border border-stroke/40 p-4 space-y-2 mt-2">
+            <p className="text-xs font-semibold text-focus">Password requirements:</p>
+            <ul className="space-y-1.5 text-xs">
               <li
                 className={cn(
-                  'flex items-center gap-2.5 transition-colors',
+                  'flex items-center gap-2 transition-colors',
                   rules.minLength ? 'text-focus font-medium' : 'text-muted-fg'
                 )}
               >
                 {rules.minLength ? (
                   <Check className="h-4 w-4 stroke-[3] text-focus shrink-0" aria-hidden="true" />
                 ) : (
-                  <Circle className="h-4 w-4 text-stroke shrink-0" aria-hidden="true" />
+                  <Circle className="h-4 w-4 text-muted-fg/60 shrink-0" aria-hidden="true" />
                 )}
-                <span>Minimum of 8 characters</span>
+                <span>At least 8 characters long</span>
                 <span className="sr-only">
                   {rules.minLength ? '(Requirement met)' : '(Requirement not met)'}
                 </span>
               </li>
 
-              {/* Requirement 2: Must include letters and numbers */}
               <li
                 className={cn(
-                  'flex items-center gap-2.5 transition-colors',
+                  'flex items-center gap-2 transition-colors',
                   rules.hasLetterAndNumber ? 'text-focus font-medium' : 'text-muted-fg'
                 )}
               >
                 {rules.hasLetterAndNumber ? (
                   <Check className="h-4 w-4 stroke-[3] text-focus shrink-0" aria-hidden="true" />
                 ) : (
-                  <Circle className="h-4 w-4 text-stroke shrink-0" aria-hidden="true" />
+                  <Circle className="h-4 w-4 text-muted-fg/60 shrink-0" aria-hidden="true" />
                 )}
-                <span>Must include letters and numbers</span>
+                <span>Includes both letters and numbers</span>
                 <span className="sr-only">
-                  {rules.hasLetterAndNumber
-                    ? '(Requirement met)'
-                    : '(Requirement not met)'}
+                  {rules.hasLetterAndNumber ? '(Requirement met)' : '(Requirement not met)'}
                 </span>
               </li>
 
-              {/* Requirement 3: Passwords match */}
               {confirmPasswordValue.length > 0 && (
                 <li
                   className={cn(
-                    'flex items-center gap-2.5 transition-colors',
+                    'flex items-center gap-2 transition-colors',
                     passwordsMatch ? 'text-focus font-medium' : 'text-error'
                   )}
                 >

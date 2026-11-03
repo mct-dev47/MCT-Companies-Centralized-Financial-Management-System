@@ -147,7 +147,22 @@ export function formatUserFriendlyErrorMessage(
     return 'Too many requests. Please wait a moment and try again.'
   }
 
-  // 9. HTTP 422 / 400 Validation Errors & Setup/Invitation Messages
+  // 9. Email Delivery & Provider Sanitization (Brevo, Resend, SMTP, Circuit Breaker)
+  if (
+    lower.includes('brevo') ||
+    lower.includes('resend') ||
+    lower.includes('smtp') ||
+    lower.includes('circuit breaker') ||
+    lower.includes('email delivery') ||
+    lower.includes('authorised_ips') ||
+    lower.includes('authorized_ips') ||
+    lower.includes('unrecognised ip') ||
+    lower.includes('unrecognized ip')
+  ) {
+    return 'We were unable to deliver the email verification message right now. Please try again shortly or contact support.'
+  }
+
+  // 10. HTTP 422 / 400 Validation Errors & Setup/Invitation Messages
   if (
     status === 422 ||
     status === 400 ||
