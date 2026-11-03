@@ -65,6 +65,10 @@ const CentralizedAuthPage = lazyPage(
   () => import('@/pages/CentralizedAuthPage'),
   'CentralizedAuthPage'
 )
+const SetupPasswordPage = lazyPage(
+  () => import('@/pages/SetupPasswordPage'),
+  'SetupPasswordPage'
+)
 
 export const router = createBrowserRouter([
   {
@@ -112,6 +116,14 @@ export const router = createBrowserRouter([
         <LoginPage />
       </PublicOnlyRoute>
     ),
+  },
+  {
+    path: '/auth/setup-password',
+    element: <SetupPasswordPage />,
+  },
+  {
+    path: '/setup-password',
+    element: <Navigate to="/auth/setup-password" replace />,
   },
   // Authenticated Persistent App Shell layout route
   // Using AppShell as a layout route keeps the sidebar and header mounted,

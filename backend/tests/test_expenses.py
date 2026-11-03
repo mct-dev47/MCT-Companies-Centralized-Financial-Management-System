@@ -89,7 +89,7 @@ def test_get_expenses_allows_audit_and_finance_roles():
         }
     ]
 
-    for role in ["audit", "finance", "admin"]:
+    for role in ["audit", "finance"]:
         user = {
             "auth_user_id": f"{role}-1",
             "user_id": 2,

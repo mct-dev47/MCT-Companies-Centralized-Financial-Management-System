@@ -1,13 +1,19 @@
+import hashlib
 import logging
 from pathlib import PurePosixPath
+import secrets
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.encryption import encrypt_payload
 from app.db.supabase import get_supabase_admin_client
 from app.models.company import Company
+from app.models.invitation import InvitationOutbox, UserInvitation
 from app.models.user import User, UserCompany
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 
@@ -26,7 +32,7 @@ class UserService:
     """Database profile operations and Supabase Auth coordination."""
     _user_picture_bucket = "user profiles"
 
-    ALLOWED_ROLES = {"finance", "audit", "supervisor"}
+    ALLOWED_ROLES = {"finance", "audit", "auditor", "supervisor"}
 
     def __init__(self, db: Session):
         self.db = db
@@ -162,8 +168,10 @@ class UserService:
             email=user_in.email,
             company_id=primary_company_id,
             is_admin=False,
-            role=user_role,
+            role="audit" if user_role == "auditor" else user_role,
             photo_url=user_in.photo_url,
+            status="PROVISIONED",
+            must_change_password=True,
         )
         try:
             self.db.add(user)
@@ -173,11 +181,47 @@ class UserService:
             # Insert into user_companies
             for cid in company_ids:
                 self.db.add(UserCompany(user_id=user.user_id, company_id=cid))
-            if company_ids:
-                self.db.commit()
-                self.db.refresh(user)
 
+            # Generate Single-Use Setup Token
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            now = datetime.now(timezone.utc)
+            invitation = UserInvitation(
+                user_id=user.user_id,
+                token_hash=token_hash,
+                status="PENDING",
+                expires_at=now + timedelta(hours=24),
+            )
+            self.db.add(invitation)
+            self.db.flush()
 
+            # Enqueue to Outbox with encrypted payload
+            from app.core.config import settings
+            frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+            setup_url = f"{frontend_url}/auth/setup-password#token={raw_token}"
+            encrypted_payload = encrypt_payload({
+                "user_id": user.user_id,
+                "user_name": user.name,
+                "setup_url": setup_url,
+            })
+            outbox_entry = InvitationOutbox(
+                idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
+                user_id=user.user_id,
+                invitation_id=invitation.invitation_id,
+                recipient_email=user.email,
+                encrypted_payload=encrypted_payload,
+                status="PENDING",
+            )
+            self.db.add(outbox_entry)
+            self.db.commit()
+            self.db.refresh(user)
+
+            # Trigger async outbox dispatch pass
+            try:
+                from app.services.invitation_dispatcher import process_pending_outbox_batch
+                threading.Thread(target=process_pending_outbox_batch, daemon=True).start()
+            except Exception as e:
+                logger.warning("Could not trigger background outbox dispatcher: %s", e)
 
             return self.to_response(user)
         except IntegrityError as error:
@@ -185,8 +229,73 @@ class UserService:
             self._delete_auth_user(auth_user_id)
             raise UserValidationError("A user with this email already exists.") from error
         except SQLAlchemyError as error:
+            self.db.rollback()
             self._delete_auth_user(auth_user_id)
             raise self._database_error("create user", error)
+
+    def reinvite_user(self, user_id: int) -> UserResponse:
+        user = self.get_user(user_id)
+        if not user:
+            raise UserValidationError("The user was not found.")
+
+        if self.is_protected_admin(user):
+            raise UserValidationError("Cannot re-invite the primary administrator.")
+
+        if user.status == "ACTIVE":
+            raise UserValidationError("User account is already active and cannot be re-invited.")
+
+        # Revoke old pending or claimed invitations
+        self.db.query(UserInvitation).filter(
+            UserInvitation.user_id == user_id,
+            UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+        ).update({"status": "REVOKED"}, synchronize_session=False)
+
+        # Cancel pending outbox jobs
+        self.db.query(InvitationOutbox).filter(
+            InvitationOutbox.user_id == user_id,
+            InvitationOutbox.status.in_(["PENDING", "FAILED"]),
+        ).update({"status": "CANCELLED", "encrypted_payload": None}, synchronize_session=False)
+
+        # Generate fresh single-use token
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        invitation = UserInvitation(
+            user_id=user.user_id,
+            token_hash=token_hash,
+            status="PENDING",
+            expires_at=now + timedelta(hours=24),
+        )
+        self.db.add(invitation)
+        self.db.flush()
+
+        from app.core.config import settings
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        setup_url = f"{frontend_url}/auth/setup-password#token={raw_token}"
+        encrypted_payload = encrypt_payload({
+            "user_id": user.user_id,
+            "user_name": user.name,
+            "setup_url": setup_url,
+        })
+        outbox_entry = InvitationOutbox(
+            idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
+            user_id=user.user_id,
+            invitation_id=invitation.invitation_id,
+            recipient_email=user.email,
+            encrypted_payload=encrypted_payload,
+            status="PENDING",
+        )
+        self.db.add(outbox_entry)
+        self.db.commit()
+        self.db.refresh(user)
+
+        try:
+            from app.services.invitation_dispatcher import process_pending_outbox_batch
+            threading.Thread(target=process_pending_outbox_batch, daemon=True).start()
+        except Exception as e:
+            logger.warning("Could not trigger background outbox dispatcher: %s", e)
+
+        return self.to_response(user)
 
     # update an existing user and return a UserResponse, or None if not found
     def update_user(
@@ -380,6 +489,8 @@ class UserService:
                 company_ids=assigned_cids,
                 is_admin=user.is_admin,
                 role=user_role,
+                status=getattr(user, "status", "ACTIVE") or "ACTIVE",
+                must_change_password=bool(getattr(user, "must_change_password", False)),
                 photo_url=photo_url,
                 last_login_at=user.last_login_at,
                 created_at=user.created_at,
@@ -436,10 +547,11 @@ class UserService:
             if role:
                 app_meta["role"] = role
 
+            internal_seed = secrets.token_urlsafe(32)
             response = get_supabase_admin_client().auth.admin.create_user({
                 "email": email,
-                "password": user_in.password,
-                "email_confirm": True,
+                "password": internal_seed,
+                "email_confirm": False,
                 "user_metadata": user_meta,
                 "app_metadata": app_meta,
             })

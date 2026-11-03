@@ -5,6 +5,7 @@ import secrets
 import json
 import hashlib
 import threading
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import jwt
@@ -107,6 +108,8 @@ def _get_application_user(*, email: str | None = None, user_id: int | None = Non
                 "name": u.name,
                 "is_admin": bool(u.is_admin),
                 "role": u_role,
+                "status": getattr(u, "status", "ACTIVE") or "ACTIVE",
+                "must_change_password": bool(getattr(u, "must_change_password", False)),
                 "company_id": u.company_id,
                 "photo_url": getattr(u, "photo_url", None),
                 "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -195,6 +198,8 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
         company_ids=company_ids,
         is_admin=is_admin_flag,
         role=user_role,
+        status=str(user.get("status") or "ACTIVE"),
+        must_change_password=bool(user.get("must_change_password", False)),
         photo_url=resolved_photo_url,
         last_login_at=user.get("last_login_at"),
         created_at=user.get("created_at"),
@@ -204,17 +209,13 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
     )
 
 
-SEEDED_OTP_CODE = "123456"
+# SEEDED_OTP_CODE removed for production security
 
 
 def _send_login_otp(email: str, otp: str) -> None:
-    logger.info("Login OTP generated for %s: %s [Seeded Code: %s]", email, otp, SEEDED_OTP_CODE)
+    logger.info("Login OTP generated for %s", _mask_email(email))
     if not settings.RESEND_API_KEY or not settings.RESEND_FROM_EMAIL:
-        logger.warning(
-            "Resend email delivery is not configured. Use the generated OTP [%s] or seeded code [%s].",
-            otp,
-            SEEDED_OTP_CODE,
-        )
+        logger.warning("Resend email delivery is not configured for OTP.")
         return
 
     def _dispatch_email():
@@ -244,13 +245,7 @@ def _send_login_otp(email: str, otp: str) -> None:
                 if response.status < 200 or response.status >= 300:
                     logger.warning("Unexpected response from Resend for %s: %s", email, response.status)
         except Exception as exc:
-            logger.warning(
-                "Resend email delivery failed for %s (fallback to seeded code '%s' or '%s'): %s",
-                email,
-                SEEDED_OTP_CODE,
-                otp,
-                exc,
-            )
+            logger.warning("Resend email delivery failed for %s: %s", _mask_email(email), exc)
 
     threading.Thread(target=_dispatch_email, daemon=True).start()
 
@@ -425,27 +420,15 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
     except Exception as exc:
         authenticated = False
 
-    # Flexible password matching for seeded accounts (supports Password123!, password123, or TempEmployee2026!)
-    allowed_seeded_passwords = ["password123", "password123!", "tempemployee2026!", "tempemployee2026", "password", "employee", "employee123", "password!"]
-    if not authenticated and password.lower() in allowed_seeded_passwords:
-        for try_pwd in ["TempEmployee2026!", "Password123!", "password123"]:
-            try:
-                supabase = get_supabase_client()
-                auth_response = supabase.auth.sign_in_with_password({
-                    "email": normalized_email,
-                    "password": try_pwd,
-                })
-                authenticated = bool(auth_response and auth_response.session)
-                if authenticated:
-                    break
-            except Exception:
-                pass
-
-    user = _get_application_user(email=normalized_email)
-
-    # Master/default password check for application and seeded accounts
-    if not authenticated and user and password.lower() in allowed_seeded_passwords:
-        authenticated = True
+        user = _get_application_user(email=normalized_email)
+    if user:
+        u_stat = str(user.get("status") or "ACTIVE").upper()
+        if u_stat == "LOCKED":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is locked due to security policy. Please contact an administrator.")
+        if u_stat == "SUSPENDED":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account has been suspended. Please contact an administrator.")
+        if u_stat == "PROVISIONED":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account invitation is pending. You must complete password setup before logging in.")
 
     if not authenticated or not user:
         try:
@@ -510,8 +493,7 @@ def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, c
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many verification attempts. Please start again.")
     submitted_otp_hash = hashlib.sha256(otp_data.otp.encode("utf-8")).hexdigest()
     expected_otp_hash = str(challenge_state.get("otp_hash", challenge.get("otp_hash")))
-    is_seeded_valid = (otp_data.otp == SEEDED_OTP_CODE)
-    if not secrets.compare_digest(expected_otp_hash, submitted_otp_hash) and not is_seeded_valid:
+    if not secrets.compare_digest(expected_otp_hash, submitted_otp_hash):
         challenge_state["attempts"] = int(challenge_state["attempts"]) + 1
         try:
             log_otp_failed(db, ip_address=ip_address, email=challenge.get("email", ""))
@@ -724,5 +706,166 @@ def reset_password(
 
     return MessageResponse(
         message="Password has been reset successfully.",
+        success=True,
+    )
+
+
+
+def setup_invitation_password(db: Session, token: str, new_password: str) -> MessageResponse:
+    """
+    Concurrency-safe invitation password setup.
+    Enforces password complexity, atomic single-use claim, Supabase Auth update,
+    and DB user activation (ACTIVE).
+    """
+    clean_token = (token or "").strip()
+    if not clean_token:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation token is required.")
+
+    # Password complexity policy
+    clean_pwd = new_password or ""
+    if len(clean_pwd) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 10 characters long.",
+        )
+    if (
+        not re.search(r"[A-Z]", clean_pwd)
+        or not re.search(r"[a-z]", clean_pwd)
+        or not re.search(r"[0-9]", clean_pwd)
+        or not any(c in '!@#$%^&*(),.?":{}|<>-=_+' for c in clean_pwd)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must contain uppercase letters, lowercase letters, numbers, and symbols.",
+        )
+
+    import hashlib
+    token_hash = hashlib.sha256(clean_token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    from app.models.invitation import UserInvitation
+    from app.services.user_service import UserService
+
+    # 1. Lookup candidate invitation
+    invitation = (
+        db.query(UserInvitation)
+        .filter(UserInvitation.token_hash == token_hash)
+        .first()
+    )
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation link is invalid, expired, or has already been used.",
+        )
+
+    if invitation.status in ("REVOKED", "EXPIRED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This invitation has been {invitation.status.lower()} and is no longer valid.",
+        )
+
+    if invitation.status == "ACCEPTED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation link has already been used to set up a password.",
+        )
+
+    # Normalize expires_at for comparison
+    exp = invitation.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp <= now:
+        db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
+            {"status": "EXPIRED"}, synchronize_session=False
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This invitation link has expired. Please contact an administrator for a new invitation.",
+        )
+
+    # 2. Atomic conditional claim: transition PENDING -> CLAIMED
+    rows = (
+        db.query(UserInvitation)
+        .filter(
+            UserInvitation.invitation_id == invitation.invitation_id,
+            UserInvitation.status == "PENDING",
+            UserInvitation.expires_at > now,
+        )
+        .update(
+            {"status": "CLAIMED", "claimed_at": now},
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invitation link is currently being processed or has already been used.",
+        )
+
+    # 3. Lock User row
+    user = db.query(User).filter(User.user_id == invitation.user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found.")
+
+    if user.status in ("LOCKED", "SUSPENDED"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Account is {user.status.lower()}. Please contact an administrator.",
+        )
+
+    # 4. Update password in Supabase Auth & confirm email
+    try:
+        auth_user_id = UserService(db)._find_auth_user_id(user.email)
+        get_supabase_admin_client().auth.admin.update_user_by_id(
+            auth_user_id,
+            {
+                "password": clean_pwd,
+                "email_confirm": True,
+                "user_metadata": {"must_change_password": False},
+            },
+        )
+    except Exception as exc:
+        # Revert claim to PENDING on Supabase error so user can retry safely
+        db.query(UserInvitation).filter(
+            UserInvitation.invitation_id == invitation.invitation_id,
+            UserInvitation.status == "CLAIMED",
+        ).update({"status": "PENDING", "claimed_at": None}, synchronize_session=False)
+        db.commit()
+        logger.exception("Failed to update password in Supabase Auth: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Authentication provider service error. Please try again.",
+        )
+
+    # 5. Finalize DB user activation & invitation acceptance
+    try:
+        user.status = "ACTIVE"
+        user.must_change_password = False
+        user.updated_at = now
+        db.query(UserInvitation).filter(
+            UserInvitation.invitation_id == invitation.invitation_id
+        ).update(
+            {"status": "ACCEPTED", "accepted_at": now},
+            synchronize_session=False,
+        )
+        db.commit()
+        logger.info("Successfully activated user_id=%s via invitation redemption.", user.user_id)
+    except Exception as dberr:
+        db.rollback()
+        logger.error(
+            "DB commit failed after Supabase password update for user %s: %s",
+            user.user_id,
+            dberr,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to finalize account activation. Please try again.",
+        )
+
+    return MessageResponse(
+        message="Password set successfully. You may now log in.",
         success=True,
     )

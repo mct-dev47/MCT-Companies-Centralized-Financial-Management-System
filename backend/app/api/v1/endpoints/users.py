@@ -164,3 +164,16 @@ def _service_http_error(error: UserServiceError) -> HTTPException:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail=str(error),
     )
+
+# re-invite an existing pending user
+@router.post("/{user_id}/reinvite", response_model=UserResponse, summary="Re-invite an existing pending employee user")
+def reinvite_user(user_id: int, _: AdminUser, db: Session = Depends(get_db)):
+    try:
+        return UserService(db).reinvite_user(user_id)
+    except UserValidationError as error:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(error),
+        ) from error
+    except UserServiceError as error:
+        raise _service_http_error(error) from error

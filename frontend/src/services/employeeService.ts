@@ -302,7 +302,7 @@ export const employeeService = {
       body: JSON.stringify({
         name: payload.fullName,
         email: payload.email,
-        password: payload.password || 'Password123!',
+        // No hardcoded password; backend generates secure single-use invitation token
         company_id: primaryCompanyId,
         company_ids: companyIds,
         company_name: payload.assignedCompany || undefined,

@@ -8,6 +8,7 @@ from app.models.bills import Bill, BillPayment
 from app.models.lending import Borrower, LendingTransaction
 from app.models.tenant import TenantLease, TenantLeasePayment
 from app.models.notification import Notification, NotificationOutbox
+from app.models.invitation import UserInvitation, InvitationOutbox
 
 # Alias for backward compatibility
 LendingFacility = Borrower
@@ -34,4 +35,6 @@ __all__ = [
     "TenantLeasePayment",
     "Notification",
     "NotificationOutbox",
+    "UserInvitation",
+    "InvitationOutbox",
 ]

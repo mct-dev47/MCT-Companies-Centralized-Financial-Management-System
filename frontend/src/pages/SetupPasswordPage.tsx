@@ -1,0 +1,231 @@
+import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ShieldCheck, Lock, Eye, EyeOff, CheckCircle2, XCircle, ArrowRight } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+
+export const SetupPasswordPage: React.FC = () => {
+  const navigate = useNavigate()
+  const [token, setToken] = useState<string>('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    // 1. Set referrer policy to prevent leaking token
+    const meta = document.createElement('meta')
+    meta.name = 'referrer'
+    meta.content = 'no-referrer'
+    document.head.appendChild(meta)
+
+    // 2. Read token from URL hash (#token=...) or query parameter (?token=...)
+    let extractedToken = ''
+    if (window.location.hash.includes('token=')) {
+      const match = window.location.hash.match(/token=([^&]+)/)
+      if (match) extractedToken = decodeURIComponent(match[1])
+    } else if (window.location.search.includes('token=')) {
+      const params = new URLSearchParams(window.location.search)
+      extractedToken = params.get('token') || ''
+    }
+
+    if (extractedToken) {
+      setToken(extractedToken)
+      // 3. Scrub token from browser address bar & history immediately
+      window.history.replaceState({}, document.title, window.location.pathname)
+    } else {
+      setError('No invitation token found in link. Please check your invitation email or request a new one.')
+    }
+
+    return () => {
+      document.head.removeChild(meta)
+    }
+  }, [])
+
+  // Validation rules
+  const hasMinLength = password.length >= 10
+  const hasUpper = /[A-Z]/.test(password)
+  const hasLower = /[a-z]/.test(password)
+  const hasNumber = /[0-9]/.test(password)
+  const hasSymbol = /[!@#$%^&*(),.?":{}|<>\-_]/.test(password)
+  const passwordsMatch = password.length > 0 && password === confirmPassword
+  const isFormValid = hasMinLength && hasUpper && hasLower && hasNumber && hasSymbol && passwordsMatch
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!token) {
+      setError('Missing invitation token. Please use the link sent to your email.')
+      return
+    }
+    if (!isFormValid) {
+      setError('Please ensure your password meets all complexity requirements.')
+      return
+    }
+
+    try {
+      setIsSubmitting(true)
+      setError(null)
+      const res = await fetch('/api/v1/auth/setup-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token,
+          new_password: password,
+        }),
+      })
+
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.detail || 'Failed to set up password. Link may be expired or already used.')
+      }
+
+      setSuccess(true)
+    } catch (err: any) {
+      setError(err.message || 'An unexpected error occurred. Please try again.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 p-4 sm:p-6 lg:p-8">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-xl border border-slate-100 p-8 space-y-6">
+        <div className="text-center space-y-2">
+          <div className="inline-flex items-center justify-center h-14 w-14 rounded-2xl bg-primary/10 text-primary mb-2">
+            <ShieldCheck className="h-8 w-8" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
+            Set Up Your Password
+          </h1>
+          <p className="text-sm text-slate-500">
+            Welcome to MCT Financial Management System. Please choose a strong password to activate your account.
+          </p>
+        </div>
+
+        {success ? (
+          <div className="space-y-6 text-center">
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200/60 text-emerald-800 space-y-2">
+              <CheckCircle2 className="h-10 w-10 text-emerald-600 mx-auto" />
+              <p className="font-semibold text-base">Account Activated!</p>
+              <p className="text-xs text-emerald-700">
+                Your password has been successfully configured. You may now sign in to access your dashboard.
+              </p>
+            </div>
+            <Button
+              onClick={() => navigate('/login')}
+              className="w-full h-11 rounded-xl bg-primary hover:bg-primary/90 text-white font-semibold flex items-center justify-center gap-2"
+            >
+              <span>Go to Sign In</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-5">
+            {error && (
+              <div className="p-3.5 rounded-xl bg-red-50 border border-red-200/70 text-red-700 text-xs flex items-start gap-2.5">
+                <XCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="new-password" className="text-xs font-semibold text-slate-700">
+                New Password
+              </Label>
+              <div className="relative">
+                <Input
+                  id="new-password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Enter a secure password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="pr-10 h-11 rounded-xl text-sm"
+                  disabled={isSubmitting || !token}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="confirm-password" className="text-xs font-semibold text-slate-700">
+                Confirm New Password
+              </Label>
+              <div className="relative">
+                <Input
+                  id="confirm-password"
+                  type={showConfirm ? 'text' : 'password'}
+                  placeholder="Re-enter your password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="pr-10 h-11 rounded-xl text-sm"
+                  disabled={isSubmitting || !token}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirm(!showConfirm)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Password Complexity Checklist */}
+            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/60 space-y-2 text-xs">
+              <p className="font-semibold text-slate-700">Password Requirements:</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                <div className={`flex items-center gap-1.5 ${hasMinLength ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>10+ characters</span>
+                </div>
+                <div className={`flex items-center gap-1.5 ${hasUpper ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>Uppercase letter</span>
+                </div>
+                <div className={`flex items-center gap-1.5 ${hasLower ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>Lowercase letter</span>
+                </div>
+                <div className={`flex items-center gap-1.5 ${hasNumber ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>At least one number</span>
+                </div>
+                <div className={`flex items-center gap-1.5 ${hasSymbol ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>Special character</span>
+                </div>
+                <div className={`flex items-center gap-1.5 ${passwordsMatch ? 'text-emerald-600 font-medium' : 'text-slate-400'}`}>
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span>Passwords match</span>
+                </div>
+              </div>
+            </div>
+
+            <Button
+              type="submit"
+              disabled={isSubmitting || !isFormValid || !token}
+              className="w-full h-11 rounded-xl bg-primary hover:bg-primary/90 text-white font-semibold transition-all shadow-md"
+            >
+              {isSubmitting ? 'Setting up Password...' : 'Activate Account'}
+            </Button>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+

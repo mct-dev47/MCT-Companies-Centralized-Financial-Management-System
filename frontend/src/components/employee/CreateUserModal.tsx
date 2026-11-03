@@ -231,7 +231,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         assignedCompanies: selectedCompanies,
         companyIds: resolvedCompanyIds,
         role: pendingValues.role,
-        password: 'Password123!',
+        // Single-use setup invitation generated on backend
         avatarFile: avatarFile || undefined,
       })
       if (!created.companyNames || created.companyNames.length === 0) {

@@ -6,12 +6,15 @@ from app.core.config import settings
 from app.core.dependencies import get_current_user, AuthenticatedUser
 from app.core.security import get_access_token, revoke_access_token
 from app.schemas.auth import (
-    LoginRequest, LoginChallengeResponse, VerifyOtpRequest,
+    LoginRequest,
+    LoginChallengeResponse,
+    VerifyOtpRequest,
     OtpResponse,
     TokenResponse,
     PasswordResetRequest,
     PasswordResetConfirm,
     MessageResponse,
+    SetupPasswordRequest,
 )
 from app.schemas.user import UserResponse
 from app.services.auth_service import (
@@ -19,7 +22,10 @@ from app.services.auth_service import (
     logout_user,
     get_current_user_info,
     request_password_reset,
-    reset_password, verify_login_otp, resend_login_otp,
+    reset_password,
+    verify_login_otp,
+    resend_login_otp,
+    setup_invitation_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -102,3 +108,10 @@ def confirm_password_reset(
         db=db,
         confirm_data=request,
     )
+
+@router.post("/setup-password", response_model=MessageResponse, summary="Set Password from Invitation Token")
+def setup_password(
+    data: SetupPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    return setup_invitation_password(db=db, token=data.token, new_password=data.new_password)

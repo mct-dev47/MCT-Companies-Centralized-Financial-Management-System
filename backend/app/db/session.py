@@ -37,9 +37,12 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
             max_overflow=10,
             pool_recycle=1800,
             pool_timeout=30,
-            connect_args={"connect_timeout": 10},
+            connect_args={"connect_timeout": 5},
         )
+        with engine.connect() as _probe:
+            pass
     except Exception as e:
+        engine = None
         logger.warning(f"Failed to initialize database engine with {db_url}: {e}. Falling back to SQLite.")
 
 if engine is None:
@@ -60,12 +63,18 @@ def init_db():
     import app.models.bank
     import app.models.lending
     import app.models.notification
+    import app.models.invitation
+    from app.db.migrations import run_migrations
     from app.models.company import Company
 
 
     from sqlalchemy.exc import ProgrammingError, OperationalError
 
     try:
+        try:
+            run_migrations(engine)
+        except Exception as me:
+            logger.warning(f"Migration runner encountered an issue: {me}. Falling back to metadata inspection.")
         Base.metadata.create_all(bind=engine)
     except (ProgrammingError, OperationalError) as e:
         if "already exists" not in str(e).lower():

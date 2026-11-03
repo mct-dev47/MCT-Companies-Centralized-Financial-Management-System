@@ -1,14 +1,20 @@
 import { z } from 'zod'
 
 export const createUserSchema = z.object({
-  fullName: z.string().trim().min(1, 'Full name is required'),
+  fullName: z
+    .string()
+    .trim()
+    .min(2, 'Full name must be at least 2 characters')
+    .max(100, 'Full name must not exceed 100 characters')
+    .regex(/^[\p{L}\s.'-]+$/u, 'Full name contains invalid characters'),
   email: z
     .string()
     .trim()
     .min(1, 'Email is required')
-    .email('Please enter a valid email address'),
+    .email('Please enter a valid email address')
+    .regex(/^[a-zA-Z0-9._%+-]+@gmail\.com$/i, 'Only @gmail.com email addresses are allowed'),
   assignedCompany: z.string().optional(),
-  assignedCompanies: z.array(z.string()),
+  assignedCompanies: z.array(z.string()).min(1, 'Please select at least one company'),
   role: z.string().min(1, 'Role is required'),
   avatarUrl: z.string().optional(),
 })

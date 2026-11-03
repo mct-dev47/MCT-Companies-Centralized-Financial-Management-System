@@ -16,6 +16,8 @@ class User(Base):
     photo_url = Column(String(500), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, default=False)
+    status = Column(String(30), nullable=False, default="ACTIVE", index=True)
+    must_change_password = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
