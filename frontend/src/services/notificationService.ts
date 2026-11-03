@@ -37,6 +37,8 @@ export interface GetNotificationsOptions {
   forceRefresh?: boolean
 }
 
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+
 export const NOTIFICATION_UPDATED_EVENT = 'mct:notifications-updated'
 export const READ_STORAGE_KEY_PREFIX = 'mct_read_notification_ids'
 
@@ -88,8 +90,8 @@ export function getReadNotificationIds(userId?: string | number | null): Set<str
         return new Set(parsed.map(String))
       }
     }
-  } catch {
-    // ignore storage errors
+  } catch (err) {
+    console.warn('Storage read error:', formatUserFriendlyErrorMessage(err))
   }
   return new Set()
 }
@@ -101,8 +103,8 @@ export function saveReadNotificationId(id: string, userId?: string | number | nu
     const set = getReadNotificationIds(userId)
     set.add(id)
     localStorage.setItem(scopedKey, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore storage errors
+  } catch (err) {
+    console.warn('Storage save error:', formatUserFriendlyErrorMessage(err))
   }
 }
 
@@ -113,8 +115,8 @@ export function saveAllReadNotificationIds(ids: string[], userId?: string | numb
     const set = getReadNotificationIds(userId)
     ids.forEach((i) => set.add(i))
     localStorage.setItem(scopedKey, JSON.stringify(Array.from(set)))
-  } catch {
-    // ignore storage errors
+  } catch (err) {
+    console.warn('Storage batch save error:', formatUserFriendlyErrorMessage(err))
   }
 }
 
@@ -126,9 +128,13 @@ export function clearNotificationCache(): void {
 }
 
 export function notifyNotificationsUpdated(): void {
-  clearNotificationCache()
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(NOTIFICATION_UPDATED_EVENT))
+  try {
+    clearNotificationCache()
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(NOTIFICATION_UPDATED_EVENT))
+    }
+  } catch (err) {
+    console.warn('Notification update event error:', formatUserFriendlyErrorMessage(err))
   }
 }
 
@@ -201,7 +207,7 @@ async function fetchWithRetry(url: string, init?: RequestInit, maxRetries = MAX_
       await new Promise((resolve) => setTimeout(resolve, delayMs))
     } catch (networkErr) {
       if (attempt >= maxRetries) {
-        throw networkErr
+        throw new Error(formatUserFriendlyErrorMessage(networkErr, 'Unable to connect to the notification service.'))
       }
       attempt += 1
       const delayMs = Math.min(10000, Math.pow(2, attempt) * 500 + Math.floor(Math.random() * 300))
@@ -251,11 +257,33 @@ export const notificationService = {
         })
 
         if (!res.ok) {
+          let errorDetail: any = null
+          try {
+            errorDetail = await res.json()
+          } catch {
+            try {
+              errorDetail = await res.text()
+            } catch {
+              // ignore
+            }
+          }
+
+          const friendly = formatUserFriendlyErrorMessage(
+            errorDetail || { status: res.status, message: res.statusText },
+            'Failed to load notifications. Please try again.'
+          )
+
           if (res.status === 401 || res.status === 403) {
             _cacheByKey.delete(cacheKey)
-            return []
+            throw new Error(friendly)
           }
-          return _lastGoodByKey.get(cacheKey) ?? []
+
+          const cached = _lastGoodByKey.get(cacheKey)
+          if (cached && cached.length > 0) {
+            console.warn('Notification fetch warning (using cache):', friendly)
+            return cached
+          }
+          throw new Error(friendly)
         }
 
         const data = await res.json()
@@ -292,8 +320,14 @@ export const notificationService = {
         }
 
         return finalResult
-      } catch {
-        return _lastGoodByKey.get(cacheKey) ?? []
+      } catch (err) {
+        const friendly = formatUserFriendlyErrorMessage(err, 'Unable to load notifications. Please check your connection.')
+        const cached = _lastGoodByKey.get(cacheKey)
+        if (cached && cached.length > 0) {
+          console.warn('Notification fetch warning (using cache):', friendly)
+          return cached
+        }
+        throw new Error(friendly)
       } finally {
         if (timeoutId) clearTimeout(timeoutId)
       }
@@ -318,8 +352,15 @@ export const notificationService = {
         method: 'POST',
         headers: getAuthHeaders(),
       })
-      return res.ok
-    } catch {
+      if (!res.ok) {
+        let errJson: any = null
+        try { errJson = await res.json() } catch { errJson = null }
+        console.warn('markAsRead warning:', formatUserFriendlyErrorMessage(errJson || { status: res.status }, 'Failed to mark notification as read.'))
+        return false
+      }
+      return true
+    } catch (err) {
+      console.warn('markAsRead error:', formatUserFriendlyErrorMessage(err, 'Failed to mark notification as read.'))
       return false
     }
   },
@@ -336,8 +377,15 @@ export const notificationService = {
         method: 'POST',
         headers: getAuthHeaders(),
       })
-      return res.ok
-    } catch {
+      if (!res.ok) {
+        let errJson: any = null
+        try { errJson = await res.json() } catch { errJson = null }
+        console.warn('markAllRead warning:', formatUserFriendlyErrorMessage(errJson || { status: res.status }, 'Failed to mark all notifications as read.'))
+        return false
+      }
+      return true
+    } catch (err) {
+      console.warn('markAllRead error:', formatUserFriendlyErrorMessage(err, 'Failed to mark all notifications as read.'))
       return false
     }
   },
@@ -362,6 +410,10 @@ export const notificationService = {
         return Number(json.unread_count || 0)
       }
 
+      let errJson: any = null
+      try { errJson = await res.json() } catch { errJson = null }
+      console.warn('getUnreadCount server error:', formatUserFriendlyErrorMessage(errJson || { status: res.status }))
+
       // Fallback to local calculation
       const items = await this.getNotifications({
         userId,
@@ -372,7 +424,8 @@ export const notificationService = {
       })
       const readSet = getReadNotificationIds(userId)
       return items.filter((item) => !readSet.has(item.notification_id) && !item.read_at).length
-    } catch {
+    } catch (err) {
+      console.warn('getUnreadCount error:', formatUserFriendlyErrorMessage(err, 'Failed to get unread notification count.'))
       return 0
     }
   },

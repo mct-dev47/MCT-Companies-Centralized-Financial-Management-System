@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { websocketService, type ConnectionStatus } from '@/services/websocketService'
 import {
   notificationService,
@@ -94,7 +95,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   const [notifications, setNotifications] = React.useState<DisplayNotification[]>([])
   const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
   const [isLoading, setIsLoading] = React.useState(false)
-  const [syncError, setSyncError] = React.useState(false)
+  const [syncError, setSyncError] = React.useState<string | null>(null)
   const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
 
   const dropdownRef = React.useRef<HTMLDivElement>(null)
@@ -147,7 +148,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         if (!mountedRef.current) return
 
         const readSet = getReadNotificationIds(userId)
-        setSyncError(false)
+        setSyncError(null)
 
         const mapped: DisplayNotification[] = items.map((item) => {
           const nt = (item.notification_type || '').toUpperCase()
@@ -290,8 +291,13 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
         setReadIds(readSet)
         setNotifications(mapped)
-      } catch {
-        setSyncError(true)
+      } catch (err) {
+        if (!mountedRef.current) return
+        const friendly = formatUserFriendlyErrorMessage(
+          err,
+          'Unable to sync notifications. Please check your connection or try again.'
+        )
+        setSyncError(friendly)
       } finally {
         isFetchingRef.current = false
         if (mountedRef.current) {
@@ -319,25 +325,37 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     setWsStatus(websocketService.getStatus())
 
     const handleRefresh = () => {
-      void fetchLiveNotifications(true)
+      try {
+        void fetchLiveNotifications(true)
+      } catch (err) {
+        console.warn('Real-time refresh error:', formatUserFriendlyErrorMessage(err))
+      }
     }
 
     const handleStatusChange = (status: ConnectionStatus) => {
       setWsStatus(status)
       if (status === 'connected') {
         // Trigger catch-up synchronization on reconnection
-        void fetchLiveNotifications(true)
+        try {
+          void fetchLiveNotifications(true)
+        } catch (err) {
+          console.warn('Catch-up sync error:', formatUserFriendlyErrorMessage(err))
+        }
       }
     }
 
     const handleStorageSync = (event: StorageEvent) => {
-      const targetKey = getReadStorageKey(userId)
-      if (event.key === targetKey || event.key === READ_STORAGE_KEY_PREFIX) {
-        const latestReadSet = getReadNotificationIds(userId)
-        setReadIds(latestReadSet)
-        setNotifications((prev) =>
-          prev.map((n) => ({ ...n, unread: !latestReadSet.has(n.id) }))
-        )
+      try {
+        const targetKey = getReadStorageKey(userId)
+        if (event.key === targetKey || event.key === READ_STORAGE_KEY_PREFIX) {
+          const latestReadSet = getReadNotificationIds(userId)
+          setReadIds(latestReadSet)
+          setNotifications((prev) =>
+            prev.map((n) => ({ ...n, unread: !latestReadSet.has(n.id) }))
+          )
+        }
+      } catch (err) {
+        console.warn('Storage sync error:', formatUserFriendlyErrorMessage(err))
       }
     }
 
@@ -405,50 +423,66 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
   // Optimistic Mark All Read
   const markAllAsRead = async () => {
-    const allIds = notifications.map((n) => n.id)
-    saveAllReadNotificationIds(allIds, userId)
-    setReadIds(new Set([...readIds, ...allIds]))
-    setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
+    try {
+      const allIds = notifications.map((n) => n.id)
+      saveAllReadNotificationIds(allIds, userId)
+      setReadIds(new Set([...readIds, ...allIds]))
+      setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
 
-    // Dispatch backend persistence call
-    void notificationService.markAllRead(undefined, userId)
+      // Dispatch backend persistence call
+      const ok = await notificationService.markAllRead(undefined, userId)
+      if (!ok) {
+        console.warn('markAllRead warning: backend update did not confirm success')
+      }
+    } catch (err) {
+      const friendly = formatUserFriendlyErrorMessage(err, 'Unable to mark all notifications as read.')
+      setSyncError(friendly)
+    }
   }
 
   // Optimistic Mark Single Read
   const handleItemClick = (item: DisplayNotification) => {
-    saveReadNotificationId(item.id, userId)
-    setReadIds((prev) => new Set([...prev, item.id]))
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === item.id ? { ...n, unread: false } : n))
-    )
+    try {
+      saveReadNotificationId(item.id, userId)
+      setReadIds((prev) => new Set([...prev, item.id]))
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === item.id ? { ...n, unread: false } : n))
+      )
 
-    // Dispatch backend persistence call
-    void notificationService.markAsRead(item.id, userId)
+      // Dispatch backend persistence call
+      void notificationService.markAsRead(item.id, userId)
+    } catch (err) {
+      console.warn('markAsRead warning:', formatUserFriendlyErrorMessage(err))
+    }
 
     setIsOpen(false)
 
-    // Navigate based on notification category / reference
-    if (item.category === 'bills' || item.refType === 'bill' || item.type.startsWith('BILL_')) {
-      if (item.refId && item.refId > 0) {
-        navigate(`/bills/${item.refId}`)
-      } else {
-        navigate('/bills')
+    try {
+      // Navigate based on notification category / reference
+      if (item.category === 'bills' || item.refType === 'bill' || item.type.startsWith('BILL_')) {
+        if (item.refId && item.refId > 0) {
+          navigate(`/bills/${item.refId}`)
+        } else {
+          navigate('/bills')
+        }
+      } else if (
+        item.category === 'lending' ||
+        item.refType === 'lending' ||
+        item.refType === 'borrower' ||
+        item.type.startsWith('LENDING_')
+      ) {
+        navigate('/lending')
+      } else if (item.refType === 'tenant' || item.type.startsWith('TENANT_')) {
+        navigate('/tenant')
+      } else if (item.refType === 'petty_cash' || item.type.includes('PETTY_CASH')) {
+        navigate('/petty-cash')
+      } else if (item.refType === 'deposit' || item.type.includes('DEPOSIT') || item.refType === 'sale') {
+        navigate('/sales')
+      } else if (item.refType === 'loan' || item.refType === 'loan_repayment' || item.type.includes('LOAN')) {
+        navigate('/loan')
       }
-    } else if (
-      item.category === 'lending' ||
-      item.refType === 'lending' ||
-      item.refType === 'borrower' ||
-      item.type.startsWith('LENDING_')
-    ) {
-      navigate('/lending')
-    } else if (item.refType === 'tenant' || item.type.startsWith('TENANT_')) {
-      navigate('/tenant')
-    } else if (item.refType === 'petty_cash' || item.type.includes('PETTY_CASH')) {
-      navigate('/petty-cash')
-    } else if (item.refType === 'deposit' || item.type.includes('DEPOSIT') || item.refType === 'sale') {
-      navigate('/sales')
-    } else if (item.refType === 'loan' || item.refType === 'loan_repayment' || item.type.includes('LOAN')) {
-      navigate('/loan')
+    } catch (navErr) {
+      console.error('Notification navigation error:', formatUserFriendlyErrorMessage(navErr))
     }
   }
 
@@ -527,14 +561,14 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           {/* Sync Error / Offline Banner */}
           {syncError && (
             <div className="bg-amber-50 border-b border-amber-200/80 px-4 py-2 flex items-center justify-between text-xs text-amber-800">
-              <span className="flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 flex-1 min-w-0 mr-2">
                 <WifiOff className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-                Sync paused. Showing cached notifications.
+                <span className="truncate">{syncError}</span>
               </span>
               <button
                 type="button"
                 onClick={() => void fetchLiveNotifications(true)}
-                className="font-bold underline hover:text-amber-950 flex items-center gap-1 cursor-pointer"
+                className="font-bold underline hover:text-amber-950 flex items-center gap-1 cursor-pointer shrink-0"
               >
                 <RefreshCw className="h-3 w-3" />
                 Retry
@@ -598,7 +632,24 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               </div>
             ) : filteredNotifications.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-fg">
-                No notifications in this category
+                {syncError ? (
+                  <div className="space-y-2.5">
+                    <AlertCircle className="h-6 w-6 text-amber-500 mx-auto" />
+                    <p className="text-xs text-slate-600 max-w-xs mx-auto leading-relaxed">{syncError}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void fetchLiveNotifications(true)}
+                      className="text-xs h-8 gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                      Try again
+                    </Button>
+                  </div>
+                ) : (
+                  'No notifications in this category'
+                )}
               </div>
             ) : (
               filteredNotifications.map((item) => {

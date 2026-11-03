@@ -601,7 +601,7 @@ export const BillsPage: React.FC = () => {
               </h1>
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Track recurring utility, rental, and scheduled bills for {displayedCompanyTitle} with automated due date reminders and payment history.
+              Track recurring utility, rental, and scheduled bills for {displayedCompanyTitle} .
             </p>
           </div>
 

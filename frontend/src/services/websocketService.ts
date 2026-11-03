@@ -3,6 +3,8 @@
  * Status Observers, and Multi-Tab BroadcastChannel support.
  */
 
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+
 export type ConnectionStatus = 'connected' | 'reconnecting' | 'offline'
 
 export type SyncEventType =
@@ -99,10 +101,12 @@ class WebSocketService {
         this.handleDisconnect()
       }
 
-      this.socket.onerror = () => {
+      this.socket.onerror = (event) => {
+        console.warn('WebSocket connection error:', formatUserFriendlyErrorMessage(event, 'Real-time connection interrupted.'))
         this.handleDisconnect()
       }
-    } catch {
+    } catch (err) {
+      console.warn('WebSocket initialization error:', formatUserFriendlyErrorMessage(err, 'Unable to establish real-time connection.'))
       this.handleDisconnect()
     }
   }
@@ -173,7 +177,7 @@ class WebSocketService {
         try {
           fn(payload)
         } catch (e) {
-          console.error('WebSocket listener error:', e)
+          console.error('WebSocket listener error:', formatUserFriendlyErrorMessage(e))
         }
       })
     }
@@ -183,7 +187,7 @@ class WebSocketService {
         try {
           fn({ type, payload })
         } catch (e) {
-          console.error('WebSocket ALL listener error:', e)
+          console.error('WebSocket ALL listener error:', formatUserFriendlyErrorMessage(e))
         }
       })
     }
