@@ -1,24 +1,33 @@
 /**
- * WebSocket Real-Time Sync Service with Multi-Tab BroadcastChannel support.
+ * WebSocket Real-Time Sync Service with Exponential Backoff, Jitter,
+ * Status Observers, and Multi-Tab BroadcastChannel support.
  */
 
-type SyncEventType =
+export type ConnectionStatus = 'connected' | 'reconnecting' | 'offline'
+
+export type SyncEventType =
   | 'LOANS_UPDATED'
   | 'PETTY_CASH_UPDATED'
   | 'TRANSACTION_UPDATED'
   | 'BANK_UPDATED'
   | 'AUDIT_UPDATED'
   | 'TENANTS_UPDATED'
+  | 'NOTIFICATION_RECEIVED'
+  | 'WS_STATUS_CHANGE'
   | 'ALL'
-type Listener = (payload?: any) => void
+
+export type Listener = (payload?: any) => void
 
 class WebSocketService {
   private socket: WebSocket | null = null
   private listeners: Map<string, Set<Listener>> = new Map()
   private reconnectTimeout: number | null = null
   private pingInterval: number | null = null
+  private stableTimer: number | null = null
   private broadcastChannel: BroadcastChannel | null = null
   private isConnecting: boolean = false
+  private reconnectAttempts: number = 0
+  private status: ConnectionStatus = 'offline'
 
   constructor() {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -35,6 +44,17 @@ class WebSocketService {
     }
   }
 
+  public getStatus(): ConnectionStatus {
+    return this.status
+  }
+
+  private setStatus(newStatus: ConnectionStatus): void {
+    if (this.status !== newStatus) {
+      this.status = newStatus
+      this.notifyListeners('WS_STATUS_CHANGE', newStatus)
+    }
+  }
+
   public connect(): void {
     if (typeof window === 'undefined') return
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
@@ -42,9 +62,9 @@ class WebSocketService {
     }
     if (this.isConnecting) return
     this.isConnecting = true
+    this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'offline')
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Connect via relative proxy (/ws) or fallback to localhost:8000
     const wsUrl = `${protocol}//${window.location.host}/ws`
 
     try {
@@ -52,7 +72,14 @@ class WebSocketService {
 
       this.socket.onopen = () => {
         this.isConnecting = false
+        this.setStatus('connected')
         this.startPing()
+
+        // Reset reconnect attempts after 5 seconds of stable connection
+        if (this.stableTimer) clearTimeout(this.stableTimer)
+        this.stableTimer = window.setTimeout(() => {
+          this.reconnectAttempts = 0
+        }, 5000)
       }
 
       this.socket.onmessage = (event) => {
@@ -60,8 +87,7 @@ class WebSocketService {
         try {
           const data = JSON.parse(event.data)
           if (data && data.type) {
-            this.notifyListeners(data.type, data.payload)
-            // Forward to other local tabs
+            this.notifyListeners(data.type, data.payload || data)
             this.broadcastChannel?.postMessage(data)
           }
         } catch {
@@ -70,23 +96,26 @@ class WebSocketService {
       }
 
       this.socket.onclose = () => {
-        this.isConnecting = false
-        this.stopPing()
-        this.scheduleReconnect()
+        this.handleDisconnect()
       }
 
       this.socket.onerror = () => {
-        this.isConnecting = false
-        try {
-          this.socket?.close()
-        } catch {
-          // ignore
-        }
+        this.handleDisconnect()
       }
     } catch {
-      this.isConnecting = false
-      this.scheduleReconnect()
+      this.handleDisconnect()
     }
+  }
+
+  private handleDisconnect(): void {
+    this.isConnecting = false
+    this.stopPing()
+    if (this.stableTimer) {
+      clearTimeout(this.stableTimer)
+      this.stableTimer = null
+    }
+    this.setStatus('reconnecting')
+    this.scheduleReconnect()
   }
 
   private startPing(): void {
@@ -107,10 +136,17 @@ class WebSocketService {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) return
+
+    this.reconnectAttempts += 1
+    // Exponential backoff with random jitter (1s, 2s, 4s, 8s, max 30s)
+    const baseDelay = Math.min(30000, Math.pow(2, Math.min(this.reconnectAttempts, 5)) * 1000)
+    const jitter = Math.floor(Math.random() * 500)
+    const delay = baseDelay + jitter
+
     this.reconnectTimeout = window.setTimeout(() => {
       this.reconnectTimeout = null
       this.connect()
-    }, 3000)
+    }, delay)
   }
 
   public subscribe(eventType: SyncEventType, callback: Listener): () => void {

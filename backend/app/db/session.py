@@ -59,6 +59,7 @@ def init_db():
     import app.models.petty_cash
     import app.models.bank
     import app.models.lending
+    import app.models.notification
     from app.models.company import Company
 
 

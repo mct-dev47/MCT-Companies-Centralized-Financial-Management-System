@@ -52,6 +52,9 @@ class FastMemoryCache:
             self._store.clear()
             self._tags.clear()
 
+    def clear(self) -> None:
+        self.invalidate_all()
+
     def _delete_key(self, key: str) -> None:
         item = self._store.pop(key, None)
         if item:

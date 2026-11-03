@@ -14,12 +14,15 @@ import {
   Banknote,
   Store,
   Wallet,
+  RefreshCw,
+  Wifi,
+  WifiOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
-import { websocketService } from '@/services/websocketService'
+import { websocketService, type ConnectionStatus } from '@/services/websocketService'
 import {
   notificationService,
   NOTIFICATION_UPDATED_EVENT,
@@ -28,6 +31,7 @@ import {
   getReadNotificationIds,
   saveReadNotificationId,
   saveAllReadNotificationIds,
+  sanitizeNotificationText,
   type NotificationItemOut,
 } from '@/services/notificationService'
 
@@ -90,6 +94,9 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   const [notifications, setNotifications] = React.useState<DisplayNotification[]>([])
   const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
   const [isLoading, setIsLoading] = React.useState(false)
+  const [syncError, setSyncError] = React.useState(false)
+  const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
+
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   const isFetchingRef = React.useRef(false)
   const mountedRef = React.useRef(true)
@@ -121,7 +128,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
       if (!isAuthenticated) {
         return
       }
-      // Prevent overlapping polling requests while a previous poll is still unresolved
       if (isFetchingRef.current && !forceRefresh) {
         return
       }
@@ -141,6 +147,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         if (!mountedRef.current) return
 
         const readSet = getReadNotificationIds(userId)
+        setSyncError(false)
 
         const mapped: DisplayNotification[] = items.map((item) => {
           const nt = (item.notification_type || '').toUpperCase()
@@ -198,43 +205,34 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             isDueReminder = true
             IconComponent = Calendar
             iconColor = 'text-amber-600'
-            iconBg = 'bg-amber-50/70 border border-amber-200/60'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
             urgencyBadge = {
               label: 'Due Tomorrow',
-              className: 'bg-amber-50 text-amber-700 border-amber-200',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
             }
           } else if (nt.includes('DUE_SOON')) {
             isDueReminder = true
-            IconComponent = Calendar
-            iconColor = 'text-blue-600'
-            iconBg = 'bg-blue-50 border border-blue-200/70'
-            urgencyBadge = {
-              label: 'Due Soon',
-              className: 'bg-blue-50 text-blue-700 border-blue-200',
-            }
-          } else if (nt === 'PETTY_CASH_LOW_BALANCE') {
-            isDueReminder = true
-            IconComponent = Wallet
+            IconComponent = Clock
             iconColor = 'text-amber-600'
             iconBg = 'bg-amber-50 border border-amber-200/70'
             urgencyBadge = {
-              label: 'Low Balance',
-              className: 'bg-amber-100 text-amber-800 border-amber-200',
+              label: 'Due Soon',
+              className: 'bg-amber-50 text-amber-800 border-amber-200',
             }
-          } else if (category === 'bills') {
+          } else if (nt === 'BILL_PAID' || nt === 'BILL_PARTIALLY_PAID') {
             IconComponent = Receipt
             iconColor = 'text-emerald-600'
             iconBg = 'bg-emerald-50 border border-emerald-200/70'
-          } else if (category === 'lending') {
+          } else if (nt.startsWith('LENDING_PAYMENT') || nt.startsWith('LENDING_FULLY')) {
             IconComponent = Banknote
             iconColor = 'text-emerald-600'
             iconBg = 'bg-emerald-50 border border-emerald-200/70'
-          } else if (categoryLabel === 'Tenants') {
+          } else if (nt.startsWith('TENANT_')) {
             IconComponent = Store
-            iconColor = 'text-emerald-600'
-            iconBg = 'bg-emerald-50 border border-emerald-200/70'
-          } else if (nt === 'LOAN_PENDING_APPROVAL' || nt === 'LOAN_REQUEST_FINANCE') {
-            IconComponent = FileCheck2
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
+          } else if (nt === 'LOAN_REQUEST_FINANCE') {
+            IconComponent = Landmark
             iconColor = 'text-amber-600'
             iconBg = 'bg-amber-50 border border-amber-200/70'
           } else if (nt === 'LOAN_ENDORSED_AUDIT' || nt === 'PETTY_CASH_AUDIT') {
@@ -269,12 +267,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             iconBg = 'bg-primary/10'
           }
 
-          const isUnread = !readSet.has(item.notification_id)
+          const isUnread = !readSet.has(item.notification_id) && !item.read_at
 
           return {
             id: item.notification_id,
-            title: item.title,
-            description: item.message,
+            title: sanitizeNotificationText(item.title),
+            description: sanitizeNotificationText(item.message),
             time: isDueReminder && urgencyBadge ? urgencyBadge.label : formatRelativeTime(item.created_at),
             unread: isUnread,
             type: nt,
@@ -293,7 +291,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         setReadIds(readSet)
         setNotifications(mapped)
       } catch {
-        // Keep last known good notifications displayed
+        setSyncError(true)
       } finally {
         isFetchingRef.current = false
         if (mountedRef.current) {
@@ -304,7 +302,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     [isAuthenticated, userId, scopedCompanyName, userRole, notifications.length]
   )
 
-  // Initial fetch and polling every 30s (only when authenticated)
+  // Initial fetch and polling every 30s
   React.useEffect(() => {
     if (!isAuthenticated) return
     void fetchLiveNotifications(false)
@@ -314,12 +312,22 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     return () => clearInterval(timer)
   }, [isAuthenticated, fetchLiveNotifications])
 
-  // Listen to custom notification update events, WebSocket broadcasts, and cross-tab storage sync
+  // Real-time synchronization & WebSocket status listener
   React.useEffect(() => {
     if (!isAuthenticated) return
 
+    setWsStatus(websocketService.getStatus())
+
     const handleRefresh = () => {
       void fetchLiveNotifications(true)
+    }
+
+    const handleStatusChange = (status: ConnectionStatus) => {
+      setWsStatus(status)
+      if (status === 'connected') {
+        // Trigger catch-up synchronization on reconnection
+        void fetchLiveNotifications(true)
+      }
     }
 
     const handleStorageSync = (event: StorageEvent) => {
@@ -335,13 +343,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
     window.addEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
     window.addEventListener('storage', handleStorageSync)
+
     const unsubs = [
+      websocketService.subscribe('WS_STATUS_CHANGE', handleStatusChange),
+      websocketService.subscribe('NOTIFICATION_RECEIVED', handleRefresh),
       websocketService.subscribe('LOANS_UPDATED', handleRefresh),
       websocketService.subscribe('PETTY_CASH_UPDATED', handleRefresh),
       websocketService.subscribe('TENANTS_UPDATED', handleRefresh),
       websocketService.subscribe('AUDIT_UPDATED', handleRefresh),
       websocketService.subscribe('SALES_UPDATED', handleRefresh),
     ]
+
     return () => {
       window.removeEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
       window.removeEventListener('storage', handleStorageSync)
@@ -349,7 +361,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
   }, [isAuthenticated, userId, fetchLiveNotifications])
 
-  // Refetch when dropdown opened (uses 10s cache if fresh)
+  // Refetch when dropdown opened
   React.useEffect(() => {
     if (isOpen && isAuthenticated) {
       void fetchLiveNotifications(false)
@@ -391,19 +403,27 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
   }, [isOpen])
 
-  const markAllAsRead = () => {
+  // Optimistic Mark All Read
+  const markAllAsRead = async () => {
     const allIds = notifications.map((n) => n.id)
     saveAllReadNotificationIds(allIds, userId)
     setReadIds(new Set([...readIds, ...allIds]))
     setNotifications((prev) => prev.map((n) => ({ ...n, unread: false })))
+
+    // Dispatch backend persistence call
+    void notificationService.markAllRead(undefined, userId)
   }
 
+  // Optimistic Mark Single Read
   const handleItemClick = (item: DisplayNotification) => {
     saveReadNotificationId(item.id, userId)
     setReadIds((prev) => new Set([...prev, item.id]))
     setNotifications((prev) =>
       prev.map((n) => (n.id === item.id ? { ...n, unread: false } : n))
     )
+
+    // Dispatch backend persistence call
+    void notificationService.markAsRead(item.id, userId)
 
     setIsOpen(false)
 
@@ -468,6 +488,24 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-stroke/20 bg-surface/50">
             <div className="flex items-center gap-2">
               <span className="font-semibold text-sm text-focus">Notifications & Reminders</span>
+              {/* WebSocket Status Indicator Dot */}
+              <span
+                title={
+                  wsStatus === 'connected'
+                    ? 'Real-time sync connected'
+                    : wsStatus === 'reconnecting'
+                    ? 'Reconnecting real-time sync...'
+                    : 'Offline polling mode'
+                }
+                className={cn(
+                  'h-2 w-2 rounded-full inline-block',
+                  wsStatus === 'connected'
+                    ? 'bg-emerald-500 ring-2 ring-emerald-100'
+                    : wsStatus === 'reconnecting'
+                    ? 'bg-amber-500 animate-pulse'
+                    : 'bg-slate-300'
+                )}
+              />
               {unreadCount > 0 && (
                 <span className="px-2 py-0.5 text-[11px] font-semibold bg-primary/10 text-primary rounded-full">
                   {unreadCount} new
@@ -485,6 +523,24 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               </button>
             )}
           </div>
+
+          {/* Sync Error / Offline Banner */}
+          {syncError && (
+            <div className="bg-amber-50 border-b border-amber-200/80 px-4 py-2 flex items-center justify-between text-xs text-amber-800">
+              <span className="flex items-center gap-1.5">
+                <WifiOff className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+                Sync paused. Showing cached notifications.
+              </span>
+              <button
+                type="button"
+                onClick={() => void fetchLiveNotifications(true)}
+                className="font-bold underline hover:text-amber-950 flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Retry
+              </button>
+            </div>
+          )}
 
           {/* Filter Tabs */}
           <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-stroke/15 bg-slate-50/70 overflow-x-auto no-scrollbar">
@@ -529,8 +585,16 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           {/* Notification List */}
           <div className="max-h-96 overflow-y-auto divide-y divide-stroke/10">
             {isLoading && notifications.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-fg">
-                Loading notifications...
+              <div className="p-5 space-y-4">
+                {[1, 2, 3].map((skeletonId) => (
+                  <div key={skeletonId} className="flex items-start gap-3 animate-pulse">
+                    <div className="h-9 w-9 rounded-xl bg-slate-200 shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 bg-slate-200 rounded w-1/3" />
+                      <div className="h-3 bg-slate-200 rounded w-3/4" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : filteredNotifications.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-fg">
