@@ -11,12 +11,12 @@ import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { ALL_COMPANIES_LIST } from '@/context/CompanyContext'
-import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 
 export interface DashboardFilterState {
   dateRange: DateRange
-  company: string
+  companies: string[]
+  company?: string
 }
 
 interface DashboardHeaderProps {
@@ -36,6 +36,21 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   const [searchQuery, setSearchQuery] = React.useState('')
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
+
+  // Normalize selected companies array safely
+  const selectedCompanies = React.useMemo<string[]>(() => {
+    if (Array.isArray(filters.companies) && filters.companies.length > 0) {
+      return filters.companies
+    }
+    if (filters.company) {
+      return [filters.company]
+    }
+    return ['All Companies']
+  }, [filters.companies, filters.company])
+
+  const isAllCompanies =
+    selectedCompanies.length === 0 ||
+    selectedCompanies.includes('All Companies')
 
   // Handle outside click and escape key
   React.useEffect(() => {
@@ -75,15 +90,52 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
     }
   }, [isOpen])
 
-  const handleCompanySelect = (comp: string) => {
-    onFiltersChange({ ...filters, company: comp })
-    setIsOpen(false)
+  const handleToggleCompany = (comp: string) => {
+    if (comp === 'All Companies') {
+      onFiltersChange({
+        ...filters,
+        companies: ['All Companies'],
+        company: 'All Companies',
+      })
+      return
+    }
+
+    let next: string[]
+    if (isAllCompanies) {
+      next = [comp]
+    } else if (selectedCompanies.includes(comp)) {
+      next = selectedCompanies.filter((c) => c !== comp)
+      if (next.length === 0) {
+        next = ['All Companies']
+      }
+    } else {
+      next = [...selectedCompanies.filter((c) => c !== 'All Companies'), comp]
+    }
+
+    const primaryCompany =
+      next.length === 1
+        ? next[0]
+        : next.includes('All Companies') || next.length === 0
+        ? 'All Companies'
+        : `${next.length} Companies`
+
+    onFiltersChange({
+      ...filters,
+      companies: next,
+      company: primaryCompany,
+    })
   }
 
-  const handleResetCompany = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    e.preventDefault()
-    onFiltersChange({ ...filters, company: 'All Companies' })
+  const handleResetCompany = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation()
+      e.preventDefault()
+    }
+    onFiltersChange({
+      ...filters,
+      companies: ['All Companies'],
+      company: 'All Companies',
+    })
   }
 
   const filteredCompanies = React.useMemo(() => {
@@ -92,20 +144,32 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
     return companies.filter((c) => c.toLowerCase().includes(q))
   }, [companies, searchQuery])
 
+  const buttonLabel = isAllCompanies
+    ? 'All Companies'
+    : selectedCompanies.length === 1
+    ? selectedCompanies[0]
+    : `${selectedCompanies.length} Companies Selected`
+
+  const buttonTooltip = isAllCompanies
+    ? 'Consolidated view of all companies'
+    : selectedCompanies.join(', ')
+
   return (
     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
       {/* Scope Subtitle */}
       <div className="min-w-0 shrink">
         <p className="text-xs sm:text-sm text-muted-fg font-normal truncate max-w-md xl:max-w-xl">
-          {filters.company !== 'All Companies'
-            ? `Viewing financial records and transactions for ${filters.company}.`
-            : "Here's the consolidated financial summary across all MCT Group of Companies."}
+          {isAllCompanies
+            ? "Here's the consolidated financial summary across all MCT Group of Companies."
+            : selectedCompanies.length === 1
+            ? `Viewing financial records and transactions for ${selectedCompanies[0]}.`
+            : `Viewing financial records and transactions for ${selectedCompanies.length} selected companies.`}
         </p>
       </div>
 
       {/* Uniform Filter Bar: Shared Date Picker + Company Scope */}
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap self-start sm:self-auto max-w-full">
-        {/* 1. Global Custom Date Picker (Single date or Custom range, no presets) */}
+        {/* 1. Global Custom Date Picker */}
         <DateRangePicker
           value={filters.dateRange}
           onChange={(newDateRange) => {
@@ -118,7 +182,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-3.5 sm:px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 whitespace-nowrap">
             <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
             <span className="font-semibold text-focus/90 truncate max-w-[280px] sm:max-w-[360px]">
-              {filters.company}
+              {selectedCompanies[0] || 'All Companies'}
             </span>
           </div>
         ) : (
@@ -126,25 +190,28 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             <button
               type="button"
               onClick={() => setIsOpen((prev) => !prev)}
+              title={buttonTooltip}
               className={cn(
                 'inline-flex items-center gap-2 h-10 sm:h-11 px-3.5 sm:px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
-                isOpen && 'ring-2 ring-slate-100 border-slate-300'
+                isOpen && 'ring-2 ring-slate-100 border-slate-300',
+                !isAllCompanies && 'border-primary/40 bg-primary/5 text-primary'
               )}
               aria-expanded={isOpen}
               aria-haspopup="listbox"
               aria-label="Filter dashboard by company"
             >
-              <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-              <span className="font-medium text-focus/90 truncate max-w-[240px] sm:max-w-[360px]">
-                {filters.company}
+              <Building2 className={cn('h-4 w-4 shrink-0', !isAllCompanies ? 'text-primary' : 'text-muted-fg')} />
+              <span className="font-medium truncate max-w-[240px] sm:max-w-[360px]">
+                {buttonLabel}
               </span>
               <ChevronDown
                 className={cn(
-                  'h-3.5 w-3.5 text-muted-fg shrink-0 ml-0.5 transition-transform duration-200',
+                  'h-3.5 w-3.5 shrink-0 ml-0.5 transition-transform duration-200',
+                  !isAllCompanies ? 'text-primary' : 'text-muted-fg',
                   isOpen && 'transform rotate-180'
                 )}
               />
-              {filters.company !== 'All Companies' && (
+              {!isAllCompanies && (
                 <span
                   role="button"
                   tabIndex={0}
@@ -159,7 +226,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                     }
                   }}
                   onMouseDown={(e) => e.stopPropagation()}
-                  className="p-1 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 cursor-pointer inline-flex items-center justify-center"
+                  className="p-1 rounded-full hover:bg-primary/20 text-primary transition-colors ml-0.5 cursor-pointer inline-flex items-center justify-center"
                   title="Reset to All Companies"
                   aria-label="Reset company filter"
                 >
@@ -170,18 +237,25 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
 
             {isOpen && (
               <div
-                className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150"
+                className="absolute right-0 top-full mt-2 w-84 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150"
                 role="listbox"
               >
                 {/* Dropdown Header */}
                 <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                    Filter By Company
-                  </span>
-                  {filters.company !== 'All Companies' && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
+                      Filter By Company
+                    </span>
+                    {!isAllCompanies && (
+                      <span className="px-1.5 py-0.2 text-[10px] font-bold bg-primary/10 text-primary rounded-full">
+                        {selectedCompanies.length}
+                      </span>
+                    )}
+                  </div>
+                  {!isAllCompanies && (
                     <button
                       type="button"
-                      onClick={handleResetCompany}
+                      onClick={() => handleResetCompany()}
                       className="text-xs text-primary hover:underline font-semibold cursor-pointer"
                     >
                       Clear Filter
@@ -221,14 +295,13 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                     filteredCompanies.map((comp) => {
                       const isSelected =
                         comp === 'All Companies'
-                          ? filters.company === 'All Companies'
-                          : filters.company !== 'All Companies' &&
-                            (filters.company === comp || isCompanyMatch(filters.company, comp))
+                          ? isAllCompanies
+                          : !isAllCompanies && selectedCompanies.includes(comp)
                       return (
                         <button
                           key={comp}
                           type="button"
-                          onClick={() => handleCompanySelect(comp)}
+                          onClick={() => handleToggleCompany(comp)}
                           className={cn(
                             'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
                             isSelected
@@ -238,14 +311,37 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
                           role="option"
                           aria-selected={isSelected}
                         >
-                          <span className="truncate">{comp}</span>
-                          {isSelected && (
-                            <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                          )}
+                          <span className="truncate pr-2">{comp}</span>
+                          <span
+                            className={cn(
+                              'h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors',
+                              isSelected
+                                ? 'bg-primary border-primary text-white'
+                                : 'border-slate-300 bg-white'
+                            )}
+                          >
+                            {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                          </span>
                         </button>
                       )
                     })
                   )}
+                </div>
+
+                {/* Dropdown Footer */}
+                <div className="mt-2 pt-2 border-t border-stroke/20 px-1 flex items-center justify-between">
+                  <span className="text-[11px] text-muted-fg">
+                    {isAllCompanies
+                      ? 'All companies showing'
+                      : `${selectedCompanies.length} selected`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsOpen(false)}
+                    className="px-3 py-1 bg-primary text-white text-xs font-semibold rounded-lg hover:bg-primary/90 transition-colors cursor-pointer"
+                  >
+                    Done
+                  </button>
                 </div>
               </div>
             )}

@@ -390,7 +390,30 @@ class NotificationService:
         company_id: Optional[int] = None,
         user_role: Optional[str] = None,
         user_scope_key: Optional[str] = None,
+        recipient_user_id: Optional[int] = None,
     ) -> int:
+        if recipient_user_id is not None:
+            from sqlalchemy import select, func
+            from app.models.notification import Notification
+            
+            q = select(func.count(Notification.notification_id)).where(
+                Notification.recipient_user_id == recipient_user_id,
+                Notification.read_at.is_(None),
+            )
+            if company_id is not None:
+                q = q.where(Notification.company_id == company_id)
+            count = self.db.scalar(q)
+            if count is not None and count > 0:
+                return int(count)
+
+            has_any = self.db.scalar(
+                select(func.count(Notification.notification_id)).where(
+                    Notification.recipient_user_id == recipient_user_id
+                )
+            )
+            if has_any and has_any > 0:
+                return 0
+
         return len(
             self.get_notifications(
                 company_id=company_id,
@@ -1788,3 +1811,317 @@ class NotificationService:
             logger.warning("Error computing deposit workflow notifications: %s", exc)
 
         return results
+
+
+# ── New Persistent Inbox & Retention Architecture ──────────────────────────
+
+from app.models.notification import Notification, NotificationOutbox
+from app.schemas.notification import NotificationListResponse
+from app.services.notification_dispatcher import resolve_event_recipients
+
+NOTIF_SCHEDULER_LOCK_ID = 884_209_101
+DEFAULT_RETENTION_DAYS = 90
+
+
+def _extend_service(cls):
+    def get_notifications_feed(
+        self,
+        recipient_user_id: int,
+        company_id: Optional[int] = None,
+        cursor: Optional[str] = None,
+        direction: str = "before",
+        notification_type: Optional[str] = None,
+        limit: int = 50,
+    ) -> NotificationListResponse:
+        from sqlalchemy import select, or_, and_
+        query = select(Notification).where(Notification.recipient_user_id == recipient_user_id)
+
+        if company_id is not None:
+            query = query.where(Notification.company_id == company_id)
+
+        if notification_type:
+            query = query.where(Notification.notification_type == notification_type.upper())
+
+        if cursor:
+            try:
+                cursor_dt_str, cursor_id = cursor.split("|", 1)
+                cursor_dt = datetime.fromisoformat(cursor_dt_str)
+                if cursor_dt.tzinfo is None:
+                    cursor_dt = cursor_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                raise ValueError("Invalid cursor format. Expected ISO_DATE|ID.")
+
+            if direction == "after":
+                query = query.where(
+                    or_(
+                        Notification.created_at > cursor_dt,
+                        and_(Notification.created_at == cursor_dt, Notification.notification_id > cursor_id),
+                    )
+                ).order_by(Notification.created_at.asc(), Notification.notification_id.asc())
+            else:
+                query = query.where(
+                    or_(
+                        Notification.created_at < cursor_dt,
+                        and_(Notification.created_at == cursor_dt, Notification.notification_id < cursor_id),
+                    )
+                ).order_by(Notification.created_at.desc(), Notification.notification_id.desc())
+        else:
+            query = query.order_by(Notification.created_at.desc(), Notification.notification_id.desc())
+
+        items = self.db.scalars(query.limit(limit + 1)).all()
+        
+        # If persistent table has no items for this user yet, fallback to computed items
+        if not items and not cursor:
+            computed = self.get_notifications(company_id=company_id, notification_type=notification_type, limit=limit)
+            return NotificationListResponse(
+                items=computed,
+                next_cursor=None,
+                has_more=False,
+                total_unread=len(computed),
+            )
+
+        has_more = len(items) > limit
+        results = items[:limit]
+
+        next_cursor = None
+        if results:
+            last = results[-1]
+            c_dt = last.created_at.isoformat() if last.created_at else datetime.now(timezone.utc).isoformat()
+            next_cursor = f"{c_dt}|{last.notification_id}"
+
+        # Get total unread count for this recipient & company scope
+        unread_count = self.get_unread_count(
+            company_id=company_id,
+            user_scope_key=f"u:{recipient_user_id}:c:{company_id}",
+        )
+
+        return NotificationListResponse(
+            items=[NotificationOut.model_validate(n) for n in results],
+            next_cursor=next_cursor,
+            has_more=has_more,
+            total_unread=unread_count,
+        )
+
+    def mark_as_read(
+        self,
+        notification_id: str,
+        recipient_user_id: int,
+    ) -> Optional[Notification]:
+        from sqlalchemy import select
+        now = datetime.now(timezone.utc)
+        expires_target = now + timedelta(days=DEFAULT_RETENTION_DAYS)
+
+        notif = self.db.scalar(
+            select(Notification).where(
+                Notification.notification_id == notification_id,
+                Notification.recipient_user_id == recipient_user_id,
+            )
+        )
+        if not notif:
+            return None
+
+        if notif.read_at is None:
+            notif.read_at = now
+            curr_exp = notif.expires_at
+            if curr_exp is not None and curr_exp.tzinfo is None:
+                curr_exp = curr_exp.replace(tzinfo=timezone.utc)
+            if curr_exp is None or expires_target < curr_exp:
+                notif.expires_at = expires_target
+            self.db.commit()
+            self.db.refresh(notif)
+
+        return notif
+
+    def mark_all_as_read(
+        self,
+        recipient_user_id: int,
+        company_id: Optional[int] = None,
+    ) -> int:
+        from sqlalchemy import update, func
+        now = datetime.now(timezone.utc)
+        expires_target = now + timedelta(days=DEFAULT_RETENTION_DAYS)
+
+        stmt = (
+            update(Notification)
+            .where(
+                Notification.recipient_user_id == recipient_user_id,
+                Notification.read_at.is_(None),
+            )
+        )
+        if company_id is not None:
+            stmt = stmt.where(Notification.company_id == company_id)
+
+        stmt = stmt.values(
+            read_at=now,
+            expires_at=func.coalesce(Notification.expires_at, expires_target),
+        )
+        res = self.db.execute(stmt)
+        self.db.commit()
+        return res.rowcount or 0
+
+    def resolve_entity_reminders(
+        self,
+        reference_type: str,
+        reference_id: int,
+    ) -> int:
+        from sqlalchemy import update, func, select
+        now = datetime.now(timezone.utc)
+        expires_target = now + timedelta(days=DEFAULT_RETENTION_DAYS)
+
+        bind = self.db.get_bind()
+        is_postgres = bind.dialect.name == "postgresql"
+        if is_postgres:
+            stmt = (
+                update(Notification)
+                .where(
+                    Notification.reference_type == reference_type,
+                    Notification.reference_id == reference_id,
+                    Notification.resolved_at.is_(None),
+                )
+                .values(
+                    resolved_at=now,
+                    expires_at=func.least(
+                        func.coalesce(Notification.expires_at, expires_target),
+                        expires_target,
+                    ),
+                )
+            )
+            res = self.db.execute(stmt)
+            self.db.commit()
+            return res.rowcount or 0
+        else:
+            rows = self.db.scalars(
+                select(Notification).where(
+                    Notification.reference_type == reference_type,
+                    Notification.reference_id == reference_id,
+                    Notification.resolved_at.is_(None),
+                )
+            ).all()
+            for r in rows:
+                r.resolved_at = now
+                curr_exp = r.expires_at
+                if curr_exp is not None and curr_exp.tzinfo is None:
+                    curr_exp = curr_exp.replace(tzinfo=timezone.utc)
+                if curr_exp is None or expires_target < curr_exp:
+                    r.expires_at = expires_target
+            self.db.commit()
+            return len(rows)
+
+    cls.get_notifications_feed = get_notifications_feed
+    cls.mark_as_read = mark_as_read
+    cls.mark_all_as_read = mark_all_as_read
+    cls.resolve_entity_reminders = resolve_entity_reminders
+    return cls
+
+NotificationService = _extend_service(NotificationService)
+
+
+def run_temporal_due_date_sweep(session_factory: Callable[[], Session]) -> dict:
+    from sqlalchemy import select, text
+    with session_factory() as db:
+        bind = db.get_bind()
+        is_postgres = bind.dialect.name == "postgresql"
+        acquired = True
+
+        if is_postgres:
+            try:
+                acquired = bool(
+                    db.execute(
+                        text("SELECT pg_try_advisory_lock(:lock_id)"),
+                        {"lock_id": NOTIF_SCHEDULER_LOCK_ID},
+                    ).scalar()
+                )
+            except Exception as e:
+                logger.warning("Could not acquire advisory lock: %s", e)
+                acquired = True
+
+        if not acquired:
+            logger.info("Temporal due-date sweep already active on another process; skipping.")
+            return {"status": "skipped", "reason": "lock_held"}
+
+        try:
+            logger.info("Starting temporal due-date sweep...")
+            svc = NotificationService(db)
+            all_notifs = svc.get_notifications(company_id=None, limit=1000)
+            now = datetime.now(timezone.utc)
+            upserted = 0
+            for item in all_notifs:
+                if not item.company_id:
+                    continue
+                recipients = resolve_event_recipients(
+                    db=db,
+                    company_id=item.company_id,
+                    target_roles=["supervisor", "finance", "admin"],
+                    target_user_ids=[],
+                )
+                for uid in recipients:
+                    notif_id = f"{item.notification_id}-{uid}"
+                    existing = db.scalar(
+                        select(Notification.notification_id).where(
+                            Notification.notification_id == notif_id
+                        )
+                    )
+                    if not existing:
+                        db.add(
+                            Notification(
+                                notification_id=notif_id,
+                                recipient_user_id=uid,
+                                company_id=item.company_id,
+                                notification_type=item.notification_type,
+                                title=item.title,
+                                message=item.message,
+                                reference_type=item.reference_type,
+                                reference_id=item.reference_id,
+                                read_at=None,
+                                resolved_at=None,
+                                expires_at=None,
+                                created_at=now,
+                            )
+                        )
+                        upserted += 1
+            db.commit()
+            return {"status": "success", "upserted_count": upserted}
+        finally:
+            if is_postgres:
+                try:
+                    db.execute(
+                        text("SELECT pg_advisory_unlock(:lock_id)"),
+                        {"lock_id": NOTIF_SCHEDULER_LOCK_ID},
+                    )
+                    db.commit()
+                except Exception:
+                    pass
+
+
+def prune_expired_notifications_batch(
+    session_factory: Callable[[], Session],
+    batch_size: int = 1000,
+) -> int:
+    from sqlalchemy import select, delete
+    total_deleted = 0
+    now = datetime.now(timezone.utc)
+
+    while True:
+        with session_factory() as db:
+            subq = (
+                select(Notification.notification_id)
+                .where(
+                    Notification.expires_at.isnot(None),
+                    Notification.expires_at <= now,
+                )
+                .limit(batch_size)
+            )
+            expired_ids = db.scalars(subq).all()
+            if not expired_ids:
+                break
+
+            stmt = delete(Notification).where(Notification.notification_id.in_(expired_ids))
+            res = db.execute(stmt)
+            db.commit()
+            deleted = res.rowcount or 0
+            total_deleted += deleted
+            if deleted < batch_size:
+                break
+
+    logger.info("Pruned %d expired notifications older than 90 days.", total_deleted)
+    return total_deleted

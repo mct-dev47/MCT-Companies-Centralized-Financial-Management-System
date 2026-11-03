@@ -33,117 +33,7 @@ export interface Resend2FAResponse {
   resendAvailableIn: number
 }
 
-// Seeded accounts in the system
-export interface SeededAccount {
-  id: string
-  fullName: string
-  email: string
-  role: UserRole
-  assignedCompany?: string
-  avatarUrl?: string
-}
 
-export const SEEDED_ACCOUNTS: SeededAccount[] = [
-  // 1. Central Admin accounts (Full access including Company & User Management)
-  {
-    id: 'usr_admin_01',
-    fullName: 'Remi Lee',
-    email: 'admin@mct.com',
-    role: 'Admin',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_admin_02',
-    fullName: 'Remi Lee',
-    email: 'remi.lee@mct.com',
-    role: 'Admin',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  // 2. Audit accounts (Same frontend as Admin: multi-company audit view; no company/user management)
-  {
-    id: 'usr_audit_01',
-    fullName: 'Financial Auditor',
-    email: 'audit@mct.com',
-    role: 'Audit',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_audit_02',
-    fullName: 'Audit Officer',
-    email: 'auditor@mct.com',
-    role: 'Audit',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  // 3. Finance accounts (Approves loans and selects lending company)
-  {
-    id: 'usr_finance_01',
-    fullName: 'Finance Officer',
-    email: 'finance@mct.com',
-    role: 'Finance',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_finance_02',
-    fullName: 'Finance Manager',
-    email: 'finance.manager@mct.com',
-    role: 'Finance',
-    assignedCompany: 'All Companies',
-    avatarUrl: logo2Url,
-  },
-  // 4. Supervisor accounts (Operational branch supervisors)
-  {
-    id: 'usr_kitchen_00',
-    fullName: 'Temporary Employee',
-    email: 'temporaryemployee@gmail.com',
-    role: 'Supervisor',
-    assignedCompany: 'MCT Kitchen',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_kitchen_01',
-    fullName: 'Temporary Employee',
-    email: 'temporary.employee@mct.com',
-    role: 'Supervisor',
-    assignedCompany: 'MCT Kitchen',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_hotel_01',
-    fullName: 'Temporary Employee 1',
-    email: 'temporary.employee1@mct.com',
-    role: 'Supervisor',
-    assignedCompany: 'MCT Hotel',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_jk_property_01',
-    fullName: 'Jessica Kho (JK Property)',
-    email: 'jkproperty@mct.com',
-    role: 'Supervisor',
-    assignedCompany: 'JK Property and Ventures',
-    avatarUrl: logo2Url,
-  },
-  {
-    id: 'usr_filcap_01',
-    fullName: 'Carlos Tan (FilCap)',
-    email: 'filcap@mct.com',
-    role: 'Supervisor',
-    assignedCompany: 'FilCap Prime Holdings Corp.',
-    avatarUrl: logo2Url,
-  },
-]
-
-export const ADMIN_USER: User = SEEDED_ACCOUNTS[0]
-export const AUDIT_USER: User = SEEDED_ACCOUNTS[2]
-export const FINANCE_USER: User = SEEDED_ACCOUNTS[4]
-export const SUPERVISOR_USER: User = SEEDED_ACCOUNTS[6]
-export const COMPANY_USER: User = SUPERVISOR_USER
-export const AUDITOR_USER: User = SEEDED_ACCOUNTS[2]
 const SESSION_STORAGE_KEY = 'mct_session_user'
 const ACCESS_TOKEN_KEY = 'mct_access_token'
 const LAST_ACTIVITY_KEY = 'mct_last_activity'
@@ -181,110 +71,65 @@ function getInitialUser(): User | null {
 }
 
 /**
- * Automatically detects whether an authenticated user is Admin, Audit, Finance, or Company
- * based on their seeded account and email credentials.
+ * Fallback user detection for offline or temporary utility use.
  */
 export function detectUserByEmail(email: string): User {
   const normalized = email.trim().toLowerCase()
-  const matched = SEEDED_ACCOUNTS.find(
-    (acc) => acc.email.toLowerCase() === normalized
-  )
-
-  if (matched) {
-    return {
-      id: matched.id,
-      fullName: matched.fullName,
-      email: matched.email,
-      role: matched.role,
-      assignedCompany: matched.assignedCompany,
-      avatarUrl: matched.avatarUrl,
-    }
+  let role: UserRole = 'Supervisor'
+  if (normalized.includes('admin')) {
+    role = 'Admin'
+  } else if (normalized.includes('audit')) {
+    role = 'Audit'
+  } else if (normalized.includes('finance')) {
+    role = 'Finance'
   }
-
-  // 1. Detection for Central Admin
-  if (normalized === 'admin@mct.com' || normalized === 'remi.lee@mct.com' || normalized.startsWith('admin')) {
-    return {
-      id: `usr_admin_${Date.now()}`,
-      fullName: 'Remi Lee',
-      email: email.trim(),
-      role: 'Admin',
-      assignedCompany: 'All Companies',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // 2. Detection for Audit role
-  if (normalized === 'audit@mct.com' || normalized === 'auditor@mct.com' || normalized.startsWith('audit')) {
-    return {
-      id: `usr_audit_${Date.now()}`,
-      fullName: 'Audit Officer',
-      email: email.trim(),
-      role: 'Audit',
-      assignedCompany: 'All Companies',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // Detection by company auditor / supervisor
-  if (normalized.includes('company_auditor') || normalized.includes('company-auditor') || normalized.includes('supervisor')) {
-    return {
-      id: `usr_supervisor_${Date.now()}`,
-      fullName: 'Branch Supervisor',
-      email: email.trim(),
-      role: 'Supervisor',
-      assignedCompany: 'MCT Kitchen',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // Detection by finance keyword
-  if (normalized.includes('finance')) {
-    return {
-      id: `usr_finance_${Date.now()}`,
-      fullName: 'Finance Officer',
-      email: email.trim(),
-      role: 'Finance',
-      assignedCompany: 'All Companies',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // Detection for JK Property employee
-  if (normalized.includes('jkproperty') || normalized.includes('jk_property')) {
-    return {
-      id: `usr_jk_${Date.now()}`,
-      fullName: 'Jessica Kho',
-      email: email.trim(),
-      role: 'Supervisor',
-      assignedCompany: 'JK Property and Ventures',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // Detection for FilCap employee
-  if (normalized.includes('filcap') || normalized.includes('filcam')) {
-    return {
-      id: `usr_filcap_${Date.now()}`,
-      fullName: 'Carlos Tan',
-      email: email.trim(),
-      role: 'Supervisor',
-      assignedCompany: 'FilCap Prime Holdings Corp.',
-      avatarUrl: logo2Url,
-    }
-  }
-
-  // Default to Admin
   return {
-    id: `usr_admin_${Date.now()}`,
-    fullName: 'Remi Lee',
+    id: `usr_${Date.now()}`,
+    fullName: email.trim(),
     email: email.trim(),
-    role: 'Admin',
-    assignedCompany: 'All Companies',
+    role: role,
+    assignedCompany: role === 'Supervisor' ? 'MCT Kitchen' : 'All Companies',
     avatarUrl: logo2Url,
   }
 }
 
 let inMemorySessionUser: User | null = getInitialUser()
+
+async function getRequest<T>(path: string): Promise<T> {
+  const token =
+    typeof window !== 'undefined'
+      ? sessionStorage.getItem(ACCESS_TOKEN_KEY)
+      : null
+  if (!token) {
+    throw new Error('No access token available')
+  }
+  const response = await fetch(`/api/v1/auth${path}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  if (response.status === 401) {
+    throw new Error('Unauthorized')
+  }
+  const responseText = await response.text()
+  let data: { detail?: string } = {}
+  try {
+    data = responseText ? (JSON.parse(responseText) as { detail?: string }) : {}
+  } catch {
+    data = {}
+  }
+  if (!response.ok) {
+    throw new Error(
+      data.detail ||
+        responseText ||
+        `Authentication request failed (${response.status}).`
+    )
+  }
+  return data as T
+}
+
 async function request<T>(path: string, body: unknown): Promise<T> {
   const token =
     typeof window !== 'undefined'
@@ -315,60 +160,53 @@ async function request<T>(path: string, body: unknown): Promise<T> {
   return data as T
 }
 
-function mapUser(user: {
+export interface BackendUserPayload {
   user_id: number
   email: string
   name: string
   is_admin: boolean
   role?: string
   company_name?: string | null
+  company_names?: string[]
+  company_id?: number | null
+  company_ids?: number[]
   photo_url?: string | null
-}): User {
+}
+
+function mapUser(user: BackendUserPayload): User {
   let role: UserRole = 'Supervisor'
   const rawRole = (user.role || '').toLowerCase()
-  const rawEmail = (user.email || '').toLowerCase()
 
-  // 1. Central Admin takes absolute precedence
-  if (rawEmail === 'admin@mct.com' || rawEmail === 'remi.lee@mct.com' || rawRole === 'admin' || (user.is_admin && rawEmail !== 'audit@mct.com')) {
+  if (rawRole === 'admin' || user.is_admin) {
     role = 'Admin'
-  }
-  // 2. Audit account (Audit view only, no company/user management)
-  else if (rawEmail === 'audit@mct.com' || rawEmail === 'auditor@mct.com' || rawRole === 'audit') {
+  } else if (rawRole === 'audit') {
     role = 'Audit'
-  }
-  // 3. Finance account
-  else if (rawRole === 'finance' || rawEmail.includes('finance')) {
+  } else if (rawRole === 'finance') {
     role = 'Finance'
-  }
-  // 4. Operational Supervisor user
-  else {
+  } else {
     role = 'Supervisor'
   }
 
-  // Look up seeded account or detect from email
-  const seeded = SEEDED_ACCOUNTS.find((acc) => acc.email.toLowerCase() === rawEmail)
-  let resolvedCompany = user.company_name || seeded?.assignedCompany
+  const userCompanyNames =
+    user.company_names && user.company_names.length > 0
+      ? user.company_names
+      : user.company_name
+      ? [user.company_name]
+      : []
 
-  if (!resolvedCompany) {
-    if (rawEmail.includes('filcap') || rawEmail.includes('filcam')) {
-      resolvedCompany = 'FilCap Prime Holdings Corp.'
-    } else if (rawEmail.includes('jkproperty') || rawEmail.includes('jk_property')) {
-      resolvedCompany = 'JK Property and Ventures'
-    }
-  }
+  const assignedCompany =
+    role === 'Admin' || role === 'Audit' || role === 'Finance'
+      ? 'All Companies'
+      : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
 
-  const assignedCompany = (role === 'Admin' || role === 'Audit' || role === 'Finance')
-    ? 'All Companies'
-    : (resolvedCompany || 'MCT Kitchen')
+  const displayName = user.name?.trim() || user.email
 
-  const displayName = rawEmail === 'admin@mct.com' || rawEmail === 'remi.lee@mct.com'
-    ? 'Remi Lee'
-    : rawEmail === 'audit@mct.com'
-    ? 'Audit Officer'
-    : user.name
-
-  const userCompanyIds = (user as any).company_ids || ((user as any).company_id ? [(user as any).company_id] : [])
-  const userCompanyNames = (user as any).company_names || (resolvedCompany ? [resolvedCompany] : [])
+  const userCompanyIds =
+    user.company_ids && user.company_ids.length > 0
+      ? user.company_ids
+      : user.company_id
+      ? [user.company_id]
+      : []
 
   return {
     id: String(user.user_id),
@@ -376,7 +214,7 @@ function mapUser(user: {
     email: user.email,
     role: role,
     assignedCompany: assignedCompany,
-    companyId: (user as any).company_id,
+    companyId: user.company_id ?? undefined,
     companyIds: userCompanyIds,
     companyNames: userCompanyNames,
     avatarUrl: user.photo_url || logo2Url,
@@ -445,20 +283,66 @@ export const authService = {
   },
 
   /**
-   * Retrieves the current user session from memory or storage.
+   * Retrieves the current user session from memory, backend, or storage.
    */
   async getSession(): Promise<User | null> {
-    if (!inMemorySessionUser && typeof window !== 'undefined') {
-      try {
-        const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
-        if (stored) {
+    if (typeof window === 'undefined') return null
+
+    const token = sessionStorage.getItem(ACCESS_TOKEN_KEY)
+    if (!token) {
+      inMemorySessionUser = null
+      return null
+    }
+
+    // Verify token expiration
+    try {
+      const tokenPayload = JSON.parse(
+        atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+      )
+      if (
+        !tokenPayload ||
+        typeof tokenPayload.exp !== 'number' ||
+        tokenPayload.exp * 1000 <= Date.now()
+      ) {
+        await this.signOut()
+        return null
+      }
+    } catch {
+      await this.signOut()
+      return null
+    }
+
+    // Check last activity idle timeout
+    const lastActivity = Number(sessionStorage.getItem(LAST_ACTIVITY_KEY))
+    if (!Number.isFinite(lastActivity) || Date.now() - lastActivity >= SESSION_IDLE_TIMEOUT_MS) {
+      await this.signOut()
+      return null
+    }
+
+    // Live backend fetch from /me to guarantee user profile is synchronized with Supabase
+    try {
+      const backendUser = await getRequest<BackendUserPayload>('/me')
+      const mapped = mapUser(backendUser)
+      inMemorySessionUser = mapped
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(mapped))
+      this.touchSessionActivity()
+    } catch {
+      // If fetching /me fails (e.g. offline/network glitch), fall back to cached session storage if valid
+      const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
+      if (stored) {
+        try {
           inMemorySessionUser = JSON.parse(stored)
+        } catch {
+          await this.signOut()
+          return null
         }
-      } catch {
-        // ignore
+      } else {
+        await this.signOut()
+        return null
       }
     }
-    if (inMemorySessionUser && typeof window !== 'undefined') {
+
+    if (inMemorySessionUser) {
       try {
         const customAvatar = localStorage.getItem('mct_user_avatar')
         if (customAvatar) {
@@ -501,13 +385,7 @@ export const authService = {
 
     const response = await request<{
       access_token: string
-      user: {
-        user_id: number
-        email: string
-        name: string
-        is_admin: boolean
-        company_name?: string | null
-      }
+      user: BackendUserPayload
     }>('/login/verify-otp', { otp: code })
     const mapped = mapUser(response.user)
     inMemorySessionUser = mapped

@@ -60,6 +60,7 @@ def init_db():
     import app.models.bank
     import app.models.lending
     import app.models.security
+    import app.models.notification
     from app.models.company import Company
 
 
