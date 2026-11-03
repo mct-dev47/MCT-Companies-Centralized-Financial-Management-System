@@ -123,7 +123,7 @@ export const router = createBrowserRouter([
   },
   {
     path: '/setup-password',
-    element: <Navigate to="/auth/setup-password" replace />,
+    element: <SetupPasswordPage />,
   },
   // Authenticated Persistent App Shell layout route
   // Using AppShell as a layout route keeps the sidebar and header mounted,

@@ -68,6 +68,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
+  // Re-invite state
+  const [isReinviting, setIsReinviting] = React.useState(false)
+  const [reinviteSuccess, setReinviteSuccess] = React.useState(false)
+
   // Photo upload and cropping in edit mode
   const [editProfilePreview, setEditProfilePreview] = React.useState<string | null>(null)
   const [editAvatarFile, setEditAvatarFile] = React.useState<File | null>(null)
@@ -115,6 +119,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setRawImageForCrop(null)
       setIsCropperOpen(false)
       setActionError(null)
+      setIsReinviting(false)
+      setReinviteSuccess(false)
     }
   }, [user, open])
 
@@ -192,6 +198,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setEditAvatarFile(null)
       setRawImageForCrop(null)
       setIsCropperOpen(false)
+      setIsReinviting(false)
+      setReinviteSuccess(false)
     }
     onOpenChange(nextOpen)
   }
@@ -266,8 +274,6 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
     }
   }
 
-  const [isReinviting, setIsReinviting] = React.useState(false)
-  const [reinviteSuccess, setReinviteSuccess] = React.useState(false)
 
   const handleReinvite = async () => {
     if (!user) return

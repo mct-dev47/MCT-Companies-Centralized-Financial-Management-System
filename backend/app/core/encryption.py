@@ -44,3 +44,30 @@ def decrypt_payload(encrypted_str: str) -> dict:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to decrypt payload.",
         )
+
+
+def encrypt_invitation_token(raw_token: str, user_id: int | None = None) -> str:
+    """Encrypt an invitation token into a Fernet URL-safe ciphertext payload."""
+    payload = {"token": raw_token}
+    if user_id is not None:
+        payload["uid"] = user_id
+    return encrypt_payload(payload)
+
+
+def decrypt_invitation_token(token_or_encrypted: str) -> str:
+    """
+    Decrypt an encrypted invitation token if it is encrypted with Fernet.
+    If it is already a raw token, returns it safely for backward compatibility.
+    """
+    clean = (token_or_encrypted or "").strip()
+    if not clean:
+        return ""
+    if clean.startswith("gAAAAA"):
+        try:
+            data = decrypt_payload(clean)
+            if isinstance(data, dict) and "token" in data:
+                return data["token"]
+        except Exception:
+            pass
+    return clean
+

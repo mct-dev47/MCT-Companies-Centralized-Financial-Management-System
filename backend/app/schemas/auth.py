@@ -46,5 +46,6 @@ class MessageResponse(BaseModel):
     encrypted_data: Optional[str] = None
 
 class SetupPasswordRequest(BaseModel):
-    token: str
-    new_password: str
+    token: Optional[str] = None
+    new_password: Optional[str] = None
+    encrypted_payload: Optional[str] = None

@@ -31,7 +31,7 @@ import app.models
 from app.schemas.user import UserCreate
 from app.core.config import settings
 from app.core.dependencies import get_current_user
-from app.core.encryption import decrypt_payload, encrypt_payload
+from app.core.encryption import decrypt_payload, encrypt_payload, decrypt_invitation_token
 from app.core.resilience import CircuitBreaker, calculate_full_jitter_backoff
 from app.db.session import Base
 from app.models.company import Company
@@ -249,6 +249,9 @@ class TestUserInvitationResilience(unittest.TestCase):
         decrypted = decrypt_payload(outbox.encrypted_payload)
         self.assertEqual(decrypted["user_id"], resp.user_id)
         self.assertIn("/auth/setup-password#token=", decrypted["setup_url"])
+        token_in_url = decrypted["setup_url"].split("#token=")[1]
+        self.assertTrue(token_in_url.startswith("gAAAAA"), "Setup token in link must be encrypted with payload encryption")
+        self.assertEqual(decrypt_invitation_token(token_in_url), decrypted["raw_token"])
 
     # =========================================================================
     # 3. Decoupled Delivery & Error Recovery Tests
@@ -413,7 +416,8 @@ class TestUserInvitationResilience(unittest.TestCase):
 
         # Extract first raw token
         outbox1 = self.db.query(InvitationOutbox).filter(InvitationOutbox.user_id == resp.user_id).first()
-        raw_token_1 = decrypt_payload(outbox1.encrypted_payload)["setup_url"].split("#token=")[1]
+        token_payload = decrypt_payload(outbox1.encrypted_payload)
+        raw_token_1 = token_payload.get("raw_token") or decrypt_invitation_token(token_payload["setup_url"].split("#token=")[1])
 
         # Re-invite user
         service.reinvite_user(resp.user_id)

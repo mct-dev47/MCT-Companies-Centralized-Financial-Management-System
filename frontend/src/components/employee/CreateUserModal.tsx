@@ -600,9 +600,6 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               Are you sure you want to add{' '}
               <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
               appointed to{' '}
-              <strong className="text-focus">
-                {formatCompanyList(selectedCompanies)}
-              </strong>{' '}
               as{' '}
               <strong className="text-focus">{pendingValues?.role}</strong>?
             </span>

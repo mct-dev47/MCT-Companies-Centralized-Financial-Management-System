@@ -124,8 +124,7 @@ export const UserManagementPage: React.FC = () => {
       message: (
         <span className="block space-y-2.5">
           <span>
-            User <strong className="text-focus">{newUser.fullName}</strong> has been created successfully appointed to{' '}
-            <strong className="text-focus">{formatCompanyList(assigned)}</strong> as{' '}
+            User <strong className="text-focus">{newUser.fullName}</strong> has been created successfully appointed as{' '}
             <strong className="text-focus">{newUser.role || 'Supervisor'}</strong>.
           </span>
           {assigned.length > 0 && (

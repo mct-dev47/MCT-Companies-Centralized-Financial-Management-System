@@ -209,12 +209,15 @@ class UserService:
 
             # Enqueue to Outbox with encrypted payload
             from app.core.config import settings
+            from app.core.encryption import encrypt_invitation_token
             frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
-            setup_url = f"{frontend_url}/auth/setup-password#token={raw_token}"
+            encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
+            setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
             encrypted_payload = encrypt_payload({
                 "user_id": user.user_id,
                 "user_name": user.name,
                 "setup_url": setup_url,
+                "raw_token": raw_token,
             })
             outbox_entry = InvitationOutbox(
                 idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
@@ -282,12 +285,15 @@ class UserService:
         self.db.flush()
 
         from app.core.config import settings
+        from app.core.encryption import encrypt_invitation_token
         frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
-        setup_url = f"{frontend_url}/auth/setup-password#token={raw_token}"
+        encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
+        setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
         encrypted_payload = encrypt_payload({
             "user_id": user.user_id,
             "user_name": user.name,
             "setup_url": setup_url,
+            "raw_token": raw_token,
         })
         outbox_entry = InvitationOutbox(
             idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",

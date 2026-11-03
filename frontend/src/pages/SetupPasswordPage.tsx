@@ -6,9 +6,30 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
+const extractTokenFromUrl = (): string => {
+  if (typeof window === 'undefined') return ''
+  try {
+    // 1. Read token from URL hash (#token=... or #/auth/setup-password?token=...)
+    if (window.location.hash) {
+      const match = window.location.hash.match(/token=([^&]+)/)
+      if (match) return decodeURIComponent(match[1])
+    }
+    // 2. Read token from query parameters (?token=...)
+    if (window.location.search) {
+      const params = new URLSearchParams(window.location.search)
+      const qToken = params.get('token')
+      if (qToken) return qToken
+    }
+    // 3. Fallback to tab sessionStorage (preserves token across StrictMode double runs and accidental page refresh)
+    return sessionStorage.getItem('mct_setup_token') || ''
+  } catch {
+    return ''
+  }
+}
+
 export const SetupPasswordPage: React.FC = () => {
   const navigate = useNavigate()
-  const [token, setToken] = useState<string>('')
+  const [token, setToken] = useState<string>(() => extractTokenFromUrl())
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -24,20 +45,21 @@ export const SetupPasswordPage: React.FC = () => {
     meta.content = 'no-referrer'
     document.head.appendChild(meta)
 
-    // 2. Read token from URL hash (#token=...) or query parameter (?token=...)
-    let extractedToken = ''
-    if (window.location.hash.includes('token=')) {
-      const match = window.location.hash.match(/token=([^&]+)/)
-      if (match) extractedToken = decodeURIComponent(match[1])
-    } else if (window.location.search.includes('token=')) {
-      const params = new URLSearchParams(window.location.search)
-      extractedToken = params.get('token') || ''
-    }
-
-    if (extractedToken) {
-      setToken(extractedToken)
-      // 3. Scrub token from browser address bar & history immediately
-      window.history.replaceState({}, document.title, window.location.pathname)
+    // 2. Validate token and persist to sessionStorage, then scrub address bar
+    const currentToken = token || extractTokenFromUrl()
+    if (currentToken) {
+      if (!token) {
+        setToken(currentToken)
+      }
+      try {
+        sessionStorage.setItem('mct_setup_token', currentToken)
+      } catch {
+        // ignore storage errors
+      }
+      // Scrub token from browser address bar and history
+      if (window.location.hash.includes('token=') || window.location.search.includes('token=')) {
+        window.history.replaceState({}, document.title, window.location.pathname)
+      }
     } else {
       setError('No invitation token found in link. Please check your invitation email or request a new one.')
     }
@@ -45,7 +67,7 @@ export const SetupPasswordPage: React.FC = () => {
     return () => {
       document.head.removeChild(meta)
     }
-  }, [])
+  }, [token])
 
   // Validation rules
   const hasMinLength = password.length >= 10
@@ -87,6 +109,11 @@ export const SetupPasswordPage: React.FC = () => {
       }
 
       setSuccess(true)
+      try {
+        sessionStorage.removeItem('mct_setup_token')
+      } catch {
+        // ignore storage errors
+      }
     } catch (err: unknown) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to set up password. Please try again or request a new invitation.'))
     } finally {

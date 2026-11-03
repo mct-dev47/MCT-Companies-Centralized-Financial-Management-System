@@ -223,6 +223,9 @@ class InvitationDispatcher:
             "subject": "Complete Your Account Setup - MCT Financial Management System",
             "htmlContent": email_body_html,
             "textContent": f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)",
+            "headers": {
+                "X-Mailin-Track": "0",
+            },
         }).encode("utf-8")
 
         req = urllib.request.Request(
@@ -286,6 +289,9 @@ class InvitationDispatcher:
                         </div>
                         """,
                         "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
+                        "headers": {
+                            "X-Mailin-Track": "0",
+                        },
                     }).encode("utf-8")
                     admin_req = urllib.request.Request(
                         "https://api.brevo.com/v3/smtp/email",

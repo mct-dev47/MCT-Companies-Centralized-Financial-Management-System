@@ -114,4 +114,11 @@ def setup_password(
     data: SetupPasswordRequest,
     db: Session = Depends(get_db),
 ):
-    return setup_invitation_password(db=db, token=data.token, new_password=data.new_password)
+    token = data.token
+    new_password = data.new_password
+    if data.encrypted_payload:
+        from app.core.encryption import decrypt_payload
+        decrypted = decrypt_payload(data.encrypted_payload)
+        token = decrypted.get("token", token)
+        new_password = decrypted.get("new_password", new_password)
+    return setup_invitation_password(db=db, token=token, new_password=new_password)

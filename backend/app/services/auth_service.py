@@ -742,7 +742,9 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
         )
 
     import hashlib
-    token_hash = hashlib.sha256(clean_token.encode("utf-8")).hexdigest()
+    from app.core.encryption import decrypt_invitation_token
+    actual_token = decrypt_invitation_token(clean_token)
+    token_hash = hashlib.sha256(actual_token.encode("utf-8")).hexdigest()
     now = datetime.now(timezone.utc)
 
     from app.models.invitation import UserInvitation
