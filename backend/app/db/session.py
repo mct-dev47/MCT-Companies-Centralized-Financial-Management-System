@@ -61,6 +61,7 @@ def init_db():
     import app.models.lending
     import app.models.security
     import app.models.notification
+    import app.models.receivable
     from app.models.company import Company
 
 
@@ -99,11 +100,25 @@ def init_db():
     try:
         from sqlalchemy import inspect as sqla_inspect, text
         inspector = sqla_inspect(engine)
-        if "petty_cash_wallets" in inspector.get_table_names():
+        table_names = set(inspector.get_table_names())
+        if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}
             if "balance" not in existing_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE petty_cash_wallets ADD COLUMN balance NUMERIC(15, 2) DEFAULT 0.00"))
+
+        if "receivables" in table_names:
+            rec_cols = {col["name"] for col in inspector.get_columns("receivables")}
+            if "sale_line_index" not in rec_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE receivables ADD COLUMN sale_line_index INTEGER"))
+            for obsolete_col in ("customer_phone", "customer_role"):
+                if obsolete_col in rec_cols:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE receivables DROP COLUMN {obsolete_col}"))
+                    except Exception as drop_err:
+                        logger.warning("Could not drop obsolete column receivables.%s: %s", obsolete_col, drop_err)
     except Exception:
         pass
 

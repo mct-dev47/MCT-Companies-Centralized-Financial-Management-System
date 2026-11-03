@@ -86,7 +86,8 @@ const DEFAULT_COMPANY_LIST = ['All Companies']
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
-import { getPaidDepositForSale } from '@/utils/cashLedgerUtils'
+import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
+import type { UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
 const ITEMS_PER_PAGE = 10
@@ -176,10 +177,15 @@ export const SalesPage: React.FC = () => {
   // Food Receivables store integration
   const {
     sales: utangSalesList,
-    people: receivablesPeople,
     kpis: receivablesKpis,
-    addNewSale: addFoodSale,
-  } = useReceivables(dateRange)
+    refreshFromBackend: refreshReceivablesFromBackend,
+  } = useReceivables(
+    {
+      startDate: dateRange.startDate || undefined,
+      endDate: dateRange.endDate || undefined,
+    },
+    isCompanyScoped ? assignedCompany : selectedCompany
+  )
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
@@ -377,7 +383,7 @@ export const SalesPage: React.FC = () => {
     loadSales()
   }, [loadSales])
 
-  // Realtime: when Audit saves a review (or any client changes a sale), reload the real values
+  // Realtime: sync on SALES_UPDATED, RECEIVABLES_UPDATED, AUDIT_UPDATED, WS reconnect, and window focus (AC-10)
   React.useEffect(() => {
     let timer: number | null = null
     const reload = () => {
@@ -385,14 +391,27 @@ export const SalesPage: React.FC = () => {
       timer = window.setTimeout(() => {
         salesService.invalidateCache()
         void loadSales(true)
+        void refreshReceivablesFromBackend()
       }, 250)
     }
     const unsubAudit = websocketService.subscribe('AUDIT_UPDATED', reload)
+    const unsubSales = websocketService.subscribe('SALES_UPDATED', reload)
+    const unsubReceivables = websocketService.subscribe('RECEIVABLES_UPDATED', reload)
+    const unsubStatus = websocketService.subscribe('WS_STATUS_CHANGE', (data) => {
+      if (data?.status === 'connected') {
+        reload()
+      }
+    })
+    window.addEventListener('focus', reload)
     return () => {
       if (timer) window.clearTimeout(timer)
       unsubAudit()
+      unsubSales()
+      unsubReceivables()
+      unsubStatus()
+      window.removeEventListener('focus', reload)
     }
-  }, [loadSales])
+  }, [loadSales, refreshReceivablesFromBackend])
 
   // Click-outside listeners for dropdowns
   React.useEffect(() => {
@@ -427,78 +446,111 @@ export const SalesPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Map in-memory / local food utang sales to standard SalesItem structure
-  const mappedUtangSales = React.useMemo<SalesItem[]>(() => {
-    return utangSalesList.map((u) => {
-      const rawDate = u.date
-      const [year, month, day] = rawDate.split('-')
-      const displayDate =
-        month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
-
-      return {
-        id: u.id,
-        refNo: `FD-${u.id.replace('SALE-2026-', '')}`,
-        chequeNo:
-          u.payment_status === 'Paid'
-            ? 'PAID-IN-FULL'
-            : u.payment_status === 'Partial'
-              ? 'PARTIAL-CREDIT'
-              : 'PAY-LATER',
-        date: displayDate,
-        rawDate: u.date,
-        particulars: `${u.items_summary} (${u.customer_name} • ${u.customer_type})`,
-        withdrawal: 0,
-        deposit: u.total_amount,
-        netAmount: u.total_amount,
-        category: 'Food Sales',
-        paymentMethod:
-          u.payment_status === 'Paid'
-            ? 'Cash'
-            : u.payment_status === 'Partial'
-              ? 'Partial Credit'
-              : 'Utang (Pay Later)',
-        company: 'MCT Food Services',
-        items: [
-          ...(u.amount_paid > 0
-            ? [
-                {
-                  particulars: `${u.items_summary} (Downpayment)`,
-                  unitPrice: u.amount_paid,
-                  quantity: 1,
-                  total: u.amount_paid,
-                  status: 'Paid' as const,
-                },
-              ]
-            : []),
-          ...(u.balance > 0
-            ? [
-                {
-                  particulars: `${u.items_summary} (Utang Balance)`,
-                  unitPrice: u.balance,
-                  quantity: 1,
-                  total: u.balance,
-                  status: 'Unpaid' as const,
-                },
-              ]
-            : []),
-        ],
-        status: (u.payment_status === 'Paid' ? 'Paid' : u.payment_status === 'Partial' ? 'Pending' : 'Unpaid') as any,
-        auditStatus: 'Verified',
-        createdAt: `${u.date}T10:00:00Z`,
-        type: 'Sales' as const,
-        customer_name: u.customer_name,
-        customer_type: u.customer_type,
-        amount_paid: u.amount_paid,
-        balance: u.balance,
-        payment_status: u.payment_status,
-      } as SalesItem & {
-        customer_name?: string
-        customer_type?: string
-        amount_paid?: number
-        balance?: number
-        payment_status?: string
+  // Group linked receivables by sale_id so partial & full payments reflect accurately in Total Cash (AC-5)
+  const receivablesBySaleId = React.useMemo(() => {
+    const map = new Map<number, UtangSale[]>()
+    for (const u of utangSalesList) {
+      if (u.sale_id !== null && u.sale_id !== undefined) {
+        const numId = Number(u.sale_id)
+        if (!Number.isNaN(numId)) {
+          const list = map.get(numId) || []
+          list.push(u)
+          map.set(numId, list)
+        }
       }
-    })
+    }
+    return map
+  }, [utangSalesList])
+
+  const getRealizedCash = React.useCallback(
+    (item: SalesItem): number => {
+      const numId = Number(item.id)
+      const linked = !Number.isNaN(numId) ? receivablesBySaleId.get(numId) : undefined
+      return getRealizedCashForSale(item, linked)
+    },
+    [receivablesBySaleId]
+  )
+
+  // Map ONLY standalone legacy food utang sales (where sale_id is null) to SalesItem structure
+  const mappedUtangSales = React.useMemo<SalesItem[]>(() => {
+    return utangSalesList
+      .filter((u) => !u.sale_id)
+      .map((u) => {
+        const rawDate = u.date
+        const [year, month, day] = rawDate.split('-')
+        const displayDate =
+          month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
+
+        return {
+          id: `utang-${u.id}`,
+          refNo: `FD-${u.id.replace('SALE-2026-', '')}`,
+          chequeNo:
+            u.payment_status === 'Paid'
+              ? 'PAID-IN-FULL'
+              : u.payment_status === 'Partial'
+                ? 'PARTIAL-CREDIT'
+                : 'PAY-LATER',
+          date: displayDate,
+          rawDate: u.date,
+          particulars: `${u.items_summary} (${u.customer_name} • ${u.customer_type})`,
+          withdrawal: 0,
+          deposit: u.total_amount,
+          netAmount: u.total_amount,
+          category: 'Food Sales',
+          paymentMethod:
+            u.payment_status === 'Paid'
+              ? 'Cash'
+              : u.payment_status === 'Partial'
+                ? 'Partial Credit'
+                : 'Utang (Pay Later)',
+          company: u.company || 'MyCity.Kitchen Corporation',
+          items: [
+            ...(u.amount_paid > 0
+              ? [
+                  {
+                    particulars: `${u.items_summary} (Downpayment)`,
+                    unitPrice: u.amount_paid,
+                    quantity: 1,
+                    total: u.amount_paid,
+                    status: 'Paid' as const,
+                  },
+                ]
+              : []),
+            ...(u.balance > 0
+              ? [
+                  {
+                    particulars: `${u.items_summary} (Utang Balance)`,
+                    unitPrice: u.balance,
+                    quantity: 1,
+                    total: u.balance,
+                    status: 'Unpaid' as const,
+                  },
+                ]
+              : []),
+          ],
+          status: (u.payment_status === 'Paid'
+            ? 'Paid'
+            : u.payment_status === 'Partial'
+              ? 'Pending'
+              : 'Unpaid') as any,
+          auditStatus: u.is_locked ? 'Verified' : 'Pending Audit',
+          createdAt: `${u.date}T10:00:00Z`,
+          type: 'Sales' as const,
+          isStandaloneUtang: true,
+          customer_name: u.customer_name,
+          customer_type: u.customer_type,
+          amount_paid: u.amount_paid,
+          balance: u.balance,
+          payment_status: u.payment_status,
+        } as SalesItem & {
+          isStandaloneUtang?: boolean
+          customer_name?: string
+          customer_type?: string
+          amount_paid?: number
+          balance?: number
+          payment_status?: string
+        }
+      })
   }, [utangSalesList])
 
   const combinedSales = React.useMemo(() => {
@@ -583,7 +635,7 @@ export const SalesPage: React.FC = () => {
         return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
       })
   }, [
-    sales,
+    combinedSales,
     selectedCompany,
     dateRange,
     statusFilter,
@@ -595,10 +647,10 @@ export const SalesPage: React.FC = () => {
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Sales Record') for Table & Chart
   const filteredSales = React.useMemo(() => {
     if (tableTab === 'Deposit') {
-      return baseFilteredSales.filter((item) => getPaidDepositForSale(item) > 0)
+      return baseFilteredSales.filter((item) => getRealizedCash(item) > 0)
     }
     return baseFilteredSales
-  }, [baseFilteredSales, tableTab])
+  }, [baseFilteredSales, tableTab, getRealizedCash])
 
   // Reset to page 1 on filter change
   React.useEffect(() => {
@@ -612,13 +664,13 @@ export const SalesPage: React.FC = () => {
     tableTab,
   ])
 
-  // KPI Calculation: Total Sales & Total Cash (computed from baseFilteredSales so switching Deposit / Sales Record tab does not alter the KPIs above)
+  // KPI Calculation: Total Sales & Total Cash (AC-5: includes partial & full payments without double-counting)
   const kpis = React.useMemo(() => {
     let salesTotal = 0
     let cashTotal = 0
     baseFilteredSales.forEach((s) => {
       salesTotal += s.deposit || 0
-      cashTotal += getPaidDepositForSale(s)
+      cashTotal += getRealizedCash(s)
     })
     return {
       totalSales: salesTotal,
@@ -626,7 +678,7 @@ export const SalesPage: React.FC = () => {
       totalIncome: salesTotal,
       outstandingUtang: receivablesKpis.totalOutstanding,
     }
-  }, [baseFilteredSales, receivablesKpis.totalOutstanding])
+  }, [baseFilteredSales, getRealizedCash, receivablesKpis.totalOutstanding])
 
   // Effective status filter for particulars display in table & modal
   const effectiveParticularsStatusFilter = React.useMemo(() => {
@@ -646,7 +698,7 @@ export const SalesPage: React.FC = () => {
     return filteredSales.map((s) => {
       const tx = salesService.toDashboardTransaction(s)
       if (tableTab === 'Deposit') {
-        const paidAmt = getPaidDepositForSale(s)
+        const paidAmt = getRealizedCash(s)
         return {
           ...tx,
           amount: paidAmt,
@@ -655,7 +707,7 @@ export const SalesPage: React.FC = () => {
       }
       return tx
     })
-  }, [filteredSales, tableTab])
+  }, [filteredSales, tableTab, getRealizedCash])
 
   // Export handlers
   const companyForExport = isCompanyScoped ? assignedCompany : selectedCompany
@@ -1336,9 +1388,11 @@ export const SalesPage: React.FC = () => {
                     }
                   )
                   const rowAmount =
-                    effectiveParticularsStatusFilter !== 'All'
-                      ? summary.filteredTotal
-                      : sale.deposit
+                    tableTab === 'Deposit' && statusFilter === 'All'
+                      ? getRealizedCash(sale)
+                      : effectiveParticularsStatusFilter !== 'All'
+                        ? summary.filteredTotal
+                        : sale.deposit
                   const createdAtTime = formatCreatedAt(sale.createdAt, {
                     timeOnly: true,
                   })
@@ -1721,7 +1775,7 @@ export const SalesPage: React.FC = () => {
         transaction={selectedTx}
         sale={selectedSale}
         onSaleUpdated={handleSaleUpdated}
-        editable={!isAdmin}
+        editable={!isAdmin && selectedSale?.auditStatus !== 'Verified'}
         statusFilter={effectiveParticularsStatusFilter}
       />
 

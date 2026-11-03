@@ -1,13 +1,17 @@
 import { isCompanyMatch } from '@/utils/companyUtils'
+import { formatToYYYYMMDD } from '@/utils/dateUtils'
+import { websocketService } from './websocketService'
+import { receivablesService, type BackendReceivable } from './receivablesService'
+
 /**
  * In-memory & LocalStorage store for Food Sales Receivables (Utang Management).
  * Supports External Customers & Staff food credit with real-time balance calculations,
- * aging buckets, payments, and payroll deductions.
+ * aging buckets, payments, payroll deductions, and bidirectional Sale sync.
  */
 
 export type CustomerType = 'External' | 'Staff'
 export type PaymentStatus = 'Paid' | 'Partial' | 'Unpaid'
-export type PaymentMethod = 'Cash' | 'GCash' | 'Bank' | 'Payroll Deduction'
+export type PaymentMethod = 'Cash' | 'GCash' | 'Bank' | 'Bank Transfer' | 'Payroll Deduction'
 export type PaymentOption = 'Paid in full' | 'Partial' | 'Pay Later'
 
 export interface UtangPayment {
@@ -17,6 +21,7 @@ export interface UtangPayment {
   amount: number
   date: string // YYYY-MM-DD
   method: PaymentMethod
+  bank_account_id?: string | null
   notes?: string
   createdAt: string
 }
@@ -24,11 +29,14 @@ export interface UtangPayment {
 export interface UtangSale {
   id: string
   company?: string
+  company_id?: number
+  sale_id?: number | null
+  sale_line_index?: number | null
+  expense_id?: number | null
+  is_locked?: boolean
   date: string // YYYY-MM-DD
   customer_name: string
   customer_type: CustomerType
-  customer_phone?: string
-  customer_role?: string
   items_summary: string
   total_amount: number
   amount_paid: number
@@ -39,10 +47,13 @@ export interface UtangSale {
 }
 
 export interface PersonLedgerSummary {
+  key: string
   name: string
   type: CustomerType
-  role_or_dept: string
-  phone: string
+  company: string
+  company_id?: number
+  has_locked: boolean
+  all_locked: boolean
   total_sales_amount: number
   total_amount_paid: number
   total_owed: number
@@ -69,6 +80,10 @@ export interface ReceivablesKPIs {
 
 const STORAGE_KEY = 'mct_food_receivables_v1'
 
+function getLocalTodayStr(): string {
+  return formatToYYYYMMDD(new Date())
+}
+
 // Initial Realistic Seed Data: 18 Sales, 10 Customers (5 Staff, 5 External)
 const INITIAL_SALES: UtangSale[] = [
   {
@@ -77,8 +92,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-11-02',
     customer_name: 'Maria Santos',
     customer_type: 'Staff',
-    customer_role: 'Kitchen Cook',
-    customer_phone: '0917-234-5678',
     items_summary: 'Pork Sisig Rice Meal (x2), Mountain Dew (x2)',
     total_amount: 380,
     amount_paid: 0,
@@ -93,8 +106,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-11-02',
     customer_name: 'Mang Jose Mercado',
     customer_type: 'External',
-    customer_role: 'Regular Diner / Neighbor',
-    customer_phone: '0922-345-6789',
     items_summary: 'Crispy Pata Regular, Sinigang na Baboy, Plain Rice (x3)',
     total_amount: 1450,
     amount_paid: 500,
@@ -120,8 +131,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-11-01',
     customer_name: 'Juan Dela Cruz',
     customer_type: 'Staff',
-    customer_role: 'Head Cashier',
-    customer_phone: '0918-456-7890',
     items_summary: 'Beef Pares Mami with Egg, Garlic Rice',
     total_amount: 220,
     amount_paid: 220,
@@ -147,8 +156,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-31',
     customer_name: 'Arlene Ramos',
     customer_type: 'Staff',
-    customer_role: 'Barista',
-    customer_phone: '0919-567-8901',
     items_summary: 'Chicken Inasal Platter, Extra Rice, Iced Tea',
     total_amount: 290,
     amount_paid: 100,
@@ -174,8 +181,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-29',
     customer_name: 'Eduardo "Ed" Lim',
     customer_type: 'External',
-    customer_role: 'Delivery Driver / Contractor',
-    customer_phone: '0924-678-9012',
     items_summary: 'Breakfast Tapsilog (x3), Hot Brewed Coffee (x3)',
     total_amount: 570,
     amount_paid: 0,
@@ -190,8 +195,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-27',
     customer_name: 'Michael Tan',
     customer_type: 'Staff',
-    customer_role: 'Dining Server',
-    customer_phone: '0920-789-0123',
     items_summary: 'Lechon Kawali Special, Coke (x2)',
     total_amount: 310,
     amount_paid: 0,
@@ -206,8 +209,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-24',
     customer_name: 'Corazon "Cora" Aquino',
     customer_type: 'External',
-    customer_role: 'Office Catering Client',
-    customer_phone: '0923-890-1234',
     items_summary: 'Pancit Bihon Party Tray, Lumpiang Shanghai (x20)',
     total_amount: 2200,
     amount_paid: 1000,
@@ -233,8 +234,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-21',
     customer_name: 'Grace Bautista',
     customer_type: 'Staff',
-    customer_role: 'Shift Supervisor',
-    customer_phone: '0921-901-2345',
     items_summary: 'Burger Steak Meal, Halo-Halo Special',
     total_amount: 260,
     amount_paid: 260,
@@ -260,8 +259,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-18',
     customer_name: 'Capt. Rodolfo Reyes',
     customer_type: 'External',
-    customer_role: 'Barangay 7 Hall Officer',
-    customer_phone: '0925-012-3456',
     items_summary: 'Beef Caldereta Feast, Pork BBQ Skewers (x15), Rice (x10)',
     total_amount: 3400,
     amount_paid: 1500,
@@ -287,9 +284,7 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-15',
     customer_name: 'Elena Gomez',
     customer_type: 'External',
-    customer_role: 'Nearby Store Owner',
-    customer_phone: '0926-123-4567',
-    items_summary: 'Kare-Kare Special, Rice (x2), Sago\'t Gulaman',
+    items_summary: "Kare-Kare Special, Rice (x2), Sago't Gulaman",
     total_amount: 480,
     amount_paid: 0,
     balance: 480,
@@ -303,8 +298,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-12',
     customer_name: 'Maria Santos',
     customer_type: 'Staff',
-    customer_role: 'Kitchen Cook',
-    customer_phone: '0917-234-5678',
     items_summary: 'Bangus Silog, Hot Tea',
     total_amount: 180,
     amount_paid: 180,
@@ -330,8 +323,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-10-08',
     customer_name: 'Mang Jose Mercado',
     customer_type: 'External',
-    customer_role: 'Regular Diner / Neighbor',
-    customer_phone: '0922-345-6789',
     items_summary: 'Grilled Liempo with Rice, Calamansi Juice (x2)',
     total_amount: 360,
     amount_paid: 150,
@@ -357,8 +348,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-09-30',
     customer_name: 'Eduardo "Ed" Lim',
     customer_type: 'External',
-    customer_role: 'Delivery Driver / Contractor',
-    customer_phone: '0924-678-9012',
     items_summary: 'Chicharron Bulaklak, San Mig Light (x6)',
     total_amount: 980,
     amount_paid: 0,
@@ -373,8 +362,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-09-25',
     customer_name: 'Michael Tan',
     customer_type: 'Staff',
-    customer_role: 'Dining Server',
-    customer_phone: '0920-789-0123',
     items_summary: 'Spaghetti with Garlic Bread, Fried Chicken (x2)',
     total_amount: 420,
     amount_paid: 150,
@@ -400,9 +387,7 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-09-18',
     customer_name: 'Corazon "Cora" Aquino',
     customer_type: 'External',
-    customer_role: 'Office Catering Client',
-    customer_phone: '0923-890-1234',
-    items_summary: 'Arroz Caldo with Tokwa\'t Baboy (x5)',
+    items_summary: "Arroz Caldo with Tokwa't Baboy (x5)",
     total_amount: 850,
     amount_paid: 850,
     balance: 0,
@@ -427,8 +412,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-09-12',
     customer_name: 'Arlene Ramos',
     customer_type: 'Staff',
-    customer_role: 'Barista',
-    customer_phone: '0919-567-8901',
     items_summary: 'Bicol Express Rice Bowl, Bottled Water',
     total_amount: 190,
     amount_paid: 0,
@@ -443,8 +426,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-09-05',
     customer_name: 'Elena Gomez',
     customer_type: 'External',
-    customer_role: 'Nearby Store Owner',
-    customer_phone: '0926-123-4567',
     items_summary: 'Crispy Pata Large, Party Rice',
     total_amount: 1650,
     amount_paid: 1650,
@@ -470,8 +451,6 @@ const INITIAL_SALES: UtangSale[] = [
     date: '2026-08-28',
     customer_name: 'Capt. Rodolfo Reyes',
     customer_type: 'External',
-    customer_role: 'Barangay 7 Hall Officer',
-    customer_phone: '0925-012-3456',
     items_summary: 'Barangay Meeting Snacks & Coffee (x15)',
     total_amount: 1800,
     amount_paid: 0,
@@ -485,21 +464,88 @@ const INITIAL_SALES: UtangSale[] = [
 class ReceivablesStore {
   private sales: UtangSale[] = []
   private listeners: Set<() => void> = new Set()
+  private wsRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
     this.load()
+    if (typeof window !== 'undefined') {
+      void this.refreshFromBackend()
+      const scheduleRefresh = () => {
+        if (this.wsRefreshTimer) clearTimeout(this.wsRefreshTimer)
+        this.wsRefreshTimer = setTimeout(() => {
+          void this.refreshFromBackend()
+        }, 250)
+      }
+      websocketService.subscribe('RECEIVABLES_UPDATED', scheduleRefresh)
+      websocketService.subscribe('SALES_UPDATED', scheduleRefresh)
+      websocketService.subscribe('AUDIT_UPDATED', scheduleRefresh)
+    }
+  }
+
+  public async refreshFromBackend(): Promise<void> {
+    try {
+      const data = await receivablesService.listReceivables()
+      if (Array.isArray(data)) {
+        this.sales = data.map((r: BackendReceivable) => ({
+          id: String(r.receivable_id),
+          company: r.company_name || 'MyCity.Kitchen Corporation',
+          company_id: r.company_id,
+          sale_id: r.sale_id ?? null,
+          sale_line_index: r.sale_line_index ?? null,
+          expense_id: r.expense_id ?? null,
+          is_locked: Boolean(r.is_locked),
+          date: r.transaction_date,
+          customer_name: r.customer_name,
+          customer_type: (r.customer_type === 'Internal' ? 'Staff' : 'External') as CustomerType,
+          items_summary: r.items_summary,
+          total_amount: Number(r.total_amount),
+          amount_paid: Number(r.amount_paid),
+          balance: Number(r.balance),
+          payment_status: r.payment_status as PaymentStatus,
+          notes: r.notes || undefined,
+          payments: (r.payments || []).map((p) => ({
+            id: String(p.payment_id),
+            sale_id: String(p.receivable_id),
+            customer_name: r.customer_name,
+            amount: Number(p.amount),
+            date: p.payment_date,
+            method: (p.payment_method || 'Cash') as PaymentMethod,
+            bank_account_id: p.bank_account_id ?? null,
+            notes: p.notes || undefined,
+            createdAt: p.created_at || new Date().toISOString(),
+          })),
+        }))
+        this.saveToStorageOnly()
+        this.notify()
+      }
+    } catch {
+      // Keep optimistic cached data on network error
+    }
+  }
+
+  private saveToStorageOnly(): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.sales))
+    } catch {
+      // ignore quota errors
+    }
   }
 
   private load(): void {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.sales = parsed.map((s) => ({
-            ...s,
-            company: s.company || 'MyCity.Kitchen Corporation',
-          }))
+        if (Array.isArray(parsed)) {
+          this.sales = parsed.map((s) => {
+            const copy = { ...s }
+            delete copy.customer_phone
+            delete copy.customer_role
+            return {
+              ...copy,
+              company: copy.company || 'MyCity.Kitchen Corporation',
+            }
+          })
           return
         }
       }
@@ -546,58 +592,76 @@ class ReceivablesStore {
 
   public getAllPayments(company?: string): UtangPayment[] {
     const list: UtangPayment[] = []
-    const salesList = company && company !== 'All Companies'
-      ? this.sales.filter((s) => isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company))
-      : this.sales
+    const salesList =
+      company && company !== 'All Companies'
+        ? this.sales.filter((s) => isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company))
+        : this.sales
 
     salesList.forEach((s) => {
-      (s.payments || []).forEach((p) => list.push(p))
+      ;(s.payments || []).forEach((p) => list.push(p))
     })
     return list.sort((a, b) => b.date.localeCompare(a.date))
   }
 
   public getPeopleSummaries(company?: string): PersonLedgerSummary[] {
-    const map = new Map<string, {
-      name: string
-      type: CustomerType
-      role: string
-      phone: string
-      sales: UtangSale[]
-    }>()
+    const map = new Map<
+      string,
+      {
+        key: string
+        name: string
+        type: CustomerType
+        company: string
+        company_id?: number
+        sales: UtangSale[]
+      }
+    >()
+
+    const isAllCompanies = !company || company === 'All Companies'
 
     this.sales.forEach((s) => {
-      if (company && company !== 'All Companies') {
-        const saleCompany = s.company || 'MyCity.Kitchen Corporation'
-        if (!isCompanyMatch(saleCompany, company)) {
-          return
-        }
+      const saleCompany = s.company || 'MyCity.Kitchen Corporation'
+      if (!isAllCompanies && !isCompanyMatch(saleCompany, company!)) {
+        return
       }
-      const key = s.customer_name.trim().toLowerCase()
-      if (!map.has(key)) {
-        map.set(key, {
+      const normalizedName = s.customer_name.trim().toLowerCase()
+      const groupKey = isAllCompanies
+        ? `${saleCompany.trim().toLowerCase()}::${normalizedName}`
+        : normalizedName
+
+      if (!map.has(groupKey)) {
+        map.set(groupKey, {
+          key: groupKey,
           name: s.customer_name,
           type: s.customer_type,
-          role: s.customer_role || (s.customer_type === 'Staff' ? 'Staff Member' : 'Customer'),
-          phone: s.customer_phone || '—',
+          company: saleCompany,
+          company_id: s.company_id,
           sales: [],
         })
       }
-      map.get(key)!.sales.push(s)
+      const entry = map.get(groupKey)!
+      if (!entry.company_id && s.company_id) {
+        entry.company_id = s.company_id
+      }
+      entry.sales.push(s)
     })
 
-    const today = new Date('2026-11-02T00:00:00')
+    const todayStr = getLocalTodayStr()
+    const today = new Date(`${todayStr}T00:00:00`)
 
     const summaries: PersonLedgerSummary[] = Array.from(map.values()).map((p) => {
       const sortedSales = [...p.sales].sort((a, b) => a.date.localeCompare(b.date))
       const allPayments: UtangPayment[] = []
       sortedSales.forEach((s) => {
-        (s.payments || []).forEach((pay) => allPayments.push(pay))
+        ;(s.payments || []).forEach((pay) => allPayments.push(pay))
       })
       allPayments.sort((a, b) => a.date.localeCompare(b.date))
 
       const totalSalesAmount = sortedSales.reduce((acc, s) => acc + s.total_amount, 0)
       const totalAmountPaid = sortedSales.reduce((acc, s) => acc + s.amount_paid, 0)
       const totalOwed = Math.max(0, sortedSales.reduce((acc, s) => acc + s.balance, 0))
+
+      const hasLocked = sortedSales.some((s) => Boolean(s.is_locked))
+      const allLocked = sortedSales.length > 0 && sortedSales.every((s) => Boolean(s.is_locked))
 
       // Oldest unpaid sale date
       const unpaidSales = sortedSales.filter((s) => s.balance > 0.005)
@@ -619,20 +683,21 @@ class ReceivablesStore {
         }
       }
 
-      // Last payment date
       const lastPayment = allPayments.length > 0 ? allPayments[allPayments.length - 1].date : null
 
-      // Overall status
       let status: PaymentStatus = 'Paid'
-      if (totalOwed > 0) {
-        status = totalAmountPaid > 0 ? 'Partial' : 'Unpaid'
+      if (totalOwed > 0.005) {
+        status = totalAmountPaid > 0.005 ? 'Partial' : 'Unpaid'
       }
 
       return {
+        key: p.key,
         name: p.name,
         type: p.type,
-        role_or_dept: p.role,
-        phone: p.phone,
+        company: p.company,
+        company_id: p.company_id,
+        has_locked: hasLocked,
+        all_locked: allLocked,
         total_sales_amount: totalSalesAmount,
         total_amount_paid: totalAmountPaid,
         total_owed: totalOwed,
@@ -647,7 +712,6 @@ class ReceivablesStore {
       }
     })
 
-    // Sort: highest balance first, then name
     return summaries.sort((a, b) => {
       if (b.total_owed !== a.total_owed) {
         return b.total_owed - a.total_owed
@@ -656,7 +720,10 @@ class ReceivablesStore {
     })
   }
 
-  public getKPIs(dateRange?: { startDate?: string; endDate?: string }, company?: string): ReceivablesKPIs {
+  public getKPIs(
+    dateRange?: { startDate?: string; endDate?: string },
+    company?: string
+  ): ReceivablesKPIs {
     const people = this.getPeopleSummaries(company)
     let filteredSales = this.sales
     if (company && company !== 'All Companies') {
@@ -672,7 +739,6 @@ class ReceivablesStore {
 
     const totalSales = filteredSales.reduce((acc, s) => acc + s.total_amount, 0)
 
-    // Cash collected = sum of payments made in that period (or all payments)
     const allPayments = this.getAllPayments(company)
     let filteredPayments = allPayments
     if (dateRange?.startDate && dateRange?.endDate) {
@@ -682,7 +748,6 @@ class ReceivablesStore {
     }
     const cashCollected = filteredPayments.reduce((acc, p) => acc + p.amount, 0)
 
-    // Total outstanding = current total unpaid balance
     const totalOutstanding = people.reduce((acc, p) => acc + p.total_owed, 0)
     const totalExternalUtang = people
       .filter((p) => p.type === 'External')
@@ -709,7 +774,7 @@ class ReceivablesStore {
   /**
    * Record payment for a customer.
    * If sale_id is provided, applies directly to that sale.
-   * Otherwise, applies in FIFO order (oldest unpaid sale first) until amount is exhausted.
+   * Otherwise, applies in FIFO order (oldest non-locked unpaid sale first) until amount is exhausted.
    */
   public recordPayment(params: {
     customer_name: string
@@ -717,26 +782,43 @@ class ReceivablesStore {
     date: string
     method: PaymentMethod
     sale_id?: string
+    company?: string
+    company_id?: number
+    bank_account_id?: string
     notes?: string
   }): { success: boolean; message: string } {
-    const { customer_name, amount, date, method, sale_id, notes } = params
+    const { customer_name, amount, date, method, sale_id, company, company_id, bank_account_id, notes } =
+      params
     if (!amount || amount <= 0) {
       return { success: false, message: 'Payment amount must be greater than zero.' }
     }
 
-    const customerSales = this.sales.filter(
-      (s) => s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase()
-    )
+    const customerSales = this.sales.filter((s) => {
+      const sameName = s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase()
+      if (!sameName) return false
+      if (company && company !== 'All Companies') {
+        return isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company)
+      }
+      return true
+    })
 
     if (customerSales.length === 0) {
       return { success: false, message: `No sales records found for ${customer_name}.` }
     }
 
-    const totalBalance = customerSales.reduce((acc, s) => acc + s.balance, 0)
+    const unlockedSales = customerSales.filter((s) => !s.is_locked)
+    if (unlockedSales.length === 0) {
+      return {
+        success: false,
+        message: 'All linked sales for this account are Verified and locked against modification.',
+      }
+    }
+
+    const totalBalance = unlockedSales.reduce((acc, s) => acc + s.balance, 0)
     if (amount > totalBalance + 0.005) {
       return {
         success: false,
-        message: `Payment amount (₱${amount.toLocaleString()}) cannot exceed total balance (₱${totalBalance.toLocaleString()}).`,
+        message: `Payment amount (₱${amount.toLocaleString()}) cannot exceed unlocked balance (₱${totalBalance.toLocaleString()}).`,
       }
     }
 
@@ -747,6 +829,12 @@ class ReceivablesStore {
       const targetSale = this.sales.find((s) => s.id === sale_id)
       if (!targetSale) {
         return { success: false, message: 'Specified sale was not found.' }
+      }
+      if (targetSale.is_locked) {
+        return {
+          success: false,
+          message: 'This receivable is locked because its linked sale has been Verified by an Auditor.',
+        }
       }
       if (amount > targetSale.balance + 0.005) {
         return {
@@ -762,6 +850,7 @@ class ReceivablesStore {
         amount,
         date,
         method,
+        bank_account_id: bank_account_id || null,
         notes: notes || undefined,
         createdAt: paymentTimestamp,
       }
@@ -772,11 +861,29 @@ class ReceivablesStore {
       targetSale.balance = Math.max(0, targetSale.total_amount - targetSale.amount_paid)
       targetSale.payment_status =
         targetSale.balance <= 0.005 ? 'Paid' : targetSale.amount_paid > 0 ? 'Partial' : 'Unpaid'
+
+      const numId = parseInt(targetSale.id, 10)
+      if (!isNaN(numId)) {
+        receivablesService
+          .recordPayment(numId, {
+            amount,
+            date,
+            payment_method: method,
+            bank_account_id,
+            notes,
+          })
+          .then(() => this.refreshFromBackend())
+          .catch(() => {
+            void this.refreshFromBackend()
+          })
+      }
     } else {
-      // FIFO: Oldest unpaid first
-      const unpaidSales = customerSales
+      // FIFO: Oldest non-locked unpaid first
+      const unpaidSales = unlockedSales
         .filter((s) => s.balance > 0.005)
         .sort((a, b) => a.date.localeCompare(b.date))
+
+      const backendPromises: Promise<unknown>[] = []
 
       for (const sale of unpaidSales) {
         if (remainingToApply <= 0.005) break
@@ -788,6 +895,7 @@ class ReceivablesStore {
           amount: alloc,
           date,
           method,
+          bank_account_id: bank_account_id || null,
           notes: notes || undefined,
           createdAt: paymentTimestamp,
         }
@@ -799,7 +907,33 @@ class ReceivablesStore {
         sale.payment_status =
           sale.balance <= 0.005 ? 'Paid' : sale.amount_paid > 0 ? 'Partial' : 'Unpaid'
 
+        const numId = parseInt(sale.id, 10)
+        if (!isNaN(numId) && method !== 'Payroll Deduction') {
+          backendPromises.push(
+            receivablesService.recordPayment(numId, {
+              amount: alloc,
+              date,
+              payment_method: method,
+              bank_account_id,
+              notes,
+            })
+          )
+        }
+
         remainingToApply -= alloc
+      }
+
+      if (method === 'Payroll Deduction') {
+        receivablesService
+          .settlePayroll(customer_name, company_id, notes)
+          .then(() => this.refreshFromBackend())
+          .catch(() => {
+            void this.refreshFromBackend()
+          })
+      } else if (backendPromises.length > 0) {
+        Promise.allSettled(backendPromises).then(() => {
+          void this.refreshFromBackend()
+        })
       }
     }
 
@@ -813,21 +947,33 @@ class ReceivablesStore {
   }
 
   /**
-   * Settle staff credit via payroll deduction (marks all outstanding sales as settled).
+   * Settle staff credit via payroll deduction (marks all non-locked outstanding sales as settled).
    */
-  public settleStaffPayrollDeduction(customer_name: string, notes?: string): { success: boolean; message: string } {
-    const staffSales = this.sales.filter(
-      (s) =>
-        s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase() &&
-        s.balance > 0.005
-    )
+  public settleStaffPayrollDeduction(
+    customer_name: string,
+    notes?: string,
+    company_id?: number,
+    company?: string
+  ): { success: boolean; message: string } {
+    const staffSales = this.sales.filter((s) => {
+      const sameName = s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase()
+      if (!sameName || s.balance <= 0.005 || s.is_locked) return false
+      if (company && company !== 'All Companies') {
+        return isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company)
+      }
+      return true
+    })
 
     if (staffSales.length === 0) {
-      return { success: false, message: `No outstanding balance found for staff ${customer_name}.` }
+      return {
+        success: false,
+        message: `No unlocked outstanding balance found for staff ${customer_name}.`,
+      }
     }
 
-    const todayStr = '2026-11-02'
+    const todayStr = getLocalTodayStr()
     let totalDeducted = 0
+    const targetCompanyId = company_id || staffSales[0]?.company_id
 
     staffSales.forEach((sale) => {
       const balanceToDeduct = sale.balance
@@ -852,6 +998,13 @@ class ReceivablesStore {
     })
 
     this.save()
+    receivablesService
+      .settlePayroll(customer_name, targetCompanyId, notes)
+      .then(() => this.refreshFromBackend())
+      .catch(() => {
+        void this.refreshFromBackend()
+      })
+
     return {
       success: true,
       message: `Successfully deducted ₱${totalDeducted.toLocaleString('en-US', {
@@ -861,24 +1014,27 @@ class ReceivablesStore {
   }
 
   /**
-   * Add a new food sale.
+   * Add a new food sale / receivable entry.
    */
   public addNewSale(params: {
     customer_name: string
     customer_type: CustomerType
-    customer_phone?: string
-    customer_role?: string
     items_summary: string
     total_amount: number
     payment_option: PaymentOption
     amount_paid?: number
     payment_method?: PaymentMethod
+    bank_account_id?: string
     date?: string
     notes?: string
     company?: string
+    company_id?: number
+    sale_id?: number
+    sale_line_index?: number
+    expense_id?: number
   }): UtangSale {
     const saleId = `SALE-2026-${String(this.sales.length + 101).padStart(3, '0')}`
-    const todayStr = params.date || '2026-11-02'
+    const todayStr = params.date || getLocalTodayStr()
     const totalAmount = Math.max(0, params.total_amount)
 
     let amountPaid = 0
@@ -895,6 +1051,7 @@ class ReceivablesStore {
         amount: totalAmount,
         date: todayStr,
         method: params.payment_method || 'Cash',
+        bank_account_id: params.bank_account_id || null,
         notes: 'Paid in full at counter',
         createdAt: new Date().toISOString(),
       })
@@ -909,12 +1066,12 @@ class ReceivablesStore {
           amount: amountPaid,
           date: todayStr,
           method: params.payment_method || 'Cash',
+          bank_account_id: params.bank_account_id || null,
           notes: 'Partial payment on food sale',
           createdAt: new Date().toISOString(),
         })
       }
     } else {
-      // Pay Later (Utang)
       amountPaid = 0
       paymentStatus = 'Unpaid'
     }
@@ -922,11 +1079,14 @@ class ReceivablesStore {
     const newSale: UtangSale = {
       id: saleId,
       company: params.company || 'MyCity.Kitchen Corporation',
+      company_id: params.company_id,
+      sale_id: params.sale_id ?? null,
+      sale_line_index: params.sale_line_index ?? null,
+      expense_id: params.expense_id ?? null,
+      is_locked: false,
       date: todayStr,
       customer_name: params.customer_name.trim(),
       customer_type: params.customer_type,
-      customer_phone: params.customer_phone || undefined,
-      customer_role: params.customer_role || undefined,
       items_summary: params.items_summary.trim(),
       total_amount: totalAmount,
       amount_paid: amountPaid,
@@ -938,7 +1098,279 @@ class ReceivablesStore {
 
     this.sales.unshift(newSale)
     this.save()
+
+    const customerTypeApi = params.customer_type === 'Staff' ? 'Internal' : 'External'
+    receivablesService
+      .createReceivable({
+        customer_name: params.customer_name.trim(),
+        customer_type: customerTypeApi,
+        items_summary: params.items_summary.trim(),
+        total_amount: totalAmount,
+        amount_paid: amountPaid,
+        payment_option: params.payment_option,
+        payment_method: params.payment_method,
+        bank_account_id: params.bank_account_id,
+        notes: params.notes,
+        company_name: params.company || 'MyCity.Kitchen Corporation',
+        company_id: params.company_id,
+        sale_id: params.sale_id,
+        sale_line_index: params.sale_line_index,
+        expense_id: params.expense_id,
+        date: todayStr,
+      })
+      .then((created) => {
+        if (created?.receivable_id) {
+          newSale.id = String(created.receivable_id)
+          newSale.company_id = created.company_id
+          this.saveToStorageOnly()
+          this.notify()
+        }
+      })
+      .catch(() => {})
+
     return newSale
+  }
+
+  public async editSale(
+    saleId: string,
+    params: {
+      customer_name?: string
+      customer_type?: CustomerType
+      items_summary?: string
+      total_amount?: number
+      notes?: string
+      date?: string
+      payment_status?: PaymentStatus
+      payment_method?: string
+      bank_account_id?: string
+    }
+  ): Promise<{ success: boolean; message: string }> {
+    const sale = this.sales.find((s) => s.id === saleId)
+    if (!sale) return { success: false, message: 'Receivable not found' }
+    if (sale.is_locked) {
+      return {
+        success: false,
+        message: 'This receivable is locked because its linked sale has been Verified by an Auditor.',
+      }
+    }
+
+    const numId = parseInt(saleId, 10)
+    if (!isNaN(numId)) {
+      try {
+        await receivablesService.updateReceivable(numId, {
+          customer_name: params.customer_name,
+          customer_type:
+            params.customer_type === 'Staff'
+              ? 'Internal'
+              : params.customer_type === 'External'
+                ? 'External'
+                : undefined,
+          items_summary: params.items_summary,
+          total_amount: params.total_amount,
+          notes: params.notes,
+          transaction_date: params.date,
+          payment_status: params.payment_status,
+          payment_method: params.payment_method,
+          bank_account_id: params.bank_account_id,
+        })
+        await this.refreshFromBackend()
+        return { success: true, message: 'Receivable updated successfully' }
+      } catch (err: any) {
+        return { success: false, message: err?.message || 'Failed to update on server' }
+      }
+    }
+
+    if (params.customer_name) sale.customer_name = params.customer_name.trim()
+    if (params.customer_type) sale.customer_type = params.customer_type
+    if (params.items_summary) sale.items_summary = params.items_summary.trim()
+    if (params.notes !== undefined) sale.notes = params.notes
+    if (params.date) sale.date = params.date
+    if (params.total_amount !== undefined) {
+      sale.total_amount = Math.max(0, params.total_amount)
+    }
+    if (params.payment_status === 'Unpaid') {
+      sale.payments = []
+      sale.amount_paid = 0
+      sale.balance = sale.total_amount
+      sale.payment_status = 'Unpaid'
+    } else if (params.payment_status === 'Paid') {
+      const rem = Math.max(0, sale.total_amount - sale.amount_paid)
+      if (rem > 0) {
+        sale.payments = sale.payments || []
+        sale.payments.push({
+          id: `PAY-${Date.now()}`,
+          sale_id: sale.id,
+          customer_name: sale.customer_name,
+          amount: rem,
+          date: params.date || getLocalTodayStr(),
+          method: (params.payment_method || 'Cash') as PaymentMethod,
+          bank_account_id: params.bank_account_id || null,
+          createdAt: new Date().toISOString(),
+        })
+      }
+      sale.amount_paid = sale.total_amount
+      sale.balance = 0
+      sale.payment_status = 'Paid'
+    } else {
+      sale.balance = Math.max(0, sale.total_amount - sale.amount_paid)
+      sale.payment_status =
+        sale.balance <= 0.005 ? 'Paid' : sale.amount_paid > 0 ? 'Partial' : 'Unpaid'
+    }
+    this.save()
+    return { success: true, message: 'Receivable updated successfully' }
+  }
+
+  public async updateDebtor(params: {
+    old_customer_name: string
+    new_customer_name: string
+    customer_type: CustomerType
+    company?: string
+    company_id?: number
+  }): Promise<{ success: boolean; message: string }> {
+    const newName = params.new_customer_name.trim()
+    if (!newName) {
+      return { success: false, message: 'Customer or staff name cannot be empty.' }
+    }
+
+    const hasBackendRecords = this.sales.some(
+      (s) =>
+        s.customer_name.trim().toLowerCase() === params.old_customer_name.trim().toLowerCase() &&
+        !isNaN(parseInt(s.id, 10))
+    )
+
+    if (hasBackendRecords) {
+      try {
+        await receivablesService.updateDebtor({
+          old_customer_name: params.old_customer_name,
+          new_customer_name: newName,
+          customer_type: params.customer_type === 'Staff' ? 'Internal' : 'External',
+          company_id: params.company_id,
+          company_name:
+            params.company && params.company !== 'All Companies' ? params.company : undefined,
+        })
+        await this.refreshFromBackend()
+        return { success: true, message: `Updated debtor profile for ${newName}.` }
+      } catch (err: any) {
+        return { success: false, message: err?.message || 'Failed to update debtor profile.' }
+      }
+    }
+
+    this.sales.forEach((s) => {
+      const sameName =
+        s.customer_name.trim().toLowerCase() === params.old_customer_name.trim().toLowerCase()
+      const sameCompany =
+        !params.company ||
+        params.company === 'All Companies' ||
+        isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', params.company)
+      if (sameName && sameCompany && !s.is_locked) {
+        s.customer_name = newName
+        s.customer_type = params.customer_type
+      }
+    })
+    this.save()
+    return { success: true, message: `Updated debtor profile for ${newName}.` }
+  }
+
+  public async deleteDebtor(params: {
+    customer_name: string
+    company?: string
+    company_id?: number
+  }): Promise<{ success: boolean; message: string }> {
+    const matching = this.sales.filter((s) => {
+      const sameName =
+        s.customer_name.trim().toLowerCase() === params.customer_name.trim().toLowerCase()
+      const sameCompany =
+        !params.company ||
+        params.company === 'All Companies' ||
+        isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', params.company)
+      return sameName && sameCompany
+    })
+
+    if (matching.some((s) => s.is_locked)) {
+      return {
+        success: false,
+        message: 'Cannot delete debtor account because one or more linked sales are Verified and locked.',
+      }
+    }
+
+    const hasBackendRecords = matching.some((s) => !isNaN(parseInt(s.id, 10)))
+    if (hasBackendRecords) {
+      try {
+        await receivablesService.deleteDebtor({
+          customer_name: params.customer_name,
+          company_id: params.company_id,
+          company_name:
+            params.company && params.company !== 'All Companies' ? params.company : undefined,
+        })
+        await this.refreshFromBackend()
+        return { success: true, message: `Deleted debtor account for ${params.customer_name}.` }
+      } catch (err: any) {
+        return { success: false, message: err?.message || 'Failed to delete debtor account.' }
+      }
+    }
+
+    this.sales = this.sales.filter((s) => !matching.includes(s))
+    this.save()
+    return { success: true, message: `Deleted debtor account for ${params.customer_name}.` }
+  }
+
+  public async deleteSale(saleId: string): Promise<{ success: boolean; message: string }> {
+    const target = this.sales.find((s) => s.id === saleId)
+    if (target?.is_locked) {
+      return {
+        success: false,
+        message: 'This receivable is locked because its linked sale has been Verified by an Auditor.',
+      }
+    }
+
+    const numId = parseInt(saleId, 10)
+    if (!isNaN(numId)) {
+      try {
+        await receivablesService.deleteReceivable(numId)
+        await this.refreshFromBackend()
+        return { success: true, message: 'Receivable deleted successfully' }
+      } catch (err: any) {
+        return { success: false, message: err?.message || 'Failed to delete on server' }
+      }
+    }
+    this.sales = this.sales.filter((s) => s.id !== saleId)
+    this.save()
+    return { success: true, message: 'Receivable deleted successfully' }
+  }
+
+  public async deletePayment(paymentId: string): Promise<{ success: boolean; message: string }> {
+    const parentSale = this.sales.find((s) => (s.payments || []).some((p) => p.id === paymentId))
+    if (parentSale?.is_locked) {
+      return {
+        success: false,
+        message: 'Cannot reverse payment because its linked sale has been Verified by an Auditor.',
+      }
+    }
+
+    const numId = parseInt(paymentId, 10)
+    if (!isNaN(numId)) {
+      try {
+        await receivablesService.deletePayment(numId)
+        await this.refreshFromBackend()
+        return { success: true, message: 'Payment reversed successfully' }
+      } catch (err: any) {
+        return { success: false, message: err?.message || 'Failed to reverse payment on server' }
+      }
+    }
+    for (const sale of this.sales) {
+      const pIdx = (sale.payments || []).findIndex((p) => p.id === paymentId)
+      if (pIdx !== -1) {
+        const removedPay = sale.payments[pIdx]
+        sale.payments.splice(pIdx, 1)
+        sale.amount_paid = Math.max(0, sale.amount_paid - removedPay.amount)
+        sale.balance = Math.max(0, sale.total_amount - sale.amount_paid)
+        sale.payment_status =
+          sale.balance <= 0.005 ? 'Paid' : sale.amount_paid > 0 ? 'Partial' : 'Unpaid'
+        break
+      }
+    }
+    this.save()
+    return { success: true, message: 'Payment reversed successfully' }
   }
 
   public resetToDefault(): void {
@@ -948,4 +1380,3 @@ class ReceivablesStore {
 }
 
 export const receivablesStore = new ReceivablesStore()
-
