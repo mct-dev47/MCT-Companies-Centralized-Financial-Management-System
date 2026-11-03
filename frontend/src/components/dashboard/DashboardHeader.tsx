@@ -177,15 +177,8 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           }}
         />
 
-        {/* 2. Company Scope: Dropdown for Finance/Audit/Admin, static assigned company pill for Supervisor */}
-        {isCompanyScoped ? (
-          <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-3.5 sm:px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 whitespace-nowrap">
-            <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-            <span className="font-semibold text-focus/90 truncate max-w-[280px] sm:max-w-[360px]">
-              {selectedCompanies[0] || 'All Companies'}
-            </span>
-          </div>
-        ) : (
+        {/* 2. Company Scope: Dropdown for Finance/Audit/Admin */}
+        {!isCompanyScoped && (
           <div ref={dropdownRef} className="relative inline-block shrink-0">
             <button
               type="button"
@@ -200,7 +193,6 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               aria-haspopup="listbox"
               aria-label="Filter dashboard by company"
             >
-              <Building2 className={cn('h-4 w-4 shrink-0', !isAllCompanies ? 'text-primary' : 'text-muted-fg')} />
               <span className="font-medium truncate max-w-[240px] sm:max-w-[360px]">
                 {buttonLabel}
               </span>

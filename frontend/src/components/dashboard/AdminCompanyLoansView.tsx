@@ -981,14 +981,14 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
             <span className="text-xs font-medium text-muted-fg block">
               Total Principal Settled
             </span>
-            <h3 className="text-xl sm:text-2xl font-bold text-emerald-600 mt-1 tabular-nums tracking-tight">
+            <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
               {formatPHP(kpis.totalPaid)}
             </h3>
             <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
               Total loan repayment installments received
             </p>
           </div>
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -999,14 +999,14 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
             <span className="text-xs font-medium text-muted-fg block">
               Outstanding Balance
             </span>
-            <h3 className="text-xl sm:text-2xl font-bold text-amber-600 mt-1 tabular-nums tracking-tight">
+            <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
               {formatPHP(kpis.totalOutstanding)}
             </h3>
             <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
               Pending repayment balance across borrower companies
             </p>
           </div>
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-amber-50 border border-amber-200/60 flex items-center justify-center text-amber-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <AlertCircle className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>

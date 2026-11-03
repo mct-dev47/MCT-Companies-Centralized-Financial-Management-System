@@ -27,6 +27,9 @@ import {
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { CardSkeleton } from '@/components/common/CardSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -101,6 +104,8 @@ export const SalesPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -705,7 +710,7 @@ export const SalesPage: React.FC = () => {
   }, [filteredSales, tableTab, getRealizedCash])
 
   // Export handlers
-  const companyForExport = isAuditor ? assignedCompany : selectedCompany
+  const companyForExport = isCompanyScoped ? assignedCompany : selectedCompany
 
   const handleExportCsv = () => {
     salesService.exportCsv(
@@ -799,7 +804,6 @@ export const SalesPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -987,15 +991,8 @@ export const SalesPage: React.FC = () => {
               hidePresets
             />
 
-            {/* Company Scope */}
-            {isCompanyScoped ? (
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">
-                  {assignedCompany}
-                </span>
-              </div>
-            ) : (
+            {/* Company Scope: ONLY Finance and Audit have the dropdown filter */}
+            {!isCompanyScoped && (
               <div ref={companyDropdownRef} className="relative inline-block">
                 <button
                   type="button"
@@ -1007,7 +1004,6 @@ export const SalesPage: React.FC = () => {
                   )}
                   aria-label="Filter sales by company"
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[150px]">
                     {selectedCompany}
                   </span>
@@ -1146,13 +1142,10 @@ export const SalesPage: React.FC = () => {
               Total Sales
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-emerald-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalSales)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1162,7 +1155,7 @@ export const SalesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <TrendingUp className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -1174,13 +1167,10 @@ export const SalesPage: React.FC = () => {
               Cash Collected
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-teal-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalCash)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1190,7 +1180,7 @@ export const SalesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-teal-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -1211,13 +1201,10 @@ export const SalesPage: React.FC = () => {
               </button>
             </div>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-rose-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(receivablesKpis.totalOutstanding)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1229,7 +1216,7 @@ export const SalesPage: React.FC = () => {
 
           <div
             onClick={() => navigate('/receivables')}
-            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-rose-50 border border-rose-200/60 flex items-center justify-center text-rose-600 shrink-0 shadow-2xs cursor-pointer group-hover:bg-rose-100 transition-colors"
+            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs cursor-pointer group-hover:bg-slate-200 transition-colors"
             title="Open Receivables Page"
           >
             <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
@@ -1248,10 +1235,7 @@ export const SalesPage: React.FC = () => {
               </div>
               <div className="h-9 w-28 bg-slate-200/60 animate-pulse rounded-xl" />
             </div>
-            <div className="h-56 sm:h-64 w-full bg-slate-50/70 rounded-2xl flex flex-col items-center justify-center gap-3">
-              <div className="w-20 h-20 rounded-full border-4 border-slate-200 border-t-emerald-400 animate-spin opacity-60" />
-              <div className="h-3.5 w-40 bg-slate-200/70 animate-pulse rounded" />
-            </div>
+            <Skeleton className="h-56 sm:h-64 w-full rounded-2xl" />
           </Card>
         ) : (
           <IncomeSummaryChart
@@ -1364,34 +1348,7 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-20 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-32 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4 text-center">
-                      <div className="h-6 w-10 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={8} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1615,7 +1572,7 @@ export const SalesPage: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1">
-                          {isAudit ? (
+                          {canAuditActions ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -1650,6 +1607,8 @@ export const SalesPage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
+                          ) : isManuel ? (
+                            <span className="text-muted-fg text-xs">—</span>
                           ) : sale.auditStatus === 'Verified' ? (
                             <span
                               className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
@@ -1741,7 +1700,7 @@ export const SalesPage: React.FC = () => {
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
         onSuccess={handleSaleAdded}
-        assignedCompany={isAuditor ? assignedCompany : selectedCompany}
+        assignedCompany={isCompanyScoped ? assignedCompany : selectedCompany}
       />
 
       {/* Delete Confirmation Dialog */}

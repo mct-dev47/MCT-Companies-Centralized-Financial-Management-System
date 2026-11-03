@@ -25,6 +25,8 @@ import {
   MoreVertical,
   Eye,
 } from 'lucide-react'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -77,7 +79,7 @@ type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 export const PettyCashPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
@@ -85,7 +87,9 @@ export const PettyCashPage: React.FC = () => {
   const isSupervisor = userRole === 'supervisor'
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
-  const isCompanyScoped = isSupervisor
+  const isCompanyScoped = isSupervisor && !isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -637,7 +641,6 @@ export const PettyCashPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -706,7 +709,6 @@ export const PettyCashPage: React.FC = () => {
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">{selectedPeriod}</span>
                 <ChevronDown
                   className={cn(
@@ -813,13 +815,8 @@ export const PettyCashPage: React.FC = () => {
               hidePresets
             />
 
-            {/* Company Scope Dropdown */}
-            {isCompanyScoped ? (
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs select-none">
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">{assignedCompany}</span>
-              </div>
-            ) : (
+            {/* Company Scope Dropdown: ONLY Finance and Audit have the dropdown filter */}
+            {!isCompanyScoped && (
               <div ref={companyDropdownRef} className="relative inline-block">
                 <button
                   type="button"
@@ -829,7 +826,6 @@ export const PettyCashPage: React.FC = () => {
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[140px]">
                     {selectedCompany}
                   </span>
@@ -882,11 +878,7 @@ export const PettyCashPage: React.FC = () => {
           </span>
           <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
             {isLoading ? (
-              <span className="inline-flex items-center gap-1.5 py-1 text-muted-fg" aria-label="Loading">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce" />
-              </span>
+              <Skeleton className="h-7 w-36 rounded-md my-1" />
             ) : (
               formatPHP(currentBalance)
             )}
@@ -895,7 +887,7 @@ export const PettyCashPage: React.FC = () => {
             Available petty cash reserve for operational disbursements • {displayedCompanyTitle}
           </p>
         </div>
-        <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-amber-50 border border-amber-200/60 flex items-center justify-center text-amber-600 shrink-0 shadow-2xs">
+        <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
           <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
         </div>
       </Card>
@@ -954,20 +946,7 @@ export const PettyCashPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                Array.from({ length: 5 }).map((_, i) => (
-                  <TableRow key={i} className="animate-pulse">
-                    <TableCell className="px-3 py-3.5"><div className="h-4 w-16 bg-slate-200 rounded" /></TableCell>
-                    <TableCell className="px-3 py-3.5"><div className="h-4 w-28 bg-slate-200 rounded" /></TableCell>
-                    <TableCell className="px-3 py-3.5"><div className="h-4 w-44 bg-slate-200 rounded" /></TableCell>
-                    <TableCell className="px-3 py-3.5"><div className="h-4 w-24 bg-slate-200 rounded" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-right"><div className="h-4 w-20 bg-slate-200 rounded ml-auto" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-right"><div className="h-4 w-16 bg-slate-200 rounded ml-auto" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-right"><div className="h-4 w-16 bg-slate-200 rounded ml-auto" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-right"><div className="h-4 w-20 bg-slate-200 rounded ml-auto" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-center"><div className="h-5 w-24 bg-slate-200 rounded-full mx-auto" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-center"><div className="h-7 w-16 bg-slate-200 rounded mx-auto" /></TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={10} />
               ) : paginatedLedger.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={10} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
@@ -987,7 +966,7 @@ export const PettyCashPage: React.FC = () => {
                     <TableRow
                       key={entry.id}
                       onClick={() => handleOpenSummary(entry)}
-                      className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer group"
+                      className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer"
                       title="Click transaction to view details or review"
                     >
                       {/* 1. Date */}
@@ -1020,7 +999,7 @@ export const PettyCashPage: React.FC = () => {
                       {/* 2. Company */}
                       <TableCell className="px-3 py-3.5">
                         <div
-                          className="font-semibold text-xs text-focus truncate group-hover:text-primary transition-colors"
+                          className="font-semibold text-xs text-focus truncate"
                           title={entry.companyName || ''}
                         >
                           {entry.companyName || '—'}
@@ -1135,7 +1114,7 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 9. Actions */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {isAudit ? (
+                        {canAuditActions ? (
                           <Button
                             type="button"
                             variant="ghost"
@@ -1155,6 +1134,8 @@ export const PettyCashPage: React.FC = () => {
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
+                        ) : isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
                         ) : isPendingFinance && entry.type === 'topup' ? (
                           <div className="flex items-center justify-center gap-1">
                             <Button
@@ -1398,15 +1379,7 @@ export const PettyCashPage: React.FC = () => {
 
               {/* Footer Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsSummaryModalOpen(false)}
-                  className="h-9 text-xs font-semibold"
-                >
-                  Close
-                </Button>
+
 
                 {/* Pending Finance: Allow Edit / Delete for topups */}
                 {targetEntry.type === 'topup' &&
@@ -1469,7 +1442,7 @@ export const PettyCashPage: React.FC = () => {
                 )}
 
                 {/* Audit Team Actions: Approve or Disapprove */}
-                {isAudit && targetEntry.status === 'Pending Audit Approval' && (
+                {canAuditActions && targetEntry.status === 'Pending Audit Approval' && (
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"

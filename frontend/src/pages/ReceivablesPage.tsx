@@ -1,7 +1,10 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { CardSkeleton } from '@/components/common/CardSkeleton'
+import { TablePagination, TableEmptyState } from '@/components/common'
 import {
   Table,
   TableBody,
@@ -11,13 +14,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  MoreVertical,
+  Eye,
   Receipt,
   User,
   Building2,
   Search,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Check,
   CheckCircle2,
   AlertCircle,
@@ -49,6 +52,7 @@ import { websocketService } from '@/services/websocketService'
 import { useReceivables } from '@/hooks/useReceivables'
 import { RecordUtangPaymentModal } from '@/components/receivables/RecordUtangPaymentModal'
 import { PersonLedgerDrawer } from '@/components/receivables/PersonLedgerDrawer'
+import { PersonLedgerPageView } from '@/components/receivables/PersonLedgerPageView'
 import type {
   CustomerType,
   PersonLedgerSummary,
@@ -59,7 +63,7 @@ const ITEMS_PER_PAGE = 10
 
 export const ReceivablesPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const normalizedUserRole = (user?.role || '').toLowerCase()
   const isAudit =
@@ -130,6 +134,12 @@ export const ReceivablesPage: React.FC = () => {
     }
   }, [user])
 
+  // Company filter state
+  React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
   const [selectedCompany, setSelectedCompany] = React.useState<string>(
     isCompanyScoped ? assignedCompany : activeCompany || 'All Companies'
   )
@@ -306,6 +316,29 @@ export const ReceivablesPage: React.FC = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
+
+  // Floating 3-dots action menu state
+  const [openMenuPersonName, setOpenMenuPersonName] = React.useState<string | null>(null)
+  const [activeMenuPerson, setActiveMenuPerson] = React.useState<PersonLedgerSummary | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{ top: number; right: number; openUpward: boolean } | null>(null)
+
+  React.useEffect(() => {
+    if (!openMenuPersonName) return
+    const handleClickOutside = () => {
+      setOpenMenuPersonName(null)
+      setActiveMenuPerson(null)
+    }
+    const handleScroll = () => {
+      setOpenMenuPersonName(null)
+      setActiveMenuPerson(null)
+    }
+    window.addEventListener('click', handleClickOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      window.removeEventListener('click', handleClickOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
+  }, [openMenuPersonName])
 
   // Modals & Drawers state
   const [selectedPersonForLedger, setSelectedPersonForLedger] =
@@ -538,6 +571,7 @@ export const ReceivablesPage: React.FC = () => {
     }, 400)
   }
 
+
   return (
     <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Toast Confirmation Banner */}
@@ -602,7 +636,6 @@ export const ReceivablesPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className="h-4 w-4 shrink-0 text-white" />
                 <span>Export</span>
                 <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90" />
               </Button>
@@ -670,7 +703,6 @@ export const ReceivablesPage: React.FC = () => {
                   )}
                   aria-label="Filter receivables by company"
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[150px]">
                     {selectedCompany}
                   </span>
@@ -852,10 +884,7 @@ export const ReceivablesPage: React.FC = () => {
               Total External Utang
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
                 <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
@@ -868,7 +897,7 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-sky-50 border border-sky-200/60 flex items-center justify-center text-sky-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Building2 className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -877,10 +906,7 @@ export const ReceivablesPage: React.FC = () => {
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-medium text-muted-fg block">Total Staff Utang</span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
                 <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
@@ -893,7 +919,7 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-purple-50 border border-purple-200/60 flex items-center justify-center text-purple-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <User className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -904,13 +930,10 @@ export const ReceivablesPage: React.FC = () => {
               Grand Total Receivables
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-rose-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalOutstanding)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -920,7 +943,7 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-rose-50 border border-rose-200/60 flex items-center justify-center text-rose-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -1011,36 +1034,7 @@ export const ReceivablesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 6 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="w-[22%] px-3.5 py-4">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Skeleton className="w-8 h-8 rounded-xl shrink-0" />
-                        <div className="space-y-1.5 flex-1 min-w-0">
-                          <Skeleton className="h-4 w-28 rounded-md" />
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="w-[12%] px-3.5 py-4">
-                      <Skeleton className="h-5 w-20 rounded-full" />
-                    </TableCell>
-                    <TableCell className="w-[14%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[14%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[14%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[11%] px-3.5 py-4">
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </TableCell>
-                    <TableCell className="w-[13%] px-3.5 py-4 text-center">
-                      <Skeleton className="h-7 w-14 rounded-lg mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={6} columns={7} />
               ) : paginatedPeople.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1176,9 +1170,9 @@ export const ReceivablesPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 7. Actions */}
+                      {/* 7. Actions (Standard 3-dots Menu matching system) */}
                       <TableCell
-                        className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
+className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1.5">
@@ -1260,45 +1254,66 @@ export const ReceivablesPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* 4. Standard System Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredPeople.length === 0
-              ? 'Showing 0 of 0 accounts'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredPeople.length} accounts`}
-          </span>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPeople.length}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          onPageChange={setCurrentPage}
+          itemLabel="accounts"
+        />
       </Card>
+
+      {/* Floating 3-dots Action Menu Portal */}
+      {openMenuPersonName && activeMenuPerson && menuPosition && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed w-48 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${menuPosition.top}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-fg border-b border-slate-100">
+              Account Actions
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const target = activeMenuPerson
+                setOpenMenuPersonName(null)
+                setActiveMenuPerson(null)
+                setSelectedPersonForLedger(target)
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-focus hover:bg-slate-50 rounded-lg transition-colors cursor-pointer text-left"
+            >
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>{isAudit ? 'View Account History' : 'View Account Ledger'}</span>
+            </button>
+
+            {activeMenuPerson.total_owed > 0 && !isAudit && (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = activeMenuPerson
+                  setOpenMenuPersonName(null)
+                  setActiveMenuPerson(null)
+                  handleOpenPayment(target)
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer text-left"
+              >
+                <Coins className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Record Payment</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
 
       {/* Record Payment Modal */}
       <RecordUtangPaymentModal
@@ -1311,7 +1326,6 @@ export const ReceivablesPage: React.FC = () => {
           showToast(msg)
         }}
       />
-
       {/* Person Ledger Drawer */}
       <PersonLedgerDrawer
         open={Boolean(selectedPersonForLedger)}
@@ -1382,24 +1396,24 @@ export const ReceivablesPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={() => setEditingPerson(null)}
-                disabled={isSavingPersonEdit}
+                disabled={isUpdatingPerson}
               >
                 Cancel
               </Button>
               <Button
                 type="button"
                 size="sm"
-                onClick={handleSavePersonEdit}
-                disabled={isSavingPersonEdit}
+                onClick={handleConfirmEditPerson}
+                disabled={isUpdatingPerson}
                 className="bg-[#960C01] hover:bg-[#7d0a00] text-white"
               >
-                {isSavingPersonEdit ? 'Saving...' : 'Save Profile'}
+                {isUpdatingPerson ? 'Updating...' : 'Save Changes'}
               </Button>
             </div>
           </DialogContent>
@@ -1409,7 +1423,7 @@ export const ReceivablesPage: React.FC = () => {
       {/* Dialog: Confirm Delete Debtor Account (AC-3, AC-9) */}
       {deletingPerson && (
         <Dialog open={Boolean(deletingPerson)} onOpenChange={(o) => !o && setDeletingPerson(null)}>
-          <DialogContent className="sm:max-w-[420px] p-5 rounded-2xl bg-white shadow-xl">
+          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
             <DialogHeader className="text-left space-y-1">
               <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 text-rose-600" />

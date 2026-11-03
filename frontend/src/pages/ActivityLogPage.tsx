@@ -1,8 +1,6 @@
 import * as React from 'react'
 import {
   Search,
-  ChevronLeft,
-  ChevronRight,
   Download,
   RotateCw,
   Clock,
@@ -13,17 +11,35 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
+import {
+  ErrorBanner,
+  TableEmptyState,
+  TablePagination,
+  TableSkeleton,
+} from '@/components/common'
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
-import { AlertCircle } from 'lucide-react'
+import {
+  formatUserFriendlyErrorMessage,
+  notifyError,
+  notifyWarning,
+} from '@/utils/errorUtils'
 
 // Helper to parse date string like "Oct 6, 2026 · 9:15 AM" or "2026-10-05 08:14"
 function parseDateForFilter(dateStr: string): Date | null {
   if (!dateStr) return null
-  const datePart = dateStr.includes('·') ? dateStr.split('·')[0].trim() : dateStr.split(' ')[0].trim()
+  const datePart = dateStr.includes('·')
+    ? dateStr.split('·')[0].trim()
+    : dateStr.split(' ')[0].trim()
   const parsed = Date.parse(datePart)
   if (!isNaN(parsed)) return new Date(parsed)
   return null
@@ -70,8 +86,12 @@ export const ActivityLogPage: React.FC = () => {
       setLogs(data)
       setLoadError('')
     } catch (err) {
-      // Catch and format all possible network, server, and authorization errors into user-friendly messages
-      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not load the activity log. Please try again.'))
+      setLoadError(
+        formatUserFriendlyErrorMessage(
+          err,
+          'Could not load the activity log. Please try again.'
+        )
+      )
     } finally {
       setLoading(false)
       setIsRefreshing(false)
@@ -96,7 +116,12 @@ export const ActivityLogPage: React.FC = () => {
     try {
       await fetchLogs()
     } catch (err) {
-      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not refresh activity logs. Please try again.'))
+      setLoadError(
+        formatUserFriendlyErrorMessage(
+          err,
+          'Could not refresh activity logs. Please try again.'
+        )
+      )
     } finally {
       setIsRefreshing(false)
     }
@@ -136,10 +161,12 @@ export const ActivityLogPage: React.FC = () => {
 
   // Pagination calculations
   const totalPages = Math.max(1, Math.ceil(filteredLogs.length / itemsPerPage))
-  const displayedLogs = React.useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage
-    return filteredLogs.slice(start, start + itemsPerPage)
-  }, [filteredLogs, currentPage, itemsPerPage])
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = Math.min(startIndex + itemsPerPage, filteredLogs.length)
+  const displayedLogs = React.useMemo(
+    () => filteredLogs.slice(startIndex, endIndex),
+    [filteredLogs, startIndex, endIndex]
+  )
 
   const handleClearFilters = () => {
     setSearchQuery('')
@@ -169,14 +196,17 @@ export const ActivityLogPage: React.FC = () => {
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.setAttribute('download', `mct_activity_logs_${new Date().toISOString().slice(0, 10)}.csv`)
+      link.setAttribute(
+        'download',
+        `mct_activity_logs_${new Date().toISOString().slice(0, 10)}.csv`
+      )
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
       URL.revokeObjectURL(url)
       setIsExportDropdownOpen(false)
     } catch (err) {
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to export CSV. Please try again.'))
+      notifyError(err, 'Failed to export CSV. Please try again.')
     }
   }
 
@@ -184,7 +214,7 @@ export const ActivityLogPage: React.FC = () => {
   const handleExportPdf = () => {
     const printWindow = window.open('', '_blank')
     if (!printWindow) {
-      alert('Pop-up blocked. Please allow pop-ups for this site to export PDF.')
+      notifyWarning('Pop-up blocked. Please allow pop-ups for this site to export PDF.')
       return
     }
 
@@ -314,7 +344,6 @@ export const ActivityLogPage: React.FC = () => {
               aria-expanded={isExportDropdownOpen}
               aria-label="Export activity logs"
             >
-              <Download className="h-4 w-4 shrink-0 text-white" />
               <span>Export</span>
               <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90" />
             </Button>
@@ -324,7 +353,7 @@ export const ActivityLogPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExportCsv}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover-item text-left"
                 >
                   <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>Download as CSV</span>
@@ -332,7 +361,7 @@ export const ActivityLogPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExportPdf}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover-item text-left"
                 >
                   <FileText className="w-4 h-4 text-rose-600 shrink-0" />
                   <span>Download as PDF</span>
@@ -342,23 +371,14 @@ export const ActivityLogPage: React.FC = () => {
           </div>
         </div>
       </div>
+
       {/* Error alert banner if refreshing or fetching fails */}
       {loadError && logs.length > 0 && (
-        <div className="p-4 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-center justify-between gap-3 text-rose-800 text-xs sm:text-sm animate-in fade-in duration-200">
-          <div className="flex items-center gap-2.5">
-            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-            <span className="font-medium">{loadError}</span>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={fetchLogs}
-            className="h-8 px-3 text-xs rounded-lg border-rose-300 text-rose-800 hover:bg-rose-100 cursor-pointer"
-          >
-            Retry
-          </Button>
-        </div>
+        <ErrorBanner
+          message={loadError}
+          onRetry={fetchLogs}
+          isRetrying={isRefreshing}
+        />
       )}
 
       {/* 2. Filters Toolbar with Extended Width Search Bar & Date Range Filter */}
@@ -406,106 +426,82 @@ export const ActivityLogPage: React.FC = () => {
 
       {/* Main Table Card */}
       <div className="bg-white rounded-[20px] border border-stroke/30 shadow-xs p-4 sm:p-6 lg:p-8">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[850px] border-collapse text-left">
-            <thead>
-              <tr className="border-b border-stroke/20">
-                <th className="pb-4 pt-1 px-6 w-[25%] text-xs font-bold text-focus uppercase tracking-wider">
-                  Company
-                </th>
-                <th className="pb-4 pt-1 px-6 w-[22%] text-xs font-bold text-focus uppercase tracking-wider">
-                  Action
-                </th>
-                <th className="pb-4 pt-1 px-6 w-[16%] text-xs font-bold text-focus uppercase tracking-wider">
-                  Module
-                </th>
-                <th className="pb-4 pt-1 px-6 w-[17%] text-xs font-bold text-focus uppercase tracking-wider">
-                  Target
-                </th>
-                <th className="pb-4 pt-1 px-6 w-[20%] text-xs font-bold text-focus uppercase tracking-wider">
-                  Time
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-stroke/15">
+        <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <Table className="w-full min-w-[850px] text-left">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="px-6 w-[25%]">Company</TableHead>
+                <TableHead className="px-6 w-[22%]">Action</TableHead>
+                <TableHead className="px-6 w-[16%]">Module</TableHead>
+                <TableHead className="px-6 w-[17%]">Target</TableHead>
+                <TableHead className="px-6 w-[20%]">Time</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {loading ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <tr key={i}>
-                    <td className="py-4 px-6">
-                      <Skeleton className="h-4 w-36 rounded-md" />
-                    </td>
-                    <td className="py-4 px-6">
-                      <Skeleton className="h-4 w-32 rounded-md" />
-                    </td>
-                    <td className="py-4 px-6">
-                      <Skeleton className="h-4 w-20 rounded-md" />
-                    </td>
-                    <td className="py-4 px-6">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </td>
-                    <td className="py-4 px-6">
-                      <Skeleton className="h-4 w-32 rounded-md" />
-                    </td>
-                  </tr>
-                ))
+                <TableSkeleton
+                  rows={8}
+                  columns={[
+                    { width: 'w-36' },
+                    { width: 'w-32' },
+                    { width: 'w-20', shape: 'pill' },
+                    { width: 'w-24' },
+                    { width: 'w-32' },
+                  ]}
+                />
               ) : displayedLogs.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-14 text-center text-muted-fg text-sm">
-                    <div className="flex flex-col items-center justify-center gap-3">
-                      <div className="h-12 w-12 rounded-full bg-surface flex items-center justify-center text-muted-fg/60">
-                        <Clock className="h-6 w-6" />
-                      </div>
-                      <p className="font-semibold text-focus">
-                        {loadError ? 'Unable to load activity logs' : 'No activity logs found'}
-                      </p>
-                      <p className="text-xs text-muted-fg max-w-sm">
-                        {loadError
-                          ? loadError
-                          : hasActiveFilters
-                          ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
-                          : 'No recent system activity records have been recorded yet.'}
-                      </p>
-                      {loadError && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={fetchLogs}
-                          className="mt-2 text-xs font-semibold rounded-lg cursor-pointer"
-                        >
-                          Try again
-                        </Button>
-                      )}
-                      {hasActiveFilters && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={handleClearFilters}
-                          className="mt-2 text-xs font-semibold rounded-lg cursor-pointer"
-                        >
-                          Clear all filters
-                        </Button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
+                <TableEmptyState
+                  colSpan={5}
+                  icon={Clock}
+                  title={
+                    loadError
+                      ? 'Unable to load activity logs'
+                      : 'No activity logs found'
+                  }
+                  description={
+                    loadError
+                      ? loadError
+                      : hasActiveFilters
+                        ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
+                        : 'No recent system activity records have been recorded yet.'
+                  }
+                  action={
+                    loadError ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={fetchLogs}
+                        className="text-xs font-semibold rounded-lg"
+                      >
+                        Try again
+                      </Button>
+                    ) : hasActiveFilters ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleClearFilters}
+                        className="text-xs font-semibold rounded-lg"
+                      >
+                        Clear all filters
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 displayedLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-surface/40 transition-colors">
-                    {/* COMPANY */}
-                    <td className="py-4 px-6 text-sm font-medium text-focus whitespace-nowrap">
+                  <TableRow key={log.id}>
+                    <TableCell className="py-4 px-6 text-sm font-medium text-focus whitespace-nowrap">
                       {log.company}
-                    </td>
-
-                    {/* ACTION */}
-                    <td className="py-4 px-6 text-sm text-focus/90 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="py-4 px-6 text-sm text-focus/90 whitespace-nowrap">
                       <div>{log.action}</div>
-                      <div className="text-[11px] text-muted-fg">by {log.user}</div>
-                    </td>
-
-                    {/* MODULE */}
-                    <td className="py-4 px-6 whitespace-nowrap">
+                      <div className="text-[11px] text-muted-fg">
+                        by {log.user}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-4 px-6 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getModuleBadgeStyle(
                           log.module
@@ -513,63 +509,32 @@ export const ActivityLogPage: React.FC = () => {
                       >
                         {log.module}
                       </span>
-                    </td>
-
-                    {/* TARGET */}
-                    <td className="py-4 px-6 whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="py-4 px-6 whitespace-nowrap">
                       <span className="font-mono text-xs px-2 py-1 rounded-md bg-surface border border-stroke/30 text-focus/80">
                         {log.target}
                       </span>
-                    </td>
-
-                    {/* TIME */}
-                    <td className="py-4 px-6 text-sm text-focus/70 tabular-nums whitespace-nowrap">
+                    </TableCell>
+                    <TableCell className="py-4 px-6 text-sm text-focus/70 tabular-nums whitespace-nowrap">
                       {log.time}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
 
-        {/* Activity Log Pagination */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-6 mt-4 border-t border-stroke/20">
-          <p className="text-xs sm:text-sm text-muted-fg font-normal">
-            Showing {displayedLogs.length} of {filteredLogs.length} activity records
-          </p>
-
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs sm:text-sm text-muted-fg font-normal">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <div className="flex items-center gap-1">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={currentPage <= 1}
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                className="h-8 w-8 p-0 rounded-lg text-focus hover:bg-surface disabled:opacity-40 cursor-pointer"
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={currentPage >= totalPages}
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                className="h-8 w-8 p-0 rounded-lg text-focus hover:bg-surface disabled:opacity-40 cursor-pointer"
-                aria-label="Next page"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredLogs.length}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          pageSize={itemsPerPage}
+          itemLabel="activity records"
+          onPageChange={setCurrentPage}
+        />
       </div>
     </div>
   )

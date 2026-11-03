@@ -19,6 +19,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { TablePagination } from '@/components/common/TablePagination'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
 import {
   Table,
   TableHeader,
@@ -214,9 +216,11 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
 export const TransactionPage: React.FC = () => {
   const { user } = useSession()
   const { activeCompany } = useCompany()
-  const isFinance = user?.role === 'Finance'
-  const isAdmin = user?.role === 'Admin' || user?.role === 'Audit'
-  const isCompanyScoped = !isAdmin && !isFinance
+  const userRole = (user?.role || '').toLowerCase()
+  const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isFinance = userRole === 'finance'
+  const isAdmin = userRole === 'admin'
+  const isCompanyScoped = !isAdmin && !isFinance && !isAudit
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
@@ -1018,7 +1022,6 @@ export const TransactionPage: React.FC = () => {
               aria-expanded={isExportDropdownOpen}
               aria-label="Export transaction records"
             >
-              <Download className="h-4 w-4 shrink-0 text-white" />
               <span>Export</span>
               <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90" />
             </Button>
@@ -1371,18 +1374,22 @@ export const TransactionPage: React.FC = () => {
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   WITHDRAWAL
                 </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  {activeTab === 'deposit' ? 'BALANCE' : 'NET AMOUNT'}
-                </TableHead>
+                {!isAudit && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    {activeTab === 'deposit' ? 'BALANCE' : 'NET AMOUNT'}
+                  </TableHead>
+                )}
                 {activeTab === 'all' && (
                   <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     STATUS
                   </TableHead>
                 )}
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  AUDIT STATUS
-                </TableHead>
-                {isAdmin && (
+                {!isAudit && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    AUDIT STATUS
+                  </TableHead>
+                )}
+                {isAdmin && !isAudit && (
                   <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     ACTION
                   </TableHead>
@@ -1415,14 +1422,11 @@ export const TransactionPage: React.FC = () => {
                   </TableRow>
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={activeTab === 'all' ? (isAdmin ? 12 : 11) : (isAdmin ? 11 : 10)}
-                    className="py-12 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    No {activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found for the selected filter criteria.
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={activeTab === 'all' ? (isAudit ? 9 : isAdmin ? 12 : 11) : (isAudit ? 8 : isAdmin ? 11 : 10)}
+                  title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
+                  message="No records match your active company, date range, or search criteria."
+                />
               ) : (
                 (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).map((tx) => {
                   const { deposit: depositAmt, withdrawal: withdrawalAmt } = getRowAmounts(tx)
@@ -1522,7 +1526,7 @@ export const TransactionPage: React.FC = () => {
                       </TableCell>
 
                       {/* 7b. Balance (Deposit tab: running total per company) or Net Amount (All tab: deposit minus withdrawal) */}
-                      {(() => {
+                      {!isAudit && (() => {
                         const shown =
                           activeTab === 'deposit'
                             ? depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0
@@ -1563,7 +1567,8 @@ export const TransactionPage: React.FC = () => {
                       )}
 
                       {/* 8. Audit Status Badge */}
-                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
+                      {!isAudit && (
+                        <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
                         {tx.auditStatus === 'Verified' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
@@ -1576,9 +1581,10 @@ export const TransactionPage: React.FC = () => {
                           </span>
                         )}
                       </TableCell>
+                      )}
 
                       {/* 9. Action for Admin */}
-                      {isAdmin && (
+                      {isAdmin && !isAudit && (
                         <TableCell
                           className="px-4 py-3.5 text-center whitespace-nowrap"
                           onClick={(e) => e.stopPropagation()}
@@ -1636,88 +1642,40 @@ export const TransactionPage: React.FC = () => {
             <span className="font-semibold text-rose-800">Total Withdrawals</span>
             <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
           </div>
-          <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
-            <span className="font-semibold text-focus">Net Amount</span>
-            <span
-              className={cn(
-                'font-bold tabular-nums',
-                activeTotals.net < 0 ? 'text-rose-600' : 'text-focus'
-              )}
-            >
-              {activeTotals.net < 0 ? `-${formatPHP(Math.abs(activeTotals.net))}` : formatPHP(activeTotals.net)}
-            </span>
-          </div>
+          {!isAudit && (
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
+              <span className="font-semibold text-focus">Net Amount</span>
+              <span
+                className={cn(
+                  'font-bold tabular-nums',
+                  activeTotals.net < 0 ? 'text-rose-600' : 'text-focus'
+                )}
+              >
+                {activeTotals.net < 0 ? `-${formatPHP(Math.abs(activeTotals.net))}` : formatPHP(activeTotals.net)}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* 5. Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {/* Record summary */}
-          <span className="font-medium text-focus/80">
-            {activeTab === 'deposit'
-              ? filteredDepositTransactions.length === 0
-                ? 'Showing 0 of 0 deposit records'
-                : `Showing ${(depositCurrentPage - 1) * itemsPerPage + 1}-${Math.min(
-                    depositCurrentPage * itemsPerPage,
-                    filteredDepositTransactions.length
-                  )} of ${filteredDepositTransactions.length} deposit records`
-              : filteredSalesTransactions.length === 0
-              ? 'Showing 0 of 0 transaction records'
-              : `Showing ${(salesCurrentPage - 1) * itemsPerPage + 1}-${Math.min(
-                  salesCurrentPage * itemsPerPage,
-                  filteredSalesTransactions.length
-                )} of ${filteredSalesTransactions.length} transaction records`}
-          </span>
-
-          {/* Page Indicator & Navigation */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage} out of{' '}
-              {activeTab === 'deposit' ? depositTotalPages : salesTotalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={
-                activeTab === 'deposit' ? depositCurrentPage <= 1 : salesCurrentPage <= 1
-              }
-              onClick={() => {
-                if (activeTab === 'deposit') {
-                  setDepositCurrentPage((p) => Math.max(1, p - 1))
-                } else {
-                  setSalesCurrentPage((p) => Math.max(1, p - 1))
-                }
-              }}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={
-                activeTab === 'deposit'
-                  ? depositCurrentPage >= depositTotalPages
-                  : salesCurrentPage >= salesTotalPages
-              }
-              onClick={() => {
-                if (activeTab === 'deposit') {
-                  setDepositCurrentPage((p) => Math.min(depositTotalPages, p + 1))
-                } else {
-                  setSalesCurrentPage((p) => Math.min(salesTotalPages, p + 1))
-                }
-              }}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage}
+          totalPages={activeTab === 'deposit' ? depositTotalPages : salesTotalPages}
+          totalRecords={activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length}
+          startIndex={((activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) - 1) * itemsPerPage}
+          endIndex={Math.min(
+            (activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) * itemsPerPage,
+            activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length
+          )}
+          itemLabel={activeTab === 'deposit' ? 'deposit records' : 'transaction records'}
+          onPageChange={(p) => {
+            if (activeTab === 'deposit') {
+              setDepositCurrentPage(p)
+            } else {
+              setSalesCurrentPage(p)
+            }
+          }}
+        />
       </div>
 
       {/* 6. Transaction Details Modal (If audited, editing is locked; if not audited, provides edit in Excel sheet) */}

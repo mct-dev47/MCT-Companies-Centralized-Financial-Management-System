@@ -2,15 +2,14 @@ import * as React from 'react'
 import {
   CheckCircle2,
   Pencil,
-  ChevronLeft,
-  ChevronRight,
   AlertCircle,
   FileText,
+  FileSpreadsheet,
   Coins,
   Search,
   X,
   Building2,
-  Download,
+  ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,13 +20,18 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
+import {
+  BackButton,
+  TableEmptyState,
+  TablePagination,
+} from '@/components/common'
 import { formatPHP } from '@/lib/format'
 import {
   getBillPaymentOptions,
   type BillItem,
 } from '@/services/billsService'
 import { formatDisplayDate } from '@/utils/dateUtils'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 function formatPeriodDisplay(periodLabelOrKey?: string): string {
@@ -73,6 +77,21 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = React.useState<string>('')
   const [ledgerPage, setLedgerPage] = React.useState<number>(1)
+  const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState<boolean>(false)
+  const exportDropdownRef = React.useRef<HTMLDivElement>(null)
+
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        exportDropdownRef.current &&
+        !exportDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsExportDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   React.useEffect(() => {
     setLedgerPage(1)
@@ -189,57 +208,56 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
 
   const totalLedgerPages = Math.max(1, Math.ceil(filteredLedgerRows.length / LEDGER_ITEMS_PER_PAGE))
   const safeLedgerPage = Math.min(ledgerPage, totalLedgerPages)
-  const paginatedLedger = filteredLedgerRows.slice(
-    (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE,
-    safeLedgerPage * LEDGER_ITEMS_PER_PAGE
-  )
+  const startIndex = (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE
+  const endIndex = Math.min(safeLedgerPage * LEDGER_ITEMS_PER_PAGE, filteredLedgerRows.length)
+  const paginatedLedger = filteredLedgerRows.slice(startIndex, endIndex)
 
   const handleExportPdf = () => {
     try {
       const printWindow = window.open('', '_blank')
       if (!printWindow) {
-        alert('Please allow pop-ups in your browser to export the Bill Details PDF.')
+        notifyWarning('Please allow pop-ups in your browser to export the Bill Details PDF.')
         return
       }
 
-    const exportDateStr = new Date().toLocaleDateString('en-PH', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    })
+      const exportDateStr = new Date().toLocaleDateString('en-PH', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      })
 
-    const recurrenceRuleText =
-      bill.billingCycle === 'Daily'
-        ? 'Every Day'
-        : bill.billingCycle === 'Yearly'
-        ? `Annual (${new Date((bill.initialDueDate || bill.dueDate) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`
-        : `Every ${dueDay}${dueDay === 1 ? 'st' : dueDay === 2 ? 'nd' : dueDay === 3 ? 'rd' : 'th'} of month`
+      const recurrenceRuleText =
+        bill.billingCycle === 'Daily'
+          ? 'Every Day'
+          : bill.billingCycle === 'Yearly'
+          ? `Annual (${new Date((bill.initialDueDate || bill.dueDate) + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })})`
+          : `Every ${dueDay}${dueDay === 1 ? 'st' : dueDay === 2 ? 'nd' : dueDay === 3 ? 'rd' : 'th'} of month`
 
-    const reminderText =
-      bill.billingCycle === 'Daily'
-        ? 'Daily alert on due date'
-        : `${bill.reminderDaysBefore || 5} days before due date`
+      const reminderText =
+        bill.billingCycle === 'Daily'
+          ? 'Daily alert on due date'
+          : `${bill.reminderDaysBefore || 5} days before due date`
 
-    const latestAmountStr =
-      bill.latestAmount && bill.latestAmount > 0
-        ? formatPHP(bill.latestAmount)
-        : bill.amount && bill.amount > 0
-        ? formatPHP(bill.amount)
-        : '—'
+      const latestAmountStr =
+        bill.latestAmount && bill.latestAmount > 0
+          ? formatPHP(bill.latestAmount)
+          : bill.amount && bill.amount > 0
+          ? formatPHP(bill.amount)
+          : '—'
 
-    const currentDueStr =
-      bill.status === 'Paid'
-        ? '₱0.00'
-        : currentRemainingDue > 0
-        ? formatPHP(currentRemainingDue)
-        : '—'
+      const currentDueStr =
+        bill.status === 'Paid'
+          ? '₱0.00'
+          : currentRemainingDue > 0
+          ? formatPHP(currentRemainingDue)
+          : '—'
 
-    const rowsHtml =
-      ledgerRows.length === 0
-        ? `<tr><td colspan="7" style="padding: 24px; text-align: center; color: #64748B; font-size: 11px; font-style: italic;">No payment transactions recorded yet.</td></tr>`
-        : ledgerRows
-            .map(
-              (r) => `
+      const rowsHtml =
+        ledgerRows.length === 0
+          ? `<tr><td colspan="7" style="padding: 24px; text-align: center; color: #64748B; font-size: 11px; font-style: italic;">No payment transactions recorded yet.</td></tr>`
+          : ledgerRows
+              .map(
+                (r) => `
           <tr>
             <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; font-weight: 600; color: #0F172A;">
               ${formatPeriodDisplay(r.periodLabel || r.date)}
@@ -270,10 +288,10 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
             </td>
           </tr>
         `
-            )
-            .join('')
+              )
+              .join('')
 
-    printWindow.document.write(`
+      printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
@@ -532,8 +550,53 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
       </html>
     `)
       printWindow.document.close()
-    } catch (err: any) {
-      alert(formatUserFriendlyErrorMessage(err, 'Unable to export Bill Details PDF. Please try again.'))
+    } catch (err: unknown) {
+      notifyError(err, 'Unable to export Bill Details PDF. Please try again.')
+    }
+  }
+
+  const handleExportCsv = () => {
+    try {
+      const csvRows: string[][] = [
+        ['MCT Group of Companies - Monthly Bill Statement'],
+        ['Biller Name', `"${bill.billerName.replace(/"/g, '""')}"`],
+        ['Company', `"${bill.company.replace(/"/g, '""')}"`],
+        ['Category', `"${(bill.category || 'General').replace(/"/g, '""')}"`],
+        ['Frequency', `"${(bill.frequency || 'Monthly').replace(/"/g, '""')}"`],
+        ['Account / Reference No.', `"${(bill.accountNumber || bill.referenceNumber || 'N/A').replace(/"/g, '""')}"`],
+        ['Monthly Amount', String(bill.amount || 0)],
+        ['Total Paid', String(totalPaidAmount)],
+        ['Current Remaining Due', String(currentRemainingDue)],
+        ['Status', `"${(bill.status || 'Active').replace(/"/g, '""')}"`],
+        ['Audit Status', `"${(bill.auditStatus || 'Pending Audit').replace(/"/g, '""')}"`],
+        ['Remarks / Notes', `"${(bill.notes || 'None').replace(/"/g, '""')}"`],
+        [],
+        ['Payment Schedule & History'],
+        ['Billing Period', 'Payment Date', 'Status', 'Amount Paid', 'Method', 'Reference No.', 'Remarks']
+      ]
+
+      ledgerRows.forEach((r) => {
+        csvRows.push([
+          `"${(formatPeriodDisplay(r.periodLabel) || '—').replace(/"/g, '""')}"`,
+          `"${(formatDisplayDate(r.date) || '—').replace(/"/g, '""')}"`,
+          `"${r.status}"`,
+          String(r.amount),
+          `"${(r.method || '—').replace(/"/g, '""')}"`,
+          `"${(r.referenceNo || '—').replace(/"/g, '""')}"`,
+          `"${(r.notes || '—').replace(/"/g, '""')}"`
+        ])
+      })
+
+      const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + csvRows.map((e) => e.join(',')).join('\n')
+      const encodedUri = encodeURI(csvContent)
+      const link = document.createElement('a')
+      link.setAttribute('href', encodedUri)
+      link.setAttribute('download', `${bill.billerName.replace(/[^a-zA-Z0-9_-]/g, '_')}_Bill_${new Date().toISOString().slice(0, 10)}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (err: unknown) {
+      notifyError(err, 'Unable to export Bill Details CSV. Please try again.')
     }
   }
 
@@ -542,15 +605,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
       {/* Top Action & Navigation Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onBack}
-            className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-2 shadow-2xs cursor-pointer"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            <span>Back to Bills</span>
-          </Button>
+          <BackButton onClick={onBack} label="Back to Bills" />
         </div>
       </div>
 
@@ -568,15 +623,48 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
 
         {/* Action Buttons in the same row as the Biller Name */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleExportPdf}
-            className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
-          >
-            <Download className="h-3.5 w-3.5 text-focus" />
-            <span>Export PDF</span>
-          </Button>
+          <div ref={exportDropdownRef} className="relative inline-block">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsExportDropdownOpen((prev) => !prev)}
+              className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer select-none"
+            >
+              <span>Export</span>
+              <ChevronDown
+                className={cn(
+                  'h-3.5 w-3.5 text-muted-fg transition-transform duration-200',
+                  isExportDropdownOpen && 'rotate-180'
+                )}
+              />
+            </Button>
+            {isExportDropdownOpen && (
+              <div className="absolute right-0 top-full mt-1.5 w-44 bg-white rounded-2xl border border-stroke/30 shadow-xl p-1.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportDropdownOpen(false)
+                    handleExportCsv()
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-focus hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-muted-fg" />
+                  <span>Export as CSV</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportDropdownOpen(false)
+                    handleExportPdf()
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-focus hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileText className="h-3.5 w-3.5 text-muted-fg" />
+                  <span>Export as PDF</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {!isAudit && (
             <>
@@ -818,13 +906,15 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                 </TableHeader>
                 <TableBody>
                   {paginatedLedger.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={7} className="h-36 text-center text-xs text-muted-fg">
-                        {searchQuery
+                    <TableEmptyState
+                      colSpan={7}
+                      title="No payment records found"
+                      description={
+                        searchQuery
                           ? `No payment records found matching "${searchQuery}".`
-                          : 'No payment transactions recorded yet.'}
-                      </TableCell>
-                    </TableRow>
+                          : 'No payment transactions recorded yet.'
+                      }
+                    />
                   ) : (
                     paginatedLedger.map((entry) => {
                       const badgeStyle =
@@ -878,49 +968,15 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
           </div>
 
           {/* 5-Row Pagination Controls */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pt-2 border-t border-slate-100 text-xs text-muted-fg">
-            <div>
-              Showing{' '}
-              <span className="font-semibold text-focus">
-                {filteredLedgerRows.length === 0
-                  ? 0
-                  : (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE + 1}
-              </span>{' '}
-              to{' '}
-              <span className="font-semibold text-focus">
-                {Math.min(safeLedgerPage * LEDGER_ITEMS_PER_PAGE, filteredLedgerRows.length)}
-              </span>{' '}
-              of <span className="font-semibold text-focus">{filteredLedgerRows.length}</span> entries
-            </div>
-
-            <div className="flex items-center gap-1.5">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={safeLedgerPage <= 1}
-                onClick={() => setLedgerPage((p) => Math.max(1, p - 1))}
-                className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-              >
-                <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                Prev
-              </Button>
-              <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-focus font-semibold text-xs">
-                Page {safeLedgerPage} of {totalLedgerPages}
-              </span>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={safeLedgerPage >= totalLedgerPages}
-                onClick={() => setLedgerPage((p) => Math.min(totalLedgerPages, p + 1))}
-                className="h-8 px-2.5 rounded-lg text-xs cursor-pointer disabled:opacity-40"
-              >
-                Next
-                <ChevronRight className="h-3.5 w-3.5 ml-1" />
-              </Button>
-            </div>
-          </div>
+          <TablePagination
+            currentPage={safeLedgerPage}
+            totalPages={totalLedgerPages}
+            totalItems={filteredLedgerRows.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onPageChange={setLedgerPage}
+            itemLabel="entries"
+          />
         </div>
       </div>
     </div>

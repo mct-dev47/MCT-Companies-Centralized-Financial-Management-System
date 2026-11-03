@@ -34,6 +34,16 @@
     scroll-behavior: smooth;
   }
 
+  /* One cursor rule for every interactive control (Tailwind preflight resets buttons to `default`). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="option"],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
   @keyframes marquee {
     0% {
       transform: translateX(0%);
@@ -74,6 +84,48 @@
     top: 50%;
     transform: translateY(-50%);
     margin: 0;
+  }
+}
+
+/*
+ * Canonical hover states — the single source of truth for interactive hover styling.
+ * Use these classes instead of ad-hoc `hover:bg-*` utilities in components.
+ *   .hover-row        table rows / list rows
+ *   .hover-row-click  table rows that open a detail view
+ *   .hover-card       KPI and content cards
+ *   .hover-card-click cards that navigate or open something
+ *   .hover-item       dropdown options and menu items
+ *   .hover-link       inline text links
+ *   .hover-icon-btn   small icon-only buttons (row actions, calendar arrows)
+ * Buttons get their hover from the variants in `components/ui/button.tsx`.
+ */
+@layer components {
+  .hover-row {
+    @apply transition-colors duration-150 hover:bg-surface/70;
+  }
+
+  .hover-row-click {
+    @apply cursor-pointer transition-colors duration-150 hover:bg-surface/70;
+  }
+
+  .hover-card {
+    @apply transition-all duration-200 hover:border-stroke/40 hover:shadow-md;
+  }
+
+  .hover-card-click {
+    @apply cursor-pointer transition-all duration-200 hover:border-stroke/40 hover:shadow-md;
+  }
+
+  .hover-item {
+    @apply cursor-pointer transition-colors duration-150 hover:bg-surface;
+  }
+
+  .hover-link {
+    @apply cursor-pointer text-primary underline-offset-4 transition-colors duration-150 hover:underline;
+  }
+
+  .hover-icon-btn {
+    @apply cursor-pointer rounded-lg text-muted-fg transition-colors duration-150 hover:bg-surface hover:text-focus;
   }
 }
 

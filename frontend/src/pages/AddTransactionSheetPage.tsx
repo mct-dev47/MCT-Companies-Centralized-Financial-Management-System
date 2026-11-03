@@ -22,6 +22,8 @@ import { receivablesStore, type CustomerType } from '@/services/receivablesStore
 import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { BackButton, ErrorBanner } from '@/components/common'
+import { notifyWarning } from '@/utils/errorUtils'
 import {
   Dialog,
   DialogContent,
@@ -473,7 +475,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   // Prevent editing only if transaction has explicitly been audited and verified by an auditor
   React.useEffect(() => {
     if (editItem && (editItem.auditStatus === 'Verified' || editItem.isAudited)) {
-      alert(
+      notifyWarning(
         'This transaction has already been audited and verified by the auditor. Records cannot be edited.'
       )
       navigate(transactionType === 'Sales' ? '/sales' : '/expense', {
@@ -1124,19 +1126,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         <div className="space-y-6 animate-in fade-in duration-200">
           {/* Header */}
           <div className="space-y-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
+            <BackButton
               onClick={() => {
                 setErrorMessage(null)
                 setCurrentStep('encode')
               }}
-              className="h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold gap-1.5 cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Edit Particulars Spreadsheet</span>
-            </Button>
+              label="Back to Edit Particulars Spreadsheet"
+            />
 
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
@@ -1150,10 +1146,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
           {/* Error Message */}
           {errorMessage && (
-            <div className="flex items-center gap-3 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-medium shadow-xs animate-in fade-in-50 duration-200">
-              <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-              <span>{errorMessage}</span>
-            </div>
+            <ErrorBanner
+              message={errorMessage}
+              onDismiss={() => setErrorMessage(null)}
+            />
           )}
 
           {/* Unpaid Entries Spreadsheet Table */}
@@ -1350,16 +1346,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       {/* 1. Navigation & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
+          <BackButton
             onClick={() => navigate(isSales ? '/sales' : '/expense')}
-            className="h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold gap-1.5 cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to {isSales ? 'Sales' : 'Expense'}</span>
-          </Button>
+            label={`Back to ${isSales ? 'Sales' : 'Expense'}`}
+          />
 
           <div className="mt-1">
             <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
@@ -1394,10 +1384,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
       {/* Error Banner */}
       {errorMessage && (
-        <div className="flex items-center gap-3 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-medium shadow-xs animate-in fade-in-50 duration-200">
-          <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
+        <ErrorBanner
+          message={errorMessage}
+          onDismiss={() => setErrorMessage(null)}
+        />
       )}
 
       {/* 2. Transaction Parameters Card (Date, Company, Payment Method, Deposit Bank, Category, Cheque/Ref) */}

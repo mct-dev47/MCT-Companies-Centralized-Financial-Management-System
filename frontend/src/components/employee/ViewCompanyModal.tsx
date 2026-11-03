@@ -23,7 +23,7 @@ import {
 } from '@/services/employeeService'
 import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 
 interface ViewCompanyModalProps {
@@ -175,7 +175,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to update company. Please try again.')
       setActionError(errorMsg)
       setIsConfirmEditOpen(false)
-      window.alert(errorMsg)
+      notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -192,7 +192,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please try again.')
       setActionError(errorMsg)
       setIsConfirmDeleteOpen(false)
-      window.alert(errorMsg)
+      notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
     }

@@ -839,7 +839,7 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-2.5 border-t border-slate-100 shrink-0">
+<div className="flex items-center justify-between pt-2.5 border-t border-slate-100 shrink-0">
           <div className="text-[11px] text-muted-fg">
             Food credit ledger synchronized in real time with Sales &amp; Bank records.
           </div>
