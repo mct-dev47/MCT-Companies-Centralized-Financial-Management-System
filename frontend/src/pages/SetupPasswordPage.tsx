@@ -4,6 +4,7 @@ import { ShieldCheck, Lock, Eye, EyeOff, CheckCircle2, XCircle, ArrowRight } fro
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const SetupPasswordPage: React.FC = () => {
   const navigate = useNavigate()
@@ -86,8 +87,8 @@ export const SetupPasswordPage: React.FC = () => {
       }
 
       setSuccess(true)
-    } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred. Please try again.')
+    } catch (err: unknown) {
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to set up password. Please try again or request a new invitation.'))
     } finally {
       setIsSubmitting(false)
     }

@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Loader2, AlertCircle, Check, ShieldCheck } from 'lucide-react'
@@ -60,11 +61,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
       await verify2FA(code)
       setIsSuccess(true)
     } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : 'Invalid authentication code. Please try again.'
-      setError(message)
+      setError(formatUserFriendlyErrorMessage(err, 'Invalid authentication code. Please try again.'))
       if (inputRef.current) {
         inputRef.current.focus()
       }
@@ -224,7 +221,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                       setCode('')
                       resendCountdown.start(result.resendAvailableIn)
                     } catch (err: unknown) {
-                      setError(err instanceof Error ? err.message : 'Unable to resend the code.')
+                      setError(formatUserFriendlyErrorMessage(err, 'Unable to resend the code.'))
                     }
                   }}
                   disabled={!resendCountdown.isExpired || isLoading}

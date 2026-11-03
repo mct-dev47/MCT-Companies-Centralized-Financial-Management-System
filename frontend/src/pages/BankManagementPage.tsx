@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import {
   Download,
@@ -325,7 +326,7 @@ export const BankManagementPage: React.FC = () => {
       websocketService.emitLocal('BANK_UPDATED', { accountId: updatedAccount.id })
       setIsEditModalOpen(false)
     } catch (err: any) {
-      alert(err.message || 'Failed to update bank account.')
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to update bank account.'))
     } finally {
       setIsSubmittingEdit(false)
     }
@@ -559,7 +560,7 @@ export const BankManagementPage: React.FC = () => {
         })
       }
     } catch (err: any) {
-      alert(err.message || 'Failed to create bank account.')
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to create bank account.'))
     } finally {
       setIsSubmittingBank(false)
     }
@@ -602,7 +603,7 @@ export const BankManagementPage: React.FC = () => {
         referenceNo: '',
       })
     } catch (err: any) {
-      alert(err.message || 'Failed to process deposit.')
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to process deposit.'))
     } finally {
       setIsSubmittingDeposit(false)
     }
@@ -645,7 +646,7 @@ export const BankManagementPage: React.FC = () => {
         category: 'Cheque',
       })
     } catch (err: any) {
-      alert(err.message || 'Failed to process withdrawal.')
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to process withdrawal.'))
     } finally {
       setIsSubmittingWithdraw(false)
     }

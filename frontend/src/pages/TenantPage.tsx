@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -149,7 +150,7 @@ export const TenantPage: React.FC = () => {
       // Keep the open lease in step with what the server has (or close it if someone deleted it)
       setActiveTenant((prev) => (prev ? list.find((t) => t.id === prev.id) ?? null : prev))
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Could not load tenant leases.')
+      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not load tenant leases.'))
     } finally {
       setIsLoading(false)
     }
@@ -201,7 +202,7 @@ export const TenantPage: React.FC = () => {
   }
 
   // Turn a server error into one clear message for the banner
-  const messageOf = (err: unknown): string => (err instanceof Error ? err.message : 'The change could not be saved.')
+  const messageOf = (err: unknown): string => formatUserFriendlyErrorMessage(err, 'The change could not be saved.')
 
   // Audit review: saved on the server, which records who reviewed and when (spec 0017)
   const saveAudit = async (lease: TenantLease, status: 'Verified' | 'Flagged') => {

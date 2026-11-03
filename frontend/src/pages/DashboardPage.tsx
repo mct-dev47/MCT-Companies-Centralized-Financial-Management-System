@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { Link } from 'react-router-dom'
 import {
@@ -167,7 +168,7 @@ export const DashboardPage: React.FC = () => {
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
         if (isMounted) {
-          setLoadError(err instanceof Error ? err.message : 'The dashboard data could not be loaded.')
+          setLoadError(formatUserFriendlyErrorMessage(err, 'The dashboard data could not be loaded.'))
         }
       } finally {
         if (isMounted) {

@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { Download, Search, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -49,7 +50,7 @@ export const CompanyLoansPage: React.FC = () => {
       setGroups(result.items)
       setTotal(result.total)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load company loans.')
+      setError(formatUserFriendlyErrorMessage(err, 'Unable to load company loans.'))
     } finally {
       setLoading(false)
     }
@@ -76,7 +77,7 @@ export const CompanyLoansPage: React.FC = () => {
         endDate: filters.date || undefined,
       })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to export company loans.')
+      setError(formatUserFriendlyErrorMessage(err, 'Unable to export company loans.'))
     }
   }
   const openGroupDetails = async (group: CompanyLoanGroup) => {
@@ -103,7 +104,7 @@ export const CompanyLoansPage: React.FC = () => {
           .sort((a, b) => a.paymentDate.localeCompare(b.paymentDate))
       )
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load the repayment timeline.')
+      setError(formatUserFriendlyErrorMessage(err, 'Unable to load the repayment timeline.'))
     }
   }
 

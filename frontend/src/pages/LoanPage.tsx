@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -609,7 +610,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       setLoans((prev) => prev.filter((l) => l.id !== deleteConfirmLoan.id))
       setDeleteConfirmLoan(null)
     } catch (err: any) {
-      alert(err?.message || 'Failed to delete loan')
+      alert(formatUserFriendlyErrorMessage(err, 'Failed to delete loan. Please try again.'))
     } finally {
       setIsDeleting(false)
     }

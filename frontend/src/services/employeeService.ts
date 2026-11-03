@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import type { AuthorizedCompany } from '@/config/centralizedCompanies'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
@@ -101,20 +102,16 @@ function getAuthHeaders(): HeadersInit {
 async function getApiError(response: Response): Promise<string> {
   try {
     const body = await response.json()
-    if (typeof body?.detail === 'string') return body.detail
-    if (Array.isArray(body?.detail)) {
-      const messages = body.detail
-        .map((item: { loc?: unknown[]; msg?: string }) => {
-          const field = item.loc?.at(-1)
-          return field && item.msg ? `${String(field)}: ${item.msg}` : item.msg
-        })
-        .filter(Boolean)
-      if (messages.length > 0) return messages.join('; ')
-    }
+    return formatUserFriendlyErrorMessage(
+      { status: response.status, ...body },
+      `Request failed (${response.status})`
+    )
   } catch {
-    // Use the generic fallback below when the response is not JSON.
+    return formatUserFriendlyErrorMessage(
+      { status: response.status },
+      `Request failed (${response.status})`
+    )
   }
-  return `Request failed (${response.status})`
 }
 
 async function mapApiResponse<T>(
