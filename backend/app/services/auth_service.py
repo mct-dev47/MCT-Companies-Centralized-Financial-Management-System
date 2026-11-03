@@ -369,15 +369,6 @@ def get_current_user_info(db: Session, user_id: int) -> UserResponse:
         )
     return UserService(db).to_response(user)
 
-def _unused_legacy_get_user_info():
-    from app.services.user_service import UserService
-    user = UserService(db).get_user(user_id)
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found",
-        )
-    return UserService(db).to_response(user)
 
 # login user with encrypted payload support
 def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[LoginChallengeResponse, str]:
