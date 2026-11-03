@@ -55,7 +55,10 @@ def list_bank_accounts(
         c.company_name.lower()
         for c in db.query(Company).filter(Company.company_id.in_(user_company_ids)).all()
     }
-    return [a for a in accounts if (a.company or "").lower() in assigned_names]
+    return [
+        a for a in accounts
+        if (getattr(a, "company_name", None) or getattr(a, "company", "") or "").lower() in assigned_names
+    ]
 
 
 @router.get("/{account_id}", response_model=BankAccountOut, summary="Get single bank account with transactions")
@@ -70,8 +73,9 @@ def get_bank_account(
         raise HTTPException(status_code=404, detail="Bank account not found.")
 
     user_role = (current_user.get("role") or "").lower()
-    if user_role not in ("finance", "audit", "auditor") and account.company:
-        comp = resolve_company(db, company_name=account.company)
+    comp_name = getattr(account, "company_name", getattr(account, "company", None))
+    if user_role not in ("finance", "audit", "auditor") and comp_name:
+        comp = resolve_company(db, company_name=comp_name)
         check_company_access(current_user, comp.company_id)
 
     return account
@@ -85,7 +89,14 @@ def create_bank_account(
 ):
     service = BankService(db)
     account = service.create_account(data)
-    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": account.id}})
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {
+            "account_id": account.id,
+            "company_id": account.company_id,
+            "action": "created",
+        }
+    })
     return account
 
 
@@ -100,7 +111,14 @@ def update_bank_account(
     account = service.update_account(account_id, data)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
-    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": account_id}})
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {
+            "account_id": account_id,
+            "company_id": account.company_id,
+            "action": "updated",
+        }
+    })
     return account
 
 
@@ -111,10 +129,21 @@ def delete_bank_account(
     db: Session = Depends(get_db),
 ):
     service = BankService(db)
+    account = service.get_account(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Bank account not found.")
+    company_id = account.company_id
     success = service.delete_account(account_id)
     if not success:
         raise HTTPException(status_code=404, detail="Bank account not found.")
-    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": account_id}})
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {
+            "account_id": account_id,
+            "company_id": company_id,
+            "action": "deleted",
+        }
+    })
     return None
 
 
@@ -129,13 +158,22 @@ def deposit_to_bank_account(
     account = service.get_account(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
-    if account.company:
-        comp = resolve_company(db, company_name=account.company)
+    comp_name = getattr(account, "company_name", getattr(account, "company", None))
+    if comp_name:
+        comp = resolve_company(db, company_name=comp_name)
         check_company_access(current_user, comp.company_id)
 
     try:
-        updated_account, _ = service.deposit(account_id, req)
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": account_id}})
+        updated_account, tx = service.deposit(account_id, req)
+        ws_manager.broadcast_sync({
+            "type": "BANK_UPDATED",
+            "payload": {
+                "account_id": account_id,
+                "company_id": updated_account.company_id,
+                "transaction_id": tx.id,
+                "action": "deposit",
+            }
+        })
         return updated_account
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -152,13 +190,22 @@ def withdraw_from_bank_account(
     account = service.get_account(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
-    if account.company:
-        comp = resolve_company(db, company_name=account.company)
+    comp_name = getattr(account, "company_name", getattr(account, "company", None))
+    if comp_name:
+        comp = resolve_company(db, company_name=comp_name)
         check_company_access(current_user, comp.company_id)
 
     try:
-        updated_account, _ = service.withdraw(account_id, req)
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": account_id}})
+        updated_account, tx = service.withdraw(account_id, req)
+        ws_manager.broadcast_sync({
+            "type": "BANK_UPDATED",
+            "payload": {
+                "account_id": account_id,
+                "company_id": updated_account.company_id,
+                "transaction_id": tx.id,
+                "action": "withdrawal",
+            }
+        })
         return updated_account
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

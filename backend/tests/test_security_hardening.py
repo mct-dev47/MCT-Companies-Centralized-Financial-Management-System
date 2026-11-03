@@ -97,3 +97,40 @@ def test_otp_cookie_secure_production_flag(monkeypatch):
     is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     assert is_secure is True
 
+
+def test_login_rate_limit_non_local_ip_handling(monkeypatch):
+    """Verify rate limit functions execute safely without crashing for non-local IP addresses."""
+    from app.services.auth_service import _ensure_ip_available, _record_failed_login, _reset_ip_attempts
+    from app.db.session import SessionLocal
+
+    external_ip = "198.51.100.42"
+    with SessionLocal() as db:
+        # Should not throw AttributeError when db session is passed
+        _ensure_ip_available(db, external_ip)
+        _record_failed_login(db, external_ip, email="test@example.com")
+        _reset_ip_attempts(db, external_ip)
+
+    # Should also safely self-resolve session if db=None is passed
+    _ensure_ip_available(None, external_ip)
+    _record_failed_login(None, external_ip, email="test@example.com")
+    _reset_ip_attempts(None, external_ip)
+
+
+def test_websocket_claims_safe_company_ids_parsing():
+    """Verify WebSocket ConnectionInfo handles non-numeric or empty company IDs safely."""
+    from app.core.websocket import ConnectionInfo
+    from unittest.mock import MagicMock
+
+    claims = {
+        "sub": "42",
+        "role": "supervisor",
+        "company_id": "1",
+        "company_ids": ["1", "invalid", "", None, 2],
+    }
+    conn_info = ConnectionInfo(MagicMock(), claims)
+    assert conn_info.user_id == 42
+    assert conn_info.company_ids == {1, 2}
+    assert conn_info.can_receive(1) is True
+    assert conn_info.can_receive(2) is True
+    assert conn_info.can_receive(3) is False
+

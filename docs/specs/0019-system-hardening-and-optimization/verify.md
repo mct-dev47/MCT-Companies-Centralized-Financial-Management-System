@@ -4,24 +4,24 @@ _Steps derived from spec 0019 acceptance criteria. `/check verify` runs these; `
 
 ## UI / manual
 
-- [ ] Submit login request on frontend without `VITE_PAYLOAD_ENCRYPTION_KEY` → payload transmits cleanly over HTTPS and signs in successfully → AC-9
-- [ ] Connect WebSocket client to `/ws` without authorization token → connection rejected with closure code 1008 → AC-3
-- [ ] Connect WebSocket client as Supervisor for Company 1, trigger event for Company 2 → socket receives zero messages from Company 2 → AC-4
-- [ ] Make unauthenticated request to `GET /api/v1/users/1/picture` → returns HTTP 401 Unauthorized → AC-8
-- [ ] Upload non image file disguised as picture (`.png` extension with text content) → returns HTTP 400 or 422 with invalid image header error → AC-8
-- [ ] Post logout request with valid bearer token → token hash recorded in `revoked_tokens` table and subsequent use yields HTTP 401 → AC-7
-- [ ] Submit invalid password repeatedly for a single IP address → lockout recorded in `login_rate_limits` table yielding HTTP 429 → AC-7
+- [x] Submit login request on frontend without `VITE_PAYLOAD_ENCRYPTION_KEY` → payload transmits cleanly over HTTPS and signs in successfully → AC-9
+- [x] Connect WebSocket client to `/ws` without authorization token → connection rejected with closure code 1008 → AC-3
+- [x] Connect WebSocket client as Supervisor for Company 1, trigger event for Company 2 → socket receives zero messages from Company 2 → AC-4
+- [x] Make unauthenticated request to `GET /api/v1/users/1/picture` → returns HTTP 401 Unauthorized → AC-8
+- [x] Upload non image file disguised as picture (`.png` extension with text content) → returns HTTP 400 or 422 with invalid image header error → AC-8
+- [x] Post logout request with valid bearer token → token hash recorded in `revoked_tokens` table and subsequent use yields HTTP 401 → AC-7
+- [x] Submit invalid password repeatedly for a single IP address → lockout recorded in `login_rate_limits` table yielding HTTP 429 → AC-7
 
 ## Commands
 
-- [ ] `pytest backend/tests` → exits 0 with 48 of 48 tests passing clean → AC-10
-- [ ] `pytest backend/tests/test_rbac_permissions.py` → verifies central admin, supervisor, and auditor permission boundaries → AC-1, AC-2
-- [ ] `pytest backend/tests/test_expenses.py` → records expense via SQLAlchemy session with exact Decimal precision → AC-5, AC-6
-- [ ] `pytest backend/tests/test_notifications.py` → verifies scoped notifications and unread counter queries → AC-4, AC-10
-- [ ] `pytest backend/tests/test_lending_late_payment.py` → verifies lending service methods and schedules with Decimal precision → AC-6, AC-10
-- [ ] `pytest backend/tests/test_tenants.py` → verifies tenant CRUD and lease payment histories without SQLite split brain → AC-5, AC-10
-- [ ] `python -c "from app.core.config import Settings; Settings(SUPABASE_JWT_SECRET='short')"` → raises ValidationError aborting startup → AC-1
-- [ ] `npm --prefix frontend run build` → builds clean production bundle with zero TypeScript compilation errors → AC-9
+- [x] `pytest backend/tests` → exits 0 with 48 of 48 tests passing clean → AC-10
+- [x] `pytest backend/tests/test_rbac_permissions.py` → verifies central admin, supervisor, and auditor permission boundaries → AC-1, AC-2
+- [x] `pytest backend/tests/test_expenses.py` → records expense via SQLAlchemy session with exact Decimal precision → AC-5, AC-6
+- [x] `pytest backend/tests/test_notifications.py` → verifies scoped notifications and unread counter queries → AC-4, AC-10
+- [x] `pytest backend/tests/test_lending_late_payment.py` → verifies lending service methods and schedules with Decimal precision → AC-6, AC-10
+- [x] `pytest backend/tests/test_tenants.py` → verifies tenant CRUD and lease payment histories without SQLite split brain → AC-5, AC-10
+- [x] `python -c "from app.core.config import Settings; Settings(SUPABASE_JWT_SECRET='short')"` → raises ValidationError aborting startup → AC-1
+- [x] `npm --prefix frontend run build` → builds clean production bundle with zero TypeScript compilation errors → AC-9
 
 ## Acceptance criteria coverage
 

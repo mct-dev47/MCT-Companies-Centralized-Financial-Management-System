@@ -30,8 +30,9 @@ def login(
     login_data: LoginRequest,
     request: Request,
     response: Response,
+    db: Session = Depends(get_db),
 ):
-    result, cookie = login_user(db=None, login_data=login_data, ip_address=request.client.host if request.client else "unknown")
+    result, cookie = login_user(db=db, login_data=login_data, ip_address=request.client.host if request.client else "unknown")
     is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result
@@ -41,8 +42,9 @@ def verify_otp(
     otp_data: VerifyOtpRequest,
     request: Request,
     response: Response,
+    db: Session = Depends(get_db),
 ):
-    result = verify_login_otp(db=None, otp_data=otp_data, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
+    result = verify_login_otp(db=db, otp_data=otp_data, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
     response.delete_cookie("mct_login_otp")
     return result
 
@@ -50,8 +52,9 @@ def verify_otp(
 def resend_otp(
     request: Request,
     response: Response,
+    db: Session = Depends(get_db),
 ):
-    result, cookie = resend_login_otp(db=None, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
+    result, cookie = resend_login_otp(db=db, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
     is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result

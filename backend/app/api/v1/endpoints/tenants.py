@@ -142,9 +142,14 @@ def delete_lease(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
-    row = TenantService(db).delete_lease(lease_id, current_user)
-    _log(db, request, current_user, AuditAction.TENANT_LEASE_DELETED, row)
-    _notify("TENANTS_UPDATED", lease_id)
+    try:
+        row = TenantService(db).delete_lease(lease_id, current_user)
+        _log(db, request, current_user, AuditAction.TENANT_LEASE_DELETED, row)
+        _notify("TENANTS_UPDATED", lease_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        raise
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
