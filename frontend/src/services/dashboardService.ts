@@ -69,26 +69,30 @@ export const dashboardService = {
   },
 
   /** Throws when the data cannot be read, so the page can say so instead of showing zeros. */
-  async getDashboardData(filters?: { company?: string }): Promise<DashboardData> {
-    const cacheKey = filters?.company || 'All Companies'
+  async getDashboardData(filters?: { company?: string; companies?: string[] }): Promise<DashboardData> {
+    const isSingleCompany =
+      !!filters?.company && filters.company !== 'All Companies'
+        ? filters.company
+        : filters?.companies && filters.companies.length === 1 && filters.companies[0] !== 'All Companies'
+        ? filters.companies[0]
+        : undefined
+
+    const cacheKey = isSingleCompany || 'All Companies'
     const cached = dashboardCache.get(cacheKey)
     if (cached && Date.now() - cached.timestamp < DASHBOARD_CACHE_TTL) {
       return cached.data
     }
 
-    const isCompanySpecific = !!filters?.company && filters.company !== 'All Companies'
-    const companyFilter = isCompanySpecific ? filters!.company : undefined
-
     const [sales, expenses] = await Promise.all([
-      salesService.getSales(companyFilter),
-      expenseService.getExpenses({ company: companyFilter }),
+      salesService.getSales(isSingleCompany),
+      expenseService.getExpenses({ company: isSingleCompany }),
     ])
     let transactions: DashboardTransactionItem[] = [
       ...sales.map((s) => salesService.toDashboardTransaction(s)),
       ...expenses.map((e) => expenseService.toDashboardTransaction(e)),
     ]
-    if (isCompanySpecific) {
-      transactions = transactions.filter((t) => isCompanyMatch(t.company, filters?.company))
+    if (isSingleCompany) {
+      transactions = transactions.filter((t) => isCompanyMatch(t.company, isSingleCompany))
     }
 
     // Latest first

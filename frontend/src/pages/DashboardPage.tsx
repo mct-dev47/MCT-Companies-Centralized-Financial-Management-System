@@ -28,7 +28,6 @@ import {
   type DashboardData,
 } from '@/services/dashboardService'
 import { pettyCashService } from '@/services/pettyCashService'
-import { loanService } from '@/services/loanService'
 import { salesService } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
 import { websocketService } from '@/services/websocketService'
@@ -36,7 +35,7 @@ import { formatPHP } from '@/lib/format'
 import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { useSession } from '@/hooks/useSession'
-import { useCompany, ALL_COMPANIES_LIST } from '@/context/CompanyContext'
+import { useCompany } from '@/context/CompanyContext'
 
 export const DashboardPage: React.FC = () => {
   const { user } = useSession()
@@ -97,27 +96,58 @@ export const DashboardPage: React.FC = () => {
     }
   }, [isAdmin])
 
+  const initialCompany = activeCompany || (userAssignedCompanies[0] || 'All Companies')
   const [filters, setFilters] = React.useState<DashboardFilterState>(() => ({
     dateRange: {
       startDate: null,
       endDate: null,
       label: 'All Dates',
     },
-    company: activeCompany || (userAssignedCompanies[0] || 'All Companies'),
+    companies: [initialCompany],
+    company: initialCompany,
   }))
 
-  // Keep filters.company in sync with global activeCompany from context
+  // Selected companies helper
+  const selectedCompanies = React.useMemo<string[]>(() => {
+    if (Array.isArray(filters.companies) && filters.companies.length > 0) {
+      return filters.companies
+    }
+    if (filters.company) {
+      return [filters.company]
+    }
+    return ['All Companies']
+  }, [filters.companies, filters.company])
+
+  const isAllCompanies =
+    selectedCompanies.length === 0 ||
+    selectedCompanies.includes('All Companies')
+
+  // Keep filters in sync if activeCompany changes externally
   React.useEffect(() => {
     if (activeCompany) {
-      setFilters((prev) =>
-        prev.company !== activeCompany ? { ...prev, company: activeCompany } : prev
-      )
+      setFilters((prev) => {
+        const currentPrimary = prev.companies?.length === 1 ? prev.companies[0] : prev.company
+        if (currentPrimary !== activeCompany) {
+          return {
+            ...prev,
+            companies: [activeCompany],
+            company: activeCompany,
+          }
+        }
+        return prev
+      })
     }
   }, [activeCompany])
 
   const [loading, setLoading] = React.useState<boolean>(true)
   const [data, setData] = React.useState<DashboardData | null>(null)
   const [loadError, setLoadError] = React.useState<string>('')
+
+  // Stable key for caching and reloading
+  const companiesFilterKey = React.useMemo(() => {
+    if (isAllCompanies) return 'All Companies'
+    return [...selectedCompanies].sort().join('|')
+  }, [isAllCompanies, selectedCompanies])
 
   // Fetch initial dashboard data
   React.useEffect(() => {
@@ -126,8 +156,9 @@ export const DashboardPage: React.FC = () => {
     const loadData = async () => {
       setLoading(true)
       try {
+        const singleCompany = !isAllCompanies && selectedCompanies.length === 1 ? selectedCompanies[0] : undefined
         const result = await dashboardService.getDashboardData({
-          company: filters.company,
+          company: singleCompany,
         })
         if (isMounted) {
           setData(result)
@@ -150,10 +181,9 @@ export const DashboardPage: React.FC = () => {
     return () => {
       isMounted = false
     }
-  }, [filters.company])
+  }, [companiesFilterKey])
 
-  // Realtime: reload quietly when another user changes data (spec 0018). Each service keeps a short
-  // cache, so the caches are cleared first to read what the database has now.
+  // Realtime: reload quietly when another user changes data (spec 0018)
   React.useEffect(() => {
     let mounted = true
     let timer: number | null = null
@@ -164,7 +194,8 @@ export const DashboardPage: React.FC = () => {
         salesService.invalidateCache()
         expenseService.invalidateCache()
         try {
-          const result = await dashboardService.getDashboardData({ company: filters.company })
+          const singleCompany = !isAllCompanies && selectedCompanies.length === 1 ? selectedCompanies[0] : undefined
+          const result = await dashboardService.getDashboardData({ company: singleCompany })
           if (mounted) {
             setData(result)
             setLoadError('')
@@ -182,9 +213,9 @@ export const DashboardPage: React.FC = () => {
       if (timer) window.clearTimeout(timer)
       unsubs.forEach((off) => off())
     }
-  }, [filters.company])
+  }, [companiesFilterKey])
 
-  // Petty cash wallet(s) for the selected company; null when the backend is unavailable
+  // Petty cash wallet(s) for the selected companies; null when backend is unavailable
   const [pettyCash, setPettyCash] = React.useState<{
     balance: number
     lowCount: number
@@ -195,43 +226,56 @@ export const DashboardPage: React.FC = () => {
   React.useEffect(() => {
     let isMounted = true
     setPettyCashLoading(true)
-    const company = filters.company
-    const request =
-      company === 'All Companies'
-        ? pettyCashService.getAllSummaries()
-        : pettyCashService.getSummary(company).then((s) => [s])
-    request
-      .then((summaries) => {
-        if (!isMounted) return
-        setPettyCash({
-          balance: summaries.reduce((sum, s) => sum + s.balance, 0),
-          lowCount: summaries.filter((s) => s.isLow).length,
-          walletCount: summaries.length,
+
+    if (isAllCompanies) {
+      pettyCashService.getAllSummaries()
+        .then((summaries) => {
+          if (!isMounted) return
+          setPettyCash({
+            balance: summaries.reduce((sum, s) => sum + s.balance, 0),
+            lowCount: summaries.filter((s) => s.isLow).length,
+            walletCount: summaries.length,
+          })
         })
-      })
-      .catch(() => isMounted && setPettyCash(null))
-      .finally(() => {
-        if (isMounted) setPettyCashLoading(false)
-      })
+        .catch(() => isMounted && setPettyCash(null))
+        .finally(() => {
+          if (isMounted) setPettyCashLoading(false)
+        })
+    } else {
+      pettyCashService.getAllSummaries()
+        .then((summaries) => {
+          if (!isMounted) return
+          const matched = summaries.filter((s) =>
+            selectedCompanies.some((c) => isCompanyMatch(s.companyName, c))
+          )
+          setPettyCash({
+            balance: matched.reduce((sum, s) => sum + s.balance, 0),
+            lowCount: matched.filter((s) => s.isLow).length,
+            walletCount: matched.length,
+          })
+        })
+        .catch(() => isMounted && setPettyCash(null))
+        .finally(() => {
+          if (isMounted) setPettyCashLoading(false)
+        })
+    }
     return () => {
       isMounted = false
     }
-  }, [filters.company])
+  }, [companiesFilterKey])
 
   // Filter transactions strictly on client side by company and date range, sorted latest first
   const filteredTransactions = React.useMemo(() => {
     if (!data?.recentTransactions) return []
 
-    const targetCompany = filters.company
-
     return data.recentTransactions
       .filter((tx) => {
-        // 1. Company filter
-        if (
-          targetCompany !== 'All Companies' &&
-          !isCompanyMatch(tx.company, targetCompany)
-        ) {
-          return false
+        // 1. Company filter (one or more selected companies)
+        if (!isAllCompanies) {
+          const match = selectedCompanies.some((targetComp) =>
+            isCompanyMatch(tx.company, targetComp)
+          )
+          if (!match) return false
         }
 
         // 2. Date range filter
@@ -248,7 +292,7 @@ export const DashboardPage: React.FC = () => {
         if (cmp !== 0) return cmp
         return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
       })
-  }, [data?.recentTransactions, filters.company, filters.dateRange])
+  }, [data?.recentTransactions, isAllCompanies, selectedCompanies, filters.dateRange])
 
   // Dynamic KPI calculations responding to filtered transactions:
   // Total Cash: actual cash inflow/deposits collected from sales
@@ -306,8 +350,13 @@ export const DashboardPage: React.FC = () => {
             companies={companyList}
             onFiltersChange={(newFilters) => {
               setFilters(newFilters)
-              if (!isCompanyScoped && newFilters.company !== filters.company) {
-                setActiveCompany(newFilters.company)
+              if (!isCompanyScoped) {
+                const newSelected = newFilters.companies || []
+                if (newSelected.length === 1 && newSelected[0] !== 'All Companies') {
+                  setActiveCompany(newSelected[0])
+                } else if (newSelected.includes('All Companies')) {
+                  setActiveCompany('All Companies')
+                }
               }
             }}
             isCompanyScoped={isCompanyScoped}
@@ -327,14 +376,6 @@ export const DashboardPage: React.FC = () => {
         </div>
       )}
 
-      {/* 3. KPI Cards (Admin, Finance, and Audit):
-          1. Total Expenses
-          2. Total Income
-          3. Net Income (Income - Expenses)
-          4. Overdue / Due Soon
-          5. Petty Cash Balance (current wallet balance, not date-filtered)
-          All other values respond dynamically to the selected company and date range.
-      */}
       {/* 3. KPI Cards:
           Admin: Only Company and User KPI cards
           Other roles: Income, Expenses, Net Income, Overdue / Due Soon, and Petty Cash
@@ -453,7 +494,13 @@ export const DashboardPage: React.FC = () => {
               Updates when date range changes. Max 10 rows per page with working pagination.
           */}
           <RecentTransactionsCard
-            companyName={filters.company}
+            companyName={
+              isAllCompanies
+                ? 'All Companies'
+                : selectedCompanies.length === 1
+                ? selectedCompanies[0]
+                : `${selectedCompanies.length} Companies`
+            }
             transactions={filteredTransactions}
           />
         </>
