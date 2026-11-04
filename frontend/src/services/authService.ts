@@ -14,6 +14,7 @@ export interface User {
   email: string
   role: UserRole | string
   assignedCompany?: string
+  assignedCompanies?: string[]
   companyId?: number
   companyIds?: number[]
   companyNames?: string[]

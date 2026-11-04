@@ -53,7 +53,7 @@ export const SignInForm: React.FC = () => {
           navigate('/employee', { replace: true })
         } else if (assignedCount >= 2) {
           navigate('/centralized-auth', { replace: true })
-        } else if (role === 'finance') {
+        } else if (role === 'finance' || role === 'audit' || role.includes('audit')) {
           navigate('/centralized-auth', { replace: true })
         } else {
           const singleComp = response.user.companyNames?.[0] || response.user.companyName

@@ -1,5 +1,23 @@
 import { formatUserFriendlyErrorMessage } from '../utils/errorUtils'
 
+function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return (
+    sessionStorage.getItem('mct_access_token') ||
+    sessionStorage.getItem('auth_token') ||
+    localStorage.getItem('auth_token')
+  )
+}
+
+function getAuthHeaders(extraHeaders?: HeadersInit): HeadersInit {
+  const token = getAuthToken()
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(extraHeaders || {}),
+  }
+}
+
 export interface DailyPaymentRecord {
   id: string
   transactionRefNo?: string
@@ -252,7 +270,7 @@ class LendingServiceGateway {
     try {
       const res = await fetch('/api/v1/lending/calculate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           principal: params.principal,
           interest_rate: params.interestRate,
@@ -306,7 +324,7 @@ class LendingServiceGateway {
   async getFacilities(companyId?: number): Promise<LendingFacility[]> {
     try {
       const query = companyId ? `?company_id=${companyId}` : ''
-      const res = await fetch(`/api/v1/lending/borrowers${query}`)
+      const res = await fetch(`/api/v1/lending/borrowers${query}`, { headers: getAuthHeaders() })
       if (res.ok) {
         const data = await res.json()
         if (Array.isArray(data)) {
@@ -327,7 +345,7 @@ class LendingServiceGateway {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
     if (!isNaN(numId) && numId > 0) {
       try {
-        const res = await fetch(`/api/v1/lending/borrowers/${numId}`)
+        const res = await fetch(`/api/v1/lending/borrowers/${numId}`, { headers: getAuthHeaders() })
         if (res.ok) {
           const data = await res.json()
           if (data && data.id) {
@@ -350,7 +368,7 @@ class LendingServiceGateway {
     try {
       const res = await fetch('/api/v1/lending/borrowers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           borrower_name: payload.borrowerName,
           borrower_contact: payload.borrowerContact || '',
@@ -406,7 +424,7 @@ class LendingServiceGateway {
     try {
       const res = await fetch('/api/v1/lending/borrowers/' + numId, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           borrower_name: payload.borrowerName,
           loan_amount: payload.loanAmount,
@@ -448,6 +466,7 @@ class LendingServiceGateway {
     try {
       const res = await fetch('/api/v1/lending/borrowers/' + numId, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       })
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}))
@@ -478,7 +497,7 @@ class LendingServiceGateway {
     const numId = parseInt(String(facilityId).replace(/\D/g, ''), 10)
     if (!isNaN(numId) && numId > 0) {
       try {
-        const res = await fetch(`/api/v1/lending/ledger/${numId}`)
+        const res = await fetch(`/api/v1/lending/ledger/${numId}`, { headers: getAuthHeaders() })
         if (res.ok) {
           return await res.json()
         }
@@ -503,7 +522,7 @@ class LendingServiceGateway {
     try {
       const res = await fetch('/api/v1/lending/payments', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           borrower_id: numId,
           payment_date: payload.paymentDate,
@@ -549,7 +568,7 @@ class LendingServiceGateway {
     try {
       const numId = borrowerId ? parseInt(String(borrowerId).replace(/\D/g, ''), 10) : undefined
       const query = numId && !isNaN(numId) ? `?borrower_id=${numId}` : ''
-      const res = await fetch(`/api/v1/lending/transactions${query}`)
+      const res = await fetch(`/api/v1/lending/transactions${query}`, { headers: getAuthHeaders() })
       if (res.ok) {
         return await res.json()
       }
