@@ -215,12 +215,12 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
 
 export const TransactionPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany } = useCompany()
+  const { activeCompany, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
-  const isCompanyScoped = !isAdmin && !isFinance && !isAudit
+  const isCompanyScoped = isStrictlyCompanyScoped
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])

@@ -90,14 +90,14 @@ const ITEMS_PER_PAGE = 10
 export const ExpensePage: React.FC = () => {
   const navigate = useNavigate()
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isCompanyUser =
     (userRole === 'company' || userRole === 'supervisor') && !isAudit
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
-  const isCompanyScoped = !isAdmin && !isFinance
+  const isCompanyScoped = isStrictlyCompanyScoped
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -120,6 +120,9 @@ export const ExpensePage: React.FC = () => {
   }, [allCompanies])
 
   React.useEffect(() => {
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      return
+    }
     let mounted = true
     loanService.getCompanies().then((companies) => {
       if (mounted && companies.length > 0) {
@@ -131,12 +134,14 @@ export const ExpensePage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [allCompanies, isAdmin, isFinance])
 
   // Filter state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(
-    isCompanyScoped ? assignedCompany : activeCompany || 'All Companies'
-  )
+  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
+    if (isCompanyScoped && assignedCompany) return assignedCompany
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return activeCompany || 'All Companies'
+  })
 
   // Prefetch bank accounts so /expense/add has Withdraw Bank ready in 0ms
   React.useEffect(() => {
@@ -158,10 +163,10 @@ export const ExpensePage: React.FC = () => {
 
   // Keep selectedCompany in sync with global activeCompany from context
   React.useEffect(() => {
-    if (!isCompanyScoped && activeCompany) {
+    if (activeCompany) {
       setSelectedCompany(activeCompany)
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
 
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'

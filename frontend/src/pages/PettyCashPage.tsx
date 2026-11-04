@@ -80,7 +80,7 @@ type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 export const PettyCashPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
 
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
@@ -88,7 +88,7 @@ export const PettyCashPage: React.FC = () => {
   const isSupervisor = userRole === 'supervisor'
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
-  const isCompanyScoped = isSupervisor && !isAudit
+  const isCompanyScoped = isStrictlyCompanyScoped
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
@@ -97,20 +97,29 @@ export const PettyCashPage: React.FC = () => {
   const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
     if (isCompanyScoped && assignedCompany) return assignedCompany
     if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-    return 'All Companies'
+    return activeCompany || 'All Companies'
   })
 
   // Synchronize with activeCompany
   React.useEffect(() => {
-    if (activeCompany && activeCompany !== 'All Companies' && !isCompanyScoped) {
+    if (activeCompany) {
       setSelectedCompany(activeCompany)
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
 
   // Dynamic company options from backend
   const [companyList, setCompanyList] = React.useState<string[]>(COMPANY_LIST)
 
   React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
+
+  React.useEffect(() => {
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      return
+    }
     let mounted = true
     loanService.getCompanies().then((companies) => {
       if (mounted && companies.length > 0) {
@@ -122,7 +131,7 @@ export const PettyCashPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [allCompanies, isAdmin, isFinance])
 
   // Company balances & ledger directly from backend
   const [balances, setBalances] = React.useState<Record<string, number>>({})
@@ -1809,7 +1818,7 @@ export const PettyCashPage: React.FC = () => {
       <TopUpPettyCashModal
         open={isTopUpModalOpen}
         onOpenChange={setIsTopUpModalOpen}
-        company={selectedCompany === 'All Companies' ? (user?.assignedCompany || 'MCT Kitchen') : selectedCompany}
+        company={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : (user?.assignedCompany || 'MCT Kitchen'))}
         currentBalance={currentBalance}
         companies={companyList}
         bankAccounts={bankAccounts}

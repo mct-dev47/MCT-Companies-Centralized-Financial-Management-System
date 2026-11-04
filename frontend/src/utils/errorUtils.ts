@@ -130,6 +130,15 @@ export function formatUserFriendlyErrorMessage(
 
   // 7. HTTP 401 / 403 Authentication / Authorization
   if (status === 401 || lower.includes('unauthorized') || lower.includes('session has expired') || lower.includes('credentials were not provided')) {
+    // Preserve sign-in / OTP failure reasons so a failed login isn't reported as an expired session
+    if (
+      lower.includes('invalid email or password') ||
+      lower.includes('user profile not found') ||
+      lower.includes('verification code') ||
+      lower.includes('verification session')
+    ) {
+      return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
+    }
     return 'Your session has expired. Please sign in again to continue.'
   }
   if (status === 403 || lower.includes('forbidden') || lower.includes('permission') || lower.includes('access denied')) {

@@ -88,7 +88,8 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isAuditor = isAudit
-  const isCompanyScoped = !isAdmin && !isFinance && !isAudit
+  const { activeCompany, setActiveCompany, dbCompanies: contextDbCompanies, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const isCompanyScoped = isStrictlyCompanyScoped
   const canApprove = (isFinance || isAdmin) && !isAudit && !isOwner
   const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
@@ -120,8 +121,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }, [isAdmin, loanType])
 
-  const { activeCompany, setActiveCompany, dbCompanies: contextDbCompanies } = useCompany()
-
   const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>(() => {
     if (contextDbCompanies && contextDbCompanies.length > 0) {
       return contextDbCompanies.map((c) => ({
@@ -135,11 +134,13 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const [loading, setLoading] = React.useState(true)
 
   // Filter state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(
-    isCompanyScoped ? assignedCompany : (activeCompany || 'All Companies')
-  )
+  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
+    if (isCompanyScoped && assignedCompany) return assignedCompany
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return activeCompany || 'All Companies'
+  })
 
-  // Keep selectedCompany in sync if user profile loads after initial render
+  // Keep selectedCompany in sync if user profile loads after initial render (strictly scoped only)
   React.useEffect(() => {
     if (isCompanyScoped && user?.assignedCompany) {
       setSelectedCompany(user.assignedCompany)
@@ -148,10 +149,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
   // Keep selectedCompany in sync with global activeCompany from context
   React.useEffect(() => {
-    if (!isCompanyScoped && activeCompany) {
+    if (activeCompany) {
       setSelectedCompany(activeCompany)
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
   const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
@@ -280,9 +281,12 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   }, [contextDbCompanies])
 
   const companyNamesList = React.useMemo(() => {
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      return allCompanies
+    }
     const list = dbCompanies.map((c) => c.company_name).filter(Boolean)
     return ['All Companies', ...list]
-  }, [dbCompanies])
+  }, [dbCompanies, allCompanies, isAdmin, isFinance])
 
   const handlePeriodChange = (period: PeriodOption) => {
     setSelectedPeriod(period)
@@ -675,7 +679,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           open={isAddModalOpen}
           onOpenChange={setIsAddModalOpen}
           onSuccess={handleLoanAdded}
-          assignedCompany={assignedCompany}
+          assignedCompany={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : assignedCompany)}
           companies={companyNamesList}
         />
       </>
@@ -1373,7 +1377,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
         onSuccess={handleLoanAdded}
-        assignedCompany={assignedCompany}
+        assignedCompany={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : assignedCompany)}
         companies={companyNamesList}
       />
 

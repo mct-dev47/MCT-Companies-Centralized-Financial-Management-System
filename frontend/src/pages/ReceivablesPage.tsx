@@ -64,7 +64,7 @@ const ITEMS_PER_PAGE = 10
 
 export const ReceivablesPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
 
   const normalizedUserRole = (user?.role || '').toLowerCase()
   const isAudit =
@@ -73,13 +73,7 @@ export const ReceivablesPage: React.FC = () => {
   const isFinance = normalizedUserRole === 'finance'
   const assignedCompany = user?.assignedCompany || ''
 
-  const isCompanyScoped = Boolean(
-    assignedCompany &&
-      assignedCompany !== 'All Companies' &&
-      !isFinance &&
-      !isAudit &&
-      !isAdmin
-  )
+  const isCompanyScoped = isStrictlyCompanyScoped
 
   // Company-scoped write check (AC-3): Finance (all companies) or Company/Supervisor (within assigned company scope)
   const canManageCompany = React.useCallback(
@@ -122,6 +116,9 @@ export const ReceivablesPage: React.FC = () => {
   ])
 
   React.useEffect(() => {
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      return
+    }
     let mounted = true
     loanService.getCompanies().then((companies) => {
       if (mounted && companies.length > 0) {
@@ -133,7 +130,7 @@ export const ReceivablesPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [user])
+  }, [allCompanies, isAdmin, isFinance, user])
 
   // Company filter state
   React.useEffect(() => {
@@ -141,9 +138,11 @@ export const ReceivablesPage: React.FC = () => {
       setCompanyList(allCompanies)
     }
   }, [allCompanies])
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(
-    isCompanyScoped ? assignedCompany : activeCompany || 'All Companies'
-  )
+  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
+    if (isCompanyScoped && assignedCompany) return assignedCompany
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return activeCompany || 'All Companies'
+  })
 
   React.useEffect(() => {
     if (isCompanyScoped && user?.assignedCompany) {
@@ -152,10 +151,10 @@ export const ReceivablesPage: React.FC = () => {
   }, [isCompanyScoped, user?.assignedCompany])
 
   React.useEffect(() => {
-    if (!isCompanyScoped && activeCompany) {
+    if (activeCompany) {
       setSelectedCompany(activeCompany)
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
 
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
   const [companySearch, setCompanySearch] = React.useState('')

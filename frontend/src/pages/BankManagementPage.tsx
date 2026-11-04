@@ -146,7 +146,7 @@ export const BankManagementPage: React.FC = () => {
 
   const { user } = useSession()
 
-  const { allCompanies } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
 
   const userRole = (user?.role || '').toLowerCase()
 
@@ -156,7 +156,7 @@ export const BankManagementPage: React.FC = () => {
 
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
-  const isCompanyScoped = !isAdmin && !isFinance && !isAudit
+  const isCompanyScoped = isStrictlyCompanyScoped
 
   const canManageBank = isAdmin || isFinance
 
@@ -190,21 +190,33 @@ export const BankManagementPage: React.FC = () => {
 
   const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
 
-    if (isCompanyScoped) return assignedCompany
+    if (isCompanyScoped && assignedCompany) return assignedCompany
 
-    return 'All Companies'
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+
+    return activeCompany || 'All Companies'
 
   })
 
   React.useEffect(() => {
 
-    if (isCompanyScoped) {
+    if (isCompanyScoped && user?.assignedCompany) {
 
-      setSelectedCompany(assignedCompany)
+      setSelectedCompany(user.assignedCompany)
 
     }
 
-  }, [isCompanyScoped, assignedCompany])
+  }, [isCompanyScoped, user?.assignedCompany])
+
+  React.useEffect(() => {
+
+    if (activeCompany) {
+
+      setSelectedCompany(activeCompany)
+
+    }
+
+  }, [activeCompany])
 
   // Dynamic companies fetched directly from database
 
@@ -213,6 +225,11 @@ export const BankManagementPage: React.FC = () => {
   React.useEffect(() => {
 
     let active = true
+
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      setDbCompanies(allCompanies.filter((c) => c !== 'All Companies'))
+      return
+    }
 
     const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
 
@@ -254,7 +271,7 @@ export const BankManagementPage: React.FC = () => {
 
     }
 
-  }, [])
+  }, [allCompanies, isAdmin, isFinance])
 
   // Real-time WebSocket connection status state
   const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>(websocketService.getStatus())
@@ -267,7 +284,11 @@ export const BankManagementPage: React.FC = () => {
       }
       // For company-scoped users, request their company accounts.
       // Company filtering in memory is instantaneous and never fails on aliases.
-      const targetComp = isCompanyScoped ? assignedCompany : undefined
+      const targetComp = isCompanyScoped
+        ? assignedCompany
+        : selectedCompany !== 'All Companies'
+        ? selectedCompany
+        : undefined
       const data = await bankService.getAccounts(targetComp, { forceRefresh })
       setAccounts(data || [])
     } catch (err) {
@@ -275,7 +296,7 @@ export const BankManagementPage: React.FC = () => {
     } finally {
       setIsLoading(false)
     }
-  }, [isCompanyScoped, assignedCompany])
+  }, [isCompanyScoped, assignedCompany, selectedCompany])
 
   React.useEffect(() => {
     fetchAccounts()
@@ -413,7 +434,7 @@ export const BankManagementPage: React.FC = () => {
 
     cardLabel: '',
 
-    companyName: isCompanyScoped ? assignedCompany : '',
+    companyName: isCompanyScoped ? assignedCompany : (selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : '')),
 
     accountType: 'Checking' as BankAccount['accountType'],
 

@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
 from typing import Generator
+from urllib.parse import urlsplit, urlunsplit
 import logging
 import os
 
@@ -19,8 +20,18 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
             db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
         elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+psycopg2://"):
             db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        if "pooler.supabase.com:5432" in db_url:
-            db_url = db_url.replace(":5432", ":6543")
+        parsed = urlsplit(db_url)
+        if (
+            parsed.hostname
+            and (parsed.hostname == "pooler.supabase.com" or parsed.hostname.endswith(".pooler.supabase.com"))
+            and parsed.port == 5432
+        ):
+            netloc = (
+                parsed.netloc[:-5] + ":6543"
+                if parsed.netloc.endswith(":5432")
+                else parsed.netloc.replace(":5432", ":6543")
+            )
+            db_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
         # Use a real client-side connection pool instead of NullPool.
         # Opening a connection to the remote Supabase pooler costs ~1-3s
         # (TCP + TLS + auth), so NullPool (a fresh connection per operation)
