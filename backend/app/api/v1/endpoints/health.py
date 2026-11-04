@@ -1,3 +1,7 @@
+import logging
+
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter
 from app.schemas.company import HealthResponse
 from app.core.config import settings
@@ -31,7 +35,8 @@ def check_db_connection():
             if client:
                 results["supabase_api"] = "configured"
         except Exception as e:
-            results["supabase_api"] = f"error: {str(e)}"
+            logger.error("Supabase API check failed: %s", e, exc_info=True)
+            results["supabase_api"] = "error: connection failed"
 
     # Check Direct Postgres connection via SQLAlchemy
     if engine:
@@ -40,7 +45,8 @@ def check_db_connection():
                 conn.execute(text("SELECT 1"))
             results["sqlalchemy_db"] = "connected"
         except Exception as e:
-            results["sqlalchemy_db"] = f"error: {str(e)}"
+            logger.error("SQLAlchemy DB check failed: %s", e, exc_info=True)
+            results["sqlalchemy_db"] = "error: database connection failed"
 
     return {
         "status": "ok",

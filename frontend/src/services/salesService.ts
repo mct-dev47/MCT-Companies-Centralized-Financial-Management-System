@@ -62,7 +62,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
   if (!chequeNo && particulars.includes('[Cheque:')) {
     const parts = particulars.split('[Cheque:')
     particulars = parts[0].trim()
-    chequeNo = parts[1].replace(']', '').trim()
+    chequeNo = parts[1].replace(/\]/g, '').trim()
   }
 
   const parsedItems = parseParticulars(particulars, null, amt)

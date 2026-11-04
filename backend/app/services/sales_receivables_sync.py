@@ -17,13 +17,107 @@ from app.services.bank_service import BankService
 
 logger = logging.getLogger(__name__)
 
-_STATUS_TAG_RE = re.compile(r"\s*\[(Paid|Unpaid|Pending|On hold)\]\s*$", re.IGNORECASE)
-_DETAIL_LINE_RE = re.compile(
-    r"^(.+?)\s*\(\s*(?:(\d+(?:\.\d+)?)\s*x)?\s*"
-    r"(?:@\s*(?:₱|PHP|Php)?\s*([\d,]+(?:\.\d+)?))?"
-    r"(?:\s*=\s*(?:₱|PHP|Php)?\s*([\d,]+(?:\.\d+)?))?\s*\)$"
-)
-_SUMMARY_QTY_SUFFIX_RE = re.compile(r"\s*\((?:x\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*x.*)\)\s*$", re.IGNORECASE)
+_KNOWN_STATUS_TAGS = {"paid", "unpaid", "pending", "on hold"}
+
+
+def _extract_status_tag(text: str) -> Tuple[str, Optional[str]]:
+    """Extract trailing status tag e.g. '[Paid]' from text safely without ReDoS."""
+    trimmed = text.strip()
+    if trimmed.endswith("]") and "[" in trimmed:
+        last_bracket = trimmed.rfind("[")
+        tag_candidate = trimmed[last_bracket + 1 : -1].strip()
+        if tag_candidate.lower() in _KNOWN_STATUS_TAGS:
+            cleaned = trimmed[:last_bracket].strip()
+            return cleaned, tag_candidate
+    return trimmed, None
+
+
+def _is_numeric_str(s: Optional[str]) -> bool:
+    if not s:
+        return False
+    try:
+        float(s.replace(",", ""))
+        return True
+    except ValueError:
+        return False
+
+
+def _parse_detail_parens(cleaned: str) -> Optional[Tuple[str, Optional[Decimal], Optional[Decimal], Optional[Decimal]]]:
+    """
+    Parses 'Item Name (2x @ ₱500.00 = ₱1,000.00)' deterministically without polynomial ReDoS.
+    Returns (name, qty, unit_price, total) or None if not a detail line.
+    """
+    trimmed = cleaned.strip()
+    if not (trimmed.endswith(")") and "(" in trimmed):
+        return None
+    last_open = trimmed.rfind("(")
+    name = trimmed[:last_open].strip()
+    if not name:
+        return None
+    inside = trimmed[last_open + 1 : -1].strip()
+
+    qty: Optional[Decimal] = None
+    unit_price: Optional[Decimal] = None
+    total: Optional[Decimal] = None
+
+    rem = inside
+    if "=" in rem:
+        parts = rem.split("=", 1)
+        rem = parts[0].strip()
+        tot_str = parts[1].strip()
+        for pfx in ("PHP", "Php", "php", "₱"):
+            if tot_str.startswith(pfx):
+                tot_str = tot_str[len(pfx) :].strip()
+                break
+        if _is_numeric_str(tot_str):
+            total = _to_decimal(tot_str, Decimal("0.00"))
+        else:
+            return None
+
+    if "@" in rem:
+        parts = rem.split("@", 1)
+        rem = parts[0].strip()
+        price_str = parts[1].strip()
+        for pfx in ("PHP", "Php", "php", "₱"):
+            if price_str.startswith(pfx):
+                price_str = price_str[len(pfx) :].strip()
+                break
+        if _is_numeric_str(price_str):
+            unit_price = _to_decimal(price_str, Decimal("0.00"))
+        else:
+            return None
+
+    rem = rem.strip()
+    if rem.lower().endswith("x"):
+        q_cand = rem[:-1].strip()
+        if _is_numeric_str(q_cand):
+            qty = _to_decimal(q_cand, Decimal("1"))
+        else:
+            return None
+    elif rem:
+        return None
+
+    if qty is None and unit_price is None and total is None:
+        return None
+    return name, qty, unit_price, total
+
+
+def _parse_summary_qty_suffix(cleaned: str) -> Optional[Tuple[str, Decimal]]:
+    """Parses 'Item (x 5)' or 'Item (5x ...)' at the end of summary safely."""
+    trimmed = cleaned.strip()
+    if not (trimmed.endswith(")") and "(" in trimmed):
+        return None
+    last_open = trimmed.rfind("(")
+    inside = trimmed[last_open + 1 : -1].strip()
+    if inside.lower().startswith("x"):
+        rest = inside[1:].strip()
+        if _is_numeric_str(rest):
+            return trimmed[:last_open].strip(), _to_decimal(rest, Decimal("1"))
+    if "x" in inside.lower():
+        prefix = inside[: inside.lower().find("x")].strip()
+        if _is_numeric_str(prefix):
+            return trimmed[:last_open].strip(), _to_decimal(prefix, Decimal("1"))
+    return None
 
 
 def _to_decimal(val: Any, default: Decimal = Decimal("0.00")) -> Decimal:
@@ -54,26 +148,26 @@ def _normalize_status_tag(raw_tag: Optional[str], fallback: str = "Paid") -> str
 def _normalize_item_name(text: Optional[str]) -> str:
     if not text:
         return ""
-    s = _STATUS_TAG_RE.sub("", text.strip())
-    m = _DETAIL_LINE_RE.match(s)
-    if m:
-        s = m.group(1)
-    s = _SUMMARY_QTY_SUFFIX_RE.sub("", s)
-    return re.sub(r"\s+", " ", s).strip().lower()
+    cleaned, _ = _extract_status_tag(text)
+    det = _parse_detail_parens(cleaned)
+    if det:
+        cleaned = det[0]
+    suffix = _parse_summary_qty_suffix(cleaned)
+    if suffix:
+        cleaned = suffix[0]
+    return re.sub(r"\s+", " ", cleaned).strip().lower()
 
 
 def _extract_name_and_qty_from_summary(summary: str) -> Tuple[str, Optional[Decimal]]:
-    cleaned = _STATUS_TAG_RE.sub("", summary.strip())
-    det = _DETAIL_LINE_RE.match(cleaned)
+    cleaned, _ = _extract_status_tag(summary)
+    det = _parse_detail_parens(cleaned)
     if det:
-        name = det.group(1).strip()
-        qty = _to_decimal(det.group(2), Decimal("1")) if det.group(2) else None
+        name = det[0]
+        qty = det[1]
         return name, qty
-    m = _SUMMARY_QTY_SUFFIX_RE.search(cleaned)
-    if m:
-        qty_raw = m.group(1) or m.group(2)
-        name = cleaned[: m.start()].strip()
-        return (name or cleaned), (_to_decimal(qty_raw, Decimal("1")) if qty_raw else None)
+    suffix = _parse_summary_qty_suffix(cleaned)
+    if suffix:
+        return suffix[0], suffix[1]
     return cleaned, None
 
 
@@ -120,21 +214,17 @@ def parse_sale_lines(raw_particulars: Optional[str], fallback_total: Any = Decim
     for ln in raw_lines:
         had_tag = False
         line_status = "Paid"
-        tag_match = _STATUS_TAG_RE.search(ln)
-        cleaned = ln
-        if tag_match:
+        cleaned, raw_tag = _extract_status_tag(ln)
+        if raw_tag:
             had_tag = True
-            line_status = _normalize_status_tag(tag_match.group(1), "Paid")
-            cleaned = ln[: tag_match.start()].strip()
+            line_status = _normalize_status_tag(raw_tag, "Paid")
 
-        det_match = _DETAIL_LINE_RE.match(cleaned)
-        if det_match:
-            name = det_match.group(1).strip()
-            qty = _to_decimal(det_match.group(2), Decimal("1")) if det_match.group(2) else Decimal("1")
-            if qty <= 0:
-                qty = Decimal("1")
-            unit_price = _to_decimal(det_match.group(3), Decimal("0.00")) if det_match.group(3) else Decimal("0.00")
-            total = _to_decimal(det_match.group(4), Decimal("0.00")) if det_match.group(4) else (qty * unit_price)
+        det_parsed = _parse_detail_parens(cleaned)
+        if det_parsed:
+            name, qty, unit_price, total = det_parsed
+            qty = qty if qty and qty > 0 else Decimal("1")
+            unit_price = unit_price if unit_price is not None else Decimal("0.00")
+            total = total if total is not None and total > 0 else (qty * unit_price)
             if total <= 0 and unit_price > 0:
                 total = (qty * unit_price).quantize(Decimal("0.01"))
             parsed.append(
