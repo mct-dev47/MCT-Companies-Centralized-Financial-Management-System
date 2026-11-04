@@ -32,7 +32,7 @@ class UserService:
     """Database profile operations and Supabase Auth coordination."""
     _user_picture_bucket = "user profiles"
 
-    ALLOWED_ROLES = {"finance", "audit", "auditor", "supervisor"}
+    ALLOWED_ROLES = {"finance", "audit", "auditor", "supervisor", "owner"}
 
     def __init__(self, db: Session):
         self.db = db
@@ -136,7 +136,7 @@ class UserService:
             raise UserValidationError("Cannot create additional Admin accounts. The system allows only one primary administrator.")
 
         if raw_role not in self.ALLOWED_ROLES:
-            raise UserValidationError(f"Invalid role '{user_in.role}'. Allowed roles: Finance, Audit, Supervisor.")
+            raise UserValidationError(f"Invalid role '{user_in.role}'. Allowed roles: Finance, Audit, Supervisor, Owner.")
 
         user_role = raw_role
 
@@ -337,7 +337,7 @@ class UserService:
             if role_val == "admin":
                 raise UserValidationError("Cannot assign the Admin role. The system allows only one primary administrator.")
             if role_val not in self.ALLOWED_ROLES:
-                raise UserValidationError(f"Invalid role '{update_data['role']}'. Allowed roles: Finance, Audit, Supervisor.")
+                raise UserValidationError(f"Invalid role '{update_data['role']}'. Allowed roles: Finance, Audit, Supervisor, Owner.")
             update_data["role"] = role_val
 
         if update_data.get("is_admin") is True:

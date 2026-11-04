@@ -44,6 +44,7 @@ const ROLES = [
   'Finance',
   'Audit',
   'Supervisor',
+  'Owner',
 ] as const
 
 const formatCompanyList = (names: string[]): string => {
@@ -208,7 +209,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (formData.role !== 'Admin' && formData.role !== 'Audit' && editSelectedCompanies.length === 0) {
+    if (formData.role !== 'Admin' && formData.role !== 'Audit' && formData.role !== 'Owner' && editSelectedCompanies.length === 0) {
       notifyWarning('Please select at least one assigned company.')
       return
     }

@@ -83,12 +83,14 @@ interface LoanPageProps {
 export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
+  const isOwner = userRole === 'owner'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isAuditor = isAudit
   const isCompanyScoped = !isAdmin && !isFinance && !isAudit
-  const canApprove = (isFinance || isAdmin) && !isAudit
+  const canApprove = (isFinance || isAdmin) && !isAudit && !isOwner
+  const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const location = useLocation()
@@ -744,7 +746,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             </div>
 
             {/* Add Loan Button (Available for Borrower requests - hidden for Audit) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={() => setIsAddModalOpen(true)}
@@ -1312,7 +1314,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 9. Actions (3 Dots Menu) */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-center">
+                        {isOwner ? (
+                          <span className="text-muted-fg text-xs">—</span>
+                        ) : (
+                          <div className="flex items-center justify-center">
                           <Button
                             type="button"
                             variant="ghost"

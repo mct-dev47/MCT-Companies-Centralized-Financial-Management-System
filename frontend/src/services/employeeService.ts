@@ -141,6 +141,8 @@ function mapUser(value: unknown): EmployeeUser {
   let roleName = (user.role || '').toLowerCase()
   if (roleName === 'admin' || user.is_admin) {
     roleName = 'Admin'
+  } else if (roleName === 'owner') {
+    roleName = 'Owner'
   } else if (roleName === 'audit') {
     roleName = 'Audit'
   } else if (roleName === 'finance') {

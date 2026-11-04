@@ -88,8 +88,8 @@ export const PettyCashPage: React.FC = () => {
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
   const isCompanyScoped = isSupervisor && !isAudit
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -668,7 +668,7 @@ export const PettyCashPage: React.FC = () => {
             </div>
 
             {/* Request Petty Cash Button (Hidden for Audit) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={() => setIsTopUpModalOpen(true)}
@@ -1134,7 +1134,7 @@ export const PettyCashPage: React.FC = () => {
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
-                        ) : isManuel ? (
+                        ) : isOwner ? (
                           <span className="text-muted-fg text-xs">—</span>
                         ) : isPendingFinance && entry.type === 'topup' ? (
                           <div className="flex items-center justify-center gap-1">
@@ -1384,7 +1384,7 @@ export const PettyCashPage: React.FC = () => {
                 {/* Pending Finance: Allow Edit / Delete for topups */}
                 {targetEntry.type === 'topup' &&
                   (targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') &&
-                  !isAudit && (
+                  !isAudit && !isOwner && (
                     <div className="flex items-center gap-2">
                       <Button
                         type="button"

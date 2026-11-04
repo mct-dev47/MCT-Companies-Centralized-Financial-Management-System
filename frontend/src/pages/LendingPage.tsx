@@ -105,8 +105,8 @@ export const LendingPage: React.FC = () => {
   const userRole = (user?.role || '').toLowerCase()
   const isFinance = userRole === 'finance'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
 
   // Set document title
   React.useEffect(() => {
@@ -1291,7 +1291,7 @@ export const LendingPage: React.FC = () => {
                 </Button>
               )}
 
-              {!isAudit && (
+              {!isAudit && !isOwner && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1696,7 +1696,7 @@ export const LendingPage: React.FC = () => {
             </div>
 
             {/* New Lending Facility Button (Red primary button per Sales Page aesthetic - hidden for Audit) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={() => {
@@ -2048,7 +2048,7 @@ export const LendingPage: React.FC = () => {
 
                       {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
                       <TableCell className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")} onClick={(e) => e.stopPropagation()}>
-                        {isManuel ? (
+                        {isOwner ? (
                           <span className="text-muted-fg text-xs">—</span>
                         ) : (
                           <Button

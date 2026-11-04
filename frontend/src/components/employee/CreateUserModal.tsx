@@ -52,6 +52,7 @@ const ROLES = [
   'Finance',
   'Audit',
   'Supervisor',
+  'Owner',
 ] as const
 
 const formatCompanyList = (names: string[]): string => {

@@ -208,6 +208,11 @@ def require_business_writer(user: CurrentUser) -> AuthenticatedUser:
             detail="Administrator accounts manage system configuration and users only; business operations are reserved for Finance and Supervisors.",
         )
     role = str(user.get("role") or "").lower()
+    if role == "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner accounts have read-only access to business records.",
+        )
     if role in ("audit", "auditor"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -256,7 +261,7 @@ def check_company_access(user: AuthenticatedUser, target_company_id: int | None)
     normalized_target_id = normalize_company_id(target_company_id)
 
     role = str(user.get("role") or "").lower()
-    if user.get("is_admin") or role in ("admin", "finance", "audit", "auditor"):
+    if user.get("is_admin") or role in ("admin", "finance", "audit", "auditor", "owner"):
         return
 
     assigned = user.get("company_ids") or []
@@ -283,7 +288,7 @@ def get_authorized_company_scope(
     """
     from app.core.company_resolver import normalize_company_id
     role = str(user.get("role") or "").lower()
-    is_privileged = user.get("is_admin") or role in ("admin", "finance", "audit", "auditor")
+    is_privileged = user.get("is_admin") or role in ("admin", "finance", "audit", "auditor", "owner")
 
     req_cid = normalize_company_id(requested_company_id) if requested_company_id is not None else None
 

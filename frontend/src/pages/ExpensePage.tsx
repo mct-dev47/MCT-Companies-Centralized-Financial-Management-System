@@ -97,9 +97,9 @@ export const ExpensePage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
-  const canAdd = !isAudit && (isCompanyUser || isFinance)
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
+  const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const [expenses, setExpenses] = React.useState<ExpenseItem[]>([])
@@ -1405,7 +1405,7 @@ export const ExpensePage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
-                          ) : isManuel ? (
+                          ) : isOwner ? (
                             <span className="text-muted-fg text-xs">—</span>
                           ) : expense.auditStatus === 'Verified' ? (
                             <span

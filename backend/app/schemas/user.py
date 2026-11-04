@@ -15,7 +15,7 @@ class UserBase(BaseModel):
     company_ids: List[int] = Field(default_factory=list)
     company_names: List[str] = Field(default_factory=list)
     is_admin: bool = False
-    role: str = Field(default="supervisor", description="Role of the user: admin, audit, finance, supervisor")
+    role: str = Field(default="supervisor", description="Role of the user: admin, audit, finance, supervisor, owner")
     photo_url: Optional[str] = None
 
 
@@ -46,9 +46,9 @@ class UserCreate(UserBase):
     @classmethod
     def validate_role(cls, v: str) -> str:
         cleaned = (v or "").strip().lower()
-        if cleaned not in ("finance", "audit", "auditor", "supervisor"):
+        if cleaned not in ("finance", "audit", "auditor", "supervisor", "owner"):
             raise ValueError(
-                f"Invalid role '{v}'. Allowed roles: Finance, Audit, Supervisor. Note: 'Company' is an organization, not a user role."
+                f"Invalid role '{v}'. Allowed roles: Finance, Audit, Supervisor, Owner. Note: 'Company' is an organization, not a user role."
             )
         return cleaned
 

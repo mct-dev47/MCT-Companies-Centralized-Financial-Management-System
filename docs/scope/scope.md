@@ -6,6 +6,7 @@
 |---|---|---|
 | Food Receivables and Unpaid Expense Lifecycle | in-progress | [0027](../specs/0027-unpaid-expense-sales-receivables-lifecycle.md) |
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
+| Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
 
 ---
 
@@ -42,3 +43,17 @@
 - [ ] Verify it: /check verify receivables-refinements-bidirectional-sync
 - [ ] Test it: /test receivables-refinements-bidirectional-sync
 
+### Owner Role and Account Migration
+**Status**: in-progress
+**Spec**: [0029](../specs/0029-owner-role-and-account-migration/index.md)
+**Intent**: Introduce an authoritative Owner role across backend and frontend systems, migrate the account for Manuel from manuel@mct.com to ryuuujin.sh@gmail.com, and enforce strict view only access across all modules without brittle email string checks.
+**Done when**: Manuel account email is updated to ryuuujin.sh@gmail.com with role owner via database migration, backend blocks Owner mutations with 403 Forbidden while granting global multi company read access, frontend auth maps role to Owner with All Companies scope, and all pages suppress creation buttons, edit menus, delete options, and audit actions for Owner users.
+
+- [x] Design it (spec): [0029](../specs/0029-owner-role-and-account-migration/index.md)
+- [x] Build it: /develop owner-role-and-account-migration (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: SQL database migration updating Manuel email to ryuuujin.sh@gmail.com and role to owner (AC-1, AC-2)
+  - [x] Milestone 2: Backend models, schemas, and dependencies supporting Owner role with 403 mutation guards (AC-1, AC-3)
+  - [x] Milestone 3: Frontend auth service mapping Owner to All Companies scope (AC-4)
+  - [x] Milestone 4: Frontend pages refactor replacing isManuel email checks with role checks and table dash placeholders (AC-5, AC-6, AC-7)
+- [x] Verify it: /check verify owner-role-and-account-migration
+- [ ] Test it: /test owner-role-and-account-migration

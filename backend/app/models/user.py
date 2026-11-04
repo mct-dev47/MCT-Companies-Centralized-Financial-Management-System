@@ -12,7 +12,7 @@ class User(Base):
     company_id = Column(Integer, ForeignKey("company.company_id", ondelete="SET NULL"), nullable=True)
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, nullable=False, index=True)
-    role = Column(String(50), nullable=False, default="company")  # "admin", "audit", "finance", "supervisor", "company"
+    role = Column(String(50), nullable=False, default="company")  # "admin", "audit", "finance", "supervisor", "company", "owner"
     photo_url = Column(String(500), nullable=True)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, nullable=False, default=False)
