@@ -201,8 +201,22 @@ export const LandingPage: React.FC = () => {
 
   const handleAuthAction = () => {
     if (user) {
-      const isFinance = (user.role || '').toLowerCase() === 'finance'
-      navigate(isFinance ? '/centralized-auth' : '/dashboard')
+      const role = (user.role || '').toLowerCase()
+      if (role === 'admin') {
+        navigate('/employee')
+        return
+      }
+      const isAuditOrFinance = role === 'finance' || role === 'audit' || role.includes('audit') || role === 'owner'
+      const namesCount = Array.isArray(user.companyNames) ? user.companyNames.filter(Boolean).length : 0
+      const idsCount = Array.isArray(user.companyIds) ? user.companyIds.filter(Boolean).length : 0
+      const assignedList = Array.isArray(user.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
+      let commaCount = 0
+      if (user.assignedCompany && user.assignedCompany !== 'All Companies') {
+        commaCount = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
+      }
+      const count = Math.max(namesCount, idsCount, assignedList, commaCount)
+      const canChooseCompany = isAuditOrFinance || (role === 'supervisor' && count >= 2)
+      navigate(canChooseCompany ? '/centralized-auth' : '/dashboard')
     } else {
       navigate('/login')
     }

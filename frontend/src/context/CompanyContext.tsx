@@ -61,11 +61,17 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames
     }
+    if (Array.isArray(user?.assignedCompanies) && user.assignedCompanies.length > 0) {
+      return user.assignedCompanies
+    }
     if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+      if (user.assignedCompany.includes(',')) {
+        return user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean)
+      }
       return [user.assignedCompany]
     }
     return []
-  }, [user?.companyNames, user?.assignedCompany])
+  }, [user?.companyNames, user?.assignedCompanies, user?.assignedCompany])
 
   const hasMultipleAssigned = userAssignedCompanies.length >= 2
 
