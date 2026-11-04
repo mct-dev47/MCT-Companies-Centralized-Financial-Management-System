@@ -21,6 +21,7 @@ import { useCompany } from '@/context/CompanyContext'
 import { type AuthorizedCompany, getCompanyInitials } from '@/config/centralizedCompanies'
 import { employeeService } from '@/services/employeeService'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { isCompanyMatch } from '@/utils/companyUtils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
 import logo2Url from '@/assets/LOGO2.png'
@@ -94,7 +95,7 @@ export const CentralizedAuthPage: React.FC = () => {
       if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
         const filtered = data.filter((comp) => {
           const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
-          const nameMatch = userAssignedNames.some((cname) => cname.toLowerCase() === comp.name.toLowerCase())
+          const nameMatch = userAssignedNames.some((cname) => isCompanyMatch(cname, comp.name))
           return idMatch || nameMatch
         })
         setCompanies(filtered)
