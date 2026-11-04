@@ -410,7 +410,7 @@ export const billsService = {
     try {
       const query =
         companyFilter && companyFilter !== 'All Companies'
-          ? `?company_name=${encodeURIComponent(companyFilter)}`
+          ? `?company_name=${encodeURIComponent(companyFilter)}&company=${encodeURIComponent(companyFilter)}`
           : ''
       const response = await fetch(`/api/v1/bills${query}`, { headers: backendHeaders() })
       if (!response.ok) {

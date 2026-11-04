@@ -73,7 +73,8 @@ export const BillsPage: React.FC = () => {
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isAdmin = userRole === 'admin' || isAudit
   const isFinance = userRole === 'finance'
-  const isCompanyScoped = !isAdmin && !isFinance
+  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const isCompanyScoped = isStrictlyCompanyScoped
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || ''
@@ -84,18 +85,18 @@ export const BillsPage: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [companyList, setCompanyList] = React.useState<string[]>(DEFAULT_COMPANY_LIST)
 
-  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
-
   // Filters
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(
-    isCompanyScoped ? assignedCompany : (activeCompany || 'All Companies')
-  )
+  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
+    if (isCompanyScoped && assignedCompany) return assignedCompany
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return activeCompany || 'All Companies'
+  })
 
   React.useEffect(() => {
-    if (!isCompanyScoped && activeCompany) {
+    if (activeCompany) {
       setSelectedCompany(activeCompany)
     }
-  }, [activeCompany, isCompanyScoped])
+  }, [activeCompany])
 
   const [statusFilter, setStatusFilter] = React.useState<'All' | BillStatus>('All')
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -195,6 +196,9 @@ export const BillsPage: React.FC = () => {
     }
   }, [allCompanies])
   React.useEffect(() => {
+    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
+      return
+    }
     let mounted = true
     loanService.getCompanies().then((companies) => {
       if (mounted && companies.length > 0) {
@@ -206,14 +210,14 @@ export const BillsPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [allCompanies, isAdmin, isFinance])
 
   // Load bills
   const loadBills = React.useCallback(async () => {
     setLoading(true)
     setLoadError(null)
     try {
-      const data = await billsService.getBills()
+      const data = await billsService.getBills(selectedCompany)
       setBills(data)
     } catch (err: any) {
       console.error('Failed to load bills:', err)
@@ -222,7 +226,7 @@ export const BillsPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [selectedCompany])
 
   const handleMarkBillAudit = (bill: BillItem, status: 'Verified' | 'Flagged') => {
     const timestamp = new Date().toLocaleString('en-US', {
@@ -1329,7 +1333,7 @@ export const BillsPage: React.FC = () => {
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
         onSuccess={handleBillCreated}
-        assignedCompany={assignedCompany}
+        assignedCompany={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : assignedCompany)}
         isCompanyScoped={isCompanyScoped}
         companies={companyList}
       />

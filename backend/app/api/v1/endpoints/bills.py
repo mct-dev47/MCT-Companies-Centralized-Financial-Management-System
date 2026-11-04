@@ -35,7 +35,7 @@ def _resolve_caller_scope(
     db: Session,
     company_id: Optional[int],
     company_name: Optional[str],
-) -> tuple[Optional[int], Optional[str]]:
+) -> tuple[Optional[int], Optional[str], Optional[list[int]]]:
     """Resolves and enforces authorized company scope for bill queries."""
     target_cid = company_id
     target_cname = company_name
@@ -47,15 +47,14 @@ def _resolve_caller_scope(
 
     scoped_cids = get_authorized_company_scope(user, target_cid)
     if scoped_cids is not None:
-        if len(scoped_cids) == 1:
-            target_cid = scoped_cids[0]
-            target_cname = None
+        if target_cid is not None and target_cid in scoped_cids:
+            return target_cid, target_cname, None
+        elif len(scoped_cids) == 1:
+            return scoped_cids[0], None, None
         else:
-            # Multi-company supervisor without explicit company filter
-            target_cid = scoped_cids[0]
-            target_cname = None
+            return None, None, scoped_cids
 
-    return target_cid, target_cname
+    return target_cid, target_cname, None
 
 
 @router.get("", response_model=List[BillOut], summary="List company bills")
@@ -63,10 +62,11 @@ def list_bills(
     user: AuthenticatedUser = Depends(require_business_reader),
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    company: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    cid, cname = _resolve_caller_scope(user, db, company_id, company_name)
-    return BillsService(db).list_bills(company_id=cid, company_name=cname)
+    cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
+    return BillsService(db).list_bills(company_id=cid, company_name=cname, company_ids=cids)
 
 
 @router.post("", response_model=BillOut, status_code=status.HTTP_201_CREATED, summary="Create a company bill")
@@ -84,10 +84,11 @@ def get_bill_stats(
     user: AuthenticatedUser = Depends(require_business_reader),
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    company: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    cid, cname = _resolve_caller_scope(user, db, company_id, company_name)
-    return BillsService(db).get_stats(company_id=cid, company_name=cname)
+    cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
+    return BillsService(db).get_stats(company_id=cid, company_name=cname, company_ids=cids)
 
 
 @router.get("/reminders", response_model=List[BillReminderOut], summary="Get bill payment reminders")
@@ -95,11 +96,12 @@ def get_bill_reminders(
     user: AuthenticatedUser = Depends(require_business_reader),
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    company: Optional[str] = Query(None),
     as_of: Optional[date] = Query(None),
     db: Session = Depends(get_db),
 ):
-    cid, cname = _resolve_caller_scope(user, db, company_id, company_name)
-    return BillsService(db).get_reminders(company_id=cid, company_name=cname, as_of=as_of or date.today())
+    cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
+    return BillsService(db).get_reminders(company_id=cid, company_name=cname, as_of=as_of or date.today(), company_ids=cids)
 
 
 @router.get("/{bill_id}", response_model=BillOut, summary="Get a bill")

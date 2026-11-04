@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { useSession } from '@/hooks/useSession'
 import { isLendingEnabledCompany } from '@/config/companyFeatures'
+import { isCompanyMatch } from '@/utils/companyUtils'
 
 export interface CompanyOption {
   id: number
@@ -54,7 +55,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     userRole === 'admin' ||
     userRole === 'finance' ||
     userRole === 'audit' ||
-    userRole.includes('auditor')
+    userRole.includes('auditor') ||
+    userRole === 'owner'
   const userAssignedCompanies = React.useMemo(() => {
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames
@@ -81,7 +83,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (
           isMultiCompanyRole ||
           userAssignedCompanies.length === 0 ||
-          userAssignedCompanies.includes(saved) ||
+          userAssignedCompanies.some((comp) => isCompanyMatch(comp, saved)) ||
           (hasMultipleAssigned && saved === 'All Companies')
         ) {
           return saved
@@ -104,7 +106,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         saved &&
         (isMultiCompanyRole ||
           userAssignedCompanies.length === 0 ||
-          userAssignedCompanies.includes(saved) ||
+          userAssignedCompanies.some((comp) => isCompanyMatch(comp, saved)) ||
           (hasMultipleAssigned && saved === 'All Companies'))
       ) {
         setActiveCompanyState(saved)

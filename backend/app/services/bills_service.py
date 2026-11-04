@@ -148,6 +148,7 @@ class BillsService:
         self,
         bill: Bill,
         as_of: date = date.today(),
+        company_ids: Optional[List[int]] = None,
         include_future: Optional[int] = None,
         validate_payments: bool = True,
     ) -> List[dict]:
@@ -256,6 +257,7 @@ class BillsService:
         self,
         bill: Bill,
         as_of: date = date.today(),
+        company_ids: Optional[List[int]] = None,
         periods: Optional[List[dict]] = None,
     ) -> Optional[dict]:
         if periods is None:
@@ -267,6 +269,7 @@ class BillsService:
         self,
         bill: Bill,
         as_of: date = date.today(),
+        company_ids: Optional[List[int]] = None,
         periods: Optional[List[dict]] = None,
     ) -> str:
         if periods is None:
@@ -336,13 +339,20 @@ class BillsService:
             ],
         )
 
-    def list_bills(self, company_id: Optional[int] = None, company_name: Optional[str] = None) -> List[BillOut]:
+    def list_bills(
+        self,
+        company_id: Optional[int] = None,
+        company_name: Optional[str] = None,
+        company_ids: Optional[List[int]] = None,
+    ) -> List[BillOut]:
         query = self.db.query(Bill).options(joinedload(Bill.company), selectinload(Bill.payments))
         if company_id:
             query = query.filter(Bill.company_id == company_id)
         elif company_name and company_name.lower() != "all companies":
             resolved = _resolve_company(self.db, None, company_name)
             query = query.filter(Bill.company_id == resolved.company_id)
+        elif company_ids:
+            query = query.filter(Bill.company_id.in_(company_ids))
         return [self._to_output(bill) for bill in query.order_by(Bill.created_at.desc(), Bill.bill_id.desc()).all()]
 
     def get_bill(self, bill_id: int) -> Bill:
@@ -554,8 +564,9 @@ class BillsService:
         company_id: Optional[int] = None,
         company_name: Optional[str] = None,
         as_of: date = date.today(),
+        company_ids: Optional[List[int]] = None,
     ) -> BillStatsOut:
-        bills = self.list_bills(company_id=company_id, company_name=company_name)
+        bills = self.list_bills(company_id=company_id, company_name=company_name, company_ids=company_ids)
         total_monthly_amount = Decimal("0.00")
         paid_amount = Decimal("0.00")
         paid_count = 0
@@ -600,8 +611,9 @@ class BillsService:
         company_id: Optional[int] = None,
         company_name: Optional[str] = None,
         as_of: date = date.today(),
+        company_ids: Optional[List[int]] = None,
     ) -> List[BillReminderOut]:
-        bills = self.list_bills(company_id=company_id, company_name=company_name)
+        bills = self.list_bills(company_id=company_id, company_name=company_name, company_ids=company_ids)
         reminders = []
 
         for b in bills:
