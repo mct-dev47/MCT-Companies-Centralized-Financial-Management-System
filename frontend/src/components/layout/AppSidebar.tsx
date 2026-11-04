@@ -198,7 +198,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         className
       )}
     >
-      <div className="flex flex-col py-6">
+      <div className="flex flex-col py-4 lg:py-6">
         {/* Logo Lockup */}
         <div className="px-4 pb-2">
           <div className="flex items-center h-11">
@@ -218,7 +218,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               <img
                 src={mct2Url}
                 alt="MCT"
-                className="h-3.5 sm:h-4 w-auto object-contain object-left block"
+                className="h-3.5 sm:h-4.5 lg:h-5 w-auto object-contain object-left block"
               />
               <span className="text-[9px] sm:text-[10px] font-medium text-muted-fg tracking-tight leading-tight mt-0.5">
                 Group of Companies
@@ -228,7 +228,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         </div>
 
         {/* Navigation */}
-        <nav aria-label="Main Navigation" className="flex flex-col mt-5">
+        <nav aria-label="Main Navigation" className="flex flex-col mt-3 lg:mt-5">
           {/* MAIN Section Header (Non-admin only; admin shows clean items without section headers) */}
           {userRole !== 'Admin' && mainItems.length > 0 && (
             <div className="px-4 pb-2">
