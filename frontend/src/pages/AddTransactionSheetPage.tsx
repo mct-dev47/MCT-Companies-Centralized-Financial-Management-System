@@ -680,20 +680,30 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   const paidCashTotal = React.useMemo(() => {
     return calculatedRows
-      .filter((r) => r.rowTotal > 0 && r.status === 'Paid')
+      .filter((r) => r.rowTotal > 0 && normalizeParticularStatus(r.status, 'Paid') === 'Paid')
+      .reduce((sum, r) => sum + r.rowTotal, 0)
+  }, [calculatedRows])
+
+  const unpaidTotal = React.useMemo(() => {
+    return calculatedRows
+      .filter((r) => r.rowTotal > 0 && normalizeParticularStatus(r.status, 'Paid') === 'Unpaid')
+      .reduce((sum, r) => sum + r.rowTotal, 0)
+  }, [calculatedRows])
+
+  const pendingTotal = React.useMemo(() => {
+    return calculatedRows
+      .filter((r) => r.rowTotal > 0 && normalizeParticularStatus(r.status, 'Paid') === 'Pending')
       .reduce((sum, r) => sum + r.rowTotal, 0)
   }, [calculatedRows])
 
   const unpaidPendingTotal = React.useMemo(() => {
-    return calculatedRows
-      .filter((r) => r.rowTotal > 0 && r.status !== 'Paid')
-      .reduce((sum, r) => sum + r.rowTotal, 0)
-  }, [calculatedRows])
+    return unpaidTotal + pendingTotal
+  }, [unpaidTotal, pendingTotal])
 
   const hasUnpaidItems = React.useMemo(() => {
     if (transactionType !== 'Sales') return false
     return rows.some(
-      (r) => r.status === 'Unpaid' || r.status === 'Pending'
+      (r) => normalizeParticularStatus(r.status, 'Paid') === 'Unpaid'
     )
   }, [transactionType, rows])
 
@@ -791,9 +801,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
 
     // Check if there are unpaid items in Sales or Expense, preserving each row's 0-based index in validItems
+    // If an item is marked 'Pending', it remains a pending sale and is NOT routed to Receivables (only 'Unpaid' items go to Receivables)
     const unpaidWithIndices = validItems
       .map((it, lineIdx) => ({ it, lineIdx }))
-      .filter(({ it }) => it.status === 'Unpaid' || it.status === 'Pending')
+      .filter(({ it }) => normalizeParticularStatus(it.status, 'Paid') === 'Unpaid')
 
     // Step 1: If on encode step and unpaid items exist:
     if (transactionType === 'Sales' && unpaidWithIndices.length > 0 && currentStep === 'encode') {
@@ -1299,7 +1310,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               </div>
               <div className="border-l border-slate-200 pl-6">
                 <span className="text-xs font-medium text-rose-600 block">Total Utang (Owed)</span>
-                <span className="text-lg sm:text-xl font-bold text-rose-600 tabular-nums">{formatPHP(unpaidPendingTotal)}</span>
+                <span className="text-lg sm:text-xl font-bold text-rose-600 tabular-nums">{formatPHP(unpaidTotal)}</span>
               </div>
             </div>
 
@@ -1938,13 +1949,24 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             </span>
           </div>
 
-          {unpaidPendingTotal > 0 && (
+          {unpaidTotal > 0 && (
             <div className="border-l border-slate-200 pl-6 sm:pl-10">
-              <span className="text-xs font-medium text-muted-fg block">
-                Unpaid / Pending
+              <span className="text-xs font-medium text-rose-600 block">
+                Unpaid (Utang)
+              </span>
+              <span className="text-lg sm:text-xl font-bold text-rose-600 mt-0.5 block tabular-nums">
+                {formatPHP(unpaidTotal)}
+              </span>
+            </div>
+          )}
+
+          {pendingTotal > 0 && (
+            <div className="border-l border-slate-200 pl-6 sm:pl-10">
+              <span className="text-xs font-medium text-yellow-700 block">
+                Pending
               </span>
               <span className="text-lg sm:text-xl font-bold text-yellow-700 mt-0.5 block tabular-nums">
-                {formatPHP(unpaidPendingTotal)}
+                {formatPHP(pendingTotal)}
               </span>
             </div>
           )}

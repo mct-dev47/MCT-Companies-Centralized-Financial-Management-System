@@ -43,6 +43,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { formatPHP } from '@/lib/format'
+import { useDropdownPosition } from '@/hooks/useDropdownPosition'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/useSession'
@@ -366,6 +367,10 @@ export const ReceivablesPage: React.FC = () => {
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
 
+  const exportPos = useDropdownPosition(exportDropdownRef, isExportDropdownOpen)
+  const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
+  const companyPos = useDropdownPosition(companyDropdownRef, isCompanyDropdownOpen)
+
   // Feedback banner
   const [toastMessage, setToastMessage] = React.useState<string | null>(null)
 
@@ -641,7 +646,15 @@ export const ReceivablesPage: React.FC = () => {
               </Button>
 
               {isExportDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <div
+                  style={exportPos.isMobile ? exportPos.style : undefined}
+                  className={cn(
+                    'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                    exportPos.isMobile
+                      ? 'w-[min(calc(100vw-32px),240px)]'
+                      : 'absolute right-0 top-full mt-2 w-52'
+                  )}
+                >
                   <button
                     type="button"
                     onClick={handleExportCsv}
@@ -723,7 +736,15 @@ export const ReceivablesPage: React.FC = () => {
                 </button>
 
                 {isCompanyDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                  <div
+                    style={companyPos.isMobile ? companyPos.style : undefined}
+                    className={cn(
+                      'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                      companyPos.isMobile
+                        ? 'w-[min(calc(100vw-32px),320px)]'
+                        : 'absolute right-0 top-full mt-2 w-68'
+                    )}
+                  >
                     <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
                       <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
                         Filter By Company
@@ -828,7 +849,15 @@ export const ReceivablesPage: React.FC = () => {
               </button>
 
               {isStatusDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-44 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <div
+                  style={statusPos.isMobile ? statusPos.style : undefined}
+                  className={cn(
+                    'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                    statusPos.isMobile
+                      ? 'w-[min(calc(100vw-32px),220px)]'
+                      : 'absolute right-0 top-full mt-2 w-44'
+                  )}
+                >
                   {(['All', 'Unpaid', 'Partial', 'Paid'] as const).map((st) => (
                     <button
                       key={st}

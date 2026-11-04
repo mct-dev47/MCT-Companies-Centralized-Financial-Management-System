@@ -213,6 +213,10 @@ export const router = createBrowserRouter([
           </NonAdminRouteGuard>
         ),
       },
+      {
+        path: '/add',
+        element: <Navigate to="/sales/add" replace />,
+      },
       // Receivables routes (Food Utang Management)
       {
         path: '/receivables',
