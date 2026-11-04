@@ -10,6 +10,7 @@ import {
   Upload,
   User as UserIcon,
   Crop,
+  Send,
 } from 'lucide-react'
 import {
   Dialog,
@@ -43,6 +44,7 @@ const ROLES = [
   'Finance',
   'Audit',
   'Supervisor',
+  'Owner',
 ] as const
 
 const formatCompanyList = (names: string[]): string => {
@@ -67,6 +69,10 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
+  // Re-invite state
+  const [isReinviting, setIsReinviting] = React.useState(false)
+  const [reinviteSuccess, setReinviteSuccess] = React.useState(false)
+
   // Photo upload and cropping in edit mode
   const [editProfilePreview, setEditProfilePreview] = React.useState<string | null>(null)
   const [editAvatarFile, setEditAvatarFile] = React.useState<File | null>(null)
@@ -90,7 +96,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const isProtectedAdmin = Boolean(
     user?.isProtected ||
     user?.id === '1' ||
-    (user?.email && user.email.toLowerCase() === 'admin@mct.com')
+    user?.isAdmin ||
+    user?.role?.toLowerCase() === 'admin'
   )
 
   React.useEffect(() => {
@@ -113,6 +120,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setRawImageForCrop(null)
       setIsCropperOpen(false)
       setActionError(null)
+      setIsReinviting(false)
+      setReinviteSuccess(false)
     }
   }, [user, open])
 
@@ -190,6 +199,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       setEditAvatarFile(null)
       setRawImageForCrop(null)
       setIsCropperOpen(false)
+      setIsReinviting(false)
+      setReinviteSuccess(false)
     }
     onOpenChange(nextOpen)
   }
@@ -198,7 +209,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (formData.role !== 'Admin' && formData.role !== 'Audit' && editSelectedCompanies.length === 0) {
+    if (formData.role !== 'Admin' && formData.role !== 'Audit' && formData.role !== 'Owner' && editSelectedCompanies.length === 0) {
       notifyWarning('Please select at least one assigned company.')
       return
     }
@@ -261,6 +272,23 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+
+  const handleReinvite = async () => {
+    if (!user) return
+    try {
+      setIsReinviting(true)
+      const updated = await employeeService.reinviteUser(user.id)
+      setReinviteSuccess(true)
+      onUpdate?.(updated)
+      setTimeout(() => setReinviteSuccess(false), 4000)
+    } catch (error) {
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to resend invitation. Please try again.')
+      window.alert(errorMsg)
+    } finally {
+      setIsReinviting(false)
     }
   }
 
@@ -633,6 +661,30 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                   </div>
                 ) : (
                   <>
+                    {(user.lastLogin === 'Never' || user.status !== 'Active') && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={isSubmitting || isReinviting}
+                        onClick={handleReinvite}
+                        className={cn(
+                          "h-11 px-4 rounded-xl border font-medium text-sm flex items-center gap-2 transition-colors cursor-pointer",
+                          reinviteSuccess
+                            ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                            : "border-sky-200 text-sky-700 hover:bg-sky-50"
+                        )}
+                      >
+                        {isReinviting ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                        ) : reinviteSuccess ? (
+                          <Check className="h-4 w-4 text-emerald-600" />
+                        ) : (
+                          <Send className="h-3.5 w-3.5 text-sky-600" />
+                        )}
+                        <span>{reinviteSuccess ? 'Invite Sent!' : isReinviting ? 'Sending...' : 'Resend Invitation'}</span>
+                      </Button>
+                    )}
+
                     <Button
                       type="button"
                       variant="outline"
@@ -675,7 +727,6 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
             {editSelectedCompanies.length > 0 && (
               <span className="block text-xs text-muted-fg">
                 Appointed to:{' '}
-                <strong className="text-focus">{formatCompanyList(editSelectedCompanies)}</strong>
               </span>
             )}
             {editSelectedCompanies.length > 0 && (

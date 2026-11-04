@@ -212,26 +212,26 @@ export const LandingPage: React.FC = () => {
     <div className="min-h-screen bg-white text-slate-900 flex flex-col font-sans select-none overflow-x-hidden">
       {/* 1. Header Navigation: Permanently fixed on top with active state underline */}
       <header className="fixed top-0 left-0 right-0 w-full z-50 bg-white/95 backdrop-blur-md border-b border-slate-100 shadow-2xs transition-all">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-20 flex items-center justify-between">
           {/* Logo Lockup using LOGO2.png & MCT2.png (Left) */}
           <button
             type="button"
             onClick={() => handleScrollTo('hero')}
-            className="flex items-center gap-3 cursor-pointer group text-left"
+            className="flex items-center gap-2 sm:gap-3 cursor-pointer group text-left"
             title="MCT Group of Companies"
           >
             <img
               src={logo2Url}
               alt="MCT Logo"
-              className="h-10 sm:h-11 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
+              className="h-8 sm:h-10 md:h-11 w-auto object-contain shrink-0 group-hover:scale-105 transition-transform"
             />
             <div className="flex flex-col justify-center items-start">
               <img
                 src={mct2Url}
                 alt="MCT"
-                className="h-4.5 sm:h-5 w-auto object-contain object-left block"
+                className="h-3.5 sm:h-4 md:h-5 max-h-[16px] sm:max-h-[20px] w-auto object-contain object-left block"
               />
-              <span className="text-[10px] font-semibold text-muted-fg tracking-tight leading-tight mt-0.5 whitespace-nowrap">
+              <span className="text-[9px] sm:text-[10px] font-semibold text-muted-fg tracking-tight leading-tight mt-0.5 whitespace-nowrap">
                 Group of Companies
               </span>
             </div>

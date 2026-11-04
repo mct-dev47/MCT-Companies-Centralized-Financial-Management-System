@@ -11,6 +11,7 @@ from app.models.security import RevokedToken, LoginRateLimit
 from app.models.notification import Notification, NotificationOutbox
 from app.models.bank import BankAccount, BankTransaction
 from app.models.receivable import Receivable, ReceivablePayment
+from app.models.invitation import UserInvitation, InvitationOutbox
 
 # Alias for backward compatibility
 LendingFacility = Borrower
@@ -43,4 +44,6 @@ __all__ = [
     "BankTransaction",
     "Receivable",
     "ReceivablePayment",
+    "UserInvitation",
+    "InvitationOutbox",
 ]

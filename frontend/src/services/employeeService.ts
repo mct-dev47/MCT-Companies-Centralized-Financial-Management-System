@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import type { AuthorizedCompany } from '@/config/centralizedCompanies'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
@@ -101,20 +102,16 @@ function getAuthHeaders(): HeadersInit {
 async function getApiError(response: Response): Promise<string> {
   try {
     const body = await response.json()
-    if (typeof body?.detail === 'string') return body.detail
-    if (Array.isArray(body?.detail)) {
-      const messages = body.detail
-        .map((item: { loc?: unknown[]; msg?: string }) => {
-          const field = item.loc?.at(-1)
-          return field && item.msg ? `${String(field)}: ${item.msg}` : item.msg
-        })
-        .filter(Boolean)
-      if (messages.length > 0) return messages.join('; ')
-    }
+    return formatUserFriendlyErrorMessage(
+      { status: response.status, ...body },
+      `Request failed (${response.status})`
+    )
   } catch {
-    // Use the generic fallback below when the response is not JSON.
+    return formatUserFriendlyErrorMessage(
+      { status: response.status },
+      `Request failed (${response.status})`
+    )
   }
-  return `Request failed (${response.status})`
 }
 
 async function mapApiResponse<T>(
@@ -144,6 +141,8 @@ function mapUser(value: unknown): EmployeeUser {
   let roleName = (user.role || '').toLowerCase()
   if (roleName === 'admin' || user.is_admin) {
     roleName = 'Admin'
+  } else if (roleName === 'owner') {
+    roleName = 'Owner'
   } else if (roleName === 'audit') {
     roleName = 'Audit'
   } else if (roleName === 'finance') {
@@ -174,7 +173,7 @@ function mapUser(value: unknown): EmployeeUser {
       ? new Date(user.last_login_at).toLocaleString()
       : 'Never',
     isAdmin: user.is_admin,
-    isProtected: Boolean(user.is_protected || user.user_id === 1 || user.email.toLowerCase() === 'admin@mct.com'),
+    isProtected: Boolean(user.is_protected || user.is_admin || user.user_id === 1 || (user.role && user.role.toLowerCase() === 'admin')),
     avatarUrl: user.photo_url || undefined,
   }
 }
@@ -271,7 +270,7 @@ export const employeeService = {
   async createUser(payload: CreateUserPayload): Promise<EmployeeUser> {
     const companies = await employeeService.getCompanies()
     
-    // Resolve company IDs from companyIds, assignedCompanies, or assignedCompany
+    // Consolidate company IDs from companyIds, assignedCompanies, and assignedCompany
     const companyIds: number[] = []
     if (payload.companyIds && payload.companyIds.length > 0) {
       for (const cid of payload.companyIds) {
@@ -280,14 +279,16 @@ export const employeeService = {
           companyIds.push(numId)
         }
       }
-    } else if (payload.assignedCompanies && payload.assignedCompanies.length > 0) {
+    }
+    if (payload.assignedCompanies && payload.assignedCompanies.length > 0) {
       for (const nameOrId of payload.assignedCompanies) {
         const resolved = resolveCompanyId(nameOrId, companies)
         if (resolved !== null && !companyIds.includes(resolved)) {
           companyIds.push(resolved)
         }
       }
-    } else if (payload.assignedCompany) {
+    }
+    if (payload.assignedCompany) {
       const resolved = resolveCompanyId(payload.assignedCompany, companies)
       if (resolved !== null && !companyIds.includes(resolved)) {
         companyIds.push(resolved)
@@ -295,6 +296,9 @@ export const employeeService = {
     }
 
     const primaryCompanyId = companyIds.length > 0 ? companyIds[0] : null
+    const assignedCompanyNames = payload.assignedCompanies && payload.assignedCompanies.length > 0
+      ? payload.assignedCompanies
+      : (payload.assignedCompany ? [payload.assignedCompany] : [])
 
     const response = await fetch('/api/v1/users', {
       method: 'POST',
@@ -302,10 +306,10 @@ export const employeeService = {
       body: JSON.stringify({
         name: payload.fullName,
         email: payload.email,
-        password: payload.password || 'Password123!',
         company_id: primaryCompanyId,
         company_ids: companyIds,
-        company_name: payload.assignedCompany || undefined,
+        company_name: assignedCompanyNames[0] || payload.assignedCompany || undefined,
+        company_names: assignedCompanyNames,
         is_admin: payload.role === 'Admin',
         role: payload.role.toLowerCase(),
         photo_url: payload.avatarUrl && !payload.avatarUrl.startsWith('data:') ? payload.avatarUrl : null,
@@ -420,6 +424,17 @@ export const employeeService = {
     if (!response.ok) {
       throw new Error(await getApiError(response))
     }
+  },
+
+  async reinviteUser(userId: string): Promise<EmployeeUser> {
+    const response = await fetch(`/api/v1/users/${userId}/reinvite`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) {
+      throw new Error(await getApiError(response))
+    }
+    return await mapApiResponse(response, mapUser)
   },
 
   async createCompany(payload: CreateCompanyPayload): Promise<Company> {

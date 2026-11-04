@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Loader2, AlertCircle, Check, ShieldCheck } from 'lucide-react'
@@ -60,11 +61,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
       await verify2FA(code)
       setIsSuccess(true)
     } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : 'Invalid authentication code. Please try again.'
-      setError(message)
+      setError(formatUserFriendlyErrorMessage(err, 'Invalid authentication code. Please try again.'))
       if (inputRef.current) {
         inputRef.current.focus()
       }
@@ -185,10 +182,6 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                     <InputOTPSlot index={5} isError={!!error} />
                   </InputOTPGroup>
                 </InputOTP>
-                <div className="rounded-xl bg-surface px-3 py-1.5 text-xs text-muted-fg text-center border border-stroke/30">
-                  <span>Seeded Verification Code: </span>
-                  <span className="font-mono font-bold text-focus">123456</span>
-                </div>
               </div>
 
               <div className="text-center text-xs sm:text-sm text-muted-fg font-medium">
@@ -224,7 +217,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                       setCode('')
                       resendCountdown.start(result.resendAvailableIn)
                     } catch (err: unknown) {
-                      setError(err instanceof Error ? err.message : 'Unable to resend the code.')
+                      setError(formatUserFriendlyErrorMessage(err, 'Unable to resend the code.'))
                     }
                   }}
                   disabled={!resendCountdown.isExpired || isLoading}

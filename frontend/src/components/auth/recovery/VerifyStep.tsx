@@ -16,6 +16,7 @@ import {
   passwordRecoveryService,
   OTP_TTL_SECONDS,
 } from '@/services/passwordRecoveryService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 interface VerifyStepProps {
   email: string
@@ -44,9 +45,7 @@ export const VerifyStep: React.FC<VerifyStepProps> = ({ email, onVerified }) => 
       const res = await passwordRecoveryService.verifyCode(email, code)
       onVerified(res.resetToken)
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Invalid verification code. Please try again.'
-      setError(message)
+      setError(formatUserFriendlyErrorMessage(err, 'Invalid verification code. Please try again.'))
       // Refocus first slot on error
       if (inputRef.current) {
         inputRef.current.focus()
@@ -70,9 +69,7 @@ export const VerifyStep: React.FC<VerifyStepProps> = ({ email, onVerified }) => 
         inputRef.current.focus()
       }
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Failed to resend code. Please try again.'
-      setError(message)
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to resend code. Please try again.'))
     } finally {
       setIsResending(false)
     }

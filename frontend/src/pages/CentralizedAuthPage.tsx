@@ -20,6 +20,7 @@ import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { type AuthorizedCompany, getCompanyInitials } from '@/config/centralizedCompanies'
 import { employeeService } from '@/services/employeeService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
 import logo2Url from '@/assets/LOGO2.png'
@@ -80,7 +81,7 @@ export const CentralizedAuthPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to load authorized companies:', err)
-      setError(err?.message || 'Failed to retrieve companies from database.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to retrieve companies from database.'))
     } finally {
       setIsLoading(false)
     }
@@ -185,7 +186,7 @@ export const CentralizedAuthPage: React.FC = () => {
               <img
                 src={mct2Url}
                 alt="MCT"
-                className="h-4 sm:h-4.5 w-auto object-contain object-left block"
+                className="h-3.5 sm:h-4 w-auto object-contain object-left block"
               />
               <span className="text-[10px] font-semibold text-muted-fg leading-none mt-0.5 tracking-tight">
                 Group of Companies
@@ -457,7 +458,7 @@ export const CentralizedAuthPage: React.FC = () => {
 
                         {/* Info from Database */}
                         <div className="min-w-0 flex-1">
-                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors line-clamp-1 leading-tight">
+                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors leading-snug break-words">
                             {company.name}
                           </h3>
                           <p className="text-xs text-gray-400 font-medium mt-0.5">
@@ -506,8 +507,8 @@ export const CentralizedAuthPage: React.FC = () => {
                           </AvatarFallback>
                         </Avatar>
 
-                        <div className="min-w-0">
-                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors truncate">
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-bold text-sm sm:text-base text-gray-900 group-hover:text-[#960C01] transition-colors leading-snug break-words">
                             {company.name}
                           </h3>
                           <div className="flex items-center gap-3 text-xs text-gray-400 mt-0.5">

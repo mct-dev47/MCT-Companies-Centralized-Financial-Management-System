@@ -126,14 +126,14 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
           {children && <div className="w-full text-left">{children}</div>}
 
-          <div className="flex items-center justify-center gap-3 pt-3 w-full">
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-center gap-2.5 sm:gap-3 pt-3 w-full">
             {Boolean(cancelLabel) && (
               <Button
                 type="button"
                 variant="outline"
                 disabled={isLoading}
                 onClick={() => handleOpenChange(false)}
-                className="flex-1 h-11 rounded-xl border border-stroke/50 text-focus hover:bg-surface text-sm font-medium transition-colors"
+                className="w-full sm:flex-1 h-11 rounded-xl border border-stroke/50 text-focus hover:bg-surface text-sm font-medium transition-colors"
               >
                 {cancelLabel}
               </Button>
@@ -143,7 +143,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
               variant={variant === 'destructive' ? 'destructive' : 'default'}
               disabled={isLoading}
               onClick={onConfirm}
-              className="flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
+              className="w-full sm:flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
             >
               {isLoading ? (
                 <>

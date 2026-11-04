@@ -58,6 +58,7 @@ import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { isDateInRange, formatCreatedAt } from '@/utils/dateUtils'
+import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { loanService } from '@/services/loanService'
@@ -88,8 +89,8 @@ export const PettyCashPage: React.FC = () => {
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
   const isCompanyScoped = isSupervisor && !isAudit
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -244,6 +245,7 @@ export const PettyCashPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Failed to load petty cash data from backend:', err)
+      notifyError(err, 'Unable to load petty cash records. Please try again.')
     } finally {
       setIsLoading(false)
     }
@@ -303,7 +305,9 @@ export const PettyCashPage: React.FC = () => {
       setApprovalFeedback('Petty cash request updated successfully.')
       setTimeout(() => setApprovalFeedback(null), 5000)
     } catch (err: any) {
-      setEditError(err?.message || 'Failed to update request.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to update request.')
+      setEditError(msg)
+      notifyError(err, 'Failed to update request.')
     } finally {
       setIsEditing(false)
     }
@@ -325,7 +329,9 @@ export const PettyCashPage: React.FC = () => {
       setApprovalFeedback('Petty cash request deleted successfully.')
       setTimeout(() => setApprovalFeedback(null), 5000)
     } catch (err: any) {
-      setDeleteError(err?.message || 'Failed to delete request.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to delete request.')
+      setDeleteError(msg)
+      notifyError(err, 'Failed to delete request.')
     } finally {
       setIsDeleting(false)
     }
@@ -519,7 +525,9 @@ export const PettyCashPage: React.FC = () => {
       setApprovalFeedback(`Petty cash request has been ${actionText} with the remark recorded.`)
       setTimeout(() => setApprovalFeedback(null), 5000)
     } catch (err: any) {
-      setReviewError(err?.message || 'Failed to submit decision.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to submit decision.')
+      setReviewError(msg)
+      notifyError(err, 'Failed to submit decision.')
     } finally {
       setIsSubmittingReview(false)
     }
@@ -668,7 +676,7 @@ export const PettyCashPage: React.FC = () => {
             </div>
 
             {/* Request Petty Cash Button (Hidden for Audit) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={() => setIsTopUpModalOpen(true)}
@@ -1134,7 +1142,7 @@ export const PettyCashPage: React.FC = () => {
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
-                        ) : isManuel ? (
+                        ) : isOwner ? (
                           <span className="text-muted-fg text-xs">—</span>
                         ) : isPendingFinance && entry.type === 'topup' ? (
                           <div className="flex items-center justify-center gap-1">
@@ -1384,7 +1392,7 @@ export const PettyCashPage: React.FC = () => {
                 {/* Pending Finance: Allow Edit / Delete for topups */}
                 {targetEntry.type === 'topup' &&
                   (targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') &&
-                  !isAudit && (
+                  !isAudit && !isOwner && (
                     <div className="flex items-center gap-2">
                       <Button
                         type="button"

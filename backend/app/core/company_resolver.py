@@ -9,7 +9,6 @@ from fastapi import HTTPException
 # Known email aliases for seeded accounts
 EMAIL_ALIASES: dict[str, str] = {
     "temporaryemployee@gmail.com": "temporary.employee@mct.com",
-    "remi.lee@mct.com": "admin@mct.com",
     "auditor@mct.com": "audit@mct.com",
     "finance.manager@mct.com": "finance@mct.com",
 }

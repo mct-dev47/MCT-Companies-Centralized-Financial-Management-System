@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { Building2, Download, Search, Tag, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -107,7 +108,7 @@ export const CompanyLoansPage: React.FC = () => {
         endDate: filters.date || undefined,
       })
     } catch (err) {
-      notifyError(err, 'Unable to export company loans.')
+      setError(notifyError(err, 'Unable to export company loans.'))
     }
   }
 
@@ -135,7 +136,7 @@ export const CompanyLoansPage: React.FC = () => {
           .sort((a, b) => a.paymentDate.localeCompare(b.paymentDate))
       )
     } catch (err) {
-      notifyError(err, 'Unable to load the repayment timeline.')
+      setError(notifyError(err, 'Unable to load the repayment timeline.'))
     }
   }
 

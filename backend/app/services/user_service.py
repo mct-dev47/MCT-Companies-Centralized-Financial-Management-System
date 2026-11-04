@@ -1,13 +1,19 @@
+import hashlib
 import logging
 from pathlib import PurePosixPath
+import secrets
+import threading
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.encryption import encrypt_payload
 from app.db.supabase import get_supabase_admin_client
 from app.models.company import Company
+from app.models.invitation import InvitationOutbox, UserInvitation
 from app.models.user import User, UserCompany
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
 
@@ -26,7 +32,7 @@ class UserService:
     """Database profile operations and Supabase Auth coordination."""
     _user_picture_bucket = "user profiles"
 
-    ALLOWED_ROLES = {"finance", "audit", "supervisor"}
+    ALLOWED_ROLES = {"finance", "audit", "auditor", "supervisor", "owner"}
 
     def __init__(self, db: Session):
         self.db = db
@@ -36,7 +42,7 @@ class UserService:
         """Check if user is the protected primary Admin account."""
         if not user:
             return False
-        return user.user_id == 1 or (user.email and user.email.strip().lower() == "admin@mct.com")
+        return bool(user.user_id == 1 or user.is_admin or (user.role and user.role.strip().lower() == "admin"))
 
     def _extract_storage_path(self, photo_url: Optional[str]) -> Optional[str]:
         if not photo_url:
@@ -130,7 +136,7 @@ class UserService:
             raise UserValidationError("Cannot create additional Admin accounts. The system allows only one primary administrator.")
 
         if raw_role not in self.ALLOWED_ROLES:
-            raise UserValidationError(f"Invalid role '{user_in.role}'. Allowed roles: Finance, Audit, Supervisor.")
+            raise UserValidationError(f"Invalid role '{user_in.role}'. Allowed roles: Finance, Audit, Supervisor, Owner.")
 
         user_role = raw_role
 
@@ -142,28 +148,42 @@ class UserService:
                 seen.add(cid)
                 company_ids.append(cid)
 
-        # If no numeric company ID provided, resolve from company_name
-        if not company_ids and getattr(user_in, "company_name", None):
+        # Also resolve from company_names or company_name
+        c_names = list(getattr(user_in, "company_names", []) or [])
+        if getattr(user_in, "company_name", None) and user_in.company_name not in c_names:
+            c_names.append(user_in.company_name)
+
+        if c_names:
             try:
                 from app.core.company_resolver import resolve_company
-                resolved = resolve_company(self.db, company_name=user_in.company_name)
-                if resolved and resolved.company_id:
-                    company_ids.append(resolved.company_id)
+                for cname in c_names:
+                    resolved = resolve_company(self.db, company_name=cname)
+                    if resolved and resolved.company_id and resolved.company_id not in seen:
+                        seen.add(resolved.company_id)
+                        company_ids.append(resolved.company_id)
             except Exception:
                 pass
 
         self._validate_user_assignment(company_ids, False, user_role)
         self._ensure_email_available(user_in.email)
         primary_company_id = company_ids[0] if company_ids else user_in.company_id
-        auth_user_id = self._create_auth_user(user_in, user_in.email, company_id=primary_company_id, role=user_role)
+        auth_user_id = self._create_auth_user(
+            user_in,
+            user_in.email,
+            company_id=primary_company_id,
+            company_ids=company_ids,
+            role=user_role,
+        )
 
         user = User(
             name=user_in.name.strip(),
             email=user_in.email,
             company_id=primary_company_id,
             is_admin=False,
-            role=user_role,
+            role="audit" if user_role == "auditor" else user_role,
             photo_url=user_in.photo_url,
+            status="PROVISIONED",
+            must_change_password=True,
         )
         try:
             self.db.add(user)
@@ -173,11 +193,50 @@ class UserService:
             # Insert into user_companies
             for cid in company_ids:
                 self.db.add(UserCompany(user_id=user.user_id, company_id=cid))
-            if company_ids:
-                self.db.commit()
-                self.db.refresh(user)
 
+            # Generate Single-Use Setup Token
+            raw_token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+            now = datetime.now(timezone.utc)
+            invitation = UserInvitation(
+                user_id=user.user_id,
+                token_hash=token_hash,
+                status="PENDING",
+                expires_at=now + timedelta(hours=24),
+            )
+            self.db.add(invitation)
+            self.db.flush()
 
+            # Enqueue to Outbox with encrypted payload
+            from app.core.config import settings
+            from app.core.encryption import encrypt_invitation_token
+            frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+            encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
+            setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
+            encrypted_payload = encrypt_payload({
+                "user_id": user.user_id,
+                "user_name": user.name,
+                "setup_url": setup_url,
+                "raw_token": raw_token,
+            })
+            outbox_entry = InvitationOutbox(
+                idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
+                user_id=user.user_id,
+                invitation_id=invitation.invitation_id,
+                recipient_email=user.email,
+                encrypted_payload=encrypted_payload,
+                status="PENDING",
+            )
+            self.db.add(outbox_entry)
+            self.db.commit()
+            self.db.refresh(user)
+
+            # Trigger async outbox dispatch pass
+            try:
+                from app.services.invitation_dispatcher import process_pending_outbox_batch
+                threading.Thread(target=process_pending_outbox_batch, daemon=True).start()
+            except Exception as e:
+                logger.warning("Could not trigger background outbox dispatcher: %s", e)
 
             return self.to_response(user)
         except IntegrityError as error:
@@ -185,8 +244,76 @@ class UserService:
             self._delete_auth_user(auth_user_id)
             raise UserValidationError("A user with this email already exists.") from error
         except SQLAlchemyError as error:
+            self.db.rollback()
             self._delete_auth_user(auth_user_id)
             raise self._database_error("create user", error)
+
+    def reinvite_user(self, user_id: int) -> UserResponse:
+        user = self.get_user(user_id)
+        if not user:
+            raise UserValidationError("The user was not found.")
+
+        if self.is_protected_admin(user):
+            raise UserValidationError("Cannot re-invite the primary administrator.")
+
+        if user.status == "ACTIVE":
+            raise UserValidationError("User account is already active and cannot be re-invited.")
+
+        # Revoke old pending or claimed invitations
+        self.db.query(UserInvitation).filter(
+            UserInvitation.user_id == user_id,
+            UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+        ).update({"status": "REVOKED"}, synchronize_session=False)
+
+        # Cancel pending outbox jobs
+        self.db.query(InvitationOutbox).filter(
+            InvitationOutbox.user_id == user_id,
+            InvitationOutbox.status.in_(["PENDING", "FAILED"]),
+        ).update({"status": "CANCELLED", "encrypted_payload": None}, synchronize_session=False)
+
+        # Generate fresh single-use token
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        now = datetime.now(timezone.utc)
+        invitation = UserInvitation(
+            user_id=user.user_id,
+            token_hash=token_hash,
+            status="PENDING",
+            expires_at=now + timedelta(hours=24),
+        )
+        self.db.add(invitation)
+        self.db.flush()
+
+        from app.core.config import settings
+        from app.core.encryption import encrypt_invitation_token
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+        encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
+        setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
+        encrypted_payload = encrypt_payload({
+            "user_id": user.user_id,
+            "user_name": user.name,
+            "setup_url": setup_url,
+            "raw_token": raw_token,
+        })
+        outbox_entry = InvitationOutbox(
+            idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
+            user_id=user.user_id,
+            invitation_id=invitation.invitation_id,
+            recipient_email=user.email,
+            encrypted_payload=encrypted_payload,
+            status="PENDING",
+        )
+        self.db.add(outbox_entry)
+        self.db.commit()
+        self.db.refresh(user)
+
+        try:
+            from app.services.invitation_dispatcher import process_pending_outbox_batch
+            threading.Thread(target=process_pending_outbox_batch, daemon=True).start()
+        except Exception as e:
+            logger.warning("Could not trigger background outbox dispatcher: %s", e)
+
+        return self.to_response(user)
 
     # update an existing user and return a UserResponse, or None if not found
     def update_user(
@@ -210,7 +337,7 @@ class UserService:
             if role_val == "admin":
                 raise UserValidationError("Cannot assign the Admin role. The system allows only one primary administrator.")
             if role_val not in self.ALLOWED_ROLES:
-                raise UserValidationError(f"Invalid role '{update_data['role']}'. Allowed roles: Finance, Audit, Supervisor.")
+                raise UserValidationError(f"Invalid role '{update_data['role']}'. Allowed roles: Finance, Audit, Supervisor, Owner.")
             update_data["role"] = role_val
 
         if update_data.get("is_admin") is True:
@@ -380,6 +507,8 @@ class UserService:
                 company_ids=assigned_cids,
                 is_admin=user.is_admin,
                 role=user_role,
+                status=getattr(user, "status", "ACTIVE") or "ACTIVE",
+                must_change_password=bool(getattr(user, "must_change_password", False)),
                 photo_url=photo_url,
                 last_login_at=user.last_login_at,
                 created_at=user.created_at,
@@ -422,24 +551,36 @@ class UserService:
             self._ensure_company_exists(cid)
 
     @staticmethod
-    def _create_auth_user(user_in: UserCreate, email: str, company_id: Optional[int] = None, role: str = "supervisor") -> str:
+    def _create_auth_user(
+        user_in: UserCreate,
+        email: str,
+        company_id: Optional[int] = None,
+        company_ids: Optional[list[int]] = None,
+        role: str = "supervisor",
+    ) -> str:
         try:
+            cids = company_ids or ([company_id] if company_id else [])
             user_meta = {"name": user_in.name.strip()}
             if company_id is not None:
                 user_meta["company_id"] = company_id
+            if cids:
+                user_meta["company_ids"] = cids
             if role:
                 user_meta["role"] = role
 
             app_meta = {"is_admin": False}
             if company_id is not None:
                 app_meta["company_id"] = company_id
+            if cids:
+                app_meta["company_ids"] = cids
             if role:
                 app_meta["role"] = role
 
+            internal_seed = secrets.token_urlsafe(32)
             response = get_supabase_admin_client().auth.admin.create_user({
                 "email": email,
-                "password": user_in.password,
-                "email_confirm": True,
+                "password": internal_seed,
+                "email_confirm": False,
                 "user_metadata": user_meta,
                 "app_metadata": app_meta,
             })

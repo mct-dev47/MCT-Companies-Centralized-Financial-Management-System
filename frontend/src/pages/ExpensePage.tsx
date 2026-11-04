@@ -82,6 +82,7 @@ type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 
 import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
+import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 const ITEMS_PER_PAGE = 10
 
@@ -97,9 +98,9 @@ export const ExpensePage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
-  const canAdd = !isAudit && (isCompanyUser || isFinance)
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
+  const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const [expenses, setExpenses] = React.useState<ExpenseItem[]>([])
@@ -297,6 +298,7 @@ export const ExpensePage: React.FC = () => {
       setExpenses(data)
     } catch (err) {
       console.error('Failed to load expenses:', err)
+      notifyError(err, 'Unable to load expenses. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -587,6 +589,7 @@ export const ExpensePage: React.FC = () => {
       setDeleteConfirmExpense(null)
     } catch (err) {
       console.error('Failed to delete expense:', err)
+      notifyError(err, 'Unable to delete expense. Please try again.')
     } finally {
       setIsDeleting(false)
     }
@@ -1405,7 +1408,7 @@ export const ExpensePage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
-                          ) : isManuel ? (
+                          ) : isOwner ? (
                             <span className="text-muted-fg text-xs">—</span>
                           ) : expense.auditStatus === 'Verified' ? (
                             <span

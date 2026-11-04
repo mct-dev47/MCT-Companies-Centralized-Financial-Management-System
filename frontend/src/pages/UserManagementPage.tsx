@@ -126,8 +126,7 @@ export const UserManagementPage: React.FC = () => {
       message: (
         <span className="block space-y-2.5">
           <span>
-            User <strong className="text-focus">{newUser.fullName}</strong> has been created successfully appointed to{' '}
-            <strong className="text-focus">{formatCompanyList(assigned)}</strong> as{' '}
+            User <strong className="text-focus">{newUser.fullName}</strong> has been created successfully appointed as{' '}
             <strong className="text-focus">{newUser.role || 'Supervisor'}</strong>.
           </span>
           {assigned.length > 0 && (
@@ -388,7 +387,7 @@ export const UserManagementPage: React.FC = () => {
                         <span>{roleDisplay}</span>
                       </span>
 
-                      {(usr.isProtected || usr.id === '1' || usr.email.toLowerCase() === 'admin@mct.com') && (
+                      {(usr.isProtected || usr.isAdmin || usr.id === '1' || usr.role?.toLowerCase() === 'admin') && (
                         <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
                           Protected
                         </span>

@@ -17,6 +17,7 @@ import { IconInput } from '@/components/auth/IconInput'
 import { PasswordInput } from '@/components/auth/PasswordInput'
 import { signInSchema, type SignInFormValues } from '@/lib/validation/auth'
 import { useSession } from '@/hooks/useSession'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const SignInForm: React.FC = () => {
   const navigate = useNavigate()
@@ -67,22 +68,20 @@ export const SignInForm: React.FC = () => {
       }
     } catch (err: unknown) {
       // Generic server error for bad credentials; never reveal which field failed
-      const message =
-        err instanceof Error ? err.message : 'Invalid email or password.'
-      setServerError(message)
+      setServerError(formatUserFriendlyErrorMessage(err, 'Invalid email or password.'))
     } finally {
       setIsLoading(false)
     }
   }
 
   return (
-    <div className="w-full max-w-[480px] sm:max-w-[540px] px-6 sm:px-8 py-8 mx-auto">
+    <div className="w-full max-w-[min(480px,94vw)] px-[clamp(0.75rem,2.5vw,2rem)] py-[clamp(0.5rem,2vh,2rem)] mx-auto">
       {/* Header Block */}
-      <div className="text-center mb-8">
-        <h1 className="text-4xl sm:text-5xl lg:text-heading font-bold text-primary tracking-tight">
+      <div className="text-center mb-[clamp(0.75rem,2.5vh,2rem)]">
+        <h1 className="text-[clamp(1.5rem,3.2vh,2.5rem)] md:text-4xl lg:text-heading font-bold text-primary tracking-tight">
           Welcome Back!
         </h1>
-        <p className="mt-2 text-base sm:text-lg text-muted-fg font-normal">
+        <p className="mt-1 sm:mt-1.5 text-[clamp(0.75rem,1.5vh,1rem)] text-muted-fg font-normal">
           Sign in to access MCT Financial Management System
         </p>
       </div>
@@ -92,16 +91,16 @@ export const SignInForm: React.FC = () => {
         <div
           role="alert"
           aria-live="assertive"
-          className="mb-6 flex items-center gap-3 rounded-lg border border-error/30 bg-error/10 p-4 text-sm text-error"
+          className="mb-4 sm:mb-6 flex items-center gap-3 rounded-lg border border-error/30 bg-error/10 p-3 sm:p-4 text-xs sm:text-sm text-error"
         >
-          <AlertCircle className="h-5 w-5 shrink-0" />
+          <AlertCircle className="h-4 sm:h-5 w-4 sm:w-5 shrink-0" />
           <span>{serverError}</span>
         </div>
       )}
 
       {/* Main Form */}
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5" noValidate>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-[clamp(0.75rem,1.8vh,1.25rem)]" noValidate>
           {/* Email Field */}
           <FormField
             control={form.control}
@@ -117,7 +116,7 @@ export const SignInForm: React.FC = () => {
                     type="email"
                     placeholder="Email Address"
                     autoComplete="email"
-                    leadingIcon={<Mail className="h-5 w-5" />}
+                    leadingIcon={<Mail className="h-4 sm:h-5 w-4 sm:w-5" />}
                     error={!!fieldState.error}
                     {...field}
                   />
@@ -151,12 +150,12 @@ export const SignInForm: React.FC = () => {
           />
 
           {/* Remember Me & Forgot Password Row */}
-          <div className="flex items-center justify-between pt-1">
+          <div className="flex items-center justify-between pt-0.5 sm:pt-1">
             <FormField
               control={form.control}
               name="rememberMe"
               render={({ field }) => (
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2 sm:gap-2.5">
                   <Checkbox
                     id="remember-me"
                     checked={field.value}
@@ -164,7 +163,7 @@ export const SignInForm: React.FC = () => {
                   />
                   <Label
                     htmlFor="remember-me"
-                    className="text-sm font-normal text-focus cursor-pointer select-none"
+                    className="text-xs sm:text-sm font-normal text-focus cursor-pointer select-none"
                   >
                     Remember me
                   </Label>
@@ -174,22 +173,22 @@ export const SignInForm: React.FC = () => {
 
             <Link
               to="/forgot-password"
-              className="text-sm font-semibold text-focus hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus rounded-sm"
+              className="text-xs sm:text-sm font-semibold text-focus hover:text-primary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus rounded-sm"
             >
               Forgot Password?
             </Link>
           </div>
 
-          {/* Submit Button - Solid Vibrant #960C01 */}
-          <div className="pt-2">
+          {/* Submit Button - Responsive Height & Typography */}
+          <div className="pt-1.5 sm:pt-2">
             <Button
               type="submit"
               disabled={isLoading}
-              className="w-full h-14 text-base font-semibold shadow-sm bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
+              className="w-full h-11 sm:h-12 md:h-14 rounded-xl text-sm sm:text-base md:text-lg font-bold shadow-md shadow-[#960C01]/20 hover:shadow-lg bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white transition-all cursor-pointer"
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  <Loader2 className="mr-2 h-4 sm:h-5 w-4 sm:w-5 animate-spin" />
                   Signing in…
                 </>
               ) : (

@@ -1,3 +1,4 @@
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -139,8 +140,8 @@ export const TenantPage: React.FC = () => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
 
   // Leases come from the database. `loadError` is set when the last load failed: the page then shows
   // the last copy it had (if any) with a warning, and every save is refused by the server call.
@@ -159,7 +160,7 @@ export const TenantPage: React.FC = () => {
       // Keep the open lease in step with what the server has (or close it if someone deleted it)
       setActiveTenant((prev) => (prev ? list.find((t) => t.id === prev.id) ?? null : prev))
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Could not load tenant leases.')
+      setLoadError(formatUserFriendlyErrorMessage(err, 'Could not load tenant leases.'))
     } finally {
       setIsLoading(false)
     }
@@ -211,7 +212,7 @@ export const TenantPage: React.FC = () => {
   }
 
   // Turn a server error into one clear message for the banner
-  const messageOf = (err: unknown): string => (err instanceof Error ? err.message : 'The change could not be saved.')
+  const messageOf = (err: unknown): string => formatUserFriendlyErrorMessage(err, 'The change could not be saved.')
 
   // Audit review: saved on the server, which records who reviewed and when (spec 0017)
   const saveAudit = async (lease: TenantLease, status: 'Verified' | 'Flagged') => {
@@ -1408,7 +1409,7 @@ export const TenantPage: React.FC = () => {
                 </Button>
               )}
 
-              {!isAudit && (
+              {!isAudit && !isOwner && (
                 <Button
                   type="button"
                   variant="outline"
@@ -1737,7 +1738,7 @@ export const TenantPage: React.FC = () => {
                             <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Penalty</th>
                             <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Paid</th>
                             <th className="py-2.5 px-3.5 text-right whitespace-nowrap">Remaining</th>
-                            {!isAudit && (
+                            {!isAudit && !isOwner && (
                               <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                             )}
                           </tr>
@@ -1797,7 +1798,7 @@ export const TenantPage: React.FC = () => {
                               <td className="py-2.5 px-3.5 text-right font-bold tabular-nums text-amber-700 whitespace-nowrap">
                                 {period.remaining > 0 ? formatPHP(period.remaining) : <span className="text-slate-400">—</span>}
                               </td>
-                              {!isAudit && (
+                              {!isAudit && !isOwner && (
                                 <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                   <div className="inline-flex items-center gap-1.5 justify-center">
                                     {period.remaining > 0 && (
@@ -1865,7 +1866,7 @@ export const TenantPage: React.FC = () => {
                             <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                             <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                             <th className="py-2.5 px-3.5 text-left">Remarks</th>
-                            {!isAudit && (
+                            {!isAudit && !isOwner && (
                               <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                             )}
                           </tr>
@@ -1904,7 +1905,7 @@ export const TenantPage: React.FC = () => {
                               <td className="py-2.5 px-3.5 text-muted-fg max-w-[200px] truncate" title={rec.notes}>
                                 {rec.notes || '—'}
                               </td>
-                              {!isAudit && (
+                              {!isAudit && !isOwner && (
                                 <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                   <div className="inline-flex items-center gap-1 justify-center">
                                     <button
@@ -1955,7 +1956,7 @@ export const TenantPage: React.FC = () => {
                             <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                             <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                             <th className="py-2.5 px-3.5 text-left">Remarks</th>
-                            {!isAudit && (
+                            {!isAudit && !isOwner && (
                               <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                             )}
                           </tr>
@@ -1995,7 +1996,7 @@ export const TenantPage: React.FC = () => {
                               <td className="py-2.5 px-3.5 text-muted-fg max-w-[200px] truncate" title={entry.notes}>
                                 {entry.notes || '—'}
                               </td>
-                              {!isAudit && (
+                              {!isAudit && !isOwner && (
                                 <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                   {entry.recordId ? (
                                     <div className="inline-flex items-center gap-1 justify-center">
@@ -2485,7 +2486,7 @@ export const TenantPage: React.FC = () => {
             </div>
 
             {/* New Tenant Lease Button (Operational users) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={handleOpenAdd}
@@ -2928,7 +2929,7 @@ export const TenantPage: React.FC = () => {
                       className="px-3.5 py-3.5 text-center whitespace-nowrap"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {isManuel ? (
+                      {isOwner ? (
                         <span className="text-muted-fg text-xs">—</span>
                       ) : (
                         <button

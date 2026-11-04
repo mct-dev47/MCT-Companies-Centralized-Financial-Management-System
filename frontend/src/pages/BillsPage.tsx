@@ -73,8 +73,8 @@ export const BillsPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isFinance = userRole === 'finance'
   const isCompanyScoped = !isAdmin && !isFinance
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || ''
 
   // Data states
@@ -679,7 +679,7 @@ export const BillsPage: React.FC = () => {
             </div>
 
             {/* Add Bill Button (Hidden for Audit) */}
-            {!isAudit && (
+            {!isAudit && !isOwner && (
               <Button
                 type="button"
                 onClick={() => setIsAddModalOpen(true)}
@@ -913,7 +913,7 @@ export const BillsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {!isAudit && (
+                  {!isAudit && !isOwner && (
                     <Button
                       type="button"
                       size="sm"
@@ -1133,7 +1133,7 @@ export const BillsPage: React.FC = () => {
                         className="w-[5%] px-1 py-3.5 text-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {isManuel ? (
+                        {isOwner ? (
                           <span className="text-muted-fg text-xs">—</span>
                         ) : (
                           <Button

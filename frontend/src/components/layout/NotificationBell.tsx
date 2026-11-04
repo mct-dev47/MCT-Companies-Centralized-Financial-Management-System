@@ -118,8 +118,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   }, [userId, isAuthenticated])
 
   const userRole = (user?.role || '').toLowerCase()
+  if (userRole === 'admin') {
+    return null
+  }
+
   const isMultiCompanyRole =
-    userRole === 'admin' || userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
+    userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
   const scopedCompanyName = isMultiCompanyRole
     ? activeCompany || 'All Companies'
     : user?.assignedCompany || activeCompany || 'All Companies'
@@ -669,7 +673,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                         item.iconBg
                       )}
                     >
-                      <Icon className={cn('h-4.5 w-4.5', item.iconColor)} />
+                      <Icon className={cn('h-4 w-4', item.iconColor)} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between gap-2">

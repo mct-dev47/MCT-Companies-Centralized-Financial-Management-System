@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +69,8 @@ class ConnectionManager:
         claims: dict[str, Any] | None = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        await websocket.accept()
+        if getattr(websocket, "client_state", None) != WebSocketState.CONNECTED:
+            await websocket.accept()
         self.active_connections.append(websocket)
         merged_data = dict(claims or {})
         if metadata:

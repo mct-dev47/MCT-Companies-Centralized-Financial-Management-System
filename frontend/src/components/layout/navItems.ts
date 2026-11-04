@@ -186,59 +186,65 @@ export function getSidebarNavSections(
   const isFilCap = isFilCapCompany(targetCompany)
   const isJK = isJKPropertyCompany(targetCompany)
 
+  // Admin has NO operation section and NO administration section header in the sidebar.
+  // Its core management links (Company Management, User Management, Activity Log) reside directly in main items.
+  if (isAdmin) {
+    return {
+      mainItems: [
+        NAV_ITEM_COMPANY_MANAGEMENT,
+        NAV_ITEM_USER_MANAGEMENT,
+        NAV_ITEM_ACTIVITY_LOG,
+      ],
+      operationsItems: [],
+      adminItems: [],
+    }
+  }
+
   // 1. MAIN ITEMS
-  // Admin Main: Dashboard only (configuration & management scoped)
   // Audit Main: Dashboard -> Transactions -> Petty Cash -> Bills
   // Supervisor / Finance / Company Main: Dashboard -> Petty Cash -> Bills -> Transactions
-  const mainItems: NavItem[] = isAdmin
-    ? []
-    : isAudit
+  const mainItems: NavItem[] = isAudit
     ? [NAV_ITEM_DASHBOARD, NAV_ITEM_TRANSACTIONS, NAV_ITEM_PETTY_CASH, NAV_ITEM_BILLS]
     : [NAV_ITEM_DASHBOARD, NAV_ITEM_PETTY_CASH, NAV_ITEM_BILLS, NAV_ITEM_TRANSACTIONS]
 
   // 2. OPERATIONS ITEMS
-  // Admin has no operations items per system scope (Admin is responsible only for configuration & management)
   const operationsItems: NavItem[] = []
 
-  if (!isAdmin) {
-    if (isAudit) {
-      // Audit has view-only oversight over all core operations including Tenants and Lending
-      operationsItems.push(
-        NAV_ITEM_SALES,
-        NAV_ITEM_RECEIVABLES,
-        NAV_ITEM_EXPENSE,
-        NAV_ITEM_LOAN,
-        NAV_ITEM_BANK_MANAGEMENT,
-        NAV_ITEM_TENANTS,
-        NAV_ITEM_LENDING
-      )
-    } else {
-      // Filcap (Lending) and JK do not have the Sales page per business specifications
-      if (!isFilCap && !isJK) {
-        // Sales and Food Receivables under Operations for Finance, Supervisors
-        operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
-      }
-      operationsItems.push(NAV_ITEM_EXPENSE, NAV_ITEM_LOAN)
+  if (isAudit) {
+    // Audit has view-only oversight over all core operations including Tenants and Lending
+    operationsItems.push(
+      NAV_ITEM_SALES,
+      NAV_ITEM_RECEIVABLES,
+      NAV_ITEM_EXPENSE,
+      NAV_ITEM_LOAN,
+      NAV_ITEM_BANK_MANAGEMENT,
+      NAV_ITEM_TENANTS,
+      NAV_ITEM_LENDING
+    )
+  } else {
+    // Filcap (Lending) and JK do not have the Sales page per business specifications
+    if (!isFilCap && !isJK) {
+      // Sales and Food Receivables under Operations for Finance, Supervisors
+      operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
+    }
+    operationsItems.push(NAV_ITEM_EXPENSE, NAV_ITEM_LOAN)
 
-      // Bank Management in Operations for Finance and Company accounts
-      operationsItems.push(NAV_ITEM_BANK_MANAGEMENT)
+    // Bank Management in Operations for Finance and Company accounts
+    operationsItems.push(NAV_ITEM_BANK_MANAGEMENT)
 
-      // FilCap gets Lending in Operations exclusively
-      if (isFilCap) {
-        operationsItems.push(NAV_ITEM_LENDING)
-      }
+    // FilCap gets Lending in Operations exclusively
+    if (isFilCap) {
+      operationsItems.push(NAV_ITEM_LENDING)
+    }
 
-      // JK Property gets Tenants in Operations exclusively
-      if (isJK) {
-        operationsItems.push(NAV_ITEM_TENANTS)
-      }
+    // JK Property gets Tenants in Operations exclusively
+    if (isJK) {
+      operationsItems.push(NAV_ITEM_TENANTS)
     }
   }
 
-  // 3. ADMINISTRATION ITEMS (Admin only)
-  const adminItems: NavItem[] = isAdmin
-    ? [NAV_ITEM_COMPANY_MANAGEMENT, NAV_ITEM_USER_MANAGEMENT, NAV_ITEM_ACTIVITY_LOG]
-    : []
+  // 3. ADMINISTRATION ITEMS (None for non-admin)
+  const adminItems: NavItem[] = []
 
   return {
     mainItems,

@@ -18,6 +18,7 @@ import {
   type RequestResetFormValues,
 } from '@/lib/validation/recovery'
 import { passwordRecoveryService } from '@/services/passwordRecoveryService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 interface RequestStepProps {
   onCodeSent: (email: string) => void
@@ -46,9 +47,7 @@ export const RequestStep: React.FC<RequestStepProps> = ({ onCodeSent }) => {
       await passwordRecoveryService.requestCode(values.email)
       onCodeSent(values.email)
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Unable to send code. Please try again.'
-      setServerError(message)
+      setServerError(formatUserFriendlyErrorMessage(err, 'Unable to send code. Please try again.'))
     } finally {
       setIsLoading(false)
     }

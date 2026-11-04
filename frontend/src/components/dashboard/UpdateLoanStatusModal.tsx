@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatPHP } from '@/lib/format'
 import { loanService, type LoanItem } from '@/services/loanService'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
 interface UpdateLoanStatusModalProps {
@@ -67,7 +68,7 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
       onSuccess(updated)
       onOpenChange(false)
     } catch (err: any) {
-      setError(err?.message || 'Failed to update loan status.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to update loan status.'))
     } finally {
       setIsSubmitting(false)
     }

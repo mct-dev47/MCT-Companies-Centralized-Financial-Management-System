@@ -44,3 +44,8 @@ class MessageResponse(BaseModel):
     message: str
     success: bool = True
     encrypted_data: Optional[str] = None
+
+class SetupPasswordRequest(BaseModel):
+    token: Optional[str] = None
+    new_password: Optional[str] = None
+    encrypted_payload: Optional[str] = None

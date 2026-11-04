@@ -44,7 +44,7 @@ export const MobileTopBar: React.FC = () => {
             <img
               src={mct2Url}
               alt="MCT"
-              className="h-4 w-auto object-contain object-left block"
+              className="h-3.5 w-auto object-contain object-left block"
             />
             <span className="text-[9px] font-medium text-muted-fg leading-none mt-0.5">
               Group of Companies

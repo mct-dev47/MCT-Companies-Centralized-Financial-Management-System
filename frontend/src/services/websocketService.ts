@@ -88,13 +88,17 @@ class WebSocketService {
     this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'offline')
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Connect via relative proxy (/ws) with auth token query param
-    const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`
+    // Connect via relative proxy (/ws) without sensitive auth token in URL query parameter
+    const wsUrl = `${protocol}//${window.location.host}/ws`
 
     try {
       this.socket = new WebSocket(wsUrl)
 
       this.socket.onopen = () => {
+        // Authenticate in-band via message handshake to avoid leaking JWT in query logs
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+          this.socket.send(JSON.stringify({ type: 'auth', token }))
+        }
         this.isConnecting = false
         this.setStatus('connected')
         this.startPing()
@@ -110,6 +114,7 @@ class WebSocketService {
         if (event.data === 'pong') return
         try {
           const data = JSON.parse(event.data)
+          if (data && data.type === 'authenticated') return
           if (data && data.type) {
             this.notifyListeners(data.type, data.payload || data)
             this.broadcastChannel?.postMessage(data)

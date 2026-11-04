@@ -1,8 +1,9 @@
 import type { SignInFormValues } from '@/lib/validation/auth'
 import logo2Url from '@/assets/LOGO2.png'
 import { encryptPayload } from '@/services/payloadEncryption'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
-export type UserRole = 'Admin' | 'Finance' | 'Audit' | 'Supervisor'
+export type UserRole = 'Admin' | 'Finance' | 'Audit' | 'Supervisor' | 'Owner'
 
 /**
  * User session model
@@ -78,6 +79,8 @@ export function detectUserByEmail(email: string): User {
   let role: UserRole = 'Supervisor'
   if (normalized.includes('admin')) {
     role = 'Admin'
+  } else if (normalized.includes('owner')) {
+    role = 'Owner'
   } else if (normalized.includes('audit')) {
     role = 'Audit'
   } else if (normalized.includes('finance')) {
@@ -122,9 +125,10 @@ async function getRequest<T>(path: string): Promise<T> {
   }
   if (!response.ok) {
     throw new Error(
-      data.detail ||
-        responseText ||
-        `Authentication request failed (${response.status}).`
+      formatUserFriendlyErrorMessage(
+        { status: response.status, ...data },
+        data.detail || responseText || `Authentication request failed (${response.status}).`
+      )
     )
   }
   return data as T
@@ -152,9 +156,10 @@ async function request<T>(path: string, body: unknown): Promise<T> {
   }
   if (!response.ok) {
     throw new Error(
-      data.detail ||
-        responseText ||
-        `Authentication request failed (${response.status}).`
+      formatUserFriendlyErrorMessage(
+        { status: response.status, ...data },
+        data.detail || responseText || `Authentication request failed (${response.status}).`
+      )
     )
   }
   return data as T
@@ -179,6 +184,8 @@ function mapUser(user: BackendUserPayload): User {
 
   if (rawRole === 'admin' || user.is_admin) {
     role = 'Admin'
+  } else if (rawRole === 'owner') {
+    role = 'Owner'
   } else if (rawRole === 'audit') {
     role = 'Audit'
   } else if (rawRole === 'finance') {
@@ -195,7 +202,7 @@ function mapUser(user: BackendUserPayload): User {
       : []
 
   const assignedCompany =
-    role === 'Admin' || role === 'Audit' || role === 'Finance'
+    role === 'Admin' || role === 'Audit' || role === 'Finance' || role === 'Owner'
       ? 'All Companies'
       : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
 

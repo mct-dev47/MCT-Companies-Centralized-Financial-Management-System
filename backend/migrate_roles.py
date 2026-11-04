@@ -28,17 +28,9 @@ for db_path in db_paths:
     # Ensure demo accounts exist in SQLite
     existing_emails = {row[0].lower(): row[1] for row in cursor.execute("SELECT email, user_id FROM users").fetchall()}
 
-    # Admin user
-    if "admin@mct.com" not in existing_emails:
-        cursor.execute("""
-            INSERT INTO users (name, email, role, is_admin, company_id)
-            VALUES ('Administrator', 'admin@mct.com', 'admin', 1, NULL)
-        """)
-        conn.commit()
-        print("Inserted admin@mct.com (role: admin)")
-    else:
-        cursor.execute("UPDATE users SET role = 'admin', is_admin = 1 WHERE lower(email) = 'admin@mct.com'")
-        conn.commit()
+    # Ensure existing primary admin account has admin role and is_admin set
+    cursor.execute("UPDATE users SET role = 'admin', is_admin = 1 WHERE user_id = 1 OR is_admin = 1")
+    conn.commit()
 
     # Separate Audit user (Same frontend as admin, minus company & user management)
     if "audit@mct.com" not in existing_emails:

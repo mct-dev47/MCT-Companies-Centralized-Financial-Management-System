@@ -54,6 +54,7 @@ import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
 import { useReceivables } from '@/hooks/useReceivables'
+import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -104,9 +105,9 @@ export const SalesPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
-  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
-  const canAuditActions = isAudit && !isManuel
-  const canAdd = !isAudit && (isCompanyUser || isFinance)
+  const isOwner = userRole === 'owner'
+  const canAuditActions = isAudit && !isOwner
+  const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
 
@@ -304,6 +305,7 @@ export const SalesPage: React.FC = () => {
       setDeleteConfirmSale(null)
     } catch (err) {
       console.error('Delete sale error:', err)
+      notifyError(err, 'Unable to delete sale record. Please try again.')
     } finally {
       setIsDeleting(false)
     }
@@ -374,6 +376,7 @@ export const SalesPage: React.FC = () => {
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
+      notifyError(err, 'Unable to load sales records. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -1607,7 +1610,7 @@ export const SalesPage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
-                          ) : isManuel ? (
+                          ) : isOwner ? (
                             <span className="text-muted-fg text-xs">—</span>
                           ) : sale.auditStatus === 'Verified' ? (
                             <span

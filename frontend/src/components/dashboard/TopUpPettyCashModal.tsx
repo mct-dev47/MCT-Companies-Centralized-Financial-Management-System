@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
 import { bankService, type BankAccount } from '@/services/bankService'
 import { loanService } from '@/services/loanService'
@@ -201,7 +202,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
       onSuccess?.(newRecord)
       onOpenChange(false)
     } catch (err: any) {
-      setError(err?.message || 'Failed to submit petty cash request.')
+      setError(formatUserFriendlyErrorMessage(err, 'Failed to submit petty cash request.'))
     } finally {
       setIsSubmitting(false)
     }
