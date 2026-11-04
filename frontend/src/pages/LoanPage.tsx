@@ -372,6 +372,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       setLoans(data)
     } catch (err) {
       console.error('Failed to load loans:', err)
+      notifyError(err, 'Unable to load company loans. Please try again.')
     } finally {
       setLoading(false)
     }

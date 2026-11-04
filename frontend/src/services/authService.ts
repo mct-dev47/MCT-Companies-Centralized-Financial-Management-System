@@ -1,6 +1,7 @@
 import type { SignInFormValues } from '@/lib/validation/auth'
 import logo2Url from '@/assets/LOGO2.png'
 import { encryptPayload } from '@/services/payloadEncryption'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export type UserRole = 'Admin' | 'Finance' | 'Audit' | 'Supervisor' | 'Owner'
 
@@ -124,9 +125,10 @@ async function getRequest<T>(path: string): Promise<T> {
   }
   if (!response.ok) {
     throw new Error(
-      data.detail ||
-        responseText ||
-        `Authentication request failed (${response.status}).`
+      formatUserFriendlyErrorMessage(
+        { status: response.status, ...data },
+        data.detail || responseText || `Authentication request failed (${response.status}).`
+      )
     )
   }
   return data as T
@@ -154,9 +156,10 @@ async function request<T>(path: string, body: unknown): Promise<T> {
   }
   if (!response.ok) {
     throw new Error(
-      data.detail ||
-        responseText ||
-        `Authentication request failed (${response.status}).`
+      formatUserFriendlyErrorMessage(
+        { status: response.status, ...data },
+        data.detail || responseText || `Authentication request failed (${response.status}).`
+      )
     )
   }
   return data as T

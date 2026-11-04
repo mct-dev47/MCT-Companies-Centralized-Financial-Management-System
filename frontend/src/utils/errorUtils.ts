@@ -140,6 +140,10 @@ export function formatUserFriendlyErrorMessage(
       lower.includes('invitation is pending') ||
       lower.includes('password setup') ||
       lower.includes('administrator accounts manage system configuration') ||
+      lower.includes('owner accounts') ||
+      lower.includes('auditor accounts') ||
+      lower.includes('read-only access') ||
+      lower.includes('business operations are reserved') ||
       lower.includes('exclusively authorized') ||
       lower.includes('must set up your password')
     ) {
@@ -180,7 +184,9 @@ export function formatUserFriendlyErrorMessage(
     lower.includes('password') ||
     lower.includes('@gmail.com') ||
     lower.includes('already been used') ||
-    lower.includes('expired')
+    lower.includes('expired') ||
+    lower.includes('allowed roles') ||
+    lower.includes('invalid role')
   ) {
     if (
       rawMessage &&

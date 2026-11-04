@@ -82,6 +82,7 @@ type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 
 import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
+import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 const ITEMS_PER_PAGE = 10
 
@@ -297,6 +298,7 @@ export const ExpensePage: React.FC = () => {
       setExpenses(data)
     } catch (err) {
       console.error('Failed to load expenses:', err)
+      notifyError(err, 'Unable to load expenses. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -587,6 +589,7 @@ export const ExpensePage: React.FC = () => {
       setDeleteConfirmExpense(null)
     } catch (err) {
       console.error('Failed to delete expense:', err)
+      notifyError(err, 'Unable to delete expense. Please try again.')
     } finally {
       setIsDeleting(false)
     }

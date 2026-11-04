@@ -54,6 +54,7 @@ import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
 import { useReceivables } from '@/hooks/useReceivables'
+import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -304,6 +305,7 @@ export const SalesPage: React.FC = () => {
       setDeleteConfirmSale(null)
     } catch (err) {
       console.error('Delete sale error:', err)
+      notifyError(err, 'Unable to delete sale record. Please try again.')
     } finally {
       setIsDeleting(false)
     }
@@ -374,6 +376,7 @@ export const SalesPage: React.FC = () => {
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
+      notifyError(err, 'Unable to load sales records. Please try again.')
     } finally {
       setLoading(false)
     }
