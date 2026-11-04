@@ -27,7 +27,7 @@ import {
   type UpdateUserPayload,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError, notifyWarning } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 
@@ -209,7 +209,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (formData.role !== 'Admin' && formData.role !== 'Audit' && editSelectedCompanies.length === 0) {
-      window.alert('Please select at least one assigned company.')
+      notifyWarning('Please select at least one assigned company.')
       return
     }
     setIsConfirmEditOpen(true)
@@ -247,7 +247,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to update user. Please try again.')
       setActionError(errorMsg)
       setIsConfirmEditOpen(false)
-      window.alert(errorMsg)
+      notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
@@ -255,7 +255,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
 
   const handleConfirmDelete = async () => {
     if (isProtectedAdmin) {
-      window.alert('The primary administrator account is protected and cannot be deleted.')
+      notifyWarning('The primary administrator account is protected and cannot be deleted.')
       return
     }
     try {
@@ -268,7 +268,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete user. Please try again.')
       setActionError(errorMsg)
       setIsConfirmDeleteOpen(false)
-      window.alert(errorMsg)
+      notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
     }

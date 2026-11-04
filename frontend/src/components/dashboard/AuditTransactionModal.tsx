@@ -119,6 +119,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
   const isAdmin = roleLower === 'admin' || roleLower === 'audit'
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAudit = isAdmin && !isManuel
 
   const [currentTx, setCurrentTx] = React.useState<DashboardTransactionItem | null>(transaction)
   const [currentSale, setCurrentSale] = React.useState<SalesItem | null>(sale || null)
@@ -326,7 +328,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     'Pending Audit'
 
   const isAudited = currentAuditStatus === 'Verified'
-  const isEditable = Boolean(editable && !isAdmin && !isAudited)
+  const isEditable = Boolean(editable && !isAdmin && !isAudited && !isManuel)
 
   const handleEditInSheet = () => {
     if (isAudited) return
@@ -1237,7 +1239,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             </div>
 
             {/* Admin Audit Actions: Unmark as Audit / Mark as Audited */}
-            {isAdmin && (
+            {canAudit && (
               <div className="flex items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (

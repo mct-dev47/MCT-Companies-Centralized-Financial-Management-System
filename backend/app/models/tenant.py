@@ -53,6 +53,31 @@ class TenantLease(Base):
         order_by="TenantLeasePayment.payment_date.desc()",
     )
 
+    @property
+    def amount_paid(self):
+        return getattr(self, "_amount_paid", 0.00)
+
+    @amount_paid.setter
+    def amount_paid(self, val):
+        self._amount_paid = val
+
+    @property
+    def remaining_balance(self):
+        return getattr(self, "_remaining_balance", None)
+
+    @remaining_balance.setter
+    def remaining_balance(self, val):
+        self._remaining_balance = val
+
+    def __init__(self, **kwargs):
+        ap = kwargs.pop("amount_paid", None)
+        rem = kwargs.pop("remaining_balance", None)
+        super().__init__(**kwargs)
+        if ap is not None:
+            self.amount_paid = ap
+        if rem is not None:
+            self.remaining_balance = rem
+
 
 class TenantLeasePayment(Base):
     __tablename__ = "tenant_lease_payments"

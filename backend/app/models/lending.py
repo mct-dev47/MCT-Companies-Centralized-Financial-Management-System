@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, Numeric, Date, DateTime, ForeignKey, Integer, Boolean
+from sqlalchemy import Column, String, Text, Numeric, Date, DateTime, ForeignKey, Integer, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.db.session import Base
@@ -11,7 +11,7 @@ class Borrower(Base):
     """
     __tablename__ = "borrowers"
 
-    borrower_id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    borrower_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     borrower_ref_no = Column(String(100), unique=True, nullable=True, index=True)
     borrower_name = Column(String(255), nullable=False, index=True)
     principal_amount = Column(Numeric(15, 2), nullable=False)
@@ -43,9 +43,9 @@ class LendingTransaction(Base):
     """
     __tablename__ = "lending_transactions"
 
-    transaction_id = Column(BigInteger, primary_key=True, index=True, autoincrement=True)
+    transaction_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     borrower_id = Column(
-        BigInteger,
+        Integer,
         ForeignKey("borrowers.borrower_id", ondelete="CASCADE"),
         nullable=False,
         index=True,
@@ -69,4 +69,3 @@ class LendingTransaction(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     borrower = relationship("Borrower", back_populates="transactions")
-

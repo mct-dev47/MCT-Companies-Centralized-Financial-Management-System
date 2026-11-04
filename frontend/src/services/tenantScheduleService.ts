@@ -37,6 +37,8 @@ export interface ScheduleLease {
   amountPaid: number
   remainingBalance: number
   dailyPayments: SchedulePayment[]
+  status?: string
+  contractDate?: string
 }
 
 export type PeriodStatus = 'Paid' | 'Advance Paid' | 'Partially Paid' | 'Missed' | 'Unpaid'
@@ -181,6 +183,46 @@ export function periodUnit(frequency: LeaseRepeat): string {
 
 export function periodLabel(frequency: LeaseRepeat, index: number): string {
   return `${periodUnit(frequency)} ${index}`
+}
+
+/**
+ * Automatically calculate first due date and default lease end date based on repeat mode.
+ * - Daily: first due date = tomorrow (+1 day), default 30-day lease end date.
+ * - Monthly: first due date = 1 month after today, default 12-month lease end date.
+ * - Quarterly: first due date = 1 quarter (3 months) after today, default 4-quarter lease end date.
+ * - Annually: first due date = 1 year after today, default 3-year lease end date.
+ * - None: first due date = base date, lease end date = empty string.
+ */
+export function getDefaultDatesForRepeat(
+  repeat: LeaseRepeat,
+  baseDateStr?: string
+): { dueDate: string; leaseEndDate: string } {
+  const base = baseDateStr || formatYmd({
+    y: new Date().getFullYear(),
+    m: new Date().getMonth() + 1,
+    d: new Date().getDate(),
+  })
+  if (repeat === 'Daily') {
+    const firstDue = addPeriodClamped(base, 'Daily', 1)
+    const end = addPeriodClamped(firstDue, 'Daily', 29)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Monthly') {
+    const firstDue = addPeriodClamped(base, 'Monthly', 1)
+    const end = addPeriodClamped(firstDue, 'Monthly', 11)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Quarterly') {
+    const firstDue = addPeriodClamped(base, 'Quarterly', 1)
+    const end = addPeriodClamped(firstDue, 'Quarterly', 3)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  if (repeat === 'Annually') {
+    const firstDue = addPeriodClamped(base, 'Annually', 1)
+    const end = addPeriodClamped(firstDue, 'Annually', 2)
+    return { dueDate: firstDue, leaseEndDate: end }
+  }
+  return { dueDate: base, leaseEndDate: '' }
 }
 
 function ordinal(n: number): string {
@@ -467,6 +509,158 @@ export function getLeaseFinancials(lease: ScheduleLease, today: string): LeaseFi
     periodCount: periods.length,
     periodsPaid: periods.filter((p) => p.remaining <= EPSILON).length,
     periods,
+  }
+}
+
+/**
+ * Tenant active period financials and status calculation (per-day / per-month tracking).
+ */
+
+export type TenantEffectiveStatus = 'Paid' | 'Unpaid' | 'Overdue' | 'Pending'
+
+export interface TenantPeriodFinancials {
+  totalDue: number
+  amountPaid: number
+  remaining: number
+  status: TenantEffectiveStatus
+  activePeriodLabel: string
+  activePeriodDueDate: string
+  totalContractDue: number
+  totalContractPaid: number
+  totalContractRemaining: number
+  periodCount: number
+  periodsPaid: number
+  nextDueDate: string
+  nextDueDateLabel: string
+}
+
+export function getTenantEffectiveStatus(lease: ScheduleLease, today: string): TenantEffectiveStatus {
+  if (lease.status === 'Pending') return 'Pending'
+  if (lease.status === 'Completed') return 'Paid'
+
+  if (!isRepeating(lease)) {
+    const fin = getLeaseFinancials(lease, today)
+    if (fin.remaining <= EPSILON) return 'Paid'
+    if (today > lease.dueDate) return 'Overdue'
+    return 'Unpaid'
+  }
+
+  const fin = getLeaseFinancials(lease, today)
+  if (fin.periods.length === 0) {
+    if (fin.remaining <= EPSILON) return 'Paid'
+    if (today > lease.dueDate) return 'Overdue'
+    return 'Unpaid'
+  }
+
+  if (fin.remaining <= EPSILON) return 'Paid'
+
+  const anchorDate = lease.contractDate || fin.periods[0].dueDate
+  const repeat = lease.repeat as LeaseRepeat
+  const elapsedCount = Math.min(
+    fin.periods.length,
+    Math.max(1, countPeriods(anchorDate, today, repeat))
+  )
+
+  const unpaidElapsed = fin.periods.slice(0, elapsedCount).filter((p) => p.remaining > EPSILON)
+  if (unpaidElapsed.length === 0) {
+    return 'Paid'
+  }
+
+  const isOverdue = unpaidElapsed.some((p) => today > p.dueDate)
+  return isOverdue ? 'Overdue' : 'Unpaid'
+}
+
+export function getTenantPeriodFinancials(lease: ScheduleLease, today: string): TenantPeriodFinancials {
+  const fin = getLeaseFinancials(lease, today)
+  const status = getTenantEffectiveStatus(lease, today)
+
+  if (!isRepeating(lease) || fin.periods.length === 0) {
+    return {
+      totalDue: fin.totalDue,
+      amountPaid: fin.amountPaid,
+      remaining: fin.remaining,
+      status,
+      activePeriodLabel: 'One Time',
+      activePeriodDueDate: lease.dueDate,
+      totalContractDue: fin.totalDue,
+      totalContractPaid: fin.amountPaid,
+      totalContractRemaining: fin.remaining,
+      periodCount: fin.periodCount,
+      periodsPaid: fin.periodsPaid,
+      nextDueDate: lease.dueDate,
+      nextDueDateLabel: 'One Time',
+    }
+  }
+
+  if (fin.remaining <= EPSILON) {
+    const lastP = fin.periods[fin.periods.length - 1]
+    return {
+      totalDue: fin.amountPaid,
+      amountPaid: fin.amountPaid,
+      remaining: 0,
+      status: 'Paid',
+      activePeriodLabel: 'Fully Paid',
+      activePeriodDueDate: lastP.dueDate,
+      totalContractDue: fin.totalDue,
+      totalContractPaid: fin.amountPaid,
+      totalContractRemaining: 0,
+      periodCount: fin.periodCount,
+      periodsPaid: fin.periodCount,
+      nextDueDate: lastP.dueDate,
+      nextDueDateLabel: 'Fully Paid',
+    }
+  }
+
+  const anchorDate = lease.contractDate || fin.periods[0].dueDate
+  const repeat = lease.repeat as LeaseRepeat
+  const elapsedCount = Math.min(
+    fin.periods.length,
+    Math.max(1, countPeriods(anchorDate, today, repeat))
+  )
+  const activePeriod = fin.periods[elapsedCount - 1]
+
+  const unpaidElapsed = fin.periods.slice(0, elapsedCount).filter((p) => p.remaining > EPSILON)
+
+  const nextUnpaid = fin.periods.find((p) => p.remaining > EPSILON) || null
+  const nextDueDate = nextUnpaid ? nextUnpaid.dueDate : (activePeriod?.dueDate || lease.dueDate)
+  const nextDueDateLabel = nextUnpaid ? nextUnpaid.label : 'Fully Paid'
+
+  if (unpaidElapsed.length === 0) {
+    return {
+      totalDue: activePeriod.amountDue,
+      amountPaid: activePeriod.amountDue,
+      remaining: 0,
+      status: 'Paid',
+      activePeriodLabel: activePeriod.label,
+      activePeriodDueDate: activePeriod.dueDate,
+      totalContractDue: fin.totalDue,
+      totalContractPaid: fin.amountPaid,
+      totalContractRemaining: fin.remaining,
+      periodCount: fin.periodCount,
+      periodsPaid: fin.periodsPaid,
+      nextDueDate: nextUnpaid ? nextUnpaid.dueDate : activePeriod.dueDate,
+      nextDueDateLabel: nextUnpaid ? nextUnpaid.label : 'Fully Paid',
+    }
+  }
+
+  const periodDue = round2(unpaidElapsed.reduce((s, p) => s + p.amountDue, 0))
+  const periodPaid = round2(unpaidElapsed.reduce((s, p) => s + p.paid, 0))
+  const periodRemaining = round2(Math.max(0, periodDue - periodPaid))
+
+  return {
+    totalDue: periodDue,
+    amountPaid: periodPaid,
+    remaining: periodRemaining,
+    status,
+    activePeriodLabel: activePeriod.label,
+    activePeriodDueDate: activePeriod.dueDate,
+    totalContractDue: fin.totalDue,
+    totalContractPaid: fin.amountPaid,
+    totalContractRemaining: fin.remaining,
+    periodCount: fin.periodCount,
+    periodsPaid: fin.periodsPaid,
+    nextDueDate,
+    nextDueDateLabel,
   }
 }
 

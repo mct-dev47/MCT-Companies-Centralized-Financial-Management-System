@@ -15,12 +15,16 @@ import {
   AlertCircle,
   PlusCircle,
   Clock,
+  Landmark,
+  MessageSquare,
+  CheckCircle2,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
-
+import { bankService, type BankAccount } from '@/services/bankService'
+import { loanService } from '@/services/loanService'
 import { pettyCashService } from '@/services/pettyCashService'
 
 export interface TopUpPettyCashModalProps {
@@ -29,6 +33,7 @@ export interface TopUpPettyCashModalProps {
   company: string
   currentBalance?: number | null
   companies?: string[]
+  bankAccounts?: BankAccount[]
   onSuccess?: (newRequest?: PettyCashTopUpRecord) => void
 }
 
@@ -45,7 +50,7 @@ export interface PettyCashTopUpRecord {
   amountIn: number
   amountOut: number
   runningBalance: number
-  status: 'Approved' | 'Pending Finance Approval' | 'Disapproved' | 'Rejected'
+  status: 'Approved' | 'Pending Finance Approval' | 'Pending Audit Approval' | 'Disapproved' | 'Rejected'
   remark?: string
   requestedBy: string
   approvedBy?: string
@@ -60,10 +65,12 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
   company,
   currentBalance = 0,
   companies = [],
+  bankAccounts: initialBankAccounts,
   onSuccess,
 }) => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
+  const isFinance = userRole === 'finance' || userRole === 'admin' || userRole === 'superadmin'
   const isSupervisor = userRole === 'supervisor'
   const isCompanyScoped = isSupervisor
 
@@ -71,8 +78,39 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
   const [amountInput, setAmountInput] = React.useState('')
   const [requestDate, setRequestDate] = React.useState(todayIso)
   const [particulars, setParticulars] = React.useState('')
+  const [fundingBankId, setFundingBankId] = React.useState('')
+  const [financeRemark, setFinanceRemark] = React.useState('')
   const [error, setError] = React.useState('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+
+  // Bank accounts list
+  const [bankAccountsList, setBankAccountsList] = React.useState<BankAccount[]>(initialBankAccounts || [])
+  const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
+
+  // Load bank accounts and companies if needed
+  React.useEffect(() => {
+    let mounted = true
+    if (open) {
+      if (!initialBankAccounts || initialBankAccounts.length === 0) {
+        bankService.getAccounts().then((accounts) => {
+          if (mounted && accounts) setBankAccountsList(accounts)
+        }).catch(() => {})
+      } else {
+        setBankAccountsList(initialBankAccounts)
+      }
+
+      if (companies.length === 0) {
+        loanService.getCompanies().then((comps) => {
+          if (mounted && comps && comps.length > 0) {
+            setDbCompanies(comps.map((c) => c.company_name).filter(Boolean))
+          }
+        }).catch(() => {})
+      }
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, initialBankAccounts, companies.length])
 
   // Reset form on open
   React.useEffect(() => {
@@ -82,12 +120,19 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
       setAmountInput('')
       setRequestDate(todayIso())
       setParticulars('')
+      setFundingBankId('')
+      setFinanceRemark(isFinance ? 'Endorsed for petty cash replenishment' : '')
       setError('')
       setIsSubmitting(false)
     }
-  }, [open, company, user?.assignedCompany])
+  }, [open, company, user?.assignedCompany, isFinance])
 
   const parsedAmount = parseFloat(amountInput) || 0
+
+  const availableCompanies = React.useMemo(() => {
+    const list = companies.length > 0 ? companies : dbCompanies
+    return list.filter((c) => c && c !== 'All Companies')
+  }, [companies, dbCompanies])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -108,16 +153,31 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
       return
     }
 
+    if (isFinance) {
+      if (!fundingBankId) {
+        setError('Please choose a funding bank account before endorsing to Internal Audit.')
+        return
+      }
+      if (!financeRemark.trim()) {
+        setError('Please enter an endorsement remark.')
+        return
+      }
+    }
+
     setIsSubmitting(true)
 
     try {
-      // Connect to backend database directly
+      const targetStatus = isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval'
+
       await pettyCashService.createTopUp({
         company: requestingCompany,
+        company_name: requestingCompany,
         amount: parsedAmount,
         date: requestDate,
         description: particulars.trim(),
-        status: 'Pending Finance Approval',
+        status: targetStatus,
+        bank_account_id: isFinance ? fundingBankId : undefined,
+        finance_remark: isFinance ? financeRemark.trim() : undefined,
       })
 
       const newRecord: PettyCashTopUpRecord = {
@@ -131,8 +191,12 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
         amountIn: 0,
         amountOut: 0,
         runningBalance: currentBalance || 0,
-        status: 'Pending Finance Approval',
-        requestedBy: user?.fullName || user?.email || (userRole === 'supervisor' ? 'Supervisor' : 'Company User'),
+        status: targetStatus,
+        bankSource: isFinance ? fundingBankId : undefined,
+        remark: isFinance ? financeRemark.trim() : undefined,
+        requestedBy: user?.fullName || user?.email || (isFinance ? 'Finance Officer' : 'Supervisor'),
+        approvedBy: isFinance ? (user?.fullName || 'Finance Officer') : undefined,
+        approvedAt: isFinance ? new Date().toISOString() : undefined,
       }
 
       onSuccess?.(newRecord)
@@ -146,7 +210,6 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Wide modal with compact vertical height */}
       <DialogContent className="sm:max-w-[760px] lg:max-w-[800px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl">
         <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
@@ -155,10 +218,12 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
             </div>
             <div>
               <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-                Request Petty Cash Top Up
+                {isFinance ? 'Endorse Petty Cash Top Up' : 'Request Petty Cash Top Up'}
               </DialogTitle>
               <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-                Submit petty cash replenishment request. Finance will review and record their decision with required remarks.
+                {isFinance
+                  ? 'Endorse petty cash replenishment directly to Internal Audit with funding bank account and remark.'
+                  : 'Submit petty cash replenishment request. Finance will review and record their decision with required remarks.'}
               </DialogDescription>
             </div>
           </div>
@@ -182,7 +247,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                   <span className="font-semibold text-focus">Petty Cash Top Up</span>
                 </div>
                 <span className="text-[10.5px] text-[#960C01] font-semibold px-2 py-0.5 rounded-full bg-[#960C01]/10 border border-[#960C01]/20 shrink-0">
-                  Automatic
+                  {isFinance ? 'Direct Endorsement' : 'Automatic'}
                 </span>
               </div>
             </div>
@@ -202,18 +267,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                   onChange={(e) => setRequestingCompany(e.target.value)}
                   className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
                 >
-                  {(companies.length > 0 ? companies.filter((c) => c !== 'All Companies') : [
-                    'MCT Kitchen',
-                    'MCT Hotel',
-                    'JK Cafe',
-                    'Annex Nine',
-                    'Merillon',
-                    'JK Printing',
-                    'Speedbox',
-                    'JK Property and Ventures',
-                    'Golden Sunburst Ventures',
-                    'FilCap Prime Holdings Corp.',
-                  ]).map((comp) => (
+                  {availableCompanies.map((comp) => (
                     <option key={comp} value={comp}>
                       {comp}
                     </option>
@@ -283,12 +337,65 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
             />
           </div>
 
+          {/* Finance Endorsement Fields */}
+          {isFinance && (
+            <div className="space-y-3.5 pt-1 border-t border-stroke/20">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-focus block">
+                    Funding Bank Account <span className="text-red-500">*</span>
+                  </Label>
+                  <div className="relative">
+                    <select
+                      value={fundingBankId}
+                      onChange={(e) => setFundingBankId(e.target.value)}
+                      className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
+                      required
+                    >
+                      <option value="">Select funding bank account...</option>
+                      {bankAccountsList.map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.bankName} - {acc.accountName} ({acc.companyName || 'Corporate'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-focus block">
+                    Endorsement Remark <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    type="text"
+                    placeholder="e.g. Endorsed for weekly operations, verified sufficient bank balance"
+                    value={financeRemark}
+                    onChange={(e) => setFinanceRemark(e.target.value)}
+                    className="h-9 text-xs rounded-xl"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Notice to user */}
           <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200/60 text-xs text-amber-900 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              Request will be routed to the Finance team for review. Required remarks and approval are confirmed by Finance.
-            </span>
+            {isFinance ? (
+              <>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  As Finance, submitting this request directly endorses it and forwards it to Internal Audit for final approval.
+                </span>
+              </>
+            ) : (
+              <>
+                <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Request will be routed to the Finance team for review. Required remarks and approval are confirmed by Finance.
+                </span>
+              </>
+            )}
           </div>
 
           {/* Action Buttons */}
@@ -309,7 +416,13 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
               className="h-9 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs shadow-xs flex items-center gap-2 cursor-pointer"
             >
               <PlusCircle className="w-3.5 h-3.5" />
-              <span>{isSubmitting ? 'Submitting...' : 'Submit Request to Finance'}</span>
+              <span>
+                {isSubmitting
+                  ? 'Submitting...'
+                  : isFinance
+                  ? 'Endorse to Internal Audit'
+                  : 'Submit Request to Finance'}
+              </span>
             </Button>
           </div>
         </form>

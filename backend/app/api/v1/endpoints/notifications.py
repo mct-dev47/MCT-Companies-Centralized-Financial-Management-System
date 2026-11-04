@@ -73,8 +73,12 @@ def _resolve_authorized_scope(
     explicit_cid: Optional[int] = normalize_company_id(company_id_param) if company_id_param is not None else None
     clean_cname = (company_name_param or "").strip()
     if explicit_cid is None and clean_cname and clean_cname.lower() != "all companies":
-        comp = resolve_company(db, None, clean_cname)
-        explicit_cid = comp.company_id
+        # Fail closed if an unknown company name is requested; never fall back to None (All Companies)
+        try:
+            comp = resolve_company(db, None, clean_cname)
+            explicit_cid = comp.company_id
+        except HTTPException:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found.")
 
     if is_multi_company:
         resolved_cid = explicit_cid
@@ -129,6 +133,7 @@ def get_notifications(
             return NotificationListResponse(items=[], next_cursor=None, has_more=False, total_unread=0)
         return []
 
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
     svc = NotificationService(db)
 
     # If cursor is supplied, return compound cursor response object
@@ -136,6 +141,8 @@ def get_notifications(
         return svc.get_notifications_feed(
             recipient_user_id=user_id,
             company_id=resolved_cid,
+            user_role=effective_role,
+            user_scope_key=user_scope_key,
             cursor=cursor,
             direction=direction,
             notification_type=notification_type,
@@ -146,6 +153,8 @@ def get_notifications(
     feed = svc.get_notifications_feed(
         recipient_user_id=user_id,
         company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
         notification_type=notification_type,
         limit=limit,
     )
@@ -176,10 +185,13 @@ def get_notifications_feed(
     if effective_role == "admin":
         return NotificationListResponse(items=[], next_cursor=None, has_more=False, total_unread=0)
 
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
     svc = NotificationService(db)
     return svc.get_notifications_feed(
         recipient_user_id=user_id,
         company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
         cursor=cursor,
         direction=direction,
         notification_type=notification_type,
@@ -197,6 +209,11 @@ def get_notifications_feed(
     response_model=NotificationCountOut,
     include_in_schema=False,
 )
+@router.get(
+    "/unread-count",
+    response_model=NotificationCountOut,
+    summary="Get unread notification count",
+)
 def notification_count(
     current_user: CurrentUser,
     company_id: Optional[int] = Query(None, description="Filter by company ID"),
@@ -211,6 +228,16 @@ def notification_count(
     )
     if effective_role == "admin":
         return NotificationCountOut(unread_count=0)
+
+    user_scope_key = f"u:{user_id}:r:{effective_role}:c:{resolved_cid}"
+    svc = NotificationService(db)
+    count = svc.get_unread_count(
+        recipient_user_id=user_id,
+        company_id=resolved_cid,
+        user_role=effective_role,
+        user_scope_key=user_scope_key,
+    )
+    return NotificationCountOut(unread_count=count)
 
 
 @router.post(

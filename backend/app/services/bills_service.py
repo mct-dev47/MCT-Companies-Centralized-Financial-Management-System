@@ -23,10 +23,12 @@ from app.schemas.bills import (
 )
 
 
-RECURRING_VALUES = {"daily", "monthly", "yearly"}
+RECURRING_VALUES = {"daily", "monthly", "yearly", "one-time"}
 
 
 def _add_period(period_date: date, recurring: str, count: int = 1, anchor_day: Optional[int] = None) -> date:
+    if recurring == "one-time":
+        return period_date
     day = anchor_day if anchor_day is not None else period_date.day
     if recurring == "daily":
         return date.fromordinal(period_date.toordinal() + count)
@@ -43,7 +45,7 @@ def _add_period(period_date: date, recurring: str, count: int = 1, anchor_day: O
 
 
 def _period_key(period_date: date, recurring: str) -> str:
-    if recurring == "daily":
+    if recurring in {"daily", "one-time"}:
         return period_date.isoformat()
     if recurring == "yearly":
         return str(period_date.year)
@@ -51,7 +53,7 @@ def _period_key(period_date: date, recurring: str) -> str:
 
 
 def _period_label(period_date: date, recurring: str) -> str:
-    if recurring == "daily":
+    if recurring in {"daily", "one-time"}:
         return period_date.strftime("%b %d, %Y").replace(" 0", " ")
     if recurring == "yearly":
         return str(period_date.year)
@@ -60,6 +62,8 @@ def _period_label(period_date: date, recurring: str) -> str:
 
 def _normalize_recurring(value: Optional[str]) -> str:
     recurring = (value or "monthly").lower()
+    if recurring in {"one-time", "onetime", "once", "one_time"}:
+        return "one-time"
     if recurring not in RECURRING_VALUES:
         raise HTTPException(status_code=400, detail="Recurring must be daily, monthly, or yearly.")
     return recurring
@@ -129,6 +133,14 @@ def _resolve_company(db: Session, company_id: Optional[int], company_name: Optio
 
 
 class BillsService:
+    @staticmethod
+    def _add_months(d: date, months: int) -> date:
+        month_index = d.year * 12 + d.month - 1 + months
+        year, month_zero_based = divmod(month_index, 12)
+        month = month_zero_based + 1
+        max_day = monthrange(year, month)[1]
+        return date(year, month, min(d.day, max_day))
+
     def __init__(self, db: Session):
         self.db = db
 
@@ -143,7 +155,10 @@ class BillsService:
         anchor_day = bill.due_date.day
         period_date = bill.due_date
 
-        if recurring == "daily":
+        if recurring == "one-time":
+            min_future = 0
+            max_periods = 1
+        elif recurring == "daily":
             min_future = 30 if include_future is None else include_future
             max_periods = 180
         elif recurring == "yearly":

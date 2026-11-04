@@ -12,9 +12,10 @@ def get_encryption_key() -> bytes:
     # Load key from settings (sourced from .env via config.py)
     key = unwrap_secret(settings.PAYLOAD_ENCRYPTION_KEY)
     if not key:
-        # Fallback: derive a key from SUPABASE_JWT_SECRET or SUPABASE_KEY
         secret = unwrap_secret(settings.SUPABASE_JWT_SECRET) or settings.SUPABASE_KEY or "mct-centralized-system-32byte-secret-key!!"
-        key = base64.urlsafe_b64encode(secret.ljust(32)[:32].encode("utf-8")).decode("utf-8")
+        if len(secret.strip()) < 32:
+            secret = secret.strip().ljust(32, "!")
+        key = base64.urlsafe_b64encode(secret.strip()[:32].encode("utf-8")).decode("utf-8")
     if isinstance(key, str):
         key = key.encode("utf-8")
     return key

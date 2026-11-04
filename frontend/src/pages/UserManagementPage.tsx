@@ -2,26 +2,26 @@ import * as React from 'react'
 import {
   Search,
   UserPlus,
-  CheckCircle2,
   X,
   Building2,
   Shield,
   User as UserIcon,
-  AlertCircle,
-  RefreshCw,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ConfirmModal, ErrorBanner } from '@/components/common'
 import { CreateUserModal } from '@/components/employee/CreateUserModal'
 import { ViewUserModal } from '@/components/employee/ViewUserModal'
-import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import {
   employeeService,
   type EmployeeUser,
   type Company,
 } from '@/services/employeeService'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import {
+  formatUserFriendlyErrorMessage,
+  notifySuccess,
+} from '@/utils/errorUtils'
 
 export const UserManagementPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
@@ -73,7 +73,7 @@ export const UserManagementPage: React.FC = () => {
   }, [])
 
   React.useEffect(() => {
-    loadData()
+    void loadData()
   }, [loadData])
 
   // Clear banner after 4 seconds
@@ -113,7 +113,9 @@ export const UserManagementPage: React.FC = () => {
 
   const handleUserCreated = async (newUser: EmployeeUser) => {
     setUsers((prev) => [newUser, ...prev])
-    setSuccessBanner(`User "${newUser.fullName}" has been created successfully.`)
+    const msg = `User "${newUser.fullName}" has been created successfully.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
 
     const assigned = (newUser.companyNames && newUser.companyNames.length > 0)
       ? newUser.companyNames
@@ -160,7 +162,9 @@ export const UserManagementPage: React.FC = () => {
       prev.map((u) => (u.id === updated.id ? updated : u))
     )
     setSelectedUser(updated)
-    setSuccessBanner(`User "${updated.fullName}" updated successfully.`)
+    const msg = `User "${updated.fullName}" updated successfully.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
 
     const assigned = (updated.companyNames && updated.companyNames.length > 0)
       ? updated.companyNames
@@ -204,7 +208,9 @@ export const UserManagementPage: React.FC = () => {
   const handleUserDeleted = async (userId: string) => {
     const deletedName = users.find((u) => u.id === userId)?.fullName || 'User'
     setUsers((prev) => prev.filter((u) => u.id !== userId))
-    setSuccessBanner(`"${deletedName}" has been removed from users.`)
+    const msg = `"${deletedName}" has been removed from users.`
+    setSuccessBanner(msg)
+    notifySuccess(msg)
     setSuccessModal({
       title: 'User Deleted',
       message: `"${deletedName}" has been removed from users successfully.`,
@@ -248,38 +254,18 @@ export const UserManagementPage: React.FC = () => {
       </div>
 
       {/* Success Notification Alert */}
-      {successBanner && (
-        <div
-          role="status"
-          className="flex items-center gap-3 p-4 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-800 text-sm font-medium animate-in fade-in-50 duration-200"
-        >
-          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-          <span>{successBanner}</span>
-        </div>
-      )}
+      <ErrorBanner
+        variant="success"
+        message={successBanner}
+        onDismiss={() => setSuccessBanner(null)}
+      />
 
       {/* Error Notification Alert */}
-      {loadError && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 p-4 rounded-xl border border-red-200 bg-red-50 text-red-800 text-sm font-medium animate-in fade-in-50 duration-200"
-        >
-          <div className="flex items-center gap-3">
-            <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
-            <span>{loadError}</span>
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => loadData()}
-            className="border-red-200 hover:bg-red-100 text-red-800 h-8 gap-1.5 rounded-lg shrink-0"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Retry</span>
-          </Button>
-        </div>
-      )}
+      <ErrorBanner
+        message={loadError}
+        onRetry={() => void loadData()}
+        isRetrying={loading}
+      />
 
       {/* Filters Toolbar - Extended full-width search bar */}
       <div className="w-full">
@@ -376,7 +362,7 @@ export const UserManagementPage: React.FC = () => {
 
                   {/* Right side: User Name, Email, Badges */}
                   <div className="min-w-0 flex-1">
-                    <h3 className="text-base sm:text-lg font-bold text-focus group-hover:text-primary transition-colors truncate">
+                    <h3 className="text-base sm:text-lg font-bold text-focus transition-colors truncate">
                       {usr.fullName}
                     </h3>
                     <p className="text-xs text-muted-fg truncate mt-0.5">
@@ -416,7 +402,6 @@ export const UserManagementPage: React.FC = () => {
       </div>
 
       {/* Modals */}
-      {/* 1. Create User Modal */}
       <CreateUserModal
         open={isCreateUserOpen}
         onOpenChange={setIsCreateUserOpen}
@@ -424,7 +409,6 @@ export const UserManagementPage: React.FC = () => {
         onSuccess={handleUserCreated}
       />
 
-      {/* 2. View / Edit / Delete User Modal */}
       <ViewUserModal
         open={isViewUserOpen}
         onOpenChange={setIsViewUserOpen}
@@ -434,8 +418,7 @@ export const UserManagementPage: React.FC = () => {
         onDelete={handleUserDeleted}
       />
 
-      {/* 3. Success Confirmation Modal */}
-      <ConfirmationDialog
+      <ConfirmModal
         open={!!successModal}
         onOpenChange={(open) => !open && setSuccessModal(null)}
         title={successModal?.title || 'Success'}

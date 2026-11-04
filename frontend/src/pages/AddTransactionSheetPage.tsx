@@ -19,8 +19,11 @@ import {
   Receipt,
 } from 'lucide-react'
 import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
+import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { BackButton, ErrorBanner } from '@/components/common'
+import { notifyWarning } from '@/utils/errorUtils'
 import {
   Dialog,
   DialogContent,
@@ -41,6 +44,7 @@ import { expenseService } from '@/services/expenseService'
 import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
 import { useSession } from '@/hooks/useSession'
+import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import {
@@ -57,13 +61,13 @@ import { isCompanyMatch } from '@/utils/companyUtils'
 
 export interface UnpaidAssignmentRow {
   rowId: string
+  saleLineIndex: number
   particulars: string
   quantity: number
   unitPrice: number
   total: number
   customerType: CustomerType
   customerName: string
-  contactOrRole: string
 }
 
 interface ParticularsRow {
@@ -165,8 +169,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const navigate = useNavigate()
   const location = useLocation()
   const { user } = useSession()
+  const { activeCompany } = useCompany()
   const isAuditor = user?.role === 'Supervisor'
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const isCompanyLocked = isAuditor || Boolean(activeCompany && activeCompany !== 'All Companies')
 
   const editItem =
     (location.state as any)?.editSale ||
@@ -187,18 +193,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Top header metadata form fields
   const [date, setDate] = React.useState(() => formatToYYYYMMDD(new Date()))
-  const initialCompany = isAuditor
-    ? assignedCompany
-    : editItem?.company || 'MCT Kitchen'
+  const initialCompany = React.useMemo(() => {
+    if (isAuditor) return assignedCompany
+    if (editItem?.company) return editItem.company
+    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    return 'MCT Kitchen'
+  }, [isAuditor, assignedCompany, editItem?.company, activeCompany])
   const [selectedCompany, setSelectedCompany] =
     React.useState<string>(initialCompany)
 
-  // Keep selectedCompany in sync if user profile loads after initial render
+  // Keep selectedCompany in sync if user profile or active company changes
   React.useEffect(() => {
     if (isAuditor && user?.assignedCompany) {
       setSelectedCompany(user.assignedCompany)
+    } else if (activeCompany && activeCompany !== 'All Companies') {
+      setSelectedCompany(activeCompany)
     }
-  }, [isAuditor, user?.assignedCompany])
+  }, [isAuditor, user?.assignedCompany, activeCompany])
 
   // Payment Method state
   const [paymentMethod, setPaymentMethod] = React.useState<string>('Cash')
@@ -216,6 +227,47 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   React.useEffect(() => {
     setKnownDebtors(receivablesStore.getPeopleSummaries())
   }, [])
+
+  React.useEffect(() => {
+    const state = location.state as any
+    if (state?.prefilledUnpaidItems && Array.isArray(state.prefilledUnpaidItems) && state.prefilledUnpaidItems.length > 0) {
+      const normalizedPrefilled: UnpaidAssignmentRow[] = state.prefilledUnpaidItems.map(
+        (it: any, idx: number) => {
+          const rawType = String(it.customerType || '').toLowerCase()
+          const resolvedType: CustomerType =
+            rawType === 'staff' || rawType === 'internal' ? 'Staff' : 'External'
+          return {
+            rowId: it.rowId || `row-${idx + 1}`,
+            saleLineIndex: typeof it.saleLineIndex === 'number' ? it.saleLineIndex : idx,
+            particulars: String(it.particulars || '').trim(),
+            quantity: Number(it.quantity) || 1,
+            unitPrice: Number(it.unitPrice) || Number(it.total) || 0,
+            total: Number(it.total) || 0,
+            customerType: resolvedType,
+            customerName: String(it.customerName || ''),
+          }
+        }
+      )
+      setRows(
+        normalizedPrefilled.map((it) => ({
+          id: it.rowId,
+          pettyCashCategory: '',
+          particulars: it.particulars,
+          unitPrice: it.unitPrice,
+          quantity: it.quantity,
+          status: 'Unpaid',
+        }))
+      )
+      setUnpaidAssignments(normalizedPrefilled)
+      setCurrentStep('assign_unpaid')
+      if (state.sourceCompany) {
+        setSelectedCompany(state.sourceCompany)
+      }
+      if (state.sourceDate) {
+        setDate(state.sourceDate)
+      }
+    }
+  }, [location.state])
 
   // Bank Accounts state initialized synchronously from cache for 0ms Deposit Bank availability
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>(() =>
@@ -316,7 +368,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         const names = companies.map((c) => c.company_name).filter(Boolean)
         setDbCompanies(names)
         if (!selectedCompany && names.length > 0) {
-          setSelectedCompany(names[0])
+          if (activeCompany && activeCompany !== 'All Companies') {
+            setSelectedCompany(activeCompany)
+          } else {
+            setSelectedCompany(names[0])
+          }
         }
       }
     })
@@ -419,7 +475,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   // Prevent editing only if transaction has explicitly been audited and verified by an auditor
   React.useEffect(() => {
     if (editItem && (editItem.auditStatus === 'Verified' || editItem.isAudited)) {
-      alert(
+      notifyWarning(
         'This transaction has already been audited and verified by the auditor. Records cannot be edited.'
       )
       navigate(transactionType === 'Sales' ? '/sales' : '/expense', {
@@ -734,28 +790,111 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
 
-    // Check if there are unpaid items in Sales
-    const unpaidItems = validItems.filter(
-      (it) => it.status === 'Unpaid' || it.status === 'Pending'
-    )
+    // Check if there are unpaid items in Sales or Expense, preserving each row's 0-based index in validItems
+    const unpaidWithIndices = validItems
+      .map((it, lineIdx) => ({ it, lineIdx }))
+      .filter(({ it }) => it.status === 'Unpaid' || it.status === 'Pending')
 
-    // Step 1: If on encode step and unpaid items exist, redirect to the Unpaid Entries Assignment spreadsheet page!
-    if (transactionType === 'Sales' && unpaidItems.length > 0 && currentStep === 'encode') {
+    // Step 1: If on encode step and unpaid items exist:
+    if (transactionType === 'Sales' && unpaidWithIndices.length > 0 && currentStep === 'encode') {
+      const existingLinked =
+        isEditMode && editItem?.id
+          ? receivablesStore
+              .getSales()
+              .filter((r) => r.sale_id !== null && Number(r.sale_id) === Number(editItem.id))
+          : []
+
       setUnpaidAssignments(
-        unpaidItems.map((it) => ({
-          rowId: it.id,
-          particulars: it.particulars.trim(),
-          quantity: it.numericQty,
-          unitPrice: it.numericPrice,
-          total: it.rowTotal,
-          customerType: 'External',
-          customerName: '',
-          contactOrRole: '',
-        }))
+        unpaidWithIndices.map(({ it, lineIdx }) => {
+          const matchedExisting =
+            existingLinked.find((r) => r.sale_line_index === lineIdx) ||
+            existingLinked.find(
+              (r) =>
+                r.sale_line_index === null &&
+                r.items_summary.trim().toLowerCase() === it.particulars.trim().toLowerCase()
+            )
+          return {
+            rowId: it.id,
+            saleLineIndex: lineIdx,
+            particulars: it.particulars.trim(),
+            quantity: it.numericQty,
+            unitPrice: it.numericPrice,
+            total: it.rowTotal,
+            customerType: matchedExisting?.customer_type || 'External',
+            customerName: matchedExisting?.customer_name || '',
+          }
+        })
       )
       setCurrentStep('assign_unpaid')
       window.scrollTo({ top: 0, behavior: 'smooth' })
       return
+    }
+
+    // AC-1: If saving an Expense with unpaid items, save expense and redirect to /sales/add prefilled
+    if (transactionType === 'Expense' && unpaidWithIndices.length > 0 && currentStep === 'encode') {
+      setIsSubmitting(true)
+      try {
+        const itemizedParticulars: ParticularItem[] = validItems.map((item, idx) => {
+          let text = item.particulars.trim()
+          if (isPettyCash && item.pettyCashCategory?.trim()) {
+            text = text ? `${item.pettyCashCategory.trim()} - ${text}` : item.pettyCashCategory.trim()
+          }
+          return {
+            id: item.id || `item-${idx}`,
+            particulars: text,
+            quantity: item.numericQty,
+            unitPrice: item.numericPrice,
+            total: item.rowTotal,
+            status: normalizeParticularStatus(item.status, 'Paid'),
+          }
+        })
+        const formattedParticulars = formatParticularsString(itemizedParticulars)
+        const companyToUse = isAuditor ? assignedCompany : selectedCompany
+
+        if (!isEditMode) {
+          await expenseService.addExpense({
+            company: companyToUse,
+            date,
+            particulars: formattedParticulars,
+            amount: grandTotal,
+            category: isPettyCash ? 'Petty Cash' : category.trim() || 'Rendered Fee',
+            paymentMethod,
+            chequeNo: chequeNo.trim() || undefined,
+            status: 'Pending',
+            items: itemizedParticulars,
+            bankAccountId: effectiveBankId || undefined,
+          })
+        }
+
+        const transferredAssignments: UnpaidAssignmentRow[] = unpaidWithIndices.map(
+          ({ it }, idx) => ({
+            rowId: it.id,
+            saleLineIndex: idx,
+            particulars: it.particulars.trim(),
+            quantity: it.numericQty,
+            unitPrice: it.numericPrice,
+            total: it.rowTotal,
+            customerType: 'Staff',
+            customerName: '',
+          })
+        )
+
+        setIsSubmitting(false)
+        navigate('/sales/add', {
+          state: {
+            prefilledUnpaidItems: transferredAssignments,
+            sourceCompany: companyToUse,
+            sourceDate: date,
+            fromExpense: true,
+          },
+          replace: true,
+        })
+        return
+      } catch (err: any) {
+        setIsSubmitting(false)
+        setErrorMessage(err?.message || 'Failed to save expense before transferring unpaid items.')
+        return
+      }
     }
 
     // Step 2: If on assign_unpaid step, ensure each unpaid item has a customer/staff name
@@ -813,52 +952,56 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             bankAccountId: effectiveBankId || undefined,
           })
 
-          // Sync unpaid entries to Receivables Utang ledger grouped by customer
+          // Sync unpaid entries to Receivables ledger (1 receivable per unpaid line linked by sale_id + sale_line_index)
           if (unpaidAssignments.length > 0) {
-            const customerGroups = new Map<string, {
-              customerName: string
-              customerType: CustomerType
-              contactOrRole: string
-              items: string[]
-              total: number
-            }>()
+            await receivablesStore.refreshFromBackend()
+            const parsedEditSaleId = Number(editItem.id)
+            const currentLinked = !Number.isNaN(parsedEditSaleId)
+              ? receivablesStore
+                  .getSales()
+                  .filter((r) => r.sale_id !== null && Number(r.sale_id) === parsedEditSaleId)
+              : []
 
-            unpaidAssignments.forEach((u) => {
-              const rawType = String(u.customerType || '').toLowerCase()
-              const isStaff = rawType.includes('staff') || rawType.includes('internal') || rawType.includes('employee')
-              const resolvedType: CustomerType = isStaff ? 'Staff' : 'External'
+            for (const u of unpaidAssignments) {
+              const resolvedType: CustomerType = u.customerType === 'Staff' ? 'Staff' : 'External'
+              const apiCustomerType = resolvedType === 'Staff' ? 'Internal' : 'External'
+              const existingAtLine = currentLinked.find(
+                (r) => r.sale_line_index === u.saleLineIndex
+              )
 
-              const key = `${resolvedType}___${u.customerName.trim().toLowerCase()}`
-              if (!customerGroups.has(key)) {
-                customerGroups.set(key, {
-                  customerName: u.customerName.trim(),
-                  customerType: resolvedType,
-                  contactOrRole: u.contactOrRole.trim(),
-                  items: [],
-                  total: 0,
+              if (existingAtLine) {
+                if (
+                  existingAtLine.customer_name.trim() !== u.customerName.trim() ||
+                  existingAtLine.customer_type !== resolvedType
+                ) {
+                  await receivablesStore.editSale(existingAtLine.id, {
+                    customer_name: u.customerName.trim(),
+                    customer_type: resolvedType,
+                  })
+                }
+              } else {
+                await receivablesService.createReceivable({
+                  customer_name: u.customerName.trim(),
+                  customer_type: apiCustomerType,
+                  items_summary: u.particulars || 'Food Order',
+                  total_amount: u.total,
+                  amount_paid: 0,
+                  payment_option: 'Pay Later',
+                  payment_method:
+                    paymentMethod === 'GCash'
+                      ? 'GCash'
+                      : paymentMethod === 'Bank Transfer'
+                        ? 'Bank Transfer'
+                        : 'Cash',
+                  notes: chequeNo.trim() ? `Ref: ${chequeNo.trim()}` : undefined,
+                  company_name: companyToUse,
+                  sale_id: !Number.isNaN(parsedEditSaleId) ? parsedEditSaleId : undefined,
+                  sale_line_index: u.saleLineIndex,
+                  date,
                 })
               }
-              const g = customerGroups.get(key)!
-              g.items.push(u.particulars)
-              g.total += u.total
-            })
-
-            customerGroups.forEach((group) => {
-              receivablesStore.addNewSale({
-                customer_name: group.customerName,
-                customer_type: group.customerType,
-                customer_phone: group.customerType === 'External' ? group.contactOrRole : undefined,
-                customer_role: group.customerType === 'Staff' ? group.contactOrRole : undefined,
-                items_summary: group.items.join(', ') || 'Food Order',
-                total_amount: group.total,
-                payment_option: 'Pay Later',
-                amount_paid: 0,
-                payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
-                date: date,
-                notes: chequeNo.trim() ? `Ref: ${chequeNo.trim()}` : undefined,
-                company: companyToUse,
-              })
-            })
+            }
+            await receivablesStore.refreshFromBackend()
           }
         } else {
           await expenseService.updateExpense(editItem.id, {
@@ -877,7 +1020,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         }
       } else {
         if (transactionType === 'Sales') {
-          await salesService.addSale({
+          const createdSale = await salesService.addSale({
             company: companyToUse,
             date,
             particulars: formattedParticulars,
@@ -890,52 +1033,33 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             bankAccountId: effectiveBankId || undefined,
           })
 
-          // Sync unpaid entries to Receivables Utang ledger grouped by customer
+          // Create 1 Receivable per unpaid line linked by sale_id and sale_line_index
           if (unpaidAssignments.length > 0) {
-            const customerGroups = new Map<string, {
-              customerName: string
-              customerType: CustomerType
-              contactOrRole: string
-              items: string[]
-              total: number
-            }>()
-
-            unpaidAssignments.forEach((u) => {
-              const rawType = String(u.customerType || '').toLowerCase()
-              const isStaff = rawType.includes('staff') || rawType.includes('internal') || rawType.includes('employee')
-              const resolvedType: CustomerType = isStaff ? 'Staff' : 'External'
-
-              const key = `${resolvedType}___${u.customerName.trim().toLowerCase()}`
-              if (!customerGroups.has(key)) {
-                customerGroups.set(key, {
-                  customerName: u.customerName.trim(),
-                  customerType: resolvedType,
-                  contactOrRole: u.contactOrRole.trim(),
-                  items: [],
-                  total: 0,
-                })
-              }
-              const g = customerGroups.get(key)!
-              g.items.push(u.particulars)
-              g.total += u.total
-            })
-
-            customerGroups.forEach((group) => {
-              receivablesStore.addNewSale({
-                customer_name: group.customerName,
-                customer_type: group.customerType,
-                customer_phone: group.customerType === 'External' ? group.contactOrRole : undefined,
-                customer_role: group.customerType === 'Staff' ? group.contactOrRole : undefined,
-                items_summary: group.items.join(', ') || 'Food Order',
-                total_amount: group.total,
-                payment_option: 'Pay Later',
+            const parsedSaleId = createdSale?.id ? Number(createdSale.id) : NaN
+            for (const u of unpaidAssignments) {
+              const resolvedType: CustomerType = u.customerType === 'Staff' ? 'Staff' : 'External'
+              const apiCustomerType = resolvedType === 'Staff' ? 'Internal' : 'External'
+              await receivablesService.createReceivable({
+                customer_name: u.customerName.trim(),
+                customer_type: apiCustomerType,
+                items_summary: u.particulars || 'Food Order',
+                total_amount: u.total,
                 amount_paid: 0,
-                payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
-                date: date,
+                payment_option: 'Pay Later',
+                payment_method:
+                  paymentMethod === 'GCash'
+                    ? 'GCash'
+                    : paymentMethod === 'Bank Transfer'
+                      ? 'Bank Transfer'
+                      : 'Cash',
                 notes: chequeNo.trim() ? `Ref: ${chequeNo.trim()}` : undefined,
-                company: companyToUse,
+                company_name: companyToUse,
+                sale_id: !Number.isNaN(parsedSaleId) ? parsedSaleId : undefined,
+                sale_line_index: u.saleLineIndex,
+                date,
               })
-            })
+            }
+            await receivablesStore.refreshFromBackend()
           }
         } else {
           await expenseService.addExpense({
@@ -1002,19 +1126,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         <div className="space-y-6 animate-in fade-in duration-200">
           {/* Header */}
           <div className="space-y-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
+            <BackButton
               onClick={() => {
                 setErrorMessage(null)
                 setCurrentStep('encode')
               }}
-              className="h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold gap-1.5 cursor-pointer"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Back to Edit Particulars Spreadsheet</span>
-            </Button>
+              label="Back to Edit Particulars Spreadsheet"
+            />
 
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
@@ -1028,10 +1146,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
           {/* Error Message */}
           {errorMessage && (
-            <div className="flex items-center gap-3 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-medium shadow-xs animate-in fade-in-50 duration-200">
-              <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-              <span>{errorMessage}</span>
-            </div>
+            <ErrorBanner
+              message={errorMessage}
+              onDismiss={() => setErrorMessage(null)}
+            />
           )}
 
           {/* Unpaid Entries Spreadsheet Table */}
@@ -1053,7 +1171,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             </div>
 
             <div className="overflow-x-auto">
-              <Table className="w-full border-collapse min-w-[980px]">
+              <Table className="w-full border-collapse min-w-[840px]">
                 <TableHeader className="bg-slate-50/90 border-b border-slate-200/80">
                   <TableRow className="hover:bg-transparent">
                     <TableHead className="w-12 text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3">
@@ -1071,14 +1189,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     <TableHead className="w-36 text-right text-[11px] font-bold uppercase tracking-wider text-rose-700 border-r border-slate-200/60 py-3 px-4">
                       TOTAL OWED (₱)
                     </TableHead>
-                    <TableHead className="w-48 text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead className="w-44 text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       CUSTOMER TYPE <span className="text-red-500">*</span>
                     </TableHead>
-                    <TableHead className="text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-4">
+                    <TableHead className="text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3 px-4">
                       CUSTOMER / STAFF NAME <span className="text-red-500">*</span>
-                    </TableHead>
-                    <TableHead className="w-48 text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3 px-3">
-                      CONTACT / ROLE
                     </TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1113,26 +1228,30 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         {formatPHP(row.total)}
                       </TableCell>
 
-                      {/* Customer / Staff Type Input Field */}
-                      <TableCell className="w-48 border-r border-slate-200/60 p-1.5 px-3">
-                        <input
-                          type="text"
-                          value={row.customerType}
+                      {/* Customer / Staff Type Select Dropdown */}
+                      <TableCell className="w-44 border-r border-slate-200/60 p-1.5 px-3">
+                        <select
+                          aria-label={`Customer type for row ${idx + 1}`}
+                          value={row.customerType === 'Staff' ? 'Staff' : 'External'}
                           onChange={(e) => {
-                            const val = e.target.value as CustomerType
+                            const val: CustomerType =
+                              e.target.value === 'Staff' ? 'Staff' : 'External'
                             setUnpaidAssignments((prev) =>
                               prev.map((u, i) => (i === idx ? { ...u, customerType: val } : u))
                             )
                           }}
-                          placeholder="e.g. External or Staff"
-                          className="w-full h-9 px-3 rounded-lg border border-stroke/60 bg-white text-xs text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus"
-                        />
+                          className="w-full h-9 px-3 rounded-lg border border-stroke/60 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus cursor-pointer"
+                        >
+                          <option value="External">External</option>
+                          <option value="Staff">Staff</option>
+                        </select>
                       </TableCell>
 
-                      {/* Customer / Staff Name Input Field (Pure input, no dropdown) */}
-                      <TableCell className="border-r border-slate-200/60 p-1.5 px-3">
+                      {/* Customer / Staff Name Input Field */}
+                      <TableCell className="p-1.5 px-3">
                         <input
                           type="text"
+                          aria-label={`Customer or staff name for row ${idx + 1}`}
                           value={row.customerName}
                           onChange={(e) => {
                             const val = e.target.value
@@ -1145,10 +1264,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                   ? {
                                       ...u,
                                       customerName: val,
-                                      ...(match ? {
-                                        customerType: match.type,
-                                        contactOrRole: match.role_or_dept || match.phone || u.contactOrRole,
-                                      } : {}),
+                                      ...(match ? { customerType: match.type } : {}),
                                     }
                                   : u
                               )
@@ -1161,22 +1277,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               ? 'border-rose-300 bg-rose-50/20'
                               : 'border-stroke/60 bg-white'
                           )}
-                        />
-                      </TableCell>
-
-                      {/* Contact / Role Input */}
-                      <TableCell className="w-48 p-1.5 px-3">
-                        <input
-                          type="text"
-                          value={row.contactOrRole}
-                          onChange={(e) => {
-                            const val = e.target.value
-                            setUnpaidAssignments((prev) =>
-                              prev.map((u, i) => (i === idx ? { ...u, contactOrRole: val } : u))
-                            )
-                          }}
-                          placeholder={row.customerType === 'Staff' ? 'e.g. Kitchen Cook' : 'e.g. 0917-xxx-xxxx'}
-                          className="w-full h-9 px-3 rounded-lg border border-stroke/60 bg-white text-xs text-focus shadow-2xs focus:outline-none focus:ring-1 focus:ring-focus"
                         />
                       </TableCell>
                     </TableRow>
@@ -1246,16 +1346,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       {/* 1. Navigation & Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="space-y-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
+          <BackButton
             onClick={() => navigate(isSales ? '/sales' : '/expense')}
-            className="h-8 px-2.5 -ml-2 text-muted-fg hover:text-focus text-xs font-semibold gap-1.5 cursor-pointer"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to {isSales ? 'Sales' : 'Expense'}</span>
-          </Button>
+            label={`Back to ${isSales ? 'Sales' : 'Expense'}`}
+          />
 
           <div className="mt-1">
             <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
@@ -1290,10 +1384,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
       {/* Error Banner */}
       {errorMessage && (
-        <div className="flex items-center gap-3 p-4 rounded-2xl border border-rose-200 bg-rose-50 text-rose-900 text-sm font-medium shadow-xs animate-in fade-in-50 duration-200">
-          <AlertCircle className="h-5 w-5 text-rose-600 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
+        <ErrorBanner
+          message={errorMessage}
+          onDismiss={() => setErrorMessage(null)}
+        />
       )}
 
       {/* 2. Transaction Parameters Card (Date, Company, Payment Method, Deposit Bank, Category, Cheque/Ref) */}
@@ -1336,9 +1430,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               <Building2 className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>Company</span>
             </label>
-            {isAuditor ? (
-              <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs sm:text-sm text-focus font-medium flex items-center truncate">
-                {assignedCompany}
+            {isCompanyLocked ? (
+              <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs sm:text-sm text-focus font-medium flex items-center truncate shadow-2xs select-none">
+                {isAuditor ? assignedCompany : (activeCompany && activeCompany !== 'All Companies' ? activeCompany : selectedCompany)}
               </div>
             ) : (
               <select

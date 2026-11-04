@@ -1,7 +1,10 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { CardSkeleton } from '@/components/common/CardSkeleton'
+import { TablePagination, TableEmptyState } from '@/components/common'
 import {
   Table,
   TableBody,
@@ -11,13 +14,13 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
+  MoreVertical,
+  Eye,
   Receipt,
   User,
   Building2,
   Search,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Check,
   CheckCircle2,
   AlertCircle,
@@ -27,16 +30,31 @@ import {
   FileText,
   X,
   Coins,
+  Edit2,
+  Trash2,
+  AlertTriangle,
+  Lock,
 } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
 import { formatPHP } from '@/lib/format'
+import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { loanService } from '@/services/loanService'
+import { websocketService } from '@/services/websocketService'
 import { useReceivables } from '@/hooks/useReceivables'
 import { RecordUtangPaymentModal } from '@/components/receivables/RecordUtangPaymentModal'
 import { PersonLedgerDrawer } from '@/components/receivables/PersonLedgerDrawer'
+import { PersonLedgerPageView } from '@/components/receivables/PersonLedgerPageView'
 import type {
+  CustomerType,
   PersonLedgerSummary,
   UtangSale,
 } from '@/services/receivablesStore'
@@ -45,11 +63,12 @@ const ITEMS_PER_PAGE = 10
 
 export const ReceivablesPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   const normalizedUserRole = (user?.role || '').toLowerCase()
   const isAudit =
     normalizedUserRole === 'audit' || normalizedUserRole.includes('auditor')
+  const isAdmin = normalizedUserRole === 'admin'
   const isFinance = normalizedUserRole === 'finance'
   const assignedCompany = user?.assignedCompany || ''
 
@@ -57,10 +76,39 @@ export const ReceivablesPage: React.FC = () => {
     assignedCompany &&
       assignedCompany !== 'All Companies' &&
       !isFinance &&
-      !isAudit
+      !isAudit &&
+      !isAdmin
   )
 
-  // Company list for dropdown
+  // Company-scoped write check (AC-3): Finance (all companies) or Company/Supervisor (within assigned company scope)
+  const canManageCompany = React.useCallback(
+    (companyName?: string, companyId?: number): boolean => {
+      if (!user || isAudit || isAdmin) return false
+      if (isFinance) return true
+      if (normalizedUserRole === 'supervisor' || normalizedUserRole === 'company') {
+        if (companyId && user.companyIds && user.companyIds.includes(companyId)) {
+          return true
+        }
+        if (companyId && user.companyId && user.companyId === companyId) {
+          return true
+        }
+        if (companyName) {
+          if (user.assignedCompany && isCompanyMatch(companyName, user.assignedCompany)) {
+            return true
+          }
+          if (
+            user.companyNames &&
+            user.companyNames.some((cnName) => isCompanyMatch(companyName, cnName))
+          ) {
+            return true
+          }
+        }
+      }
+      return false
+    },
+    [user, isAudit, isAdmin, isFinance, normalizedUserRole]
+  )
+
   const [companyList, setCompanyList] = React.useState<string[]>([
     'All Companies',
     'MyCity.Kitchen Corporation',
@@ -87,6 +135,11 @@ export const ReceivablesPage: React.FC = () => {
   }, [user])
 
   // Company filter state
+  React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
   const [selectedCompany, setSelectedCompany] = React.useState<string>(
     isCompanyScoped ? assignedCompany : activeCompany || 'All Companies'
   )
@@ -121,8 +174,129 @@ export const ReceivablesPage: React.FC = () => {
     kpis,
     recordPayment,
     settleStaffPayrollDeduction,
+    editSale,
+    updateDebtor,
+    deleteDebtor,
+    deleteSale,
+    deletePayment,
+    refreshFromBackend,
     resetToDefault,
   } = useReceivables(undefined, effectiveCompany)
+
+  // Real-time WebSocket + Reconnect + Window Focus background sync (250ms debounced, AC-10)
+  React.useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null
+
+    const triggerDebouncedRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        void refreshFromBackend()
+      }, 250)
+    }
+
+    const unsubReceivables = websocketService.subscribe(
+      'RECEIVABLES_UPDATED',
+      triggerDebouncedRefresh
+    )
+    const unsubSales = websocketService.subscribe(
+      'SALES_UPDATED',
+      triggerDebouncedRefresh
+    )
+    const unsubAudit = websocketService.subscribe(
+      'AUDIT_UPDATED',
+      triggerDebouncedRefresh
+    )
+    const unsubStatus = websocketService.subscribe('WS_STATUS_CHANGE', (data) => {
+      if (data?.status === 'connected') {
+        triggerDebouncedRefresh()
+      }
+    })
+
+    const handleWindowFocus = () => {
+      triggerDebouncedRefresh()
+    }
+    window.addEventListener('focus', handleWindowFocus)
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      unsubReceivables()
+      unsubSales()
+      unsubAudit()
+      unsubStatus()
+      window.removeEventListener('focus', handleWindowFocus)
+    }
+  }, [refreshFromBackend])
+
+  // Debtor batch edit & delete state (AC-9)
+  const [editingPerson, setEditingPerson] = React.useState<PersonLedgerSummary | null>(null)
+  const [editPersonName, setEditPersonName] = React.useState('')
+  const [editPersonType, setEditPersonType] = React.useState<CustomerType>('External')
+  const [personEditError, setPersonEditError] = React.useState<string | null>(null)
+  const [isSavingPersonEdit, setIsSavingPersonEdit] = React.useState(false)
+
+  const [deletingPerson, setDeletingPerson] = React.useState<PersonLedgerSummary | null>(null)
+  const [personDeleteError, setPersonDeleteError] = React.useState<string | null>(null)
+  const [isDeletingPerson, setIsDeletingPerson] = React.useState(false)
+
+  const handleOpenEditPerson = (p: PersonLedgerSummary) => {
+    if (p.all_locked) return
+    setEditingPerson(p)
+    setEditPersonName(p.name)
+    setEditPersonType(p.type)
+    setPersonEditError(null)
+  }
+
+  const handleSavePersonEdit = async () => {
+    if (!editingPerson) return
+    if (!editPersonName.trim()) {
+      setPersonEditError('Customer or staff name cannot be empty.')
+      return
+    }
+    setIsSavingPersonEdit(true)
+    setPersonEditError(null)
+    try {
+      const res = await updateDebtor({
+        old_customer_name: editingPerson.name,
+        new_customer_name: editPersonName.trim(),
+        customer_type: editPersonType,
+        company: editingPerson.company,
+        company_id: editingPerson.company_id,
+      })
+      if (!res.success) {
+        setPersonEditError(res.message)
+        return
+      }
+      showToast(res.message)
+      setEditingPerson(null)
+    } catch (err: any) {
+      setPersonEditError(err?.message || 'Failed to update debtor profile.')
+    } finally {
+      setIsSavingPersonEdit(false)
+    }
+  }
+
+  const handleConfirmDeletePerson = async () => {
+    if (!deletingPerson) return
+    setIsDeletingPerson(true)
+    setPersonDeleteError(null)
+    try {
+      const res = await deleteDebtor({
+        customer_name: deletingPerson.name,
+        company: deletingPerson.company,
+        company_id: deletingPerson.company_id,
+      })
+      if (!res.success) {
+        setPersonDeleteError(res.message)
+        return
+      }
+      showToast(res.message)
+      setDeletingPerson(null)
+    } catch (err: any) {
+      setPersonDeleteError(err?.message || 'Failed to delete debtor account.')
+    } finally {
+      setIsDeletingPerson(false)
+    }
+  }
 
   // State Filters
   const [activeTab, setActiveTab] = React.useState<'All' | 'External' | 'Staff'>('All')
@@ -143,11 +317,48 @@ export const ReceivablesPage: React.FC = () => {
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
 
+  // Floating 3-dots action menu state
+  const [openMenuPersonName, setOpenMenuPersonName] = React.useState<string | null>(null)
+  const [activeMenuPerson, setActiveMenuPerson] = React.useState<PersonLedgerSummary | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{ top: number; right: number; openUpward: boolean } | null>(null)
+
+  React.useEffect(() => {
+    if (!openMenuPersonName) return
+    const handleClickOutside = () => {
+      setOpenMenuPersonName(null)
+      setActiveMenuPerson(null)
+    }
+    const handleScroll = () => {
+      setOpenMenuPersonName(null)
+      setActiveMenuPerson(null)
+    }
+    window.addEventListener('click', handleClickOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      window.removeEventListener('click', handleClickOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
+  }, [openMenuPersonName])
+
   // Modals & Drawers state
-  const [selectedPersonForLedger, setSelectedPersonForLedger] = React.useState<PersonLedgerSummary | null>(null)
+  const [selectedPersonForLedger, setSelectedPersonForLedger] =
+    React.useState<PersonLedgerSummary | null>(null)
   const [isRecordPaymentOpen, setIsRecordPaymentOpen] = React.useState(false)
-  const [paymentTargetPerson, setPaymentTargetPerson] = React.useState<PersonLedgerSummary | null>(null)
+  const [paymentTargetPerson, setPaymentTargetPerson] =
+    React.useState<PersonLedgerSummary | null>(null)
   const [paymentTargetSale, setPaymentTargetSale] = React.useState<UtangSale | null>(null)
+
+  // Keep open PersonLedgerDrawer live-synced whenever `people` updates
+  React.useEffect(() => {
+    setSelectedPersonForLedger((prev) => {
+      if (!prev) return null
+      return (
+        people.find((p) => p.key === prev.key) ||
+        people.find((p) => p.name === prev.name && p.company === prev.company) ||
+        null
+      )
+    })
+  }, [people])
 
   // Dropdown menus
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
@@ -165,7 +376,6 @@ export const ReceivablesPage: React.FC = () => {
     }, 4500)
   }
 
-  // Click-outside listener for dropdowns
   React.useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node
@@ -183,23 +393,19 @@ export const ReceivablesPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Filtered People List
+  // Filtered People List (AC-2: search by customer/staff name, no phone/role)
   const filteredPeople = React.useMemo(() => {
     return people.filter((p) => {
-      // Tab check: External vs Staff
       if (activeTab === 'External' && p.type !== 'External') return false
       if (activeTab === 'Staff' && p.type !== 'Staff') return false
 
-      // Search check
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim()
         const matchName = p.name.toLowerCase().includes(q)
-        const matchRole = (p.role_or_dept || '').toLowerCase().includes(q)
-        const matchPhone = (p.phone || '').toLowerCase().includes(q)
-        if (!matchName && !matchRole && !matchPhone) return false
+        const matchCompany = (p.company || '').toLowerCase().includes(q)
+        if (!matchName && !matchCompany) return false
       }
 
-      // Status filter
       if (statusFilter !== 'All') {
         if (statusFilter === 'Unpaid' && p.status !== 'Unpaid') return false
         if (statusFilter === 'Partial' && p.status !== 'Partial') return false
@@ -210,43 +416,38 @@ export const ReceivablesPage: React.FC = () => {
     })
   }, [people, activeTab, searchQuery, statusFilter])
 
-  // Reset to page 1 on filter changes
   React.useEffect(() => {
     setCurrentPage(1)
   }, [activeTab, searchQuery, statusFilter])
 
-  // Pagination calculation
   const totalPages = Math.ceil(filteredPeople.length / ITEMS_PER_PAGE) || 1
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
   const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, filteredPeople.length)
   const paginatedPeople = filteredPeople.slice(startIndex, endIndex)
 
-  // Open Payment modal from a table row
   const handleOpenPayment = (person: PersonLedgerSummary, sale?: UtangSale) => {
     setPaymentTargetPerson(person)
     setPaymentTargetSale(sale || null)
     setIsRecordPaymentOpen(true)
   }
 
-  // Handle Payroll deduction
-  const handleSettlePayroll = (customerName: string) => {
-    const res = settleStaffPayrollDeduction(customerName)
+  const handleSettlePayroll = (
+    customerName: string,
+    companyId?: number,
+    companyName?: string
+  ) => {
+    const res = settleStaffPayrollDeduction(customerName, undefined, companyId, companyName)
     if (res.success) {
       showToast(res.message)
-      if (selectedPersonForLedger?.name === customerName) {
-        const updated = people.find((p) => p.name === customerName) || null
-        setSelectedPersonForLedger(updated)
-      }
     }
   }
 
-  // Real CSV Export
+  // Real CSV Export (AC-2: no Role/Phone columns)
   const handleExportCsv = () => {
     const headers = [
-      'Name',
+      'Customer / Staff Name',
       'Customer Type',
-      'Role / Department',
-      'Contact Phone',
+      'Company',
       'Total Purchases (PHP)',
       'Total Paid (PHP)',
       'Outstanding Owed (PHP)',
@@ -258,8 +459,7 @@ export const ReceivablesPage: React.FC = () => {
     const rows = filteredPeople.map((p) => [
       `"${p.name.replace(/"/g, '""')}"`,
       p.type,
-      `"${(p.role_or_dept || '').replace(/"/g, '""')}"`,
-      p.phone || '-',
+      `"${(p.company || '').replace(/"/g, '""')}"`,
       p.total_sales_amount.toFixed(2),
       p.total_amount_paid.toFixed(2),
       p.total_owed.toFixed(2),
@@ -269,7 +469,7 @@ export const ReceivablesPage: React.FC = () => {
     ])
 
     const csvContent =
-      'data:text/csv;charset=utf-8,﻿' +
+      'data:text/csv;charset=utf-8,\uFEFF' +
       [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n')
 
     const encodedUri = encodeURI(csvContent)
@@ -285,7 +485,7 @@ export const ReceivablesPage: React.FC = () => {
     setIsExportDropdownOpen(false)
   }
 
-  // Real PDF Export (Print Window)
+  // Real PDF Export (AC-2: no Role/Phone subtitles)
   const handleExportPdf = () => {
     setIsExportDropdownOpen(false)
     const printWindow = window.open('', '_blank')
@@ -298,7 +498,7 @@ export const ReceivablesPage: React.FC = () => {
             .map(
               (p) => `
         <tr>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${p.name}<br/><span style="font-weight: normal; font-size: 10px; color: #64748b;">${p.role_or_dept || ''}</span></td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${p.name}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${p.type}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right;">₱${p.total_sales_amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #16a34a;">₱${p.total_amount_paid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
@@ -328,7 +528,7 @@ export const ReceivablesPage: React.FC = () => {
           </style>
         </head>
         <body>
-          <h1>MCT Group of Companies — Receivables & Utang Ledger</h1>
+          <h1>MCT Group of Companies - Receivables &amp; Utang Ledger</h1>
           <div class="subtitle">Generated on ${new Date().toLocaleString()} &bull; Total Accounts: ${filteredPeople.length}</div>
           <div class="kpi-row">
             <div class="kpi-card">
@@ -371,6 +571,7 @@ export const ReceivablesPage: React.FC = () => {
     }, 400)
   }
 
+
   return (
     <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Toast Confirmation Banner */}
@@ -388,7 +589,7 @@ export const ReceivablesPage: React.FC = () => {
         </div>
       )}
 
-      {/* 1. Header Row (Matching Sales & Expense Pages) */}
+      {/* 1. Header Row */}
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -396,7 +597,6 @@ export const ReceivablesPage: React.FC = () => {
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
                 Receivables
               </h1>
-
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Summary of customer and staff food credit, aging balances, and remittances in{' '}
@@ -404,15 +604,14 @@ export const ReceivablesPage: React.FC = () => {
                 {isCompanyScoped
                   ? assignedCompany
                   : selectedCompany === 'All Companies'
-                  ? 'MCT Group of Companies'
-                  : selectedCompany}
+                    ? 'MCT Group of Companies'
+                    : selectedCompany}
               </strong>
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 self-start sm:self-auto">
-            {/* Reset Demo Data Button (Hidden for Audit) */}
-            {!isAudit && (
+            {isFinance && (
               <Button
                 type="button"
                 variant="outline"
@@ -429,7 +628,6 @@ export const ReceivablesPage: React.FC = () => {
               </Button>
             )}
 
-            {/* Export Dropdown (CSV / PDF) */}
             <div ref={exportDropdownRef} className="relative inline-block">
               <Button
                 type="button"
@@ -438,7 +636,6 @@ export const ReceivablesPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className="h-4 w-4 shrink-0 text-white" />
                 <span>Export</span>
                 <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90" />
               </Button>
@@ -469,14 +666,13 @@ export const ReceivablesPage: React.FC = () => {
 
         {/* Second Row: Search Bar & Filter Toolbar */}
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          {/* Extended Width Search Bar */}
           <div className="relative flex-1 w-full">
             <Search className="w-4 h-4 text-muted-fg absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by customer name, department, or phone…"
+              placeholder="Search by customer or staff name…"
               className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
             />
             {searchQuery && (
@@ -491,13 +687,10 @@ export const ReceivablesPage: React.FC = () => {
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Company Dropdown Filter Button */}
             {isCompanyScoped ? (
               <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
                 <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">
-                  {assignedCompany}
-                </span>
+                <span className="font-semibold text-focus/90">{assignedCompany}</span>
               </div>
             ) : (
               <div ref={companyDropdownRef} className="relative inline-block">
@@ -510,7 +703,6 @@ export const ReceivablesPage: React.FC = () => {
                   )}
                   aria-label="Filter receivables by company"
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[150px]">
                     {selectedCompany}
                   </span>
@@ -684,19 +876,15 @@ export const ReceivablesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. KPI Cards (Exact match to Sales & Expense styling, typography & colors) */}
+      {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {/* Card 1: Total External Utang */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-medium text-muted-fg block">
               Total External Utang
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
                 <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
@@ -709,22 +897,16 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-sky-50 border border-sky-200/60 flex items-center justify-center text-sky-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Building2 className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
 
-        {/* Card 2: Total Staff Utang */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
-            <span className="text-xs font-medium text-muted-fg block">
-              Total Staff Utang
-            </span>
+            <span className="text-xs font-medium text-muted-fg block">Total Staff Utang</span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
                 <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
@@ -737,25 +919,21 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-purple-50 border border-purple-200/60 flex items-center justify-center text-purple-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <User className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
 
-        {/* Card 3: Grand Total Receivables */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-medium text-muted-fg block">
               Grand Total Receivables
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <Skeleton className="h-7 w-36 rounded-md" />
-                <Skeleton className="h-3.5 w-56 rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-rose-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalOutstanding)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -765,15 +943,14 @@ export const ReceivablesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-rose-50 border border-rose-200/60 flex items-center justify-center text-rose-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
       </div>
 
-      {/* 3. Main Receivables Table Card (Matching System Standards) */}
+      {/* 3. Main Receivables Table Card */}
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
-        {/* Dynamic Context & Filter Bar (Matching System Standards) */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 mb-2 border-b border-slate-100">
           <div className="flex items-center gap-2.5 flex-wrap">
             <span
@@ -825,14 +1002,14 @@ export const ReceivablesPage: React.FC = () => {
               <col style={{ width: '12%' }} />
               <col style={{ width: '14%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '15%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '13%' }} />
-              <col style={{ width: '10%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
                 <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  NAME / CONTACT
+                  CUSTOMER / STAFF
                 </TableHead>
                 <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   TYPE
@@ -843,13 +1020,13 @@ export const ReceivablesPage: React.FC = () => {
                 <TableHead className="w-[14%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className="w-[15%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[14%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   TOTAL OWED
                 </TableHead>
-                <TableHead className="w-[13%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   STATUS
                 </TableHead>
-                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[13%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -857,37 +1034,7 @@ export const ReceivablesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 6 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="w-[22%] px-3.5 py-4">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <Skeleton className="w-8 h-8 rounded-xl shrink-0" />
-                        <div className="space-y-1.5 flex-1 min-w-0">
-                          <Skeleton className="h-4 w-28 rounded-md" />
-                          <Skeleton className="h-3 w-36 rounded-md" />
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell className="w-[12%] px-3.5 py-4">
-                      <Skeleton className="h-5 w-20 rounded-full" />
-                    </TableCell>
-                    <TableCell className="w-[14%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[14%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[15%] px-3.5 py-4">
-                      <Skeleton className="h-4 w-24 rounded-md" />
-                    </TableCell>
-                    <TableCell className="w-[13%] px-3.5 py-4">
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </TableCell>
-                    <TableCell className="w-[10%] px-3.5 py-4 text-center">
-                      <Skeleton className="h-7 w-14 rounded-lg mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={6} columns={7} />
               ) : paginatedPeople.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -910,16 +1057,20 @@ export const ReceivablesPage: React.FC = () => {
               ) : (
                 paginatedPeople.map((p) => {
                   const isStaff = p.type === 'Staff'
-                  const hasOwed = p.total_owed > 0
+                  const hasOwed = p.total_owed > 0.005
+                  const unlockedOwed = p.sales
+                    .filter((s) => !s.is_locked)
+                    .reduce((acc, s) => acc + s.balance, 0)
+                  const rowCanEdit = canManageCompany(p.company, p.company_id)
 
                   return (
                     <TableRow
-                      key={p.name}
+                      key={p.key}
                       onClick={() => setSelectedPersonForLedger(p)}
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-all duration-300 cursor-pointer"
-                      title="Click to view detailed customer ledger & transaction history"
+                      title="Click to view detailed account ledger & transaction history"
                     >
-                      {/* 1. Name & Contact */}
+                      {/* 1. Customer / Staff Name */}
                       <TableCell className="w-[22%] px-3.5 py-3.5 text-left truncate">
                         <div className="flex items-center gap-2.5 min-w-0">
                           <div
@@ -931,12 +1082,22 @@ export const ReceivablesPage: React.FC = () => {
                             {p.name.charAt(0)}
                           </div>
                           <div className="min-w-0 truncate">
-                            <span className="font-semibold text-xs sm:text-sm text-focus block truncate">
-                              {p.name}
-                            </span>
-                            <span className="text-[11px] text-muted-fg block truncate">
-                              {p.role_or_dept || ''} {p.phone ? `• ${p.phone}` : ''}
-                            </span>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="font-semibold text-xs sm:text-sm text-focus block truncate">
+                                {p.name}
+                              </span>
+                              {p.all_locked && (
+                                <Lock
+                                  className="w-3.5 h-3.5 text-slate-500 shrink-0"
+                                  aria-label="Locked (Verified)"
+                                />
+                              )}
+                            </div>
+                            {effectiveCompany === 'All Companies' && p.company && (
+                              <span className="text-[11px] text-muted-fg block truncate">
+                                {p.company}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </TableCell>
@@ -981,14 +1142,14 @@ export const ReceivablesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 5. Total Owed */}
-                      <TableCell className="w-[15%] px-3.5 py-3.5 text-left font-bold text-xs sm:text-sm tabular-nums whitespace-nowrap">
+                      <TableCell className="w-[14%] px-3.5 py-3.5 text-left font-bold text-xs sm:text-sm tabular-nums whitespace-nowrap">
                         <span className={cn(hasOwed ? 'text-rose-600 font-bold' : 'text-emerald-600')}>
                           {formatPHP(p.total_owed)}
                         </span>
                       </TableCell>
 
-                      {/* 6. Status Badge (Exact System Theme) */}
-                      <TableCell className="w-[13%] px-3.5 py-3.5 text-left whitespace-nowrap">
+                      {/* 6. Status Badge */}
+                      <TableCell className="w-[11%] px-3.5 py-3.5 text-left whitespace-nowrap">
                         <span
                           className={cn(
                             'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border tracking-wide uppercase',
@@ -1009,19 +1170,24 @@ export const ReceivablesPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 7. Actions */}
+                      {/* 7. Actions (Standard 3-dots Menu matching system) */}
                       <TableCell
-                        className="w-[10%] px-3.5 py-3.5 text-center whitespace-nowrap"
+className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1.5">
-                          {hasOwed && !isAudit && (
+                          {hasOwed && rowCanEdit && (
                             <Button
                               type="button"
                               size="sm"
+                              disabled={p.all_locked || unlockedOwed <= 0.005}
                               onClick={() => handleOpenPayment(p)}
-                              className="h-8 px-2.5 sm:px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs flex items-center gap-1 shadow-2xs cursor-pointer"
-                              title="Record payment remittance"
+                              className="h-8 px-2.5 sm:px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs flex items-center gap-1 shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              title={
+                                p.all_locked
+                                  ? 'Locked: linked sale has been Verified by an Auditor'
+                                  : 'Record payment remittance'
+                              }
                             >
                               <Coins className="w-3.5 h-3.5" />
                               <span>Pay</span>
@@ -1034,10 +1200,50 @@ export const ReceivablesPage: React.FC = () => {
                             size="sm"
                             onClick={() => setSelectedPersonForLedger(p)}
                             className="h-8 px-2.5 rounded-lg text-xs font-semibold text-focus hover:bg-slate-100 cursor-pointer"
-                            title={isAudit ? 'View debtor account history' : 'View account ledger'}
+                            title={rowCanEdit ? 'View account ledger' : 'View debtor account history'}
                           >
-                            <span>{isAudit ? 'View' : 'Ledger'}</span>
+                            <span>{rowCanEdit ? 'Ledger' : 'View'}</span>
                           </Button>
+
+                          {rowCanEdit && (
+                            <>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={p.all_locked}
+                                onClick={() => handleOpenEditPerson(p)}
+                                className="h-8 w-8 p-0 rounded-lg text-slate-600 hover:text-focus hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={
+                                  p.all_locked
+                                    ? 'Locked: all linked sales are Verified'
+                                    : 'Edit debtor profile'
+                                }
+                                aria-label={`Edit debtor ${p.name}`}
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={p.has_locked}
+                                onClick={() => {
+                                  setPersonDeleteError(null)
+                                  setDeletingPerson(p)
+                                }}
+                                className="h-8 w-8 p-0 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                title={
+                                  p.has_locked
+                                    ? 'Locked: one or more linked sales are Verified'
+                                    : 'Delete debtor account'
+                                }
+                                aria-label={`Delete debtor ${p.name}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1048,45 +1254,66 @@ export const ReceivablesPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* 4. Standard System Pagination Footer (Matching Sales & Expense Pages) */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredPeople.length === 0
-              ? 'Showing 0 of 0 accounts'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredPeople.length} accounts`}
-          </span>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredPeople.length}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          onPageChange={setCurrentPage}
+          itemLabel="accounts"
+        />
       </Card>
+
+      {/* Floating 3-dots Action Menu Portal */}
+      {openMenuPersonName && activeMenuPerson && menuPosition && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed w-48 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${menuPosition.top}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-fg border-b border-slate-100">
+              Account Actions
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                const target = activeMenuPerson
+                setOpenMenuPersonName(null)
+                setActiveMenuPerson(null)
+                setSelectedPersonForLedger(target)
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-focus hover:bg-slate-50 rounded-lg transition-colors cursor-pointer text-left"
+            >
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>{isAudit ? 'View Account History' : 'View Account Ledger'}</span>
+            </button>
+
+            {activeMenuPerson.total_owed > 0 && !isAudit && (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = activeMenuPerson
+                  setOpenMenuPersonName(null)
+                  setActiveMenuPerson(null)
+                  handleOpenPayment(target)
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer text-left"
+              >
+                <Coins className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>Record Payment</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
 
       {/* Record Payment Modal */}
       <RecordUtangPaymentModal
@@ -1097,14 +1324,9 @@ export const ReceivablesPage: React.FC = () => {
         onRecordPayment={recordPayment}
         onSuccess={(msg) => {
           showToast(msg)
-          if (selectedPersonForLedger && paymentTargetPerson) {
-            const updated = people.find((p) => p.name === paymentTargetPerson.name) || null
-            setSelectedPersonForLedger(updated)
-          }
         }}
       />
-
-      {/* Person Ledger Drawer / Full View */}
+      {/* Person Ledger Drawer */}
       <PersonLedgerDrawer
         open={Boolean(selectedPersonForLedger)}
         onOpenChange={(open) => !open && setSelectedPersonForLedger(null)}
@@ -1112,7 +1334,137 @@ export const ReceivablesPage: React.FC = () => {
         onOpenRecordPayment={handleOpenPayment}
         onSettlePayrollDeduction={handleSettlePayroll}
         isAudit={isAudit}
+        canEdit={
+          selectedPersonForLedger
+            ? canManageCompany(
+                selectedPersonForLedger.company,
+                selectedPersonForLedger.company_id
+              )
+            : false
+        }
+        onEditSale={editSale}
+        onDeleteSale={deleteSale}
+        onDeletePayment={deletePayment}
       />
+
+      {/* Dialog: Edit Debtor Profile (AC-2, AC-3, AC-9) */}
+      {editingPerson && (
+        <Dialog open={Boolean(editingPerson)} onOpenChange={(o) => !o && setEditingPerson(null)}>
+          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
+            <DialogHeader className="text-left space-y-1">
+              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-[#960C01]" />
+                <span>Edit Debtor Profile</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-fg">
+                Update debtor name or customer classification across all non-locked receivable orders for this account.
+              </DialogDescription>
+            </DialogHeader>
+
+            {personEditError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{personEditError}</span>
+              </div>
+            )}
+
+            <div className="space-y-3 pt-2 text-xs text-left">
+              <div>
+                <label className="font-semibold text-focus block mb-1">
+                  Customer / Staff Name
+                </label>
+                <input
+                  type="text"
+                  value={editPersonName}
+                  onChange={(e) => setEditPersonName(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-focus block mb-1">Customer Type</label>
+                <select
+                  value={editPersonType}
+                  onChange={(e) =>
+                    setEditPersonType(e.target.value === 'Staff' ? 'Staff' : 'External')
+                  }
+                  className="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                >
+                  <option value="External">External</option>
+                  <option value="Staff">Staff</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEditingPerson(null)}
+                disabled={isUpdatingPerson}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleConfirmEditPerson}
+                disabled={isUpdatingPerson}
+                className="bg-[#960C01] hover:bg-[#7d0a00] text-white"
+              >
+                {isUpdatingPerson ? 'Updating...' : 'Save Changes'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Dialog: Confirm Delete Debtor Account (AC-3, AC-9) */}
+      {deletingPerson && (
+        <Dialog open={Boolean(deletingPerson)} onOpenChange={(o) => !o && setDeletingPerson(null)}>
+          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
+            <DialogHeader className="text-left space-y-1">
+              <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600" />
+                <span>Delete Debtor Account?</span>
+              </DialogTitle>
+              <DialogDescription className="text-xs text-muted-fg">
+                Are you sure you want to delete all receivable records for{' '}
+                <strong>{deletingPerson.name}</strong>? Linked sale lines and deposited payments will be reversed automatically.
+              </DialogDescription>
+            </DialogHeader>
+
+            {personDeleteError && (
+              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{personDeleteError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDeletingPerson(null)}
+                disabled={isDeletingPerson}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleConfirmDeletePerson}
+                disabled={isDeletingPerson}
+                className="bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                {isDeletingPerson ? 'Deleting...' : 'Confirm Delete'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Card } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 
 interface DashboardKpiCardProps {
@@ -43,11 +44,7 @@ export const DashboardKpiCard: React.FC<DashboardKpiCardProps> = ({
           )}
         >
           {isCardLoading ? (
-            <span className="inline-flex items-center gap-1.5 py-1 text-muted-fg" aria-label="Loading">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce" />
-            </span>
+            <Skeleton className="h-6 sm:h-7 w-28 rounded-md my-1" />
           ) : (
             value
           )}
@@ -61,7 +58,7 @@ export const DashboardKpiCard: React.FC<DashboardKpiCardProps> = ({
 
       <div
         className={cn(
-          'h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-[#E5E5E5] flex items-center justify-center text-focus/40 shrink-0 shadow-2xs',
+          'h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs',
           iconContainerClassName
         )}
       >

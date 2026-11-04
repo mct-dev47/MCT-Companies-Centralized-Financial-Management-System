@@ -14,19 +14,22 @@ import {
   FileText,
   Trash2,
   Pencil,
-  ChevronLeft,
-  ChevronRight,
   AlertCircle,
   X,
+  XCircle,
   CheckCircle2,
   HandCoins,
   Clock,
   MoreVertical,
   Eye,
 } from 'lucide-react'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { TablePagination, ConfirmModal } from '@/components/common'
+import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
   TableHeader,
@@ -84,7 +87,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isAuditor = isAudit
-  const isCompanyScoped = !isAdmin && !isFinance
+  const isCompanyScoped = !isAdmin && !isFinance && !isAudit
   const canApprove = (isFinance || isAdmin) && !isAudit
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -115,11 +118,19 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }, [isAdmin, loanType])
 
-  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
+  const { activeCompany, setActiveCompany, dbCompanies: contextDbCompanies } = useCompany()
+
+  const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>(() => {
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      return contextDbCompanies.map((c) => ({
+        company_id: c.company_id ?? c.id,
+        company_name: c.company_name ?? c.name,
+      }))
+    }
+    return []
+  })
   const [loans, setLoans] = React.useState<LoanItem[]>([])
   const [loading, setLoading] = React.useState(true)
-
-  const { activeCompany, setActiveCompany } = useCompany()
 
   // Filter state
   const [selectedCompany, setSelectedCompany] = React.useState<string>(
@@ -140,7 +151,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }, [activeCompany, isCompanyScoped])
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
-  const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Approve')
+  const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     preset: 'All Dates',
@@ -244,18 +255,27 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     setOpenMenuLoanId(null)
   }
 
-  // Fetch Companies from Database
+  // Fetch Companies from Database (or populate from context)
   React.useEffect(() => {
     let mounted = true
-    loanService.getCompanies().then((res) => {
-      if (mounted && res.length > 0) {
-        setDbCompanies(res)
-      }
-    })
+    if (contextDbCompanies && contextDbCompanies.length > 0) {
+      setDbCompanies(
+        contextDbCompanies.map((c) => ({
+          company_id: c.company_id ?? c.id,
+          company_name: c.company_name ?? c.name,
+        }))
+      )
+    } else {
+      loanService.getCompanies().then((res) => {
+        if (mounted && res.length > 0) {
+          setDbCompanies(res)
+        }
+      })
+    }
     return () => {
       mounted = false
     }
-  }, [])
+  }, [contextDbCompanies])
 
   const companyNamesList = React.useMemo(() => {
     const list = dbCompanies.map((c) => c.company_name).filter(Boolean)
@@ -564,6 +584,14 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     setCurrentPage(1)
     setHighlightedLoanId(newItem.id)
 
+    // Automatically redirect Finance/Admin to the Loan Details modal to endorse to audit
+    if (canApprove) {
+      if (loanType !== 'Borrower') {
+        setLoanType('Borrower')
+      }
+      setViewLoanItem(newItem)
+    }
+
     setTimeout(() => {
       tableCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 150)
@@ -610,7 +638,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       setLoans((prev) => prev.filter((l) => l.id !== deleteConfirmLoan.id))
       setDeleteConfirmLoan(null)
     } catch (err: any) {
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to delete loan. Please try again.'))
+      notifyError(err, 'Failed to delete loan.')
     } finally {
       setIsDeleting(false)
     }
@@ -689,7 +717,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -760,7 +787,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <Calendar className="h-4 w-4 text-muted-fg shrink-0" />
                 <span className="font-medium text-focus/90">{selectedPeriod}</span>
                 <ChevronDown
                   className={cn(
@@ -870,7 +896,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[140px] sm:max-w-[180px]">
                     {selectedCompany}
                   </span>
@@ -999,11 +1024,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           </span>
           <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
             {loading ? (
-              <span className="inline-flex items-center gap-1.5 py-1 text-muted-fg" aria-label="Loading">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-current animate-bounce" />
-              </span>
+              <Skeleton className="h-7 w-36 rounded-md my-1" />
             ) : (
               formatPHP(kpis.totalLoans)
             )}
@@ -1028,10 +1049,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               <div className="h-5 w-44 bg-slate-200/80 animate-pulse rounded-md" />
               <div className="h-3.5 w-64 bg-slate-200/60 animate-pulse rounded-md" />
             </div>
-            <div className="h-56 sm:h-64 w-full bg-slate-50/70 rounded-2xl flex flex-col items-center justify-center gap-3">
-              <div className="w-20 h-20 rounded-full border-4 border-slate-200 border-t-primary animate-spin opacity-60" />
-              <div className="h-3.5 w-40 bg-slate-200/70 animate-pulse rounded" />
-            </div>
+            <Skeleton className="h-56 sm:h-64 w-full rounded-2xl" />
           </Card>
         ) : (
           <LoanHorizontalBarChart
@@ -1113,39 +1131,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-14 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-18 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-22 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-24 bg-slate-200/70 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5">
-                      <div className="h-4 w-16 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    {loanType === 'Borrower' && (
-                      <TableCell className="px-2 py-3.5">
-                        <div className="h-4 w-10 bg-slate-200/60 animate-pulse rounded" />
-                      </TableCell>
-                    )}
-                    <TableCell className="px-2 py-3.5 text-center">
-                      <div className="h-6 w-16 bg-slate-200/60 animate-pulse rounded-full mx-auto" />
-                    </TableCell>
-                    <TableCell className="px-2 py-3.5 text-center">
-                      <div className="h-7 w-7 bg-slate-200/60 animate-pulse rounded-lg mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={loanType === 'Borrower' ? 8 : 7} />
               ) : paginatedLoans.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1364,42 +1350,15 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           </Table>
         </div>
 
-        {/* Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredLoans.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredLoans.length} records`}
-          </span>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
-              className="h-8 px-2.5 rounded-lg cursor-pointer"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
-              className="h-8 px-2.5 rounded-lg cursor-pointer"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredLoans.length}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          onPageChange={setCurrentPage}
+          itemLabel="records"
+        />
       </Card>
 
       {/* Add Loan Modal */}
@@ -1438,63 +1397,39 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       />
 
       {/* Delete Confirmation Modal */}
-      <Dialog
+      <ConfirmModal
         open={Boolean(deleteConfirmLoan)}
         onOpenChange={(open) => !open && setDeleteConfirmLoan(null)}
+        title="Delete Loan Request"
+        description="Are you sure you want to delete this pending loan request? This action cannot be undone."
+        confirmLabel="Delete"
+        loadingLabel="Deleting…"
+        variant="destructive"
+        actionType="delete"
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
       >
-        <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="text-left pb-2 pr-6">
-            <DialogTitle className="text-lg font-bold text-focus leading-tight">
-              Delete Loan Request
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg font-normal">
-              Are you sure you want to delete this pending loan request? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {deleteConfirmLoan && (
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 my-2">
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Ref No:</span>
-                <span className="font-mono font-medium text-focus">{deleteConfirmLoan.refNo}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Borrower:</span>
-                <span className="font-medium text-focus">{deleteConfirmLoan.borrower}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Lender:</span>
-                <span className="font-medium text-focus">{deleteConfirmLoan.lender}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Amount:</span>
-                <span className="font-bold text-red-600">{formatPHP(deleteConfirmLoan.amount)}</span>
-              </div>
+        {deleteConfirmLoan && (
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 my-2">
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Ref No:</span>
+              <span className="font-mono font-medium text-focus">{deleteConfirmLoan.refNo}</span>
             </div>
-          )}
-
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteConfirmLoan(null)}
-              className="h-9 px-3 rounded-lg text-xs"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="h-9 px-4 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs"
-            >
-              {isDeleting ? 'Deleting…' : 'Delete'}
-            </Button>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Borrower:</span>
+              <span className="font-medium text-focus">{deleteConfirmLoan.borrower}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Lender:</span>
+              <span className="font-medium text-focus">{deleteConfirmLoan.lender}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Amount:</span>
+              <span className="font-bold text-red-600">{formatPHP(deleteConfirmLoan.amount)}</span>
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        )}
+      </ConfirmModal>
 
       {/* Record / Update Payment Modal */}
       <RecordPaymentModal
@@ -1598,20 +1533,45 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               </div>
 
               <div className="pt-3 border-t border-stroke/20 flex items-center justify-end gap-2 flex-wrap">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setViewLoanItem(null)}
-                  className="h-9 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Close
-                </Button>
+
+
+                {isAuditor && viewLoanItem.status === 'Pending Audit Approval' && (
+                  <>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        const target = viewLoanItem
+                        setViewLoanItem(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="h-9 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5" />
+                      <span>Disapprove</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        const target = viewLoanItem
+                        setViewLoanItem(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="h-9 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Approve</span>
+                    </Button>
+                  </>
+                )}
 
                 {!isAuditor &&
                   canApprove &&
                   (viewLoanItem.status === 'Pending Finance Endorsement' ||
-                    viewLoanItem.status === 'Pending Approval') && (
+                    viewLoanItem.status === 'Pending Approval' ||
+                    ((viewLoanItem.status || '').toLowerCase().includes('pending') &&
+                      !(viewLoanItem.status || '').toLowerCase().includes('audit'))) && (
                     <Button
                       type="button"
                       size="sm"
@@ -1680,8 +1640,41 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAuditor ? (
+            {canAuditActions ? (
               <>
+                {activeMenuLoan.status === 'Pending Audit Approval' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuLoan
+                        setOpenMenuLoanId(null)
+                        setMenuPosition(null)
+                        setActiveMenuLoan(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Approve</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuLoan
+                        setOpenMenuLoanId(null)
+                        setMenuPosition(null)
+                        setActiveMenuLoan(null)
+                        setAuditReviewLoanItem(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Disapprove</span>
+                    </button>
+                    <div className="h-px bg-slate-100 my-1" />
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => handleMarkLoanAudit(activeMenuLoan, 'Verified')}
@@ -1706,11 +1699,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                     setOpenMenuLoanId(null)
                     setMenuPosition(null)
                     setActiveMenuLoan(null)
-                    if (target.status === 'Pending Audit Approval') {
-                      setAuditReviewLoanItem(target)
-                    } else {
-                      setViewLoanItem(target)
-                    }
+                    setViewLoanItem(target)
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors text-left cursor-pointer"
                 >

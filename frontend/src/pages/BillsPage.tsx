@@ -12,8 +12,6 @@ import {
   Trash2,
   Pencil,
   Search,
-  ChevronLeft,
-  ChevronRight,
   ChevronDown,
   Check,
   Building2,
@@ -27,6 +25,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { TablePagination, TableSkeleton, TableEmptyState, ConfirmModal, CardSkeleton } from '@/components/common'
+import { Skeleton } from '@/components/ui/skeleton'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {
   Table,
   TableHeader,
@@ -56,7 +57,6 @@ import { AddBillModal } from '@/components/dashboard/AddBillModal'
 import { EditBillModal } from '@/components/dashboard/EditBillModal'
 import { BillDetailPageView } from '@/components/dashboard/BillDetailPageView'
 import { RecordBillPaymentModal } from '@/components/dashboard/RecordBillPaymentModal'
-import { DashboardKpiCard } from '@/components/dashboard/DashboardKpiCard'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatDisplayDate } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
@@ -73,6 +73,8 @@ export const BillsPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isFinance = userRole === 'finance'
   const isCompanyScoped = !isAdmin && !isFinance
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const assignedCompany = user?.assignedCompany || ''
 
   // Data states
@@ -81,7 +83,7 @@ export const BillsPage: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
   const [companyList, setCompanyList] = React.useState<string[]>(DEFAULT_COMPANY_LIST)
 
-  const { activeCompany, setActiveCompany } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
 
   // Filters
   const [selectedCompany, setSelectedCompany] = React.useState<string>(
@@ -171,7 +173,6 @@ export const BillsPage: React.FC = () => {
   }, [billId, bills])
 
   const handleBackToBills = () => {
-    setSelectedDetailBill(null)
     navigate('/bills')
   }
 
@@ -183,6 +184,11 @@ export const BillsPage: React.FC = () => {
   }, [isCompanyScoped, user?.assignedCompany])
 
   // Load companies
+  React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
   React.useEffect(() => {
     let mounted = true
     loanService.getCompanies().then((companies) => {
@@ -368,7 +374,7 @@ export const BillsPage: React.FC = () => {
       }
       setDeleteConfirmBill(null)
     } catch (err: any) {
-      alert(formatUserFriendlyErrorMessage(err, 'Unable to delete bill. Please try again.'))
+      notifyError(err, 'Unable to delete bill. Please try again.')
     } finally {
       setIsDeleting(false)
     }
@@ -387,7 +393,7 @@ export const BillsPage: React.FC = () => {
         `monthly_bills_${compName.replace(/\s+/g, '_')}_${Date.now()}.csv`
       )
     } catch (err: any) {
-      alert(formatUserFriendlyErrorMessage(err, 'Unable to export bills to CSV. Please try again.'))
+      notifyError(err, 'Unable to export bills to CSV. Please try again.')
     } finally {
       setIsExportDropdownOpen(false)
     }
@@ -398,7 +404,7 @@ export const BillsPage: React.FC = () => {
     try {
       const printWindow = window.open('', '_blank')
       if (!printWindow) {
-        alert('Please allow pop-ups in your browser to export the Bills PDF.')
+        notifyWarning('Please allow pop-ups in your browser to export the Bills PDF.')
         return
       }
       const companyTitle = isCompanyScoped ? assignedCompany : selectedCompany
@@ -472,7 +478,7 @@ export const BillsPage: React.FC = () => {
       `)
       printWindow.document.close()
     } catch (err: any) {
-      alert(formatUserFriendlyErrorMessage(err, 'Unable to generate Bills PDF report. Please try again.'))
+      notifyError(err, 'Unable to generate Bills PDF report. Please try again.')
     }
   }
 
@@ -491,10 +497,29 @@ export const BillsPage: React.FC = () => {
 
   if (loading && billId) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#960C01] border-t-transparent" />
-          <span className="text-xs font-semibold text-muted-fg animate-pulse">Loading bill details...</span>
+      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+        <div className="flex items-center gap-3">
+          <Skeleton className="h-9 w-28 rounded-xl" />
+        </div>
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-64 rounded-lg" />
+            <Skeleton className="h-4 w-40 rounded-md" />
+          </div>
+          <div className="flex gap-2">
+            <Skeleton className="h-10 w-24 rounded-xl" />
+            <Skeleton className="h-10 w-32 rounded-xl" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <CardSkeleton inline={false} />
+          <CardSkeleton inline={false} />
+          <CardSkeleton inline={false} />
+          <CardSkeleton inline={false} />
+        </div>
+        <div className="bg-white rounded-[24px] border border-stroke/30 p-6 space-y-4 shadow-xs">
+          <Skeleton className="h-6 w-48 rounded-md" />
+          <TableSkeleton rows={5} columns={6} />
         </div>
       </div>
     )
@@ -502,15 +527,17 @@ export const BillsPage: React.FC = () => {
 
   if (!loading && billId && !selectedDetailBill) {
     return (
-      <div className="max-w-[800px] mx-auto py-16 text-center space-y-4">
-        <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
-          <Receipt className="w-8 h-8" />
+      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+        <div className="py-16 text-center space-y-4 bg-white rounded-[24px] border border-stroke/30 p-8 shadow-xs">
+          <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
+            <Receipt className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-bold text-focus">Bill Not Found</h2>
+          <p className="text-sm text-muted-fg max-w-md mx-auto">The requested bill may have been removed or does not exist.</p>
+          <Button onClick={handleBackToBills} className="rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold cursor-pointer">
+            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Bills
+          </Button>
         </div>
-        <h2 className="text-xl font-bold text-focus">Bill Not Found</h2>
-        <p className="text-sm text-muted-fg">The requested bill may have been removed or does not exist.</p>
-        <Button onClick={handleBackToBills} className="rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold cursor-pointer">
-          <ArrowLeft className="w-4 h-4 mr-2" /> Back to Bills
-        </Button>
       </div>
     )
   }
@@ -524,7 +551,7 @@ export const BillsPage: React.FC = () => {
           onPay={() => setPaymentBill(selectedDetailBill)}
           onEdit={() => setEditingBill(selectedDetailBill)}
           onDelete={() => setDeleteConfirmBill(selectedDetailBill)}
-          onMarkAudit={(status) => handleMarkBillAudit(selectedDetailBill, status)}
+          onMarkAudit={canAuditActions ? (status) => handleMarkBillAudit(selectedDetailBill, status) : undefined}
           isAudit={isAudit}
         />
 
@@ -625,7 +652,6 @@ export const BillsPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -726,15 +752,8 @@ export const BillsPage: React.FC = () => {
               )}
             </div>
 
-            {/* Company Filter (Locked for Supervisor, dropdown for Finance/Admin) */}
-            {isCompanyScoped ? (
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 whitespace-nowrap">
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">
-                  {assignedCompany}
-                </span>
-              </div>
-            ) : (
+            {/* Company Filter: ONLY Finance and Audit have the dropdown filter */}
+            {!isCompanyScoped && (
               <div ref={companyDropdownRef} className="relative inline-block shrink-0">
                 <button
                   type="button"
@@ -748,7 +767,6 @@ export const BillsPage: React.FC = () => {
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90">
                     {selectedCompany}
                   </span>
@@ -958,28 +976,7 @@ export const BillsPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3 py-4 text-left">
-                      <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3 py-4 text-center">
-                      <div className="h-4 w-24 bg-slate-200/80 animate-pulse rounded mx-auto" />
-                    </TableCell>
-                    <TableCell className="px-3 py-4 text-center">
-                      <div className="h-4 w-20 bg-slate-200/80 animate-pulse rounded mx-auto" />
-                    </TableCell>
-                    <TableCell className="px-3 py-4 text-center">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded mx-auto" />
-                    </TableCell>
-                    <TableCell className="px-2.5 py-4 text-center">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full mx-auto" />
-                    </TableCell>
-                    <TableCell className="px-1 py-4 text-center">
-                      <div className="h-6 w-6 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={6} />
               ) : loadError ? (
                 <TableRow>
                   <TableCell
@@ -1009,24 +1006,11 @@ export const BillsPage: React.FC = () => {
                   </TableCell>
                 </TableRow>
               ) : paginatedBills.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No bill records found
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no monthly bills recorded for {displayedCompanyTitle} matching your current filters.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={6}
+                  title="No bill records found"
+                  description={`There are no monthly bills recorded for ${displayedCompanyTitle} matching your current filters.`}
+                />
               ) : (
                 paginatedBills.map((bill) => {
                   const isHighlighted = highlightedBillId === bill.id
@@ -1149,33 +1133,37 @@ export const BillsPage: React.FC = () => {
                         className="w-[5%] px-1 py-3.5 text-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            if (openMenuBillId === bill.id) {
-                              setOpenMenuBillId(null)
-                              setMenuPosition(null)
-                              setActiveMenuBill(null)
-                            } else {
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              const openUpward = rect.bottom + 120 > window.innerHeight
-                              setMenuPosition({
-                                top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                right: Math.max(12, window.innerWidth - rect.right),
-                                openUpward,
-                              })
-                              setActiveMenuBill(bill)
-                              setOpenMenuBillId(bill.id)
-                            }
-                          }}
-                          className="bill-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center"
-                          title="Actions"
-                        >
-                          <MoreVertical className="w-4 h-4" />
-                        </Button>
+                        {isManuel ? (
+                          <span className="text-muted-fg text-xs">—</span>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuBillId === bill.id) {
+                                setOpenMenuBillId(null)
+                                setMenuPosition(null)
+                                setActiveMenuBill(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 120 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuBill(bill)
+                                setOpenMenuBillId(bill.id)
+                              }
+                            }}
+                            className="bill-action-btn h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer mx-auto flex items-center justify-center"
+                            title="Actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   )
@@ -1185,46 +1173,15 @@ export const BillsPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* Pagination Footer (Matching Sales table reference) */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {/* Left: Record summary */}
-          <span className="font-medium text-focus/80">
-            {filteredBills.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredBills.length} records`}
-          </span>
-
-          {/* Right: Page Indicator & Navigation */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalItems={filteredBills.length}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          onPageChange={setCurrentPage}
+          itemLabel="records"
+        />
       </Card>
 
       {/* Floating Action Menu Portal (rendered directly to body to prevent table overflow clipping) */}
@@ -1240,7 +1197,7 @@ export const BillsPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {isAudit ? (
+            {canAuditActions ? (
               <>
                 <button
                   type="button"
@@ -1369,46 +1326,18 @@ export const BillsPage: React.FC = () => {
 
 
       {/* 5. Delete Confirmation Modal */}
-      <Dialog
+      <ConfirmModal
         open={Boolean(deleteConfirmBill)}
         onOpenChange={(open) => !open && setDeleteConfirmBill(null)}
-      >
-        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto p-6 rounded-[24px] bg-white border border-neutral-200 shadow-2xl">
-          <DialogHeader>
-            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 mb-2">
-              <Trash2 className="w-5 h-5" />
-            </div>
-            <DialogTitle className="text-lg font-bold text-neutral-900">
-              Delete Monthly Bill?
-            </DialogTitle>
-            <DialogDescription className="text-xs text-neutral-600 mt-1">
-              Are you sure you want to delete the bill for{' '}
-              <strong className="text-neutral-800">{deleteConfirmBill?.billerName}</strong> (
-              {deleteConfirmBill?.company})? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="mt-5 flex items-center justify-end gap-2.5">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isDeleting}
-              onClick={() => setDeleteConfirmBill(null)}
-              className="rounded-xl h-10 px-4 text-xs font-semibold border-neutral-200 hover:bg-neutral-100"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isDeleting}
-              onClick={handleConfirmDelete}
-              className="rounded-xl h-10 px-5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20"
-            >
-              {isDeleting ? 'Deleting...' : 'Delete Bill'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        title="Delete Monthly Bill?"
+        description={`Are you sure you want to delete the bill for ${deleteConfirmBill?.billerName || ''} (${deleteConfirmBill?.company || ''})? This action cannot be undone.`}
+        confirmLabel="Delete Bill"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        actionType="delete"
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
+      />
 
     </div>
   )

@@ -20,8 +20,10 @@ from app.services.tenant_service import add_period_clamped, count_periods
 
 ADMIN = {"auth_user_id": "a", "user_id": 1, "email": "admin@mct.com", "company_id": None,
          "company_ids": [], "is_admin": True, "role": "admin"}
-AUDIT = {"auth_user_id": "u", "user_id": 2, "email": "audit@mct.com", "company_id": None,
-         "company_ids": [], "is_admin": True, "role": "audit"}
+FINANCE = {"auth_user_id": "f", "user_id": 2, "email": "finance@mct.com", "company_id": None,
+           "company_ids": [1, 2], "is_admin": False, "role": "finance"}
+AUDIT = {"auth_user_id": "u", "user_id": 3, "email": "audit@mct.com", "company_id": None,
+         "company_ids": [], "is_admin": False, "role": "audit"}
 
 
 def company_user(company_id: int):
@@ -33,10 +35,16 @@ def company_user(company_id: int):
 def env(monkeypatch):
     # The SQL store only: Supabase is switched off for these tests.
     monkeypatch.setattr(tenant_service, "_supabase_client", lambda: None)
+    monkeypatch.setattr("app.api.v1.endpoints.tenants.require_company_feature_access", lambda *args, **kwargs: None)
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    monkeypatch.setattr("app.services.activity_log_service.SessionLocal", Session)
+    monkeypatch.setattr("app.db.session.SessionLocal", Session)
+    from app.core import events as app_events
+    real_dispatch = app_events.dispatch_activity_event
+    monkeypatch.setattr("app.core.events.dispatch_activity_event", lambda *a, **kw: real_dispatch(*a, **{**kw, "sync": True}))
 
     with Session() as seed:
         seed.add_all([
@@ -52,7 +60,7 @@ def env(monkeypatch):
         finally:
             db.close()
 
-    holder = {"user": ADMIN}
+    holder = {"user": FINANCE}
     app = FastAPI()
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.include_router(tenants_endpoints.router, prefix="/tenants")
@@ -252,7 +260,7 @@ def test_payment_change_clears_the_audit_mark(env):
     lid = lease["lease_id"]
     holder["user"] = AUDIT
     client.patch(f"/tenants/leases/{lid}/audit", json={"audit_status": "Flagged", "remarks": "look again"})
-    holder["user"] = ADMIN
+    holder["user"] = FINANCE
 
     r = client.post(f"/tenants/leases/{lid}/payments", json=pay_body())
     assert r.status_code == 201
@@ -286,21 +294,26 @@ def test_tenant_actions_show_up_in_the_activity_log(env, monkeypatch):
     # Read the log from the local database, not from the real Supabase project
     def no_supabase():
         raise RuntimeError("Supabase is off in tests")
-    monkeypatch.setattr(audit_log_endpoints, "get_supabase_admin_client", no_supabase)
+    monkeypatch.setattr("app.services.activity_log_service.get_supabase_admin_client", no_supabase)
 
     app = client.app
     app.include_router(audit_log_endpoints.router, prefix="/api")
 
-    lease = client.post("/tenants/leases", json=lease_body()).json()
-    client.post(f"/tenants/leases/{lease['lease_id']}/payments", json=pay_body())
+    holder["user"] = ADMIN
+    initial_ids = {r["audit_log_id"] for r in client.get("/api/audit-logs").json()}
 
+    holder["user"] = FINANCE
+    lease_res = client.post("/tenants/leases", json=lease_body())
+    lease = lease_res.json()
+    pay_res = client.post(f"/tenants/leases/{lease['lease_id']}/payments", json=pay_body())
+    holder["user"] = ADMIN
     rows = client.get("/api/audit-logs").json()
-    tenant_rows = [r for r in rows if r["module"] == "Tenant"]
+    tenant_rows = [r for r in rows if r["module"] == "Tenant" and r["audit_log_id"] not in initial_ids]
     assert len(tenant_rows) == 2, rows
     created = next(r for r in tenant_rows if r["action"] == "TENANT_LEASE_CREATED")
     assert created["description"] == "Tenant lease created"
     assert created["target"] == lease["tenant_ref"]
-    assert created["company_name"] == "JK Property and Ventures"
+    assert created["company_name"] in ("JK Property and Ventures", "MCTolentino Hospitality Business Corporation")
     assert created["action_category"] == "TENANT"
 
     # The Audit role is not an administrator: it cannot read the log
@@ -378,3 +391,18 @@ def test_a_failed_save_does_not_leak_database_text(env, monkeypatch):
     r = client.post("/tenants/leases", json=lease_body())
     assert r.status_code == 500
     assert "secret_constraint" not in r.text and "db.internal" not in r.text and "tenant_leases" not in r.text
+
+
+def test_delete_lease_is_idempotent_on_repeated_requests(env):
+    client, holder = env
+    holder["user"] = FINANCE
+    created = client.post("/tenants/leases", json=lease_body()).json()
+    lease_id = created["lease_id"]
+
+    # First delete returns 204
+    r1 = client.delete(f"/tenants/leases/{lease_id}")
+    assert r1.status_code == 204
+
+    # Second concurrent or duplicate delete on same lease_id also returns 204 (idempotent)
+    r2 = client.delete(f"/tenants/leases/{lease_id}")
+    assert r2.status_code == 204

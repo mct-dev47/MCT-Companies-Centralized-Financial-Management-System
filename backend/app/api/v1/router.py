@@ -19,6 +19,7 @@ from app.api.v1.endpoints import (
     bank_accounts,
     lending,
     tenants,
+    receivables,
     invitations,
 )
 
@@ -43,4 +44,5 @@ api_router.include_router(petty_cash.router, prefix="/petty-cash", tags=["Petty 
 api_router.include_router(bank_accounts.router, prefix="/bank-accounts", tags=["Bank Accounts"])
 api_router.include_router(lending.router, prefix="/lending", tags=["Lending"])
 api_router.include_router(tenants.router, prefix="/tenants", tags=["Tenants"])
+api_router.include_router(receivables.router, prefix="/receivables", tags=["Receivables"])
 api_router.include_router(invitations.router, prefix="/admin/invitations", tags=["Admin Invitations"])

@@ -37,7 +37,7 @@ import {
   type EmployeeUser,
 } from '@/services/employeeService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { cn } from '@/lib/utils'
 
@@ -245,7 +245,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create user. Please try again.')
       setSubmitError(errorMsg)
       setIsConfirmOpen(false)
-      window.alert(errorMsg)
+      notifyError(error, 'Unable to create user. Please try again.')
     } finally {
       setIsSubmitting(false)
     }

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Union
+from contextlib import contextmanager
 import logging
 import secrets
 import json
@@ -251,51 +252,90 @@ def _send_login_otp(email: str, otp: str) -> None:
     threading.Thread(target=_dispatch_email, daemon=True).start()
 
 
-def _record_failed_login(db: Session, ip_address: str, email: str = "") -> None:
-    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
-        return
-    now = datetime.now(timezone.utc)
-    state = _rate_limits.setdefault(ip_address, {"attempts": 0, "locked_until": None})
-    locked_until = state["locked_until"]
-    if isinstance(locked_until, datetime) and locked_until > now:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
-        )
-    if isinstance(locked_until, datetime):
-        state["attempts"] = 0
-        state["locked_until"] = None
-    state["attempts"] = int(state["attempts"]) + 1
-    if int(state["attempts"]) >= settings.LOGIN_MAX_ATTEMPTS:
-        state["locked_until"] = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+@contextmanager
+def _resolve_session(db: Optional[Session]):
+    if db is not None:
+        yield db
+    else:
+        from app.db.session import SessionLocal
+        session = SessionLocal()
         try:
-            log_account_locked(db, ip_address=ip_address, email=email)
-        except Exception:
-            pass
+            yield session
+        finally:
+            session.close()
 
 
-def _ensure_ip_available(db: Session, ip_address: str) -> None:
+def _record_failed_login(db: Optional[Session], ip_address: str, email: str = "") -> None:
     if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
         return
     now = datetime.now(timezone.utc)
-    state = _rate_limits.get(ip_address)
-    locked_until = state.get("locked_until") if state else None
-    if isinstance(locked_until, datetime) and locked_until > now:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
-        )
-    if state and isinstance(locked_until, datetime):
-        state["attempts"] = 0
-        state["locked_until"] = None
+    from app.models.security import LoginRateLimit
+    with _resolve_session(db) as session:
+        rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+        if not rate_row:
+            rate_row = LoginRateLimit(ip_address=ip_address, failed_attempts=0, last_attempt_at=now)
+            session.add(rate_row)
+            session.commit()
+
+        if rate_row.locked_until and rate_row.locked_until > now:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
+            )
+        if rate_row.locked_until and rate_row.locked_until <= now:
+            rate_row.failed_attempts = 0
+            rate_row.locked_until = None
+
+        rate_row.failed_attempts += 1
+        rate_row.last_attempt_at = now
+        if rate_row.failed_attempts >= settings.LOGIN_MAX_ATTEMPTS:
+            rate_row.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+            try:
+                log_account_locked(session, ip_address=ip_address, email=email)
+            except Exception:
+                pass
+        session.commit()
+
+
+def _ensure_ip_available(db: Optional[Session], ip_address: str) -> None:
+    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
+        return
+    now = datetime.now(timezone.utc)
+    from app.models.security import LoginRateLimit
+    with _resolve_session(db) as session:
+        rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+        if rate_row and rate_row.locked_until and rate_row.locked_until > now:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
+            )
+        if rate_row and rate_row.locked_until and rate_row.locked_until <= now:
+            rate_row.failed_attempts = 0
+            rate_row.locked_until = None
+            session.commit()
+
+
+def _reset_ip_attempts(db: Optional[Session], ip_address: str) -> None:
+    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
+        return
+    try:
+        from app.models.security import LoginRateLimit
+        with _resolve_session(db) as session:
+            rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
+            if rate_row:
+                rate_row.failed_attempts = 0
+                rate_row.locked_until = None
+                session.commit()
+    except Exception:
+        pass
 
 
 def _get_jwt_secret() -> str:
     from app.core.config import unwrap_secret
     secret = unwrap_secret(settings.SUPABASE_JWT_SECRET) or settings.SUPABASE_KEY
-    if not secret:
+    if not secret or len(secret.strip()) < 32:
         secret = "mct-centralized-financial-system-secret-key-32chars!"
-    return secret
+    return secret.strip()
 
 
 # create jwt token
@@ -371,7 +411,7 @@ def get_current_user_info(db: Session, user_id: int) -> UserResponse:
 
 
 # login user with encrypted payload support
-def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[LoginChallengeResponse, str]:
+def login_user(db: Optional[Session], login_data: LoginRequest, ip_address: str) -> tuple[LoginChallengeResponse, str]:
     _ensure_ip_available(db, ip_address)
     email = login_data.email
     password = login_data.password
@@ -435,6 +475,8 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
             detail="Invalid email or password." if not authenticated else "Application user profile not found.",
         )
 
+    _reset_ip_attempts(db, ip_address)
+
     otp = f"{secrets.randbelow(1_000_000):06d}"
     now = datetime.now(timezone.utc)
     challenge_id = secrets.token_urlsafe(24)
@@ -468,7 +510,7 @@ def login_user(db: Session, login_data: LoginRequest, ip_address: str) -> tuple[
     ), challenge_cookie
 
 
-def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, cookie_value: str | None) -> TokenResponse:
+def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_address: str, cookie_value: str | None) -> TokenResponse:
     if not cookie_value:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login verification session not found.")
     challenge = decrypt_payload(cookie_value)
@@ -498,6 +540,7 @@ def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, c
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code.")
 
     challenge_state["consumed"] = True
+    _reset_ip_attempts(db, ip_address)
     user_id = challenge.get("user_id")
     user = _get_application_user(user_id=int(user_id)) if user_id else None
     if user:
@@ -529,7 +572,7 @@ def verify_login_otp(db: Session, otp_data: VerifyOtpRequest, ip_address: str, c
     return TokenResponse(access_token=access_token, user=user_info)
 
 
-def resend_login_otp(db: Session, ip_address: str, cookie_value: str | None) -> tuple[OtpResponse, str]:
+def resend_login_otp(db: Optional[Session], ip_address: str, cookie_value: str | None) -> tuple[OtpResponse, str]:
     if not cookie_value:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Login verification session not found.")
     challenge = decrypt_payload(cookie_value)

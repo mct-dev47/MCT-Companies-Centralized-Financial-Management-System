@@ -61,6 +61,26 @@ class CompanyService:
         except SQLAlchemyError as error:
             raise self._database_error("list companies", error)
 
+    # list_companies_lookup retrieves only company_id and company_name without heavy financial aggregation
+    def list_companies_lookup(self) -> List[dict]:
+        try:
+            companies = (
+                self.db.query(Company.company_id, Company.company_name)
+                .order_by(Company.company_id.asc())
+                .all()
+            )
+            return [
+                {
+                    "company_id": c.company_id,
+                    "company_name": c.company_name,
+                    "id": c.company_id,
+                    "name": c.company_name,
+                }
+                for c in companies
+            ]
+        except SQLAlchemyError as error:
+            raise self._database_error("list companies lookup", error)
+
     #retrieves a company by its ID from the database and returns the Company object if found, or None if not found.
     def get_company(self, company_id: int) -> Optional[Company]:
         try:

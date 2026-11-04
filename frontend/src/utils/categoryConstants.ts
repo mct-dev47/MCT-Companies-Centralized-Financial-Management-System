@@ -18,6 +18,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Product Sales': '#7C3AED',
   'Catering': '#DB2777',
   'Other Income': '#65A30D',
+  'Rental Income': '#059669',
 }
 
 export const CATEGORY_LIST: TransactionCategory[] = [

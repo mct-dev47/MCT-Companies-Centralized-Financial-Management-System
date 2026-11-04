@@ -16,10 +16,9 @@ import {
   AlertCircle,
   User,
   Building,
-  CreditCard,
-  Plus,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'
+import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import type {
   CustomerType,
@@ -37,8 +36,6 @@ export interface NewFoodSaleModalProps {
   onAddNewSale: (params: {
     customer_name: string
     customer_type: CustomerType
-    customer_phone?: string
-    customer_role?: string
     items_summary: string
     total_amount: number
     payment_option: PaymentOption
@@ -56,57 +53,38 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
   onSuccess,
   onAddNewSale,
 }) => {
+  const todayIso = React.useMemo(() => formatToYYYYMMDD(new Date()), [])
   const [customerType, setCustomerType] = React.useState<CustomerType>('External')
   const [selectedPersonName, setSelectedPersonName] = React.useState<string>('')
   const [customName, setCustomName] = React.useState<string>('')
-  const [customerPhone, setCustomerPhone] = React.useState<string>('')
-  const [customerRole, setCustomerRole] = React.useState<string>('')
   const [itemsSummary, setItemsSummary] = React.useState<string>('')
   const [totalAmountInput, setTotalAmountInput] = React.useState<string>('')
   const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
   const [amountPaidInput, setAmountPaidInput] = React.useState<string>('')
   const [paymentMethod, setPaymentMethod] = React.useState<PaymentMethod>('Cash')
-  const [saleDate, setSaleDate] = React.useState<string>('2026-11-02')
+  const [saleDate, setSaleDate] = React.useState<string>(() => formatToYYYYMMDD(new Date()))
   const [notes, setNotes] = React.useState<string>('')
   const [error, setError] = React.useState<string>('')
 
-  // Filter existing people by type
   const filteredPeople = React.useMemo(() => {
     return existingPeople.filter((p) => p.type === customerType)
   }, [existingPeople, customerType])
 
-  // Reset on open
   React.useEffect(() => {
     if (open) {
       setCustomerType('External')
       setSelectedPersonName('')
       setCustomName('')
-      setCustomerPhone('')
-      setCustomerRole('')
       setItemsSummary('')
       setTotalAmountInput('')
       setPaymentOption('Paid in full')
       setAmountPaidInput('')
       setPaymentMethod('Cash')
-      setSaleDate('2026-11-02')
+      setSaleDate(formatToYYYYMMDD(new Date()))
       setNotes('')
       setError('')
     }
   }, [open])
-
-  // Sync selected person details
-  React.useEffect(() => {
-    if (selectedPersonName && selectedPersonName !== '__NEW__') {
-      const match = existingPeople.find((p) => p.name === selectedPersonName)
-      if (match) {
-        setCustomerPhone(match.phone === '—' ? '' : match.phone)
-        setCustomerRole(match.role_or_dept)
-      }
-    } else if (selectedPersonName === '__NEW__') {
-      setCustomerPhone('')
-      setCustomerRole('')
-    }
-  }, [selectedPersonName, existingPeople])
 
   const totalAmount = parseFloat(totalAmountInput) || 0
   const amountPaid = parseFloat(amountPaidInput) || 0
@@ -127,7 +105,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
         : selectedPersonName.trim()
 
     if (!finalName) {
-      setError('Please select or enter the customer / staff member name.')
+      setError('Please select or enter the customer or staff member name.')
       return
     }
 
@@ -155,12 +133,15 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
     const newSale = onAddNewSale({
       customer_name: finalName,
       customer_type: customerType,
-      customer_phone: customerPhone.trim() || undefined,
-      customer_role: customerRole.trim() || undefined,
       items_summary: itemsSummary.trim(),
       total_amount: totalAmount,
       payment_option: paymentOption,
-      amount_paid: paymentOption === 'Paid in full' ? totalAmount : paymentOption === 'Partial' ? amountPaid : 0,
+      amount_paid:
+        paymentOption === 'Paid in full'
+          ? totalAmount
+          : paymentOption === 'Partial'
+            ? amountPaid
+            : 0,
       payment_method: paymentOption !== 'Pay Later' ? paymentMethod : undefined,
       date: saleDate,
       notes: notes.trim() || undefined,
@@ -175,7 +156,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[620px] max-h-[85vh] flex flex-col bg-white rounded-[24px] p-5 sm:p-6 shadow-2xl overflow-hidden">
-        {/* Header */}
         <DialogHeader className="shrink-0 pb-3 border-b border-stroke/20 pr-8 text-left">
           <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
             <UtensilsCrossed className="h-5 w-5 text-emerald-600" />
@@ -186,7 +166,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Scrollable Form */}
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 space-y-3.5 mt-2">
           {error && (
             <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700 shrink-0">
@@ -196,7 +175,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
           )}
 
           <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-0 text-left">
-            {/* Customer Type Toggle */}
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-focus">Customer Type</Label>
               <div className="flex gap-2">
@@ -230,12 +208,11 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                   )}
                 >
                   <User className="w-3.5 h-3.5 text-purple-600" />
-                  <span>Internal Staff</span>
+                  <span>Staff</span>
                 </button>
               </div>
             </div>
 
-            {/* Customer Selection or Input */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs font-semibold text-focus">
@@ -249,7 +226,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                 >
                   <option value="">Select from existing {customerType.toLowerCase()} list...</option>
                   {filteredPeople.map((p) => (
-                    <option key={p.name} value={p.name}>
+                    <option key={p.key} value={p.name}>
                       {p.name} {p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}
                     </option>
                   ))}
@@ -274,7 +251,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               )}
             </div>
 
-            {/* Food Items Summary */}
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-focus">
                 Food Items / Order Summary <span className="text-red-500">*</span>
@@ -289,7 +265,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               />
             </div>
 
-            {/* Total Sale Amount & Date */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs font-semibold text-focus">
@@ -323,14 +298,13 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                     required
                     value={saleDate}
                     onChange={(e) => setSaleDate(e.target.value)}
-                    max="2026-11-02"
+                    max={todayIso}
                     className="pl-9 h-9 sm:h-10 text-xs sm:text-sm rounded-xl border-stroke/60"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Payment Option: Paid in full | Partial | Pay Later (Utang) */}
             <div className="space-y-2 pt-1">
               <Label className="text-xs font-semibold text-focus">
                 Payment Option <span className="text-red-500">*</span>
@@ -350,8 +324,8 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                         ? opt === 'Paid in full'
                           ? 'bg-emerald-50 border-emerald-400 text-emerald-800 font-bold shadow-2xs'
                           : opt === 'Partial'
-                          ? 'bg-amber-50 border-amber-400 text-amber-800 font-bold shadow-2xs'
-                          : 'bg-rose-50 border-rose-400 text-rose-800 font-bold shadow-2xs'
+                            ? 'bg-amber-50 border-amber-400 text-amber-800 font-bold shadow-2xs'
+                            : 'bg-rose-50 border-rose-400 text-rose-800 font-bold shadow-2xs'
                         : 'bg-white border-stroke/50 text-focus/70 hover:bg-slate-50'
                     )}
                   >
@@ -364,7 +338,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               </div>
             </div>
 
-            {/* Partial Amount Input & Payment Method */}
             {paymentOption === 'Partial' && (
               <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -394,7 +367,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                     >
                       <option value="Cash">Cash</option>
                       <option value="GCash">GCash</option>
-                      <option value="Bank">Bank Transfer</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
                     </select>
                   </div>
                 </div>
@@ -408,12 +381,11 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               </div>
             )}
 
-            {/* Paid in full Payment Method */}
             {paymentOption === 'Paid in full' && (
               <div className="space-y-1">
                 <Label className="text-xs font-semibold text-focus">Payment Method</Label>
                 <div className="flex gap-1.5">
-                  {(['Cash', 'GCash', 'Bank'] as const).map((m) => (
+                  {(['Cash', 'GCash', 'Bank Transfer'] as const).map((m) => (
                     <button
                       key={m}
                       type="button"
@@ -432,7 +404,6 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               </div>
             )}
 
-            {/* Pay Later Summary Banner */}
             {paymentOption === 'Pay Later' && (
               <div className="p-3 bg-rose-50/80 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-900">
                 <span>Total amount will be recorded as Unpaid credit (Utang):</span>
@@ -440,20 +411,18 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
               </div>
             )}
 
-            {/* Notes */}
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-focus">Sale Notes (Optional)</Label>
               <Input
                 type="text"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="e.g. Dine-in table 4 / takeaway for break / promised pay on Friday"
+                placeholder="e.g. Dine in table 4 / takeaway for break / promised pay on Friday"
                 className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl border-stroke/60"
               />
             </div>
           </div>
 
-          {/* Action Buttons */}
           <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
             <Button
               type="button"
@@ -476,4 +445,3 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
     </Dialog>
   )
 }
-

@@ -57,6 +57,14 @@ class AuthorizedCompanyOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class CompanyLookupOut(BaseModel):
+    company_id: int
+    company_name: str
+    id: int
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
 class HealthResponse(BaseModel):
     status: str
     service: str

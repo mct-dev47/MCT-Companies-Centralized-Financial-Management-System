@@ -23,13 +23,17 @@ class NotificationOut(BaseModel):
     expires_at: Optional[datetime] = None
     extra_data: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
+    due_date: Optional[str] = None
+    amount: Optional[float] = None
+    remaining_amount: Optional[float] = None
+    paid_amount: Optional[float] = None
 
     @computed_field
     @property
     def is_read(self) -> bool:
         return self.read_at is not None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
 
 class NotificationListResponse(BaseModel):

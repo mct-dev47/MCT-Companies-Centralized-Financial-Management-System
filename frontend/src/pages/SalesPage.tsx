@@ -27,6 +27,9 @@ import {
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { CardSkeleton } from '@/components/common/CardSkeleton'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -83,7 +86,8 @@ const DEFAULT_COMPANY_LIST = ['All Companies']
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
-import { getPaidDepositForSale } from '@/utils/cashLedgerUtils'
+import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
+import type { UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
 const ITEMS_PER_PAGE = 10
@@ -100,6 +104,8 @@ export const SalesPage: React.FC = () => {
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = !isAdmin && !isFinance
   const isAuditor = isAudit
+  const isManuel = (user?.email || '').toLowerCase().includes('manuel')
+  const canAuditActions = isAudit && !isManuel
   const canAdd = !isAudit && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -171,10 +177,15 @@ export const SalesPage: React.FC = () => {
   // Food Receivables store integration
   const {
     sales: utangSalesList,
-    people: receivablesPeople,
     kpis: receivablesKpis,
-    addNewSale: addFoodSale,
-  } = useReceivables(dateRange)
+    refreshFromBackend: refreshReceivablesFromBackend,
+  } = useReceivables(
+    {
+      startDate: dateRange.startDate || undefined,
+      endDate: dateRange.endDate || undefined,
+    },
+    isCompanyScoped ? assignedCompany : selectedCompany
+  )
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
@@ -372,7 +383,7 @@ export const SalesPage: React.FC = () => {
     loadSales()
   }, [loadSales])
 
-  // Realtime: when Audit saves a review (or any client changes a sale), reload the real values
+  // Realtime: sync on SALES_UPDATED, RECEIVABLES_UPDATED, AUDIT_UPDATED, WS reconnect, and window focus (AC-10)
   React.useEffect(() => {
     let timer: number | null = null
     const reload = () => {
@@ -380,14 +391,27 @@ export const SalesPage: React.FC = () => {
       timer = window.setTimeout(() => {
         salesService.invalidateCache()
         void loadSales(true)
+        void refreshReceivablesFromBackend()
       }, 250)
     }
     const unsubAudit = websocketService.subscribe('AUDIT_UPDATED', reload)
+    const unsubSales = websocketService.subscribe('SALES_UPDATED', reload)
+    const unsubReceivables = websocketService.subscribe('RECEIVABLES_UPDATED', reload)
+    const unsubStatus = websocketService.subscribe('WS_STATUS_CHANGE', (data) => {
+      if (data?.status === 'connected') {
+        reload()
+      }
+    })
+    window.addEventListener('focus', reload)
     return () => {
       if (timer) window.clearTimeout(timer)
       unsubAudit()
+      unsubSales()
+      unsubReceivables()
+      unsubStatus()
+      window.removeEventListener('focus', reload)
     }
-  }, [loadSales])
+  }, [loadSales, refreshReceivablesFromBackend])
 
   // Click-outside listeners for dropdowns
   React.useEffect(() => {
@@ -422,78 +446,111 @@ export const SalesPage: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Map in-memory / local food utang sales to standard SalesItem structure
-  const mappedUtangSales = React.useMemo<SalesItem[]>(() => {
-    return utangSalesList.map((u) => {
-      const rawDate = u.date
-      const [year, month, day] = rawDate.split('-')
-      const displayDate =
-        month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
-
-      return {
-        id: u.id,
-        refNo: `FD-${u.id.replace('SALE-2026-', '')}`,
-        chequeNo:
-          u.payment_status === 'Paid'
-            ? 'PAID-IN-FULL'
-            : u.payment_status === 'Partial'
-              ? 'PARTIAL-CREDIT'
-              : 'PAY-LATER',
-        date: displayDate,
-        rawDate: u.date,
-        particulars: `${u.items_summary} (${u.customer_name} • ${u.customer_type})`,
-        withdrawal: 0,
-        deposit: u.total_amount,
-        netAmount: u.total_amount,
-        category: 'Food Sales',
-        paymentMethod:
-          u.payment_status === 'Paid'
-            ? 'Cash'
-            : u.payment_status === 'Partial'
-              ? 'Partial Credit'
-              : 'Utang (Pay Later)',
-        company: 'MCT Food Services',
-        items: [
-          ...(u.amount_paid > 0
-            ? [
-                {
-                  particulars: `${u.items_summary} (Downpayment)`,
-                  unitPrice: u.amount_paid,
-                  quantity: 1,
-                  total: u.amount_paid,
-                  status: 'Paid' as const,
-                },
-              ]
-            : []),
-          ...(u.balance > 0
-            ? [
-                {
-                  particulars: `${u.items_summary} (Utang Balance)`,
-                  unitPrice: u.balance,
-                  quantity: 1,
-                  total: u.balance,
-                  status: 'Unpaid' as const,
-                },
-              ]
-            : []),
-        ],
-        status: (u.payment_status === 'Paid' ? 'Paid' : u.payment_status === 'Partial' ? 'Pending' : 'Unpaid') as any,
-        auditStatus: 'Verified',
-        createdAt: `${u.date}T10:00:00Z`,
-        type: 'Sales' as const,
-        customer_name: u.customer_name,
-        customer_type: u.customer_type,
-        amount_paid: u.amount_paid,
-        balance: u.balance,
-        payment_status: u.payment_status,
-      } as SalesItem & {
-        customer_name?: string
-        customer_type?: string
-        amount_paid?: number
-        balance?: number
-        payment_status?: string
+  // Group linked receivables by sale_id so partial & full payments reflect accurately in Total Cash (AC-5)
+  const receivablesBySaleId = React.useMemo(() => {
+    const map = new Map<number, UtangSale[]>()
+    for (const u of utangSalesList) {
+      if (u.sale_id !== null && u.sale_id !== undefined) {
+        const numId = Number(u.sale_id)
+        if (!Number.isNaN(numId)) {
+          const list = map.get(numId) || []
+          list.push(u)
+          map.set(numId, list)
+        }
       }
-    })
+    }
+    return map
+  }, [utangSalesList])
+
+  const getRealizedCash = React.useCallback(
+    (item: SalesItem): number => {
+      const numId = Number(item.id)
+      const linked = !Number.isNaN(numId) ? receivablesBySaleId.get(numId) : undefined
+      return getRealizedCashForSale(item, linked)
+    },
+    [receivablesBySaleId]
+  )
+
+  // Map ONLY standalone legacy food utang sales (where sale_id is null) to SalesItem structure
+  const mappedUtangSales = React.useMemo<SalesItem[]>(() => {
+    return utangSalesList
+      .filter((u) => !u.sale_id)
+      .map((u) => {
+        const rawDate = u.date
+        const [year, month, day] = rawDate.split('-')
+        const displayDate =
+          month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
+
+        return {
+          id: `utang-${u.id}`,
+          refNo: `FD-${u.id.replace('SALE-2026-', '')}`,
+          chequeNo:
+            u.payment_status === 'Paid'
+              ? 'PAID-IN-FULL'
+              : u.payment_status === 'Partial'
+                ? 'PARTIAL-CREDIT'
+                : 'PAY-LATER',
+          date: displayDate,
+          rawDate: u.date,
+          particulars: `${u.items_summary} (${u.customer_name} • ${u.customer_type})`,
+          withdrawal: 0,
+          deposit: u.total_amount,
+          netAmount: u.total_amount,
+          category: 'Food Sales',
+          paymentMethod:
+            u.payment_status === 'Paid'
+              ? 'Cash'
+              : u.payment_status === 'Partial'
+                ? 'Partial Credit'
+                : 'Utang (Pay Later)',
+          company: u.company || 'MyCity.Kitchen Corporation',
+          items: [
+            ...(u.amount_paid > 0
+              ? [
+                  {
+                    particulars: `${u.items_summary} (Downpayment)`,
+                    unitPrice: u.amount_paid,
+                    quantity: 1,
+                    total: u.amount_paid,
+                    status: 'Paid' as const,
+                  },
+                ]
+              : []),
+            ...(u.balance > 0
+              ? [
+                  {
+                    particulars: `${u.items_summary} (Utang Balance)`,
+                    unitPrice: u.balance,
+                    quantity: 1,
+                    total: u.balance,
+                    status: 'Unpaid' as const,
+                  },
+                ]
+              : []),
+          ],
+          status: (u.payment_status === 'Paid'
+            ? 'Paid'
+            : u.payment_status === 'Partial'
+              ? 'Pending'
+              : 'Unpaid') as any,
+          auditStatus: u.is_locked ? 'Verified' : 'Pending Audit',
+          createdAt: `${u.date}T10:00:00Z`,
+          type: 'Sales' as const,
+          isStandaloneUtang: true,
+          customer_name: u.customer_name,
+          customer_type: u.customer_type,
+          amount_paid: u.amount_paid,
+          balance: u.balance,
+          payment_status: u.payment_status,
+        } as SalesItem & {
+          isStandaloneUtang?: boolean
+          customer_name?: string
+          customer_type?: string
+          amount_paid?: number
+          balance?: number
+          payment_status?: string
+        }
+      })
   }, [utangSalesList])
 
   const combinedSales = React.useMemo(() => {
@@ -578,7 +635,7 @@ export const SalesPage: React.FC = () => {
         return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
       })
   }, [
-    sales,
+    combinedSales,
     selectedCompany,
     dateRange,
     statusFilter,
@@ -590,10 +647,10 @@ export const SalesPage: React.FC = () => {
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Sales Record') for Table & Chart
   const filteredSales = React.useMemo(() => {
     if (tableTab === 'Deposit') {
-      return baseFilteredSales.filter((item) => getPaidDepositForSale(item) > 0)
+      return baseFilteredSales.filter((item) => getRealizedCash(item) > 0)
     }
     return baseFilteredSales
-  }, [baseFilteredSales, tableTab])
+  }, [baseFilteredSales, tableTab, getRealizedCash])
 
   // Reset to page 1 on filter change
   React.useEffect(() => {
@@ -607,13 +664,13 @@ export const SalesPage: React.FC = () => {
     tableTab,
   ])
 
-  // KPI Calculation: Total Sales & Total Cash (computed from baseFilteredSales so switching Deposit / Sales Record tab does not alter the KPIs above)
+  // KPI Calculation: Total Sales & Total Cash (AC-5: includes partial & full payments without double-counting)
   const kpis = React.useMemo(() => {
     let salesTotal = 0
     let cashTotal = 0
     baseFilteredSales.forEach((s) => {
       salesTotal += s.deposit || 0
-      cashTotal += getPaidDepositForSale(s)
+      cashTotal += getRealizedCash(s)
     })
     return {
       totalSales: salesTotal,
@@ -621,7 +678,7 @@ export const SalesPage: React.FC = () => {
       totalIncome: salesTotal,
       outstandingUtang: receivablesKpis.totalOutstanding,
     }
-  }, [baseFilteredSales, receivablesKpis.totalOutstanding])
+  }, [baseFilteredSales, getRealizedCash, receivablesKpis.totalOutstanding])
 
   // Effective status filter for particulars display in table & modal
   const effectiveParticularsStatusFilter = React.useMemo(() => {
@@ -641,7 +698,7 @@ export const SalesPage: React.FC = () => {
     return filteredSales.map((s) => {
       const tx = salesService.toDashboardTransaction(s)
       if (tableTab === 'Deposit') {
-        const paidAmt = getPaidDepositForSale(s)
+        const paidAmt = getRealizedCash(s)
         return {
           ...tx,
           amount: paidAmt,
@@ -650,10 +707,10 @@ export const SalesPage: React.FC = () => {
       }
       return tx
     })
-  }, [filteredSales, tableTab])
+  }, [filteredSales, tableTab, getRealizedCash])
 
   // Export handlers
-  const companyForExport = isAuditor ? assignedCompany : selectedCompany
+  const companyForExport = isCompanyScoped ? assignedCompany : selectedCompany
 
   const handleExportCsv = () => {
     salesService.exportCsv(
@@ -747,7 +804,6 @@ export const SalesPage: React.FC = () => {
                 aria-haspopup="true"
                 aria-expanded={isExportDropdownOpen}
               >
-                <Download className={cn('h-4 w-4 shrink-0', isAudit ? 'text-white' : 'text-focus/70')} />
                 <span>Export</span>
                 <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5', isAudit ? 'text-white/90' : 'text-muted-fg')} />
               </Button>
@@ -935,15 +991,8 @@ export const SalesPage: React.FC = () => {
               hidePresets
             />
 
-            {/* Company Scope */}
-            {isCompanyScoped ? (
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs">
-                <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-                <span className="font-semibold text-focus/90">
-                  {assignedCompany}
-                </span>
-              </div>
-            ) : (
+            {/* Company Scope: ONLY Finance and Audit have the dropdown filter */}
+            {!isCompanyScoped && (
               <div ref={companyDropdownRef} className="relative inline-block">
                 <button
                   type="button"
@@ -955,7 +1004,6 @@ export const SalesPage: React.FC = () => {
                   )}
                   aria-label="Filter sales by company"
                 >
-                  <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
                   <span className="font-medium text-focus/90 truncate max-w-[150px]">
                     {selectedCompany}
                   </span>
@@ -1094,13 +1142,10 @@ export const SalesPage: React.FC = () => {
               Total Sales
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-emerald-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalSales)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1110,7 +1155,7 @@ export const SalesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-emerald-50 border border-emerald-200/60 flex items-center justify-center text-emerald-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <TrendingUp className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -1122,13 +1167,10 @@ export const SalesPage: React.FC = () => {
               Cash Collected
             </span>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-teal-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(kpis.totalCash)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1138,7 +1180,7 @@ export const SalesPage: React.FC = () => {
             )}
           </div>
 
-          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-teal-50 border border-teal-200/60 flex items-center justify-center text-teal-600 shrink-0 shadow-2xs">
+          <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
@@ -1159,13 +1201,10 @@ export const SalesPage: React.FC = () => {
               </button>
             </div>
             {loading ? (
-              <div className="space-y-1.5 mt-2">
-                <div className="h-7 w-36 bg-slate-200/80 animate-pulse rounded-md" />
-                <div className="h-3 w-56 bg-slate-200/60 animate-pulse rounded-md" />
-              </div>
+              <CardSkeleton inline={true} />
             ) : (
               <>
-                <h3 className="text-xl sm:text-2xl font-bold text-rose-600 mt-1 tabular-nums tracking-tight">
+                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
                   {formatPHP(receivablesKpis.totalOutstanding)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
@@ -1177,7 +1216,7 @@ export const SalesPage: React.FC = () => {
 
           <div
             onClick={() => navigate('/receivables')}
-            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-rose-50 border border-rose-200/60 flex items-center justify-center text-rose-600 shrink-0 shadow-2xs cursor-pointer group-hover:bg-rose-100 transition-colors"
+            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs cursor-pointer group-hover:bg-slate-200 transition-colors"
             title="Open Receivables Page"
           >
             <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
@@ -1196,10 +1235,7 @@ export const SalesPage: React.FC = () => {
               </div>
               <div className="h-9 w-28 bg-slate-200/60 animate-pulse rounded-xl" />
             </div>
-            <div className="h-56 sm:h-64 w-full bg-slate-50/70 rounded-2xl flex flex-col items-center justify-center gap-3">
-              <div className="w-20 h-20 rounded-full border-4 border-slate-200 border-t-emerald-400 animate-spin opacity-60" />
-              <div className="h-3.5 w-40 bg-slate-200/70 animate-pulse rounded" />
-            </div>
+            <Skeleton className="h-56 sm:h-64 w-full rounded-2xl" />
           </Card>
         ) : (
           <IncomeSummaryChart
@@ -1312,34 +1348,7 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-20 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-32 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4 text-center">
-                      <div className="h-6 w-10 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={8} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1379,9 +1388,11 @@ export const SalesPage: React.FC = () => {
                     }
                   )
                   const rowAmount =
-                    effectiveParticularsStatusFilter !== 'All'
-                      ? summary.filteredTotal
-                      : sale.deposit
+                    tableTab === 'Deposit' && statusFilter === 'All'
+                      ? getRealizedCash(sale)
+                      : effectiveParticularsStatusFilter !== 'All'
+                        ? summary.filteredTotal
+                        : sale.deposit
                   const createdAtTime = formatCreatedAt(sale.createdAt, {
                     timeOnly: true,
                   })
@@ -1561,7 +1572,7 @@ export const SalesPage: React.FC = () => {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center gap-1">
-                          {isAudit ? (
+                          {canAuditActions ? (
                             <Button
                               type="button"
                               variant="ghost"
@@ -1596,6 +1607,8 @@ export const SalesPage: React.FC = () => {
                             >
                               <MoreVertical className="w-4 h-4" />
                             </Button>
+                          ) : isManuel ? (
+                            <span className="text-muted-fg text-xs">—</span>
                           ) : sale.auditStatus === 'Verified' ? (
                             <span
                               className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
@@ -1687,7 +1700,7 @@ export const SalesPage: React.FC = () => {
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
         onSuccess={handleSaleAdded}
-        assignedCompany={isAuditor ? assignedCompany : selectedCompany}
+        assignedCompany={isCompanyScoped ? assignedCompany : selectedCompany}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -1762,7 +1775,7 @@ export const SalesPage: React.FC = () => {
         transaction={selectedTx}
         sale={selectedSale}
         onSaleUpdated={handleSaleUpdated}
-        editable={!isAdmin}
+        editable={!isAdmin && selectedSale?.auditStatus !== 'Verified'}
         statusFilter={effectiveParticularsStatusFilter}
       />
 

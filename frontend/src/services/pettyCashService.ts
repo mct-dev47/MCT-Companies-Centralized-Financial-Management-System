@@ -58,11 +58,15 @@ export interface PettyCashLedgerEntry {
 }
 
 export interface NewPettyCashTopUpInput {
-  company: string
+  company?: string
+  company_name?: string
   amount: number
   date: string
   description?: string
   status?: string
+  bank_account_id?: string | null
+  finance_remark?: string | null
+  endorsement_remark?: string | null
 }
 
 /**
@@ -315,15 +319,19 @@ export const pettyCashService = {
   },
 
   async createTopUp(input: NewPettyCashTopUpInput): Promise<void> {
+    const comp = input.company || input.company_name || ''
     const response = await fetch('/api/v1/petty-cash/topups', {
       method: 'POST',
       headers: backendHeaders(),
       body: JSON.stringify({
-        company: input.company,
+        company: comp,
+        company_name: comp,
         amount: input.amount,
         topup_date: input.date,
         description: input.description || null,
-        status: input.status || 'Pending Finance Approval',
+        status: input.status || 'Pending Finance Endorsement',
+        bank_account_id: input.bank_account_id || null,
+        finance_remark: input.finance_remark || input.endorsement_remark || null,
       }),
     })
     if (!response.ok) throw await getBackendError(response)

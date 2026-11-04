@@ -81,6 +81,18 @@ class BankService:
     def get_account(self, account_id: str) -> Optional[BankAccount]:
         return self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
 
+    def delete_account(self, account_id: str) -> bool:
+        account = self.get_account(account_id)
+        if not account:
+            return False
+        try:
+            self.db.delete(account)
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            return False
+
     def _generate_account_id(self) -> str:
         count = self.db.query(BankAccount).count()
         num = count + 1

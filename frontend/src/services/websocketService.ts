@@ -14,6 +14,11 @@ export type SyncEventType =
   | 'BANK_UPDATED'
   | 'AUDIT_UPDATED'
   | 'TENANTS_UPDATED'
+  | 'RECEIVABLES_UPDATED'
+  | 'SALES_UPDATED'
+  | 'EXPENSE_CREATED'
+  | 'EXPENSE_UPDATED'
+  | 'EXPENSE_DELETED'
   | 'NOTIFICATION_RECEIVED'
   | 'WS_STATUS_CHANGE'
   | 'ALL'
@@ -57,17 +62,34 @@ class WebSocketService {
     }
   }
 
+  private getToken(): string | null {
+    if (typeof window === 'undefined') return null
+    return (
+      sessionStorage.getItem('mct_access_token') ||
+      sessionStorage.getItem('auth_token') ||
+      localStorage.getItem('auth_token')
+    )
+  }
+
   public connect(): void {
     if (typeof window === 'undefined') return
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return
     }
     if (this.isConnecting) return
+
+    const token = this.getToken()
+    if (!token) {
+      // Avoid connecting without authorization token to prevent 1008 policy violation
+      return
+    }
+
     this.isConnecting = true
     this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'offline')
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws`
+    // Connect via relative proxy (/ws) with auth token query param
+    const wsUrl = `${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`
 
     try {
       this.socket = new WebSocket(wsUrl)
@@ -111,6 +133,24 @@ class WebSocketService {
     }
   }
 
+  public disconnect(): void {
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
+    this.stopPing()
+    this.isConnecting = false
+    if (this.socket) {
+      try {
+        this.socket.close()
+      } catch {
+        // ignore
+      }
+      this.socket = null
+    }
+    this.setStatus('offline')
+  }
+
   private handleDisconnect(): void {
     this.isConnecting = false
     this.stopPing()
@@ -140,6 +180,8 @@ class WebSocketService {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) return
+    const token = this.getToken()
+    if (!token) return
 
     this.reconnectAttempts += 1
     // Exponential backoff with random jitter (1s, 2s, 4s, 8s, max 30s)

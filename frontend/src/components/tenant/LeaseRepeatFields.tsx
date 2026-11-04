@@ -117,7 +117,19 @@ export const RepeatDetails: React.FC<RepeatDetailsProps> = ({
             placeholder="Blank means no penalty"
             value={penaltyRate}
             onWheel={(e) => e.currentTarget.blur()}
-            onChange={(e) => onPenaltyRateChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === '-' || e.key === 'e' || e.key === 'E') {
+                e.preventDefault()
+              }
+            }}
+            onChange={(e) => {
+              const val = e.target.value
+              if (val.startsWith('-')) {
+                onPenaltyRateChange('')
+                return
+              }
+              onPenaltyRateChange(val)
+            }}
             className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', errors.penaltyRate && 'border-red-500')}
           />
           {errors.penaltyRate ? (

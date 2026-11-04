@@ -14,6 +14,7 @@ export interface CompanyContextValue {
   setActiveCompany: (company: string) => void
   isLendingEnabled: boolean
   isCompanyScoped: boolean
+  isSpecificCompanySelected: boolean
   allCompanies: string[]
   dbCompanies: CompanyOption[]
   isLoadingCompanies: boolean
@@ -49,6 +50,11 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { user } = useSession()
 
   const userRole = (user?.role || '').trim().toLowerCase()
+  const isMultiCompanyRole =
+    userRole === 'admin' ||
+    userRole === 'finance' ||
+    userRole === 'audit' ||
+    userRole.includes('auditor')
   const userAssignedCompanies = React.useMemo(() => {
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames
@@ -61,23 +67,28 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const hasMultipleAssigned = userAssignedCompanies.length >= 2
 
-  // A user is strictly scoped to one single company ONLY if they have exactly 1 assigned company and are not admin
+  // A user is strictly scoped to one single company ONLY if they have exactly 1 assigned company and are not admin or finance
   const isCompanyScoped = Boolean(
-    !hasMultipleAssigned &&
-      userAssignedCompanies.length === 1 &&
-      userRole !== 'admin'
+    !isMultiCompanyRole &&
+      !hasMultipleAssigned &&
+      userAssignedCompanies.length === 1
   )
 
   const [activeCompany, setActiveCompanyState] = React.useState<string>(() => {
     if (typeof window !== 'undefined') {
       const saved = sessionStorage.getItem(COMPANY_STORAGE_KEY)
       if (saved) {
-        if (userAssignedCompanies.length === 0 || userAssignedCompanies.includes(saved) || (hasMultipleAssigned && saved === 'All Companies')) {
+        if (
+          isMultiCompanyRole ||
+          userAssignedCompanies.length === 0 ||
+          userAssignedCompanies.includes(saved) ||
+          (hasMultipleAssigned && saved === 'All Companies')
+        ) {
           return saved
         }
       }
     }
-    if (userAssignedCompanies.length > 0) {
+    if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
       return userAssignedCompanies[0]
     }
     return 'All Companies'
@@ -89,15 +100,21 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveCompanyState(userAssignedCompanies[0])
     } else if (!isCompanyScoped) {
       const saved = typeof window !== 'undefined' ? sessionStorage.getItem(COMPANY_STORAGE_KEY) : null
-      if (saved && (userAssignedCompanies.length === 0 || userAssignedCompanies.includes(saved) || (hasMultipleAssigned && saved === 'All Companies'))) {
+      if (
+        saved &&
+        (isMultiCompanyRole ||
+          userAssignedCompanies.length === 0 ||
+          userAssignedCompanies.includes(saved) ||
+          (hasMultipleAssigned && saved === 'All Companies'))
+      ) {
         setActiveCompanyState(saved)
-      } else if (userAssignedCompanies.length > 0) {
+      } else if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
         setActiveCompanyState(userAssignedCompanies[0])
       } else {
         setActiveCompanyState('All Companies')
       }
     }
-  }, [isCompanyScoped, userAssignedCompanies, hasMultipleAssigned, user?.id])
+  }, [isCompanyScoped, isMultiCompanyRole, userAssignedCompanies, hasMultipleAssigned, user?.id])
 
   const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>(getCachedCompanies)
   const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
@@ -125,7 +142,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
     setIsLoadingCompanies(true)
     try {
-      const res = await fetch('/api/v1/companies', {
+      const res = await fetch('/api/v1/companies/lookup', {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -169,7 +186,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [loadCompanies, user?.id])
 
   const allCompanies = React.useMemo(() => {
-    if (userAssignedCompanies.length > 0) {
+    if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
       if (userAssignedCompanies.length > 1) {
         return ['All Companies', ...userAssignedCompanies]
       }
@@ -177,7 +194,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
     if (dynamicCompanies.length > 0) return dynamicCompanies
     return ALL_COMPANIES_LIST
-  }, [dynamicCompanies, userAssignedCompanies])
+  }, [dynamicCompanies, userAssignedCompanies, isMultiCompanyRole])
 
   const setActiveCompany = React.useCallback((company: string) => {
     setActiveCompanyState(company)
@@ -185,6 +202,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       sessionStorage.setItem(COMPANY_STORAGE_KEY, company)
     }
   }, [])
+
+  const isSpecificCompanySelected = Boolean(activeCompany && activeCompany !== 'All Companies')
 
   const isLendingEnabled = React.useMemo(() => {
     return isLendingEnabledCompany(activeCompany)
@@ -196,6 +215,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveCompany,
       isLendingEnabled,
       isCompanyScoped,
+      isSpecificCompanySelected,
       allCompanies,
       dbCompanies,
       isLoadingCompanies,
@@ -206,6 +226,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setActiveCompany,
       isLendingEnabled,
       isCompanyScoped,
+      isSpecificCompanySelected,
       allCompanies,
       dbCompanies,
       isLoadingCompanies,

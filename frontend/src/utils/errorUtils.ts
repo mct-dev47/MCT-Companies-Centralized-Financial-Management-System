@@ -3,7 +3,16 @@
  * Formats raw exceptions, network failures, and HTTP error responses into concise,
  * friendly, non-verbose messages so users never see raw technical messages
  * like "Failed to fetch", "Error 500", or Python tracebacks.
+ *
+ * Display conventions (used across every page):
+ * - Action feedback (save / delete / export failures, client-side validation,
+ *   success confirmations) -> toast via `notifyError` / `notifyWarning` / `notifySuccess`.
+ * - Persistent page-load failures and inline form errors -> `<ErrorBanner />`
+ *   from `@/components/common/ErrorBanner`, with the message produced by
+ *   `formatUserFriendlyErrorMessage`.
  */
+
+import { pushToast } from '@/lib/toastStore'
 
 export function formatUserFriendlyErrorMessage(
   err: unknown,
@@ -185,15 +194,17 @@ export function formatUserFriendlyErrorMessage(
     return 'Please check the entered values and ensure all required fields are correct.'
   }
 
-  // 10. Strip code stack traces, file paths, and syntax exceptions
+  // 9. Strip code stack traces, file paths, and syntax exceptions.
+  // Stack-frame / traceback markers are matched as patterns rather than bare substrings so that
+  // ordinary sentences containing "that ", "at least", "guideline", or "profile" are not discarded.
   if (
-    lower.includes('at ') ||
-    lower.includes('line ') ||
+    /^\s*at\s|\bat\s+\S+\s+\(/m.test(rawMessage) ||
+    /\bline \d+/.test(lower) ||
+    /\bfile "/.test(lower) ||
     lower.includes('sql') ||
     lower.includes('typeerror') ||
     lower.includes('referenceerror') ||
-    lower.includes('exception') ||
-    lower.includes('file ')
+    lower.includes('exception')
   ) {
     return fallbackMessage
   }
@@ -206,6 +217,38 @@ export function formatUserFriendlyErrorMessage(
   }
 
   return fallbackMessage
+}
+
+/**
+ * Show a sanitized error toast for a failed action (API failure, export failure, etc.).
+ * Returns the user-facing message so callers can also store it if needed.
+ */
+export function notifyError(
+  err: unknown,
+  fallbackMessage: string = 'An unexpected error occurred. Please try again.'
+): string {
+  const message = formatUserFriendlyErrorMessage(err, fallbackMessage)
+  pushToast({ variant: 'error', message })
+  return message
+}
+
+/**
+ * Show a warning toast for client-side validation or blocked actions
+ * (e.g. "Please enter a bank name.", "Pop-up blocked..."). The message is shown verbatim,
+ * so only pass already user-friendly text here.
+ */
+export function notifyWarning(message: string): void {
+  pushToast({ variant: 'warning', message })
+}
+
+/** Show a success toast after a completed action. */
+export function notifySuccess(message: string): void {
+  pushToast({ variant: 'success', message })
+}
+
+/** Show a neutral informational toast. */
+export function notifyInfo(message: string): void {
+  pushToast({ variant: 'info', message })
 }
 
 export const getErrorMessage = formatUserFriendlyErrorMessage

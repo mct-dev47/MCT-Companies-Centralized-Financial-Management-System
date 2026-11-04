@@ -44,6 +44,9 @@ export const DashboardPage: React.FC = () => {
 
   const userRole = (user?.role || '').trim().toLowerCase()
   const isAdmin = userRole === 'admin'
+  const isFinance = userRole === 'finance'
+  const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isMultiCompanyRole = isAdmin || isFinance || isAudit
   const userAssignedCompanies = React.useMemo(() => {
     if (user?.companyNames && user.companyNames.length > 0) {
       return user.companyNames
@@ -58,7 +61,7 @@ export const DashboardPage: React.FC = () => {
   const isCompanyScoped = Boolean(
     !hasMultipleAssigned &&
       userAssignedCompanies.length === 1 &&
-      userRole !== 'admin'
+      !isMultiCompanyRole
   )
 
   // Dynamic companies list strictly from authorized assigned companies in CompanyContext
@@ -337,6 +340,10 @@ export const DashboardPage: React.FC = () => {
     return <DashboardSkeleton />
   }
 
+  if (isAdmin && adminLoading && adminStats.userCount === 0 && adminStats.companyCount === 0) {
+    return <DashboardSkeleton isAdmin={true} />
+  }
+
   return (
     <div className="space-y-5 pb-8 max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Visually hidden h1 for accessibility compliance */}
@@ -394,8 +401,8 @@ export const DashboardPage: React.FC = () => {
               loading={adminLoading}
               icon={Building2}
               subtext="Registered Companies"
-              valueClassName="text-primary font-bold"
-              iconContainerClassName="bg-primary/10 text-primary border border-primary/20"
+              valueClassName="text-focus font-bold"
+              iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
               className="h-full cursor-pointer hover:border-primary/40"
             />
           </Link>
@@ -410,8 +417,8 @@ export const DashboardPage: React.FC = () => {
               loading={adminLoading}
               icon={Users}
               subtext="Active System Accounts"
-              valueClassName="text-blue-600 font-bold"
-              iconContainerClassName="bg-blue-50 text-blue-600 border border-blue-200/60"
+              valueClassName="text-focus font-bold"
+              iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
               className="h-full cursor-pointer hover:border-blue-400/40"
             />
           </Link>
@@ -423,36 +430,32 @@ export const DashboardPage: React.FC = () => {
             value={formatPHP(totalIncome)}
             loading={loading}
             icon={TrendingUp}
-            valueClassName="text-emerald-600"
-            iconContainerClassName="bg-emerald-50 text-emerald-600 border border-emerald-200/60"
+            valueClassName="text-focus font-bold"
+            iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
           />
           <DashboardKpiCard
             label="Total Cash Expense"
             value={formatPHP(totalExpenses)}
             loading={loading}
             icon={TrendingDown}
-            valueClassName="text-rose-600"
-            iconContainerClassName="bg-rose-50 text-rose-600 border border-rose-200/60"
+            valueClassName="text-focus font-bold"
+            iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
           />
           <DashboardKpiCard
             label="Net Income (Total Cash - Cash Expense)"
             value={formatPHP(netIncome)}
             loading={loading}
             icon={Landmark}
-            valueClassName={netIncome >= 0 ? 'text-emerald-600' : 'text-rose-600'}
-            iconContainerClassName={
-              netIncome >= 0
-                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200/60'
-                : 'bg-rose-50 text-rose-600 border border-rose-200/60'
-            }
+            valueClassName="text-focus font-bold"
+            iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
           />
           <DashboardKpiCard
             label="Overdue / Due Soon"
             value={`${overdueCount} / ${dueSoonCount}`}
             loading={loading}
             icon={AlertCircle}
-            valueClassName="text-amber-600"
-            iconContainerClassName="bg-amber-50 text-amber-600 border border-amber-200/60"
+            valueClassName="text-focus font-bold"
+            iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
           />
           <Link
             to="/petty-cash"
@@ -465,8 +468,8 @@ export const DashboardPage: React.FC = () => {
               loading={loading || pettyCashLoading}
               icon={Wallet}
               className="h-full"
-              valueClassName="text-blue-600"
-              iconContainerClassName="bg-blue-50 text-blue-600 border border-blue-200/60"
+              valueClassName="text-focus font-bold"
+              iconContainerClassName="bg-slate-100 text-focus border border-slate-200/80"
             />
           </Link>
         </div>

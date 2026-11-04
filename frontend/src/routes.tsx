@@ -14,10 +14,47 @@ import {
 
 function PageFallback() {
   return (
-    <div className="flex min-h-[60vh] w-full items-center justify-center">
-      <div className="flex flex-col items-center gap-3">
-        <div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <span className="text-xs font-medium text-muted-fg animate-pulse">Loading...</span>
+    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      {/* Header skeleton */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div className="space-y-2">
+          <div className="h-9 w-56 rounded-xl bg-slate-200/80 animate-pulse" />
+          <div className="h-4 w-72 rounded-md bg-slate-200/60 animate-pulse" />
+        </div>
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-28 rounded-xl bg-slate-200/70 animate-pulse" />
+          <div className="h-10 w-32 rounded-xl bg-slate-200/70 animate-pulse" />
+        </div>
+      </div>
+
+      {/* KPI Cards skeleton */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className="w-full bg-white rounded-[15px] border border-stroke/20 p-5 shadow-xs flex items-center justify-between animate-pulse"
+          >
+            <div className="space-y-2">
+              <div className="h-3 w-20 rounded bg-slate-200/80" />
+              <div className="h-7 w-32 rounded bg-slate-200/80" />
+              <div className="h-3 w-40 rounded bg-slate-200/60" />
+            </div>
+            <div className="h-11 w-11 rounded-xl bg-slate-200/70 shrink-0" />
+          </div>
+        ))}
+      </div>
+
+      {/* Table container skeleton */}
+      <div className="bg-white rounded-[24px] border border-stroke/30 p-6 shadow-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="h-5 w-44 rounded bg-slate-200/80 animate-pulse" />
+          <div className="h-9 w-48 rounded-xl bg-slate-200/60 animate-pulse" />
+        </div>
+        <div className="space-y-3 pt-2">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-11 w-full rounded-lg bg-slate-100 animate-pulse" />
+          ))}
+        </div>
       </div>
     </div>
   )

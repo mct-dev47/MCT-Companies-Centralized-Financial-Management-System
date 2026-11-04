@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     ]
     HOST: str = "127.0.0.1"
     PORT: int = 8000
+    ENVIRONMENT: str = "development"
 
     # Supabase settings
     SUPABASE_URL: str = ""
@@ -61,6 +62,16 @@ class Settings(BaseSettings):
     OTP_RESEND_INTERVAL_SECONDS: int = 120
     OTP_EXPIRES_SECONDS: int = 180
     SESSION_IDLE_TIMEOUT_SECONDS: int = 7200
+
+    @field_validator("SUPABASE_JWT_SECRET")
+    @classmethod
+    def validate_jwt_secret(cls, v: Union[SecretStr, str]) -> SecretStr:
+        val = v.get_secret_value() if isinstance(v, SecretStr) else str(v)
+        if val and len(val.strip()) < 32:
+            raise ValueError(
+                "Configuration error: SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters."
+            )
+        return SecretStr(val.strip()) if not isinstance(v, SecretStr) else v
 
     @property
     def brevo_api_key_plain(self) -> str:
