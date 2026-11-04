@@ -1,3 +1,4 @@
+import json
 import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,6 +7,9 @@ from app.api.v1.router import api_router
 from app.core.websocket import ws_manager
 from app.core.errors import validation_exception_handler, global_unhandled_exception_handler
 from fastapi.exceptions import RequestValidationError
+from app.core.logging_filter import setup_log_redaction
+
+setup_log_redaction()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -51,6 +55,20 @@ async def websocket_endpoint(websocket: WebSocket):
             token = auth_header.strip()
 
     if not token:
+        # In-band authentication handshake: if token is not in query params or headers,
+        # accept socket and await the initial authentication frame
+        await websocket.accept()
+        try:
+            import asyncio
+            auth_raw = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            auth_data = json.loads(auth_raw)
+            if isinstance(auth_data, dict) and auth_data.get("type") == "auth":
+                token = auth_data.get("token")
+        except Exception:
+            await websocket.close(code=1008)
+            return
+
+    if not token:
         await websocket.close(code=1008)
         return
 
@@ -63,6 +81,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         await ws_manager.connect(websocket, claims=claims)
+        await websocket.send_text(json.dumps({"type": "authenticated"}))
         while True:
             data = await websocket.receive_text()
             if data == "ping":
@@ -75,6 +94,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def on_startup():
+    setup_log_redaction()
     from app.db.session import init_db
     init_db()
 
