@@ -19,7 +19,7 @@ def unwrap_secret(val: Union[SecretStr, str, None]) -> str:
 class Settings(BaseSettings):
     PROJECT_NAME: str = "MCT Companies Centralized Financial Management System"
     API_V1_STR: str = "/api/v1"
-    CORS_ORIGINS: List[str] = [
+    CORS_ORIGINS: Union[str, List[str]] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
@@ -84,11 +84,20 @@ class Settings(BaseSettings):
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, str) and v.startswith("["):
-            return json.loads(v)
-        return v
+        if isinstance(v, list):
+            return [str(item).strip() for item in v]
+        if isinstance(v, str):
+            val = v.strip()
+            if val.startswith("[") and val.endswith("]"):
+                try:
+                    parsed = json.loads(val)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed]
+                except Exception:
+                    inner = val[1:-1].strip()
+                    return [p.strip().strip("'").strip('"') for p in inner.split(",") if p.strip()]
+            return [i.strip().strip("'").strip('"') for i in val.split(",") if i.strip()]
+        return []
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_ENV_FILE,
