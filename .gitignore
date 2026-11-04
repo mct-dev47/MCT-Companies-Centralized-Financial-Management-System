@@ -3,6 +3,11 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# SQLite / Database files
+*.db
+*.sqlite
+*.sqlite3
+
 # C extensions
 *.so
 
@@ -14,8 +19,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -225,3 +230,16 @@ node_modules/
 dist/
 venv/
 .venv/
+
+# Backend virtual environment
+backend/venv/
+
+# NGINX SSL certificates (never commit to git)
+nginx/ssl/
+
+# Docker build artifacts
+*.log
+
+# IDE & AI Assistant local state
+.gemini/
+.kiro/

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev:backend": "cd backend && .\\venv\\Scripts\\uvicorn.exe app.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:backend": "cd backend && ..\\.venv\\Scripts\\uvicorn.exe app.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
     "dev": "concurrently -n \"backend,frontend\" -c \"cyan.bold,magenta.bold\" \"npm run dev:backend\" \"npm run dev:frontend\""
   },

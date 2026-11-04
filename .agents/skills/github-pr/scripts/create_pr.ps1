@@ -6,7 +6,23 @@ param(
     [string]$BaseBranch = "dev"
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+if (Test-Path Variable:\PSNativeCommandUseErrorActionPreference) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
+# Auto-detect GH_TOKEN from User environment or Git credential store if not present in session
+if (-not $env:GH_TOKEN) {
+    $userToken = [System.Environment]::GetEnvironmentVariable("GH_TOKEN", "User")
+    if ($userToken) {
+        $env:GH_TOKEN = $userToken
+    } else {
+        $cred = "protocol=https`nhost=github.com" | git credential fill 2>$null | Select-String "password="
+        if ($cred) {
+            $env:GH_TOKEN = $cred.Line.Replace("password=", "")
+        }
+    }
+}
 
 Write-Host "=== GitHub PR Automation ===" -ForegroundColor Cyan
 

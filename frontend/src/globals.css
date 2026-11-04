@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary: #960C01;
+  --background: #FFFFFF;
+  --focus: #0B0F2B;
+  --error: #960C01;
+  --disabled: #767B89;
+  --stroke: #979797;
+  --surface: #F4F4F4;
+  --primary-tint: rgb(150 12 1 / 0.2);
+  --muted-fg: #767B89;
+  --chart-neutral: rgb(151 151 151 / 0.6);
+  --icon-tile: #E5E5E5;
+  --radius: 15px;
+}
+
+@layer base {
+  html, body {
+    font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--focus);
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  /* One cursor rule for every interactive control (Tailwind preflight resets buttons to `default`). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="option"],
+  summary,
+  select:not(:disabled) {
+    cursor: pointer;
+  }
+
+  @keyframes marquee {
+    0% {
+      transform: translateX(0%);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+
+  .animate-marquee {
+    display: flex;
+    width: max-content;
+    animation: marquee 35s linear infinite;
+  }
+
+  .animate-marquee:hover {
+    animation-play-state: paused;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-sphere-float-1,
+    .animate-sphere-float-2,
+    .animate-sphere-float-3,
+    .animate-sphere-float-accent,
+    .animate-marquee {
+      animation: none !important;
+    }
+  }
+
+  input[type="date"] {
+    position: relative;
+  }
+
+  input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    margin: 0;
+  }
+}
+
+/*
+ * Canonical hover states — the single source of truth for interactive hover styling.
+ * Use these classes instead of ad-hoc `hover:bg-*` utilities in components.
+ *   .hover-row        table rows / list rows
+ *   .hover-row-click  table rows that open a detail view
+ *   .hover-card       KPI and content cards
+ *   .hover-card-click cards that navigate or open something
+ *   .hover-item       dropdown options and menu items
+ *   .hover-link       inline text links
+ *   .hover-icon-btn   small icon-only buttons (row actions, calendar arrows)
+ * Buttons get their hover from the variants in `components/ui/button.tsx`.
+ */
+@layer components {
+  .hover-row {
+    @apply transition-colors duration-150 hover:bg-surface/70;
+  }
+
+  .hover-row-click {
+    @apply cursor-pointer transition-colors duration-150 hover:bg-surface/70;
+  }
+
+  .hover-card {
+    @apply transition-all duration-200 hover:border-stroke/40 hover:shadow-md;
+  }
+
+  .hover-card-click {
+    @apply cursor-pointer transition-all duration-200 hover:border-stroke/40 hover:shadow-md;
+  }
+
+  .hover-item {
+    @apply cursor-pointer transition-colors duration-150 hover:bg-surface;
+  }
+
+  .hover-link {
+    @apply cursor-pointer text-primary underline-offset-4 transition-colors duration-150 hover:underline;
+  }
+
+  .hover-icon-btn {
+    @apply cursor-pointer rounded-lg text-muted-fg transition-colors duration-150 hover:bg-surface hover:text-focus;
+  }
+}
+
+@layer utilities {
+  /* Invisible scrollbar utility while maintaining full scrollability */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none !important;
+    scrollbar-width: none !important;
+  }
+}
+
+/* Ensure sidebar and all modal dialogs have invisible scrollbars while keeping them scrollable */
+aside,
+[role="dialog"],
+[data-radix-portal] [role="dialog"],
+.modal-scroll {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+aside::-webkit-scrollbar,
+[role="dialog"]::-webkit-scrollbar,
+[data-radix-portal] [role="dialog"]::-webkit-scrollbar,
+.modal-scroll::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
