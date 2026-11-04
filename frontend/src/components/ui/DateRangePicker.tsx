@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatToMMDDYYYY, formatToYYYYMMDD } from '@/utils/dateUtils'
+import { useDropdownPosition } from '@/hooks/useDropdownPosition'
 
 export interface DateRange {
   startDate: string | null // ISO YYYY-MM-DD
@@ -124,6 +125,9 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
   // Custom date picker popover open state
   const [isCalendarOpen, setIsCalendarOpen] = React.useState(false)
   const calendarPopoverRef = React.useRef<HTMLDivElement>(null)
+
+  const presetPos = useDropdownPosition(presetDropdownRef, isPresetOpen)
+  const calendarPos = useDropdownPosition(calendarPopoverRef, isCalendarOpen)
 
   // Track if active selection is custom
   const isCustomRange = Boolean(
@@ -292,7 +296,15 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
           </button>
 
           {isPresetOpen && (
-            <div className="absolute left-0 top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+            <div
+              style={presetPos.isMobile ? presetPos.style : undefined}
+              className={cn(
+                'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                presetPos.isMobile
+                  ? 'w-[min(calc(100vw-32px),240px)]'
+                  : 'absolute left-0 top-full mt-2 w-52'
+              )}
+            >
               <div className="pb-2 mb-1 border-b border-stroke/20 px-2">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
                   Preset Periods
@@ -385,7 +397,15 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
 
         {/* Popover: Positioned with right-0 so it never clips off the right screen boundary */}
         {isCalendarOpen && (
-          <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+          <div
+            style={calendarPos.isMobile ? calendarPos.style : undefined}
+            className={cn(
+              'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+              calendarPos.isMobile
+                ? 'w-[min(calc(100vw-32px),320px)]'
+                : 'absolute right-0 top-full mt-2 w-72 sm:w-80'
+            )}
+          >
             {/* Header */}
             <div className="flex items-center justify-between pb-3 border-b border-stroke/20">
               <span className="text-xs font-bold uppercase tracking-wider text-focus">

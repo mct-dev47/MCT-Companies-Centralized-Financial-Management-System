@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Check, ChevronDown, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
+import { useDropdownPosition } from '@/hooks/useDropdownPosition'
 
 export interface DropdownFilterOption<T extends string = string> {
   value: T
@@ -118,6 +119,7 @@ export function DropdownFilter<T extends string = string>({
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const pos = useDropdownPosition(containerRef, open)
 
   const effectivePlaceholder = placeholder || allLabel
   const effectiveMenuTitle = menuTitle || title
@@ -236,11 +238,17 @@ export function DropdownFilter<T extends string = string>({
 
       {open && (
         <div
+          style={pos.isMobile ? pos.style : undefined}
           className={cn(
-            'absolute top-full mt-2 min-w-[12rem] bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-            searchable ? 'w-68 p-2.5 shadow-2xl' : 'w-48',
-            menuWidthClassName,
-            align === 'left' ? 'left-0' : 'right-0',
+            'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            pos.isMobile
+              ? 'w-[min(calc(100vw-32px),320px)] overflow-y-auto'
+              : cn(
+                  'absolute top-full mt-2 min-w-[12rem]',
+                  searchable ? 'w-68 p-2.5 shadow-2xl' : 'w-48',
+                  menuWidthClassName,
+                  align === 'left' ? 'left-0' : 'right-0'
+                ),
             menuClassName
           )}
         >
