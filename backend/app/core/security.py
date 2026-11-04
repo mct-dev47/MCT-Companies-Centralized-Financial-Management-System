@@ -8,7 +8,7 @@ import json
 import time
 from typing import Any, Annotated
 
-from app.core.config import settings
+from app.core.config import settings, unwrap_secret
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -63,7 +63,7 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
     Tokens are rejected when they have an invalid signature, missing subject,
     expired timestamps, an invalid audience, or an invalid issuer.
     """
-    secret = settings.SUPABASE_JWT_SECRET
+    secret = unwrap_secret(settings.SUPABASE_JWT_SECRET)
     if not secret or len(secret.strip()) < 32:
         raise RuntimeError("SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters.")
 

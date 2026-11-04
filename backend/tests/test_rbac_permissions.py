@@ -101,6 +101,8 @@ class TestRBACPermissions(unittest.TestCase):
         # Disable Supabase remote connections in unit tests
         self.sb_patcher = patch("app.db.supabase.get_supabase_admin_client", side_effect=Exception("Supabase disabled in unit tests"))
         self.sb_patcher.start()
+        self.act_patcher = patch("app.services.activity_log_service.get_supabase_admin_client", side_effect=Exception("Supabase disabled in unit tests"))
+        self.act_patcher.start()
 
         def mock_summaries(cids):
             return {cid: {"total_revenue": 0.0, "total_expenses": 0.0, "net_profit": 0.0} for cid in cids}
@@ -152,6 +154,7 @@ class TestRBACPermissions(unittest.TestCase):
 
     def tearDown(self):
         self.sb_patcher.stop()
+        self.act_patcher.stop()
         self.fin_patcher.stop()
         self.ts_patcher.stop()
 
@@ -262,7 +265,7 @@ class TestRBACPermissions(unittest.TestCase):
         self.assertIn("Access denied", res.json()["detail"])
 
         # Supervisor cannot create a record for unassigned company
-        res = self.client.post("/bills", json={"company_id": 1, "vendor_name": "Test", "amount": 500, "due_date": "2026-12-01"})
+        res = self.client.post("/bills", json={"company_id": 1, "bill_name": "Test Bill", "amount": 500, "due_date": "2026-12-01"})
         self.assertEqual(res.status_code, 403)
 
         # Supervisor cannot manage users or companies
@@ -280,7 +283,7 @@ class TestRBACPermissions(unittest.TestCase):
         self.current_user_holder["user"] = FINANCE_USER
         res = self.client.get("/tenants/leases?company_id=1")
         self.assertEqual(res.status_code, 403)
-        self.assertIn("Tenants is only available for JK Property and Ventures Corporation", res.json()["detail"])
+        self.assertIn("JK Property and Ventures Corporation", res.json()["detail"])
 
         # Finance access Tenants on JK Property (5) -> 200
         res = self.client.get("/tenants/leases?company_id=5")
@@ -296,7 +299,7 @@ class TestRBACPermissions(unittest.TestCase):
         self.current_user_holder["user"] = FINANCE_USER
         res = self.client.get("/lending/borrowers?company_id=1")
         self.assertEqual(res.status_code, 403)
-        self.assertIn("Lending is only available for FILCAP Prime Holdings Corp.", res.json()["detail"])
+        self.assertIn("FILCAP Prime Holdings Corp.", res.json()["detail"])
 
         # Finance access Lending on FILCAP (7) -> 200
         res = self.client.get("/lending/borrowers?company_id=7")

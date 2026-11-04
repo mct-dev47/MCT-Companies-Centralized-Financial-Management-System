@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1.router import api_router
 from app.core.websocket import ws_manager
-from app.core.errors import validation_exception_handler
+from app.core.errors import validation_exception_handler, global_unhandled_exception_handler
 from fastapi.exceptions import RequestValidationError
 
 app = FastAPI(
@@ -16,6 +16,8 @@ app = FastAPI(
 
 # Validation errors never echo the submitted values back (see app/core/errors.py)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+# Catch-all exception handler to prevent any secret or stack trace leakage in 500 errors
+app.add_exception_handler(Exception, global_unhandled_exception_handler)
 
 # CORS Middleware setup
 

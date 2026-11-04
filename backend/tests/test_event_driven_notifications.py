@@ -459,3 +459,39 @@ def test_compound_cursor_pagination_identical_timestamps(db_session_factory):
         all_retrieved_ids = [n.notification_id for n in page1.items + page2.items + page3.items]
         assert len(all_retrieved_ids) == 5
         assert len(set(all_retrieved_ids)) == 5
+
+
+def test_admin_receives_no_business_notifications_and_non_admin_unaffected(db_session_factory):
+    """
+    Verifies that the Administrator role is strictly restricted from receiving business
+    operational notifications, while non-admin roles (Finance, Supervisor) continue
+    to function normally.
+    """
+    with db_session_factory() as db:
+        svc = NotificationService(db)
+
+        # 1. Admin returns empty list and 0 unread count
+        admin_items = svc.get_notifications(company_id=1, user_role="admin")
+        assert admin_items == []
+        assert svc.get_unread_count(company_id=1, user_role="admin") == 0
+
+        # 2. Add persistent notification for a business user (Supervisor, user_id=10)
+        now = datetime.now(timezone.utc)
+        notif = Notification(
+            notification_id="sup-notif-1",
+            recipient_user_id=10,
+            company_id=1,
+            notification_type="BILL_DUE",
+            title="Electric Bill Due",
+            message="Please settle electricity",
+            created_at=now,
+        )
+        db.add(notif)
+        db.commit()
+
+        # 3. Supervisor receives their company notification as expected
+        feed = svc.get_notifications_feed(recipient_user_id=10, company_id=1)
+        assert len(feed.items) == 1
+        assert feed.items[0].notification_id == "sup-notif-1"
+        assert svc.get_unread_count(recipient_user_id=10, company_id=1) == 1
+

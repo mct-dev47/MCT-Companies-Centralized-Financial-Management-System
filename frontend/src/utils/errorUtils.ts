@@ -33,13 +33,25 @@ export function formatUserFriendlyErrorMessage(
     }
   } else if (typeof err === 'object') {
     const anyErr = err as any
-    status = anyErr.status || anyErr.statusCode
-    if (typeof anyErr.detail === 'string') {
-      rawMessage = anyErr.detail
-    } else if (Array.isArray(anyErr.detail)) {
-      rawMessage = anyErr.detail.map((d: any) => d?.msg || String(d)).join(', ')
-    } else {
-      rawMessage = anyErr.message || anyErr.error || ''
+    status = anyErr.status || anyErr.statusCode || anyErr.response?.status
+    const data = anyErr.response?.data
+    if (data && typeof data === 'object') {
+      if (typeof data.detail === 'string') {
+        rawMessage = data.detail
+      } else if (Array.isArray(data.detail)) {
+        rawMessage = data.detail.map((d: any) => d?.msg || String(d)).join(', ')
+      } else if (typeof data.message === 'string') {
+        rawMessage = data.message
+      }
+    }
+    if (!rawMessage) {
+      if (typeof anyErr.detail === 'string') {
+        rawMessage = anyErr.detail
+      } else if (Array.isArray(anyErr.detail)) {
+        rawMessage = anyErr.detail.map((d: any) => d?.msg || String(d)).join(', ')
+      } else {
+        rawMessage = anyErr.message || anyErr.error || ''
+      }
     }
   }
 
@@ -54,7 +66,9 @@ export function formatUserFriendlyErrorMessage(
     lower.includes('network connection failed') ||
     lower.includes('network request failed') ||
     lower.includes('load failed') ||
-    lower.includes('cannot connect')
+    lower.includes('cannot connect') ||
+    lower.includes('connecterror') ||
+    lower.includes('econnrefused')
   ) {
     return 'Unable to connect. Please check your internet connection or try again later.'
   }
@@ -103,7 +117,7 @@ export function formatUserFriendlyErrorMessage(
   // 6. HTTP 409 Conflict (e.g. Period settlement locking, duplicate names)
   if (status === 409 || lower.includes('409') || lower.includes('settled') || lower.includes('already exists') || lower.includes('duplicate')) {
     if (lower.includes('already exists') || lower.includes('duplicate')) {
-      if (rawMessage && rawMessage.length < 120 && !lower.includes('sql') && !lower.includes('traceback')) {
+      if (rawMessage && rawMessage.length < 140 && !lower.includes('sql') && !lower.includes('traceback')) {
         return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
       }
       return 'A record with these details already exists.'
@@ -115,17 +129,67 @@ export function formatUserFriendlyErrorMessage(
   }
 
   // 7. HTTP 401 / 403 Authentication / Authorization
-  if (status === 401 || lower.includes('unauthorized')) {
+  if (status === 401 || lower.includes('unauthorized') || lower.includes('session has expired') || lower.includes('credentials were not provided')) {
     return 'Your session has expired. Please sign in again to continue.'
   }
-  if (status === 403 || lower.includes('forbidden') || lower.includes('permission')) {
+  if (status === 403 || lower.includes('forbidden') || lower.includes('permission') || lower.includes('access denied')) {
+    // Preserve authoritative security policy explanations from server
+    if (
+      lower.includes('locked') ||
+      lower.includes('suspended') ||
+      lower.includes('invitation is pending') ||
+      lower.includes('password setup') ||
+      lower.includes('administrator accounts manage system configuration') ||
+      lower.includes('exclusively authorized') ||
+      lower.includes('must set up your password')
+    ) {
+      return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
+    }
     return 'You do not have permission to perform this operation.'
   }
 
-  // 8. HTTP 422 / 400 Validation Errors
-  if (status === 422 || status === 400 || lower.includes('validation')) {
-    if (rawMessage && !lower.includes('object') && !lower.includes('error:') && rawMessage.length < 100) {
-      return rawMessage.replace(/^(error|validation error):\s*/i, '').trim()
+  // 8. HTTP 429 Too Many Requests / Rate Limiting
+  if (status === 429 || lower.includes('429') || lower.includes('too many requests') || lower.includes('temporarily locked')) {
+    if (rawMessage && (lower.includes('minutes') || lower.includes('try again in'))) {
+      return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
+    }
+    return 'Too many requests. Please wait a moment and try again.'
+  }
+
+  // 9. Email Delivery & Provider Sanitization (Brevo, Resend, SMTP, Circuit Breaker)
+  if (
+    lower.includes('brevo') ||
+    lower.includes('resend') ||
+    lower.includes('smtp') ||
+    lower.includes('circuit breaker') ||
+    lower.includes('email delivery') ||
+    lower.includes('authorised_ips') ||
+    lower.includes('authorized_ips') ||
+    lower.includes('unrecognised ip') ||
+    lower.includes('unrecognized ip')
+  ) {
+    return 'We were unable to deliver the email verification message right now. Please try again shortly or contact support.'
+  }
+
+  // 10. HTTP 422 / 400 Validation Errors & Setup/Invitation Messages
+  if (
+    status === 422 ||
+    status === 400 ||
+    lower.includes('validation') ||
+    lower.includes('invitation') ||
+    lower.includes('password') ||
+    lower.includes('@gmail.com') ||
+    lower.includes('already been used') ||
+    lower.includes('expired')
+  ) {
+    if (
+      rawMessage &&
+      !lower.includes('object') &&
+      !lower.includes('traceback') &&
+      !lower.includes('sql') &&
+      rawMessage.length < 180
+    ) {
+      return rawMessage.replace(/^(error|validation error):\s*/i, '').replace(/HTTP \d+ \w+:\s*/i, '').trim()
     }
     return 'Please check the entered values and ensure all required fields are correct.'
   }
@@ -145,9 +209,9 @@ export function formatUserFriendlyErrorMessage(
     return fallbackMessage
   }
 
-  // 10. Clean user-ready messages
+  // 11. Clean user-ready messages
   const cleaned = rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
-  if (cleaned.length > 0 && cleaned.length < 140) {
+  if (cleaned.length > 0 && cleaned.length < 180) {
     // Capitalize first letter if needed
     return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
   }
@@ -186,3 +250,5 @@ export function notifySuccess(message: string): void {
 export function notifyInfo(message: string): void {
   pushToast({ variant: 'info', message })
 }
+
+export const getErrorMessage = formatUserFriendlyErrorMessage

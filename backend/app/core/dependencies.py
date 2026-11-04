@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Annotated, Any, TypedDict, Optional, List
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,8 @@ class AuthenticatedUser(TypedDict, total=False):
     company_ids: list[int]
     is_admin: bool
     role: str
+    status: str
+    must_change_password: bool
 
 
 VerifiedToken = Annotated[dict[str, Any], Depends(verify_token)]
@@ -33,6 +35,7 @@ def _optional_positive_int(value: object) -> int | None:
 # get the current authenticated user from the verified token claims and DB
 def get_current_user(
     claims: VerifiedToken,
+    request: Request = None,
     db: Session = Depends(get_db),
 ) -> AuthenticatedUser:
     metadata = claims.get("app_metadata")
@@ -53,7 +56,7 @@ def get_current_user(
         db_user = db.query(User).filter(func.lower(User.email) == resolved_email.lower()).first()
         if db_user:
             user_id = db_user.user_id
-            is_admin = db_user.is_admin or db_user.user_id == 1 or (db_user.email and db_user.email.lower() == "admin@mct.com")
+            is_admin = bool(db_user.is_admin or db_user.user_id == 1 or (db_user.role and db_user.role.lower() == "admin"))
             role = "admin" if is_admin else (db_user.role or "supervisor").lower()
             if role in ("company", "company employee"):
                 role = "supervisor"
@@ -72,7 +75,7 @@ def get_current_user(
                 if supa_res.data:
                     su = supa_res.data[0]
                     user_id = su.get("user_id")
-                    is_admin = su.get("is_admin") is True or resolved_email == "admin@mct.com"
+                    is_admin = bool(su.get("is_admin") is True or (su.get("role") and su.get("role").lower() == "admin") or user_id == 1)
                     role = "admin" if is_admin else (su.get("role") or "supervisor").lower()
                     if role in ("company", "company employee"):
                         role = "supervisor"
@@ -83,6 +86,41 @@ def get_current_user(
             except Exception:
                 pass
 
+    user_status = "ACTIVE"
+    must_change_password = False
+    if db_user:
+        user_status = str(getattr(db_user, "status", "ACTIVE") or "ACTIVE").upper()
+        must_change_password = bool(getattr(db_user, "must_change_password", False))
+
+    path = request.url.path if request and hasattr(request, "url") else ""
+    is_whitelisted = path.endswith("/auth/me") or path.endswith("/auth/logout") or path.endswith("/auth/setup-password")
+    if not is_whitelisted:
+        if user_status == "LOCKED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is locked due to security policy. Please contact an administrator.",
+            )
+        if user_status == "SUSPENDED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account has been suspended. Please contact an administrator.",
+            )
+        if user_status == "PROVISIONED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account invitation is pending. You must set up your password before accessing resources.",
+            )
+        if user_status != "ACTIVE":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Account status '{user_status}' is not authorized to access system resources.",
+            )
+        if must_change_password:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Password setup required before accessing application resources.",
+            )
+
     return {
         "auth_user_id": claims.get("sub", ""),
         "user_id": user_id,
@@ -91,6 +129,8 @@ def get_current_user(
         "company_ids": company_ids,
         "is_admin": is_admin,
         "role": role,
+        "status": user_status,
+        "must_change_password": must_change_password,
     }
 
 

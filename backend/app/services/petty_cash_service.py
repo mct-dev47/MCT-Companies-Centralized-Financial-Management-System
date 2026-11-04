@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.cache import system_cache
+from app.core.dependencies import AuthenticatedUser
 from app.core.websocket import ws_manager
 from app.db.supabase import get_supabase_admin_client
 from app.models.bank import BankAccount

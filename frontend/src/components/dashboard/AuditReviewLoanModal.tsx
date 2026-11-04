@@ -22,6 +22,7 @@ import {
 } from '@/services/loanService'
 import { formatPHP } from '@/lib/format'
 import { formatCreatedAt } from '@/utils/dateUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { Clock } from 'lucide-react'
 
 interface AuditReviewLoanModalProps {
@@ -67,7 +68,7 @@ export const AuditReviewLoanModal: React.FC<AuditReviewLoanModalProps> = ({
       onSuccess(reviewed)
       onOpenChange(false)
     } catch (err: any) {
-      setError(err?.message || `Failed to ${action} loan.`)
+      setError(formatUserFriendlyErrorMessage(err, `Failed to ${action} loan.`))
     } finally {
       setIsSubmitting(false)
     }

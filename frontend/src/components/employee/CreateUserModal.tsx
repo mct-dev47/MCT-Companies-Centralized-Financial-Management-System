@@ -219,7 +219,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       setIsSubmitting(true)
       const resolvedCompanyIds = selectedCompanies
         .map((name) => {
-          const comp = companies.find((c) => c.name === name || c.id === name)
+          const comp = companies.find((c) => c.name === name || c.id === name || c.name.trim().toLowerCase() === name.trim().toLowerCase())
           return comp ? Number(comp.id) : null
         })
         .filter((id): id is number => id !== null && !isNaN(id))
@@ -231,10 +231,10 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         assignedCompanies: selectedCompanies,
         companyIds: resolvedCompanyIds,
         role: pendingValues.role,
-        password: 'Password123!',
+        // Single-use setup invitation generated on backend
         avatarFile: avatarFile || undefined,
       })
-      if (!created.companyNames || created.companyNames.length === 0) {
+      if (!created.companyNames || created.companyNames.length < selectedCompanies.length) {
         created.companyNames = selectedCompanies
         created.companyName = selectedCompanies.join(', ')
       }
@@ -600,9 +600,6 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               Are you sure you want to add{' '}
               <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
               appointed to{' '}
-              <strong className="text-focus">
-                {formatCompanyList(selectedCompanies)}
-              </strong>{' '}
               as{' '}
               <strong className="text-focus">{pendingValues?.role}</strong>?
             </span>

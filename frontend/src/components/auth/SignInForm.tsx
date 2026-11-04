@@ -17,6 +17,7 @@ import { IconInput } from '@/components/auth/IconInput'
 import { PasswordInput } from '@/components/auth/PasswordInput'
 import { signInSchema, type SignInFormValues } from '@/lib/validation/auth'
 import { useSession } from '@/hooks/useSession'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const SignInForm: React.FC = () => {
   const navigate = useNavigate()
@@ -67,9 +68,7 @@ export const SignInForm: React.FC = () => {
       }
     } catch (err: unknown) {
       // Generic server error for bad credentials; never reveal which field failed
-      const message =
-        err instanceof Error ? err.message : 'Invalid email or password.'
-      setServerError(message)
+      setServerError(formatUserFriendlyErrorMessage(err, 'Invalid email or password.'))
     } finally {
       setIsLoading(false)
     }

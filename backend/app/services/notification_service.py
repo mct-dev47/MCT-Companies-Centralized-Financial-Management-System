@@ -301,6 +301,9 @@ class NotificationService:
         offset: int = 0,
     ) -> list[NotificationOut]:
         effective_role = (user_role or "supervisor").strip().lower() or "supervisor"
+        if effective_role == "admin":
+            return []
+
         scope_ident = user_scope_key or f"r:{effective_role}:c:{company_id}"
         base_cache_key = f"notifs_v2:{scope_ident}"
 
@@ -392,6 +395,9 @@ class NotificationService:
         user_scope_key: Optional[str] = None,
         recipient_user_id: Optional[int] = None,
     ) -> int:
+        if (user_role or "").strip().lower() == "admin":
+            return 0
+
         if recipient_user_id is not None:
             from sqlalchemy import select, func
             from app.models.notification import Notification
@@ -2062,7 +2068,7 @@ def run_temporal_due_date_sweep(session_factory: Callable[[], Session]) -> dict:
                 recipients = resolve_event_recipients(
                     db=db,
                     company_id=item.company_id,
-                    target_roles=["supervisor", "finance", "admin"],
+                    target_roles=["supervisor", "finance"],
                     target_user_ids=[],
                 )
                 for uid in recipients:
