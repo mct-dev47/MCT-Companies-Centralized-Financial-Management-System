@@ -1347,6 +1347,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                             <MoreVertical className="w-4 h-4" />
                           </Button>
                         </div>
+                      )}
                       </TableCell>
                     </TableRow>
                   )

@@ -218,9 +218,9 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               <img
                 src={mct2Url}
                 alt="MCT"
-                className="h-4.5 sm:h-5 w-auto object-contain object-left block"
+                className="h-3.5 sm:h-4 w-auto object-contain object-left block"
               />
-              <span className="text-[10px] font-medium text-muted-fg tracking-tight leading-tight mt-0.5">
+              <span className="text-[9px] sm:text-[10px] font-medium text-muted-fg tracking-tight leading-tight mt-0.5">
                 Group of Companies
               </span>
             </div>
@@ -229,20 +229,22 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 
         {/* Navigation */}
         <nav aria-label="Main Navigation" className="flex flex-col mt-5">
-          {/* MAIN Section Header */}
-          <div className="px-4 pb-2">
-            <div
-              className={cn(
-                'overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out',
-                isExpanded ? 'max-w-[160px] opacity-100' : 'max-w-0 opacity-0'
-              )}
-            >
-              <span className="text-[10px] font-bold tracking-wider text-muted-fg/80 uppercase">
-                MAIN
-              </span>
+          {/* MAIN Section Header (Non-admin only; admin shows clean items without section headers) */}
+          {userRole !== 'Admin' && mainItems.length > 0 && (
+            <div className="px-4 pb-2">
+              <div
+                className={cn(
+                  'overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out',
+                  isExpanded ? 'max-w-[160px] opacity-100' : 'max-w-0 opacity-0'
+                )}
+              >
+                <span className="text-[10px] font-bold tracking-wider text-muted-fg/80 uppercase">
+                  MAIN
+                </span>
+              </div>
+              {!isExpanded && <div className="w-8 h-px bg-stroke/30 mx-auto" />}
             </div>
-            {!isExpanded && <div className="w-8 h-px bg-stroke/30 mx-auto" />}
-          </div>
+          )}
 
           {/* Main items */}
           <div className="px-3 space-y-1">
