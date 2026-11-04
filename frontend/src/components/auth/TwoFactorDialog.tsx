@@ -85,7 +85,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
       navigate('/employee', { replace: true })
     } else if (assignedCount >= 2) {
       navigate('/centralized-auth', { replace: true })
-    } else if (role === 'finance') {
+    } else if (role === 'finance' || role === 'audit' || role.includes('audit')) {
       navigate('/centralized-auth', { replace: true })
     } else {
       const singleComp = sessionUser?.companyNames?.[0] || sessionUser?.companyName

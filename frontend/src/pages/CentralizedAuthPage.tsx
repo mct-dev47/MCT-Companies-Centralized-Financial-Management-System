@@ -30,7 +30,7 @@ type ViewMode = 'grid' | 'list'
 
 export const CentralizedAuthPage: React.FC = () => {
   const navigate = useNavigate()
-  const { user, signOut } = useSession()
+  const { user, signOut, updateUser } = useSession()
   const { setActiveCompany } = useCompany()
 
   // State management
@@ -45,12 +45,25 @@ export const CentralizedAuthPage: React.FC = () => {
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const userMenuRef = React.useRef<HTMLDivElement>(null)
 
-  // Admin is strictly restricted to Employee / User / Activity Log
+  // Admin is strictly restricted to Employee / User / Activity Log.
+  // Single-company Supervisor does not need centralized selector; redirect to dashboard.
   React.useEffect(() => {
     if (user) {
       const role = (user.role || '').toLowerCase()
       if (role === 'admin') {
         navigate('/employee', { replace: true })
+        return
+      }
+      const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
+      const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
+      const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
+      let commaSeparated = 0
+      if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+        commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
+      }
+      const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
+      if (role === 'supervisor' && assignedCount === 1) {
+        navigate('/dashboard', { replace: true })
       }
     }
   }, [user, navigate])
@@ -67,9 +80,18 @@ export const CentralizedAuthPage: React.FC = () => {
     try {
       const data = await employeeService.getAuthorizedCompanies()
       // Filter to assigned companies if the user has specific assigned companies
-      const userAssignedNames = user?.companyNames || []
+      const userAssignedNames = [
+        ...(user?.companyNames || []),
+        ...(user?.assignedCompanies || []),
+        ...(user?.assignedCompany && user.assignedCompany !== 'All Companies'
+          ? user.assignedCompany.split(',').map((c) => c.trim())
+          : []),
+      ].filter(Boolean)
       const userAssignedIds = user?.companyIds || []
-      if (userAssignedNames.length > 0 || userAssignedIds.length > 0) {
+      const role = (user?.role || '').toLowerCase()
+
+      // Supervisor is strictly filtered to their assigned companies
+      if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
         const filtered = data.filter((comp) => {
           const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
           const nameMatch = userAssignedNames.some((cname) => cname.toLowerCase() === comp.name.toLowerCase())
@@ -85,7 +107,7 @@ export const CentralizedAuthPage: React.FC = () => {
     } finally {
       setIsLoading(false)
     }
-  }, [user?.companyNames, user?.companyIds])
+  }, [user?.companyNames, user?.companyIds, user?.assignedCompanies, user?.assignedCompany, user?.role])
 
   React.useEffect(() => {
     void loadAuthorizedCompanies()
@@ -129,6 +151,7 @@ export const CentralizedAuthPage: React.FC = () => {
   // Handle select company & open account
   const handleSelectCompany = (company: AuthorizedCompany) => {
     setActiveCompany(company.name)
+    updateUser({ assignedCompany: company.name })
     navigate('/dashboard')
   }
 

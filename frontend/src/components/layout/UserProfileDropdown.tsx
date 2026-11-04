@@ -11,8 +11,32 @@ import { cn } from '@/lib/utils'
 export const UserProfileDropdown: React.FC = () => {
   const { user, signOut } = useSession()
   const { activeCompany } = useCompany()
-  const userRole = (user?.role || '').toLowerCase()
-  const canAccessCentralized = userRole === 'finance'
+  const userRole = (user?.role || '').trim().toLowerCase()
+  const isAuditOrFinance =
+    userRole === 'finance' ||
+    userRole === 'audit' ||
+    userRole.includes('audit') ||
+    userRole === 'owner'
+
+  const assignedCompanyCount = React.useMemo(() => {
+    if (!user) return 0
+    const names = Array.isArray(user.companyNames) ? user.companyNames.filter(Boolean) : []
+    const ids = Array.isArray(user.companyIds) ? user.companyIds.filter(Boolean) : []
+    const assignedList = Array.isArray(user.assignedCompanies)
+      ? user.assignedCompanies.filter(Boolean)
+      : []
+    let commaList: string[] = []
+    if (user.assignedCompany && user.assignedCompany !== 'All Companies') {
+      commaList = user.assignedCompany
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean)
+    }
+    return Math.max(names.length, ids.length, assignedList.length, commaList.length)
+  }, [user])
+
+  const isMultiCompanySupervisor = userRole === 'supervisor' && assignedCompanyCount >= 2
+  const canAccessCentralized = isAuditOrFinance || isMultiCompanySupervisor
   const navigate = useNavigate()
   const [isOpen, setIsOpen] = React.useState(false)
   const [isLoggingOut, setIsLoggingOut] = React.useState(false)
