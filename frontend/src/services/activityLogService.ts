@@ -19,6 +19,9 @@ export interface ActivityLogItem {
   module: string
   target: string
   time: string
+  ipAddress?: string
+  details?: any
+  rawCreatedAt?: string
 }
 
 export interface ActivityLogQueryParams {
@@ -42,12 +45,15 @@ export interface PurgeExpiredResult {
 interface RawAuditLogRow {
   audit_log_id: number
   action: string
+  action_category?: string
   created_at?: string | null
   user_name?: string
   company_name?: string
   description?: string
   module?: string
   target?: string
+  ip_address?: string
+  details?: any
 }
 
 function getAuthHeaders(): HeadersInit {
@@ -122,6 +128,9 @@ export const activityLogService = {
         module: row.module || 'General',
         target: row.target || '-',
         time: formatLogTime(row.created_at),
+        ipAddress: row.ip_address || '—',
+        details: row.details,
+        rawCreatedAt: row.created_at || '',
       }))
     } catch (err) {
       throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to load activity logs. Please try again.'))

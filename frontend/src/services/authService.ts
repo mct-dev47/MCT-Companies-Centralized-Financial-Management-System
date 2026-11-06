@@ -2,6 +2,7 @@ import type { SignInFormValues } from '@/lib/validation/auth'
 import logo2Url from '@/assets/LOGO2.png'
 import { encryptPayload } from '@/services/payloadEncryption'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatRealName } from '@/utils/formatRealName'
 
 export type UserRole = 'Admin' | 'Finance' | 'Audit' | 'Supervisor' | 'Owner'
 
@@ -89,7 +90,7 @@ export function detectUserByEmail(email: string): User {
   }
   return {
     id: `usr_${Date.now()}`,
-    fullName: email.trim(),
+    fullName: formatRealName(email.trim()),
     email: email.trim(),
     role: role,
     assignedCompany: role === 'Supervisor' ? 'MCT Kitchen' : 'All Companies',
@@ -207,7 +208,7 @@ function mapUser(user: BackendUserPayload): User {
       ? 'All Companies'
       : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
 
-  const displayName = user.name?.trim() || user.email
+  const displayName = formatRealName(user.name?.trim() || user.email)
 
   const userCompanyIds =
     user.company_ids && user.company_ids.length > 0

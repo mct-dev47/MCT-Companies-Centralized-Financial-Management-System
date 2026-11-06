@@ -13,6 +13,8 @@ class AuthenticatedUser(TypedDict, total=False):
     auth_user_id: str
     user_id: int | None
     email: str | None
+    name: str | None
+    full_name: str | None
     company_id: int | None
     company_ids: list[int]
     is_admin: bool
@@ -121,10 +123,24 @@ def get_current_user(
                 detail="Password setup required before accessing application resources.",
             )
 
+    from app.core.user_name_resolver import resolve_real_name
+    real_name = None
+    if db_user and (getattr(db_user, "name", None) or "").strip():
+        real_name = str(db_user.name).strip()
+    elif isinstance(claims.get("user_metadata"), dict):
+        um = claims["user_metadata"]
+        real_name = um.get("full_name") or um.get("name")
+    if not real_name and claims.get("name"):
+        real_name = claims.get("name")
+    if not real_name:
+        real_name = resolve_real_name(email)
+
     return {
         "auth_user_id": claims.get("sub", ""),
         "user_id": user_id,
         "email": email,
+        "name": real_name,
+        "full_name": real_name,
         "company_id": company_id,
         "company_ids": company_ids,
         "is_admin": is_admin,

@@ -77,6 +77,7 @@ def init_db():
     import app.models.notification
     import app.models.receivable
     import app.models.invitation
+    import app.models.particular
     from app.db.migrations import run_migrations
     from app.models.company import Company
 

@@ -6,7 +6,7 @@ from app.db.session import Base
 
 
 class PettyCashTopUp(Base):
-    """Money moved from a company's sales cash into its petty cash wallet."""
+    """Money moved from a company's sales cash into its petty cash wallet or reimbursed expense."""
 
     __tablename__ = "petty_cash_topups"
 
@@ -25,6 +25,12 @@ class PettyCashTopUp(Base):
     # and approvals with no funding bank move no money.
     bank_account_id = Column(String(100), nullable=True)
     status = Column(String(50), nullable=False, default="Pending Finance Endorsement")
+    request_type = Column(String(50), nullable=False, default="topup", server_default="topup")
+    paid_by = Column(String(150), nullable=True)
+    receipt_url = Column(Text, nullable=True)
+    attachments = Column(Text, nullable=True)
+    items = Column(Text, nullable=True)
+    category = Column(String(100), nullable=True)
     endorsed_by = Column(String(100), nullable=True)
     endorsed_at = Column(DateTime(timezone=True), nullable=True)
     finance_remark = Column(Text, nullable=True)

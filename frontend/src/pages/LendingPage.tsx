@@ -1,6 +1,9 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ShieldCheck,
+  CheckCircle2,
   Download,
   Plus,
   Search,
@@ -25,6 +28,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -106,7 +110,71 @@ export const LendingPage: React.FC = () => {
   const isFinance = userRole === 'finance'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isOwner = userRole === 'owner'
-  const canAuditActions = isAudit && !isOwner
+  const canAuditActions = (isAudit || userRole === 'admin') && !isOwner
+  // Audit Review modal and submission state
+  const [isAuditConfirmModalOpen, setIsAuditConfirmModalOpen] = React.useState(false)
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+
+  const handleConfirmAudit = async () => {
+    if (!activeFacility) return
+    setIsSubmittingAudit(true)
+    try {
+      const timestamp = new Date().toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
+      const updatedFacility: LendingFacility = {
+        ...activeFacility,
+        auditStatus: 'Verified',
+        auditDate: timestamp,
+        auditedBy: auditorName,
+      }
+      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
+      saveFacilities(updatedList)
+      setActiveFacility(updatedFacility)
+      setIsAuditConfirmModalOpen(false)
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
+  const handleConfirmDiscrepancy = async () => {
+    if (!activeFacility || !discrepancyReason.trim()) return
+    setIsSubmittingAudit(true)
+    try {
+      const timestamp = new Date().toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
+      const updatedFacility: LendingFacility = {
+        ...activeFacility,
+        auditStatus: 'Flagged',
+        auditDate: timestamp,
+        auditedBy: auditorName,
+        auditRemarks: discrepancyReason.trim(),
+      }
+      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
+      saveFacilities(updatedList)
+      setActiveFacility(updatedFacility)
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
 
   // Set document title
   React.useEffect(() => {
@@ -1278,7 +1346,7 @@ export const LendingPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Record Payment & Edit Buttons in the same row as the Borrower's Name */}
+            {/* Record Payment, Edit Terms & Audit Action Buttons */}
             <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
               {!isAudit && activeFacility.remainingBalance > 0 && (
                 <Button
@@ -1301,6 +1369,31 @@ export const LendingPage: React.FC = () => {
                   <Pencil className="h-3.5 w-3.5" />
                   <span>Edit Terms</span>
                 </Button>
+              )}
+
+              {canAuditActions && (
+                <>
+                  <Button
+                    type="button"
+                    onClick={() => setIsAuditConfirmModalOpen(true)}
+                    className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>{activeFacility.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setDiscrepancyReason(activeFacility.auditRemarks || '')
+                      setIsDiscrepancyModalOpen(true)
+                    }}
+                    className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Flag Discrepancy</span>
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -1435,6 +1528,8 @@ export const LendingPage: React.FC = () => {
                   {activeFacility.notes}
                 </div>
               )}
+
+
             </div>  
           </div>
 
@@ -2557,913 +2652,55 @@ export const LendingPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* 5. Modal: Update Payment ("Update" Action Button) */}
-      <Dialog open={isDailyPaymentModalOpen} onOpenChange={setIsDailyPaymentModalOpen}>
-        <DialogContent className="sm:max-w-[860px] md:max-w-[920px] max-h-[88vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-emerald-600" />
-              <span>Record Payment</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Record payment remittance for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong> ({activeFacility?.paymentFrequency || 'Daily'} Schedule).
-            </DialogDescription>
-          </DialogHeader>
+      {/* 5. Modal: Shared Record Payment Modal */}
+      {activeFacility && (
+        <SharedPaymentModal
+          open={isDailyPaymentModalOpen}
+          onOpenChange={setIsDailyPaymentModalOpen}
+          isAudit={isAudit}
+          entityName={activeFacility.borrowerName}
+          entitySubtitle={`${activeFacility.paymentFrequency || 'Daily'} Schedule`}
+          accountTypeLabel="Loan"
+          referenceNumber={activeFacility.borrower_ref_no || activeFacility.borrowerRefNo || activeFacility.loanRefNo || `BOR-${activeFacility.id}`}
+          paymentFrequency={activeFacility.paymentFrequency || 'Daily'}
+          dailyTarget={getFacilityDailyTarget(activeFacility)}
+          remainingBalance={activeFacility.remainingBalance}
+          contractDate={activeFacility.dateBorrowed}
+          dueDate={activeFacility.dueDate}
+          existingPayments={activeFacility.dailyPayments || []}
+          monthlyProgress={
+            activeFacility.paymentFrequency === 'Monthly'
+              ? getMonthlyProgress(activeFacility).months
+              : undefined
+          }
+          onSubmitPayment={async (subData) => {
+            const backendRes = await lendingService.recordPayment({
+              borrower_id: activeFacility.borrower_id || activeFacility.borrowerId,
+              facilityId: activeFacility.id,
+              paymentDate: subData.paymentDate,
+              cycleDueDate: subData.targetInstallmentDate,
+              cycleIndex: subData.cycleIndex,
+              amount: subData.amount,
+              penaltyAmount: subData.penaltyAmount,
+              method: subData.method,
+              referenceNo: subData.referenceNo,
+              notes: subData.notes,
+              status: subData.status,
+            })
 
-          {activeFacility && (() => {
-            const freq = activeFacility.paymentFrequency || 'Daily'
-            const isDaily = freq === 'Daily'
-            const isMonthly = freq === 'Monthly'
-            const dailyTarget = getFacilityDailyTarget(activeFacility)
-            const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
-            const cashReceivedDate = paymentForm.paymentDate
-            const isLatePayment = Boolean(targetInstallmentDate && cashReceivedDate > targetInstallmentDate)
-
-            let calculatedDaysLate = 0
-            if (isLatePayment && targetInstallmentDate && cashReceivedDate) {
-              const d1 = new Date(cashReceivedDate)
-              const d2 = new Date(targetInstallmentDate)
-              calculatedDaysLate = Math.max(1, Math.round((d1.getTime() - d2.getTime()) / (1000 * 60 * 60 * 24)))
+            if (!backendRes.success) {
+              throw new Error(
+                formatUserFriendlyErrorMessage(
+                  backendRes.message,
+                  'Unable to record payment remittance. Please try again.'
+                )
+              )
             }
 
-            const rawPenaltyNum = parseFloat(paymentForm.penaltyAmount)
-            const isPenaltyNegative = !isNaN(rawPenaltyNum) && rawPenaltyNum < 0
-            const userPenaltyNum = Math.max(0, rawPenaltyNum || 0)
-            // Penalty is not included in the deduction of total payable.
-            // Max allowed for repayment amount is strictly the remaining loan balance.
-            const maxAllowed = activeFacility.remainingBalance
-            const currentPaymentNum = parseFloat(paymentForm.paymentAmount)
-            const isAmountValid =
-              !isNaN(currentPaymentNum) &&
-              currentPaymentNum >= 1 &&
-              currentPaymentNum <= maxAllowed &&
-              !isPenaltyNegative
-
-            const alreadyPaidOnSelectedDate = (activeFacility.dailyPayments || [])
-              .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === targetInstallmentDate)
-              .reduce((sum, p) => sum + (p.amount || 0), 0)
-
-            const isDateAlreadySettled =
-              isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005
-
-            let periodRemainingDue = Math.min(
-              activeFacility.remainingBalance,
-              Math.max(0, Math.round((dailyTarget - alreadyPaidOnSelectedDate) * 100) / 100)
-            )
-
-            if (isMonthly) {
-              const progress = getMonthlyProgress(activeFacility)
-              const selectedMonth = progress.months.find(
-                (m) =>
-                  (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
-                  m.dueDate === targetInstallmentDate
-              ) || progress.activeMonth
-              periodRemainingDue = Math.min(activeFacility.remainingBalance, selectedMonth.remaining)
-            } else if (!isDaily) {
-              const nextInst = getNextInstallmentInfo(activeFacility)
-              if (nextInst) {
-                periodRemainingDue = Math.min(activeFacility.remainingBalance, nextInst.remaining)
-              }
-            }
-
-            const willBePartiallyPaid =
-              isAmountValid &&
-              currentPaymentNum < periodRemainingDue - 0.005 &&
-              maxAllowed - currentPaymentNum > 0.005
-
-            return (
-              <form onSubmit={handleRecordDailyPayment} className="space-y-5 mt-2">
-                {/* Inline Error Banner */}
-                {paymentError && (
-                  <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01]">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-[#960C01] mt-0.5" />
-                      <span>{paymentError}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentError(null)}
-                      className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
-                    >
-                      &times;
-                    </button>
-                  </div>
-                )}
-
-                {/* Two-Column Layout: Left = Calendar, Right = Payment Fields */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                  {/* Left Column: Interactive Calendar Date Picker for Daily, or Month Selector for Monthly */}
-                  <div className="space-y-1.5">
-                    {isMonthly ? (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-focus">
-                            Installment Month <span className="text-[#960C01]">*</span>
-                          </label>
-                          <span className="text-[11px] font-mono font-bold text-focus">
-                            {targetInstallmentDate ? `Target: ${targetInstallmentDate}` : 'Please select month'}
-                          </span>
-                        </div>
-
-                        <div className="border border-stroke/60 rounded-xl p-3 bg-white space-y-2 max-h-[300px] overflow-y-auto">
-                          {(() => {
-                            const progress = getMonthlyProgress(activeFacility)
-                            return progress.months.map((m) => {
-                              const isSelected =
-                                paymentForm.cycleIndex === m.monthIndex ||
-                                (!paymentForm.cycleIndex && targetInstallmentDate === m.dueDate)
-                              const isFullyPaid = m.status === 'Paid' || m.remaining <= 0.005
-
-                              return (
-                                <button
-                                  key={`month-select-${m.monthIndex}`}
-                                  type="button"
-                                  disabled={isFullyPaid}
-                                  onClick={() => {
-                                    if (!isFullyPaid) {
-                                      setPaymentError(null)
-                                      setPaymentForm({
-                                        ...paymentForm,
-                                        targetInstallmentDate: m.dueDate,
-                                        cycleIndex: m.monthIndex,
-                                      })
-                                    }
-                                  }}
-                                  className={cn(
-                                    'w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between',
-                                    isSelected && 'border-[#960C01] bg-[#960C01]/5 ring-1 ring-[#960C01]',
-                                    !isSelected && isFullyPaid && 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed',
-                                    !isSelected && !isFullyPaid && 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/80 cursor-pointer'
-                                  )}
-                                >
-                                  <div className="space-y-0.5">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs font-bold text-focus">
-                                        Month {m.monthIndex}
-                                      </span>
-                                      <span className="text-[10px] font-mono text-muted-fg">
-                                        Due: {m.dueDate}
-                                      </span>
-                                    </div>
-                                    <div className="text-[11px] text-muted-fg">
-                                      Target: <span className="font-semibold text-focus">{formatPHP(m.target)}</span>
-                                      {m.paid > 0 && (
-                                        <> • Paid: <span className="font-semibold text-emerald-600">{formatPHP(m.paid)}</span></>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div>
-                                    {isFullyPaid ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                        <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                        Paid
-                                      </span>
-                                    ) : m.status === 'Partially Paid' ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                        Partial ({formatPHP(m.remaining)} due)
-                                      </span>
-                                    ) : m.isOverdue ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                        <AlertCircle className="w-2.5 h-2.5 text-[#960C01]" />
-                                        Overdue
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                                        Due {formatPHP(m.remaining)}
-                                      </span>
-                                    )}
-                                  </div>
-                                </button>
-                              )
-                            })
-                          })()}
-                        </div>
-
-                        <p className="text-[10.5px] text-muted-fg leading-tight">
-                          Select the monthly installment cycle you are recording cash payment for.
-                        </p>
-                      </div>
-                    ) : (
-                      /* Daily Calendar Date Picker */
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-focus">
-                            Installment Date <span className="text-[#960C01]">*</span>
-                          </label>
-                          <span className="text-[11px] font-mono font-bold text-focus">
-                            {targetInstallmentDate ? `Target: ${targetInstallmentDate}` : 'Please select date'}
-                          </span>
-                        </div>
-
-                        <div className="border border-stroke/60 rounded-xl p-3.5 bg-white space-y-2.5">
-                          {/* Month Header & Controls */}
-                          <div className="flex items-center justify-between px-1">
-                            <span className="text-xs font-bold text-focus">
-                              {paymentCalendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const prev = new Date(paymentCalendarMonth)
-                                  prev.setMonth(prev.getMonth() - 1)
-                                  setPaymentCalendarMonth(prev)
-                                }}
-                                className="p-1 rounded-md hover:bg-slate-100 text-muted-fg hover:text-focus cursor-pointer"
-                                aria-label="Previous month"
-                              >
-                                <ChevronLeft className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const next = new Date(paymentCalendarMonth)
-                                  next.setMonth(next.getMonth() + 1)
-                                  setPaymentCalendarMonth(next)
-                                }}
-                                className="p-1 rounded-md hover:bg-slate-100 text-muted-fg hover:text-focus cursor-pointer"
-                                aria-label="Next month"
-                              >
-                                <ChevronRight className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Weekday labels */}
-                          <div className="grid grid-cols-7 gap-1 text-center text-[10.5px] font-bold text-muted-fg uppercase py-1 border-b border-slate-100">
-                            <span>Su</span>
-                            <span>Mo</span>
-                            <span>Tu</span>
-                            <span>We</span>
-                            <span>Th</span>
-                            <span>Fr</span>
-                            <span>Sa</span>
-                          </div>
-
-                          {/* Days Grid */}
-                          {(() => {
-                            const calYear = paymentCalendarMonth.getFullYear()
-                            const calMonth = paymentCalendarMonth.getMonth()
-                            const firstDay = new Date(calYear, calMonth, 1).getDay()
-                            const totalDays = new Date(calYear, calMonth + 1, 0).getDate()
-
-                            const paidByDateMap = new Map<string, number>()
-                            ;(activeFacility.dailyPayments || []).forEach((p) => {
-                              const dt = p.cycle_due_date || p.cycleDueDate || p.date
-                              if (!dt) return
-                              paidByDateMap.set(dt, (paidByDateMap.get(dt) || 0) + (p.amount || 0))
-                            })
-
-                            const startBorrowed = activeFacility.dateBorrowed || ''
-                            const todayStr = formatToYYYYMMDD(new Date())
-
-                            return (
-                              <div className="grid grid-cols-7 gap-1 text-center">
-                                {Array.from({ length: firstDay }).map((_, i) => (
-                                  <div key={`cal-empty-${i}`} className="h-9" />
-                                ))}
-
-                                {Array.from({ length: totalDays }).map((_, i) => {
-                                  const d = i + 1
-                                  const dStr = String(d).padStart(2, '0')
-                                  const mStr = String(calMonth + 1).padStart(2, '0')
-                                  const dateStr = `${calYear}-${mStr}-${dStr}`
-
-                                  const isBefore = startBorrowed ? dateStr < startBorrowed : false
-                                  const paidOnDate = paidByDateMap.get(dateStr) || 0
-                                  const isPaid = paidOnDate >= dailyTarget - 0.005 && dailyTarget > 0
-                                  const isPartial = !isPaid && paidOnDate > 0
-                                  const isMissed = !isBefore && !isPaid && dateStr < todayStr
-                                  const isSelected = targetInstallmentDate === dateStr
-                                  const isDisabled = isBefore || isPaid
-
-                                  return (
-                                    <button
-                                      key={dateStr}
-                                      type="button"
-                                      disabled={isDisabled}
-                                      onClick={() => {
-                                        if (!isDisabled) {
-                                          setPaymentError(null)
-                                          setPaymentForm({
-                                            ...paymentForm,
-                                            targetInstallmentDate: dateStr,
-                                          })
-                                        }
-                                      }}
-                                      className={cn(
-                                        'h-9 rounded-lg text-xs font-medium flex flex-col items-center justify-center relative transition-all',
-                                        isSelected &&
-                                          'bg-[#960C01] text-white font-bold shadow-xs ring-2 ring-[#960C01]/30 z-10',
-                                        !isSelected &&
-                                          isPaid &&
-                                          'bg-emerald-50 text-emerald-700 border border-emerald-200/80 cursor-not-allowed opacity-90',
-                                        !isSelected &&
-                                          isPartial &&
-                                          'bg-amber-50 text-amber-800 border border-amber-300 cursor-pointer font-semibold',
-                                        !isSelected &&
-                                          isMissed &&
-                                          'bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/30 cursor-pointer font-bold hover:bg-[#960C01]/20',
-                                        !isSelected &&
-                                          isBefore &&
-                                          'text-slate-300 cursor-not-allowed bg-slate-50/50',
-                                        !isSelected &&
-                                          !isPaid &&
-                                          !isPartial &&
-                                          !isMissed &&
-                                          !isBefore &&
-                                          'hover:bg-slate-100 text-focus cursor-pointer hover:font-bold border border-transparent'
-                                      )}
-                                      title={
-                                        isPaid
-                                          ? `${dateStr}: Fully Paid & Locked (Cannot select)`
-                                          : isBefore
-                                          ? `${dateStr}: Prior to loan date`
-                                          : isMissed
-                                          ? `${dateStr}: Missed installment (Due ${dateStr}) — Click to settle`
-                                          : isPartial
-                                          ? `${dateStr}: Partially Paid (${formatPHP(paidOnDate)} of ${formatPHP(dailyTarget)}) — Select to pay remaining ${formatPHP(Math.max(0, dailyTarget - paidOnDate))}`
-                                          : `Select ${dateStr}`
-                                      }
-                                    >
-                                      <span>{d}</span>
-                                      {isPaid && <Check className="h-2.5 w-2.5 text-emerald-600 -mt-0.5" />}
-                                      {isPartial && !isSelected && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 absolute bottom-1" />
-                                      )}
-                                      {isMissed && !isSelected && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-[#960C01] absolute bottom-1" />
-                                      )}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            )
-                          })()}
-
-                          {/* Calendar Legend */}
-                          <div className="flex flex-wrap items-center justify-between text-[10px] text-muted-fg pt-2 border-t border-slate-100 gap-1.5">
-                            <div className="flex items-center gap-2.5">
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Paid
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-[#960C01] inline-block" /> Selected
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Partial
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-[#960C01] inline-block" /> Missed
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Late Status Information / Breakdown */}
-                    {isLatePayment ? (
-                      <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl space-y-1.5 text-xs text-amber-900">
-                        <div className="flex items-center justify-between font-bold text-amber-800">
-                          <span className="flex items-center gap-1.5">
-                            <AlertCircle className="w-4 h-4 text-amber-600" />
-                            Overdue Installment
-                          </span>
-                          <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                            {calculatedDaysLate} Day{calculatedDaysLate > 1 ? 's' : ''} Late
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-amber-700">
-                          Scheduled due date was <strong>{targetInstallmentDate}</strong>. Input any late penalty charges in the field on the right.
-                        </div>
-                        <div className="pt-1.5 border-t border-amber-200/80 flex items-center justify-between font-bold text-xs text-focus">
-                          <span>Installment Due:</span>
-                          <span className="text-emerald-700 text-sm font-mono">{formatPHP(periodRemainingDue)}</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
-                        <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span className="text-[11px]">Installment is on-time. No late penalty required.</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right Column: Payment Amount, Payment Method, Receipt No., Remarks/Notes */}
-                  <div className="space-y-3.5">
-                    {/* Date Cash Received Input */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-focus">
-                          Date Cash Received <span className="text-[#960C01]">*</span>
-                        </label>
-                        <span className="text-[11px] font-medium">
-                          {isLatePayment ? (
-                            <span className="text-[#960C01] font-bold flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                              {calculatedDaysLate} Day{calculatedDaysLate > 1 ? 's' : ''} Late
-                            </span>
-                          ) : (
-                            <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                              <Check className="w-3 h-3" />
-                              On Time (0 penalty)
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <Input
-                        type="date"
-                        required
-                        value={paymentForm.paymentDate}
-                        onChange={(e) => {
-                          setPaymentError(null)
-                          setPaymentForm({ ...paymentForm, paymentDate: e.target.value })
-                        }}
-                        className="h-10 text-xs sm:text-sm rounded-xl font-medium"
-                      />
-                      <p className="text-[10px] text-muted-fg mt-1">
-                        Enter actual cash collection date. If paid on time in the field, this removes late penalties.
-                      </p>
-                    </div>
-
-                    {/* Payment Amount Input */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-focus">
-                          Payment Amount (₱) <span className="text-[#960C01]">*</span>
-                        </label>
-                        <span className="text-[11px] text-muted-fg font-medium">
-                          Target: {formatPHP(periodRemainingDue)}
-                        </span>
-                      </div>
-                      <Input
-                        required
-                        type="number"
-                        min="1"
-                        max={maxAllowed}
-                        step="any"
-                        value={paymentForm.paymentAmount}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        onKeyDown={(e) => {
-                          if (e.key === '-' || e.key === 'Subtract') {
-                            e.preventDefault()
-                          }
-                        }}
-                        onChange={(e) => {
-                          setPaymentError(null)
-                          const val = e.target.value
-                          if (val.includes('-')) return
-                          setPaymentForm({ ...paymentForm, paymentAmount: val })
-                        }}
-                        placeholder="Enter repayment amount"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      {paymentForm.paymentAmount && !isAmountValid && (
-                        <p className="text-[11px] text-[#960C01] mt-1">
-                          {currentPaymentNum < 1
-                            ? 'Payment amount cannot be lower than ₱1.00.'
-                            : currentPaymentNum > maxAllowed
-                            ? `Payment amount cannot exceed ${formatPHP(maxAllowed)}.`
-                            : isPenaltyNegative
-                            ? 'Late payment charges cannot be a negative value.'
-                            : 'Please enter a valid amount.'}
-                        </p>
-                      )}
-                    </div>
-
-                     {/* Late Payment Charges Input */}
-                    {isLatePayment && (
-                      <div className="p-3 bg-[#960C01]/5 border border-[#960C01]/20 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-[#960C01] flex items-center gap-1">
-                            <AlertCircle className="w-3.5 h-3.5 text-[#960C01]" />
-                            Late Payment Charges (₱)
-                          </label>
-                        </div>
-                        <Input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={paymentForm.penaltyAmount}
-                          onWheel={(e) => e.currentTarget.blur()}
-                          onKeyDown={(e) => {
-                            if (e.key === '-' || e.key === 'Subtract') {
-                              e.preventDefault()
-                            }
-                          }}
-                          onChange={(e) => {
-                            setPaymentError(null)
-                            const val = e.target.value
-                            if (val.includes('-')) return
-                            const num = parseFloat(val)
-                            if (!isNaN(num) && num < 0) return
-                            setPaymentForm({ ...paymentForm, penaltyAmount: val })
-                          }}
-                          placeholder="0.00"
-                          className="h-9 text-xs sm:text-sm rounded-lg font-semibold bg-white border-[#960C01]/30 focus:border-[#960C01] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                        {isPenaltyNegative && (
-                          <p className="text-[11px] text-[#960C01] font-medium mt-1">
-                            Late payment charges can be ₱0.00 but can never be a negative value.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                      {isAmountValid && (
-                        <div className="mt-2 space-y-1.5">
-                          {userPenaltyNum > 0 && (
-                            <div className="p-2.5 rounded-xl border border-slate-200/90 bg-slate-50 text-xs space-y-1">
-                              <div className="flex justify-between items-center text-muted-fg text-[11px]">
-                                <span>Repayment (reduces loan):</span>
-                                <span className="font-mono font-semibold text-focus">{formatPHP(currentPaymentNum)}</span>
-                              </div>
-                              <div className="flex justify-between items-center text-[#960C01] text-[11px]">
-                                <span>Late Payment Charge (fee):</span>
-                                <span className="font-mono font-semibold">+{formatPHP(userPenaltyNum)}</span>
-                              </div>
-                              <div className="pt-1 border-t border-slate-200 flex justify-between items-center font-bold text-focus">
-                                <span>Total Cash to Collect:</span>
-                                <span className="font-mono text-emerald-700 text-sm">
-                                  {formatPHP(currentPaymentNum + userPenaltyNum)}
-                                </span>
-                              </div>
-                            </div>
-                          )}
-                          <div className="flex items-center justify-between px-3 py-2 rounded-xl border text-xs bg-slate-50/80 border-slate-200/80">
-                            <span className="text-muted-fg font-medium">Transaction Status Tag:</span>
-                            {willBePartiallyPaid ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                Partially Paid ({formatPHP(Math.max(0, periodRemainingDue - currentPaymentNum))} short of target)
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <Check className="w-3 h-3 text-emerald-600" />
-                                <span>Paid</span>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                    {/* Payment Method */}
-                    <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Payment Method
-                      </label>
-                      <select
-                        value={paymentForm.method}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, method: e.target.value })
-                        }
-                        className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                      >
-                        <option value="Cash">Cash</option>
-                        <option value="GCash">GCash</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                        <option value="Cheque">Cheque</option>
-                      </select>
-                    </div>
-
-                    {/* Receipt / Ref No. (no default value) */}
-                    <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Receipt / Ref No.
-                      </label>
-                      <Input
-                        value={paymentForm.referenceNo}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, referenceNo: e.target.value })
-                        }
-                        placeholder="e.g. OR-88201"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-mono"
-                      />
-                    </div>
-
-                    {/* Remarks / Notes (Longer text field without default value) */}
-                    <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Remarks / Notes
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={paymentForm.notes}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, notes: e.target.value })
-                        }
-                        placeholder="Enter payment remarks or notes..."
-                        className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setIsDailyPaymentModalOpen(false)}
-                    className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={!isAmountValid || isDateAlreadySettled || !paymentForm.paymentDate}
-                    className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
-                  >
-                    Review & Confirm Payment
-                  </Button>
-                </div>
-              </form>
-            )
-          })()}
-        </DialogContent>
-      </Dialog>
-
-      {/* 5B. Modal: Payment Confirmation Modal */}
-      <Dialog open={isPaymentConfirmModalOpen} onOpenChange={setIsPaymentConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-[#960C01]" />
-              <span>Confirm Payment Transaction</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Please review the payment details below before recording this transaction.
-            </DialogDescription>
-          </DialogHeader>
-
-          {pendingPayment && (
-            <div className="space-y-4 mt-2">
-              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Borrower:</span>
-                  <span className="font-bold text-focus text-right">{pendingPayment.borrowerName}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Installment Due Date:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingPayment.targetInstallmentDate || pendingPayment.paymentDate}
-                    {pendingPayment.periodLabel ? ` (${pendingPayment.periodLabel})` : ''}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Date Cash Received:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingPayment.paymentDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Timeliness:</span>
-                  {pendingPayment.isLate ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                      <span>{pendingPayment.daysLate} Days Late</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>On Time (0 penalty)</span>
-                    </span>
-                  )}
-                </div>
-                {Boolean(pendingPayment.penaltyPortion) ? (
-                  <div className="flex justify-between items-center text-[#960C01]">
-                    <span className="font-medium">Late Payment Charges (Fee):</span>
-                    <span className="font-bold">+{formatPHP(pendingPayment.penaltyPortion || 0)}</span>
-                  </div>
-                ) : pendingPayment.isLate ? (
-                  <div className="flex justify-between items-center text-muted-fg">
-                    <span>Late Payment Charges:</span>
-                    <span className="font-semibold text-emerald-600">Waived (₱0.00)</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-focus">Installment Payment:</span>
-                  <span className="font-semibold text-emerald-600 text-xs">
-                    {formatPHP(pendingPayment.amount)}
-                  </span>
-                </div>
-                {Boolean(pendingPayment.penaltyPortion) && (
-                  <div className="flex justify-between items-center bg-amber-50/80 p-2 rounded-lg border border-amber-200/80 font-bold">
-                    <span className="text-focus text-[11px]">Total Cash to Collect:</span>
-                    <span className="text-amber-800 text-sm font-mono">
-                      {formatPHP(pendingPayment.amount + (pendingPayment.penaltyPortion || 0))}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Status Tag:</span>
-                  {pendingPayment.paymentStatus === 'Partially Paid' ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Partially Paid
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>Paid</span>
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Method:</span>
-                  <span className="font-semibold text-focus">{pendingPayment.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Receipt / Ref No.:</span>
-                  <span className="font-mono text-focus">{pendingPayment.referenceNo || '—'}</span>
-                </div>
-                {pendingPayment.notes && (
-                  <div className="flex justify-between items-start gap-3">
-                    <span className="text-muted-fg shrink-0">Remarks:</span>
-                    <span className="text-focus text-right">{pendingPayment.notes}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="text-muted-fg">Remaining Loan Balance After:</span>
-                  <span className="font-bold text-amber-600">
-                    {formatPHP(pendingPayment.remainingBalanceAfter)}
-                  </span>
-                </div>
-              </div>
-
-              {pendingPayment.paymentStatus === 'Partially Paid' && (
-                <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1">
-                  <div className="font-bold text-amber-800 flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Partial Payment Notice</span>
-                  </div>
-                  <p className="text-[11px] text-amber-700 leading-relaxed">
-                    This payment is less than the installment due. It will be tagged as{' '}
-                    <strong>Partially Paid</strong> (not Paid), and the remaining{' '}
-                    <strong>{formatPHP(pendingPayment.periodRemainingAfter)}</strong> for this period will remain open for settlement.
-                  </p>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isSubmittingPayment}
-                  onClick={() => setIsPaymentConfirmModalOpen(false)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Back to Edit
-                </Button>
-                <Button
-                  type="button"
-                  disabled={isSubmittingPayment}
-                  onClick={handleConfirmRecordPayment}
-                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
-                >
-                  {isSubmittingPayment ? 'Recording...' : 'Confirm & Record Payment'}
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 5C. Modal: Payment Success Modal */}
-      <Dialog open={isPaymentSuccessModalOpen} onOpenChange={setIsPaymentSuccessModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          {completedReceipt && (
-            <div className="space-y-4">
-              <div className="flex flex-col items-center text-center pt-1">
-                <div
-                  className={cn(
-                    'w-12 h-12 rounded-full flex items-center justify-center mb-3 border',
-                    completedReceipt.paymentStatus === 'Partially Paid'
-                      ? 'bg-amber-50 border-amber-200 text-amber-600'
-                      : 'bg-emerald-50 border-emerald-200 text-emerald-600'
-                  )}
-                >
-                  <Check className="w-6 h-6" />
-                </div>
-                <DialogTitle className="text-lg font-bold text-focus">
-                  Payment Recorded Successfully
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-1">
-                  Payment transaction for <strong className="text-focus">{completedReceipt.borrowerName}</strong> has been saved.
-                </DialogDescription>
-              </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Transaction Status:</span>
-                  {completedReceipt.paymentStatus === 'Partially Paid' ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Partially Paid
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Lock className="w-2.5 h-2.5 text-emerald-600" />
-                      <span>Paid</span>
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Amount Paid:</span>
-                  <span className="font-extrabold text-emerald-600 text-sm">
-                    {formatPHP(completedReceipt.amount)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Installment Due Date:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {completedReceipt.targetInstallmentDate || completedReceipt.paymentDate}
-                    {completedReceipt.periodLabel ? ` (${completedReceipt.periodLabel})` : ''}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Date Cash Received:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {completedReceipt.paymentDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Timeliness:</span>
-                  {completedReceipt.isLate ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                      <span>{completedReceipt.daysLate} Days Late</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>On Time</span>
-                    </span>
-                  )}
-                </div>
-                {Boolean(completedReceipt.penaltyPortion) ? (
-                  <div className="flex justify-between items-center text-[#960C01]">
-                    <span className="font-medium">Late Payment Charges (Fee):</span>
-                    <span className="font-bold">+{formatPHP(completedReceipt.penaltyPortion || 0)}</span>
-                  </div>
-                ) : completedReceipt.isLate ? (
-                  <div className="flex justify-between items-center text-muted-fg">
-                    <span>Late Payment Charges:</span>
-                    <span className="font-semibold text-emerald-600">Waived (₱0.00)</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="font-semibold text-focus">Repayment Amount:</span>
-                  <span className="font-extrabold text-emerald-600 font-mono">
-                    {formatPHP(completedReceipt.amount)}
-                  </span>
-                </div>
-                {Boolean(completedReceipt.penaltyPortion) && (
-                  <div className="flex justify-between items-center bg-amber-50/80 p-2 rounded-lg border border-amber-200/80 font-bold">
-                    <span className="text-focus text-[11px]">Total Cash Collected:</span>
-                    <span className="text-amber-800 text-sm font-mono">
-                      {formatPHP(completedReceipt.amount + (completedReceipt.penaltyPortion || 0))}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Method:</span>
-                  <span className="font-semibold text-focus">{completedReceipt.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Receipt / Ref No.:</span>
-                  <span className="font-mono text-focus">{completedReceipt.referenceNo || '—'}</span>
-                </div>
-                {completedReceipt.paymentStatus === 'Partially Paid' && (
-                  <div className="flex justify-between items-center text-amber-700 border-t border-slate-200/70 pt-2">
-                    <span className="font-medium">Remaining Installment Due:</span>
-                    <span className="font-bold">{formatPHP(completedReceipt.periodRemainingAfter)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="text-muted-fg">Updated Loan Balance:</span>
-                  <span className="font-bold text-amber-600">
-                    {formatPHP(completedReceipt.remainingBalanceAfter)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end pt-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    setIsPaymentSuccessModalOpen(false)
-                    setCompletedReceipt(null)
-                  }}
-                  className="w-full h-10 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
-                >
-                  Done
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+            await loadFacilities()
+          }}
+        />
+      )}
 
       {/* 6. Modal: Edit Borrower Details */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
@@ -3788,6 +3025,114 @@ export const LendingPage: React.FC = () => {
                 </>
               ) : (
                 <span>Delete Borrower</span>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Modal: Mark as Audited Confirmation */}
+      <Dialog open={isAuditConfirmModalOpen} onOpenChange={setIsAuditConfirmModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              <span>Confirm Audit Verification</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
+              Are you sure you want to mark the loan facility for{' '}
+              <strong className="text-focus">{activeFacility?.borrowerName}</strong> as audited? This will record
+              your verification and timestamp.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 mt-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmittingAudit}
+              onClick={() => setIsAuditConfirmModalOpen(false)}
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSubmittingAudit}
+              onClick={handleConfirmAudit}
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isSubmittingAudit ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Verifying...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Confirm & Mark Audited</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: Flag Discrepancy Reason */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-[#960C01]" />
+              <span>Flag Audit Discrepancy</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
+              Please specify the audit findings, discrepancies, or notes for{' '}
+              <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-2">
+            <label className="text-xs font-semibold text-focus block">
+              Discrepancy Reason / Findings <span className="text-[#960C01]">*</span>
+            </label>
+            <textarea
+              value={discrepancyReason}
+              onChange={(e) => setDiscrepancyReason(e.target.value)}
+              placeholder="Detail any payment discrepancies, unrecorded ledger items, or issues..."
+              className="min-h-[100px] text-xs rounded-xl"
+              autoFocus
+            ></textarea>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmittingAudit}
+              onClick={() => {
+                setIsDiscrepancyModalOpen(false)
+                setDiscrepancyReason('')
+              }}
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSubmittingAudit || !discrepancyReason.trim()}
+              onClick={handleConfirmDiscrepancy}
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isSubmittingAudit ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Flagging...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Flag Discrepancy</span>
+                </>
               )}
             </Button>
           </div>

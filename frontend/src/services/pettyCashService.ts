@@ -26,6 +26,11 @@ export interface PettyCashSummary {
 export interface PettyCashLedgerEntry {
   id: string
   type: 'topup' | 'expense' | 'request'
+  requestType?: 'topup' | 'reimbursement' | string
+  paidBy?: string | null
+  receiptUrl?: string | null
+  attachments?: string | null
+  items?: string | null
   recordId: number
   companyId?: number | null
   companyName?: string | null
@@ -67,6 +72,12 @@ export interface NewPettyCashTopUpInput {
   bank_account_id?: string | null
   finance_remark?: string | null
   endorsement_remark?: string | null
+  request_type?: 'topup' | 'reimbursement' | string
+  paid_by?: string | null
+  receipt_url?: string | null
+  attachments?: string | null
+  items?: string | null
+  category?: string | null
 }
 
 /**
@@ -150,6 +161,11 @@ interface BackendLedgerEntry {
   funding_account_name?: string | null
   funding_company_name?: string | null
   is_own_account?: boolean
+  request_type?: string | null
+  paid_by?: string | null
+  receipt_url?: string | null
+  attachments?: string | null
+  items?: string | null
 }
 
 function backendHeaders(): HeadersInit {
@@ -225,6 +241,11 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     fundingAccountName: data.funding_account_name,
     fundingCompanyName: data.funding_company_name,
     isOwnAccount: Boolean(data.is_own_account),
+    requestType: data.request_type || (data.entry_type === 'topup' ? 'topup' : 'topup'),
+    paidBy: data.paid_by,
+    receiptUrl: data.receipt_url,
+    attachments: data.attachments,
+    items: data.items,
   }
 }
 
@@ -332,6 +353,12 @@ export const pettyCashService = {
         status: input.status || 'Pending Finance Endorsement',
         bank_account_id: input.bank_account_id || null,
         finance_remark: input.finance_remark || input.endorsement_remark || null,
+        request_type: input.request_type || 'topup',
+        paid_by: input.paid_by || null,
+        receipt_url: input.receipt_url || null,
+        attachments: input.attachments || null,
+        items: input.items || null,
+        category: input.category || null,
       }),
     })
     if (!response.ok) throw await getBackendError(response)
@@ -402,5 +429,20 @@ export const pettyCashService = {
     })
     if (!response.ok) throw await getBackendError(response)
     return mapSummary(await response.json())
+  },
+
+  async uploadReceipt(file: File): Promise<{ url: string; filename: string; file_name?: string; file_size?: number; mime_type?: string }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const response = await fetch('/api/v1/petty-cash/receipts', {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    })
+    if (!response.ok) throw await getBackendError(response)
+    return await response.json()
   },
 }
