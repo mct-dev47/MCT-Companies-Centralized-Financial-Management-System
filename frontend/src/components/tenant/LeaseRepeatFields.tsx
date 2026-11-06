@@ -34,7 +34,7 @@ export const RepeatSelect: React.FC<RepeatSelectProps> = ({ value, onChange, dis
   <div className="space-y-1">
     <label htmlFor="lease-repeat" className="text-xs font-semibold text-focus flex items-center gap-1.5">
       <Repeat className="h-3.5 w-3.5 text-muted-fg" aria-hidden="true" />
-      <span>Repeat</span>
+      <span>Payment Schedule</span>
     </label>
     <select
       id="lease-repeat"
