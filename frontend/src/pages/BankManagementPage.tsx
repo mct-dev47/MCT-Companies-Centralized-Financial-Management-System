@@ -1478,50 +1478,13 @@ export const BankManagementPage: React.FC = () => {
 
           <div>
 
-            <div className="flex items-center gap-2.5">
+
 
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
 
                 Bank Management
 
               </h1>
-
-              <div
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border transition-colors select-none',
-                  wsStatus === 'connected'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
-                    : wsStatus === 'reconnecting'
-                    ? 'bg-amber-50 text-amber-700 border-amber-200/60'
-                    : 'bg-slate-100 text-slate-600 border-slate-200/60'
-                )}
-                title={
-                  wsStatus === 'connected'
-                    ? 'WebSocket real-time sync active: balances and transactions update automatically'
-                    : wsStatus === 'reconnecting'
-                    ? 'Reconnecting real-time sync...'
-                    : 'Real-time sync offline'
-                }
-              >
-                <span
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    wsStatus === 'connected'
-                      ? 'bg-emerald-500 animate-pulse'
-                      : wsStatus === 'reconnecting'
-                      ? 'bg-amber-500 animate-ping'
-                      : 'bg-slate-400'
-                  )}
-                />
-                <span className="font-semibold text-[11px]">
-                  {wsStatus === 'connected'
-                    ? 'Live Sync'
-                    : wsStatus === 'reconnecting'
-                    ? 'Reconnecting'
-                    : 'Sync Paused'}
-                </span>
-              </div>
-            </div>
 
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
 

@@ -44,7 +44,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       <MobileTopBar />
 
       {/* Desktop Persistent Sidebar Rail (>= lg) */}
-      <div className="hidden lg:block shrink-0 w-[72px] min-h-screen self-stretch relative z-50">
+      <div className="hidden lg:block shrink-0 w-[72px] h-screen sticky top-0 z-50">
         <AppSidebar />
       </div>
 

@@ -188,17 +188,17 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       onMouseEnter={() => !forceExpanded && setIsHovered(true)}
       onMouseLeave={() => !forceExpanded && setIsHovered(false)}
       className={cn(
-        'flex flex-col justify-between min-h-screen h-full bg-background border-r border-stroke/20 select-none no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden transition-[width,box-shadow] duration-300 ease-in-out',
+        'flex flex-col justify-between h-screen bg-background border-r border-stroke/20 select-none overflow-y-auto overflow-x-hidden no-scrollbar [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden transition-[width,box-shadow] duration-300 ease-in-out',
         forceExpanded
-          ? 'w-full relative shadow-none'
+          ? 'w-full relative shadow-none h-full'
           : cn(
-              'absolute left-0 top-0 bottom-0 z-50 bg-white dark:bg-slate-900',
+              'absolute left-0 top-0 bottom-0 h-screen z-50 bg-white dark:bg-slate-900',
               isExpanded ? 'w-64 lg:w-72 shadow-2xl' : 'w-[72px] shadow-none'
             ),
         className
       )}
     >
-      <div className="flex flex-col py-4 lg:py-6 sticky top-0">
+      <div className="flex flex-col py-4 lg:py-6">
         {/* Logo Lockup */}
         <div className="px-4 pb-2">
           <div className="flex items-center h-11">

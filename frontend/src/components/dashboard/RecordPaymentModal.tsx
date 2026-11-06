@@ -527,8 +527,9 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                         setAmountInput(e.target.value)
                         setError('')
                       }}
+                      onWheel={(e) => e.currentTarget.blur()}
                       placeholder="0.00"
-                      className="pl-8 h-11 text-base font-bold tabular-nums rounded-xl border-stroke/60 focus-visible:ring-2 focus-visible:ring-focus"
+                      className="pl-8 h-11 text-base font-bold tabular-nums rounded-xl border-stroke/60 focus-visible:ring-2 focus-visible:ring-focus [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       autoFocus
                     />
                   </div>
