@@ -78,6 +78,7 @@ def init_db():
     import app.models.receivable
     import app.models.invitation
     import app.models.particular
+    import app.models.payment_method
     from app.db.migrations import run_migrations
     from app.models.company import Company
 

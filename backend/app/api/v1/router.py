@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     receivables,
     invitations,
     particulars,
+    payment_methods,
 )
 
 api_router = APIRouter()
@@ -48,3 +49,4 @@ api_router.include_router(tenants.router, prefix="/tenants", tags=["Tenants"])
 api_router.include_router(receivables.router, prefix="/receivables", tags=["Receivables"])
 api_router.include_router(invitations.router, prefix="/admin/invitations", tags=["Admin Invitations"])
 api_router.include_router(particulars.router, prefix="/particulars", tags=["Particulars"])
+api_router.include_router(payment_methods.router, prefix="/payment-methods", tags=["Payment Methods"])

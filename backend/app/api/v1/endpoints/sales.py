@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
+from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
 from app.models.company import Company
-from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate
+from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -201,6 +202,189 @@ def get_sales(
         ]
 
 
+def _to_date(val) -> Optional[date]:
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str) and val.strip():
+        try:
+            return date.fromisoformat(val.strip().split("T")[0])
+        except Exception:
+            try:
+                parts = val.strip().split("/")
+                if len(parts) == 3:
+                    m, d, y = parts
+                    if len(y) == 2:
+                        y = "20" + y
+                    return date(int(y), int(m), int(d))
+            except Exception:
+                pass
+    return None
+
+
+def _rollup_audit_status(statuses: List[str]) -> str:
+    if not statuses:
+        return "Pending Audit"
+    cleaned = [s.strip() for s in statuses if s]
+    if any(s.lower() in ("discrepancy", "flagged") for s in cleaned):
+        return "Discrepancy"
+    if all(s.lower() in ("verified", "all verified") for s in cleaned):
+        return "All Verified"
+    return "Pending Audit"
+
+
+@router.get("/daily-summary", response_model=List[DailySalesSummaryOut], summary="Daily sales aggregation summary")
+def get_sales_daily_summary(
+    company_id: Optional[int] = Query(None, description="Filter by Company ID"),
+    company_name: Optional[str] = Query(None, description="Filter by Company Name"),
+    category_id: Optional[int] = Query(None, description="Filter by Category ID"),
+    start_date: Optional[date] = Query(None, description="Filter from date"),
+    end_date: Optional[date] = Query(None, description="Filter to date"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    view_type: Optional[str] = Query(None, description="View type ('deposit' or 'sales')"),
+    search: Optional[str] = Query(None, description="Search keyword"),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db)
+):
+    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    raw_records = []
+
+    try:
+        if not use_sb:
+            raise RuntimeError("In-memory SQLite session")
+        client = get_supabase_admin_client()
+
+        sb_query = client.table("sales").select("*")
+
+        resolved_company_id = normalize_company_id(company_id)
+        if resolved_company_id:
+            check_company_access(current_user, resolved_company_id)
+            sb_query = sb_query.eq("company_id", resolved_company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved_comp = resolve_company(db, company_name=company_name)
+            target_cid = resolved_comp.company_id
+            check_company_access(current_user, target_cid)
+            sb_query = sb_query.eq("company_id", target_cid)
+        elif user_company_ids:
+            if len(user_company_ids) == 1:
+                sb_query = sb_query.eq("company_id", user_company_ids[0])
+            else:
+                sb_query = sb_query.in_("company_id", user_company_ids)
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            sb_query = sb_query.eq("category_id", category_id)
+        if start_date:
+            sb_query = sb_query.gte("transaction_date", start_date.isoformat())
+        if end_date:
+            sb_query = sb_query.lte("transaction_date", end_date.isoformat())
+
+        res = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True).execute()
+        rows = res.data or []
+        for r in rows:
+            raw_records.append({
+                "transaction_date": r.get("transaction_date"),
+                "amount": r.get("amount") or 0.0,
+                "particulars": r.get("particulars") or r.get("description") or "",
+                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
+                "audit_status": r.get("audit_status") or "Pending Audit",
+            })
+    except HTTPException:
+        raise
+    except Exception:
+        query = db.query(Sale)
+        if company_id:
+            check_company_access(current_user, company_id)
+            query = query.filter(Sale.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Sale.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.join(Company, Sale.company_id == Company.company_id).filter(
+                    func.lower(Company.company_name) == func.lower(company_name.strip())
+                )
+        elif user_company_ids:
+            query = query.filter(Sale.company_id.in_(user_company_ids))
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            query = query.filter(Sale.category_id == category_id)
+        if start_date:
+            query = query.filter(Sale.transaction_date >= start_date)
+        if end_date:
+            query = query.filter(Sale.transaction_date <= end_date)
+
+        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
+        for s in rows:
+            raw_records.append({
+                "transaction_date": s.transaction_date,
+                "amount": s.amount,
+                "particulars": s.particulars or "",
+                "cheque_no": s.cheque_no or "",
+                "audit_status": s.audit_status or "Pending Audit",
+            })
+
+    # Group by date
+    daily_groups = defaultdict(lambda: {
+        "count": 0,
+        "gross_total": Decimal("0.00"),
+        "realized_cash": Decimal("0.00"),
+        "audit_statuses": []
+    })
+
+    search_term = (search or "").strip().lower()
+    is_deposit_view = (view_type or "").lower() == "deposit"
+
+    for r in raw_records:
+        rec_date = _to_date(r["transaction_date"])
+        if not rec_date:
+            continue
+
+        parts = r["particulars"]
+        chq = r["cheque_no"]
+
+        if search_term:
+            if search_term not in parts.lower() and search_term not in chq.lower():
+                continue
+
+        amt = Decimal(str(r["amount"] or 0))
+        realized = compute_paid_amount_from_particulars(parts, amt)
+
+        if is_deposit_view and realized <= Decimal("0.00"):
+            continue
+
+        gross = realized if is_deposit_view else amt
+
+        daily_groups[rec_date]["count"] += 1
+        daily_groups[rec_date]["gross_total"] += gross
+        daily_groups[rec_date]["realized_cash"] += realized
+        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+
+    result = [
+        DailySalesSummaryOut(
+            date=d,
+            day_of_week=d.strftime("%A"),
+            transaction_count=data["count"],
+            gross_total=data["gross_total"],
+            realized_cash=data["realized_cash"],
+            audit_status=_rollup_audit_status(data["audit_statuses"])
+        )
+        for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
+    ]
+    return result
+
+
+
 @router.post("", response_model=SaleOut, status_code=status.HTTP_201_CREATED, summary="Record a new sale")
 def create_sale(
     sale_in: SaleCreate,
@@ -209,14 +393,18 @@ def create_sale(
     db: Session = Depends(get_db)
 ):
     if sale_in.amount < 1.00:
-        raise HTTPException(status_code=400, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
+        raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
     if sale_in.transaction_date > date.today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     parts = (sale_in.particulars or sale_in.description or "").strip()
     if not parts:
-        raise HTTPException(status_code=400, detail="Particulars is required.")
+        raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
+
+    cat_str = (sale_in.category or "").strip()
+    if not sale_in.category_id and not cat_str:
+        raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (sale_in.cheque_no or sale_in.chequeNo or "").strip() or None
     use_sb = SalesReceivablesSyncService(db)._use_supabase()
@@ -528,7 +716,7 @@ def update_sale(
     db: Session = Depends(get_db)
 ):
     if sale_in.amount is not None and sale_in.amount < 1.00:
-        raise HTTPException(status_code=400, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
+        raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
     if sale_in.transaction_date is not None and sale_in.transaction_date > date.today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")

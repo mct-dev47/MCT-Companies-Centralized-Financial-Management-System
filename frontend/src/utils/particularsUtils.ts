@@ -3,6 +3,7 @@ export interface ParticularItem {
   particulars: string
   quantity: number
   unitPrice: number
+  serviceFee?: number
   total: number
   status?: 'Paid' | 'Unpaid' | 'Pending' | 'On hold'
 }

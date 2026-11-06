@@ -12,6 +12,8 @@
 | Company Amount Input Validation and User Form Reset | in-progress | [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md) |
 | User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
 | Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
+| Daily Grouped Sales and Expenses with Transaction Drilldown | in-progress | [0034](../specs/0034-daily-grouped-sales-and-expenses-with-transaction-drilldown/index.md) |
+| Transaction Sheet Validation, Company Payment Methods with Service Fees, and Supervisor View Cleanups | in-progress | [0035](../specs/0035-sales-validation-gcash-fee-supervisor-cleanups.md) |
 
 ---
 
@@ -142,3 +144,39 @@
   - [x] Milestone 6: Record Payment modal required Payment Method and 50 character limit on Remarks (AC-7)
 - [x] Verify it: /check verify lending-page-refinements
 - [x] Test it: /test lending-page-refinements
+
+### Daily Grouped Sales and Expenses with Transaction Drilldown
+**Status**: in-progress
+**Spec**: [0034](../specs/0034-daily-grouped-sales-and-expenses-with-transaction-drilldown/index.md)
+**Intent**: Group sales and expenses by day with daily totals and aggregate audit badges, and provide subtab toggles in Deposit and Withdraw views to switch between Daily Summary and All Transactions with inline drilldown.
+**Done when**: `/sales` and `/expense` provide Daily Summary and All Transactions subtabs inside both Deposit/Withdraw and Sales/Expense Record views, Daily Summary aggregates by day with expandable drilldown rows, All Transactions displays granular rows, and KPIs remain consistent across both views.
+
+- [x] Design it (spec): [0034](../specs/0034-daily-grouped-sales-and-expenses-with-transaction-drilldown/index.md)
+- [x] Build it: /develop daily-grouped-sales-and-expenses (code in `backend/app/api/v1/endpoints/{sales,expenses}.py`, `frontend/src/pages/{SalesPage,ExpensePage}.tsx`)
+  - [x] Milestone 1: Reusable daily transaction aggregation utility (`dailyGroupUtils.ts`) (AC-2, AC-6, AC-9, AC-10)
+  - [x] Milestone 2: Sales page subtab switcher, daily grouped table, and expandable drilldown rows (AC-1, AC-2, AC-3, AC-4, AC-9, AC-10)
+  - [x] Milestone 3: Expense page subtab switcher, daily grouped table, and expandable drilldown rows (AC-5, AC-6, AC-7, AC-8, AC-9, AC-10)
+  - [x] Milestone 4: Export handler alignment for daily summary and detailed transactions (AC-11)
+- [ ] Verify it: /check verify daily-grouped-sales-and-expenses
+- [ ] Test it: /test daily-grouped-sales-and-expenses
+
+### Transaction Sheet Validation, Company Payment Methods with Service Fees, and Supervisor View Cleanups
+**Status**: in-progress
+**Spec**: [0035](../specs/0035-sales-validation-gcash-fee-supervisor-cleanups.md)
+**Intent**: Default payment methods to Cash, Cheque, and GCash with company specific custom payment methods, compute inline service fees for GCash and custom methods, prevent particulars popups on add row, enforce strict row field validation, remove redundant Company columns for supervisors, and rename Inspect to Show.
+**Done when**: Cash, Cheque, and GCash are default payment methods, custom company payment methods are isolated per company, GCash and custom methods show an inline service fee defaulting to 0 that adds to row total, empty price, particulars, and category trigger red outlines and a descriptive alert banner, backend enforces 422 validations, supervisor views hide company columns in daily summaries and transactions, and accordion toggle displays Show / Hide.
+
+- [x] Design it (spec): [0035](../specs/0035-sales-validation-gcash-fee-supervisor-cleanups.md)
+- [x] Build it: /develop 0035 (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Database model `CompanyPaymentMethod`, cascade deletions, and REST endpoints (AC-2, AC-8)
+  - [x] Milestone 2: Frontend payment method service and custom method modal on `/sales/add` (AC-2)
+  - [x] Milestone 3: Autocomplete focus without auto opening dropdown on row creation (AC-1)
+  - [x] Milestone 4: Inline service fee calculation with default 0 for GCash and custom methods (AC-3, AC-8)
+  - [x] Milestone 5: Pre submit row validation scanner with red cell outlines and top error banner (AC-4)
+  - [x] Milestone 6: Backend schema and endpoint 422 validation for minimum amount, category, and particulars (AC-5)
+  - [x] Milestone 7: Supervisor and company scoped column hiding on SalesPage and ExpensePage (AC-6)
+  - [x] Milestone 8: Accordion toggle button text updated to Show / Hide (AC-7)
+- [ ] Verify it: /check verify 0035
+- [ ] Test it: /test 0035
+
+

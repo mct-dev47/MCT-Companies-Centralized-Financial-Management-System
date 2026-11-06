@@ -15,12 +15,16 @@ _Steps derived from spec 0028 acceptance criteria and value sourcing rules. `/ch
 - [ ] Use debtor row Edit and Delete buttons on `/receivables` for a customer with multiple non verified orders → `PUT /api/v1/receivables/debtor` updates customer name and type across all matching company rows, and `DELETE /api/v1/receivables/debtor` reverses linked bank deposits, removes or updates linked `Sale` lines, and deletes the debtor's receivables atomically → AC-9
 - [ ] Mark a `Sale` as `Verified` using an `Audit` account, then view `/sales` and `/receivables` as `Finance` → both the `Sale` and its linked `Receivable` and `ReceivablePayment` rows display locked read only badges with edit, pay, reverse, and delete buttons disabled, and direct `PUT`, `POST` payment, or `DELETE` API calls return HTTP `409 Conflict` → AC-8 (Value source: `is_locked` derived from `Sale.audit_status == 'Verified'`)
 - [ ] Temporarily disconnect WebSocket (or background the `/sales` tab), record a receivable payment in another session, then restore WebSocket connection or focus the `/sales` window → 250ms debounced cache invalidation silently refetches `/sales` and `/receivables` data so statuses and KPIs catch up automatically → AC-10
+- [ ] Edit a legacy or standalone receivable that has `sale_id == NULL` on `/receivables` (or record a payment on it) → sync service provisions a linked `Sale` record in Supabase and SQLite, attaches `sale_id`, formats `sales.particulars` with status tag (`[Paid]`, `[Pending]`, or `[Unpaid]`), and the transaction appears immediately on `/sales` → AC-11 (Value source: auto provisioned `Sale` record)
+- [ ] Edit an existing multi row sale on `/sales/add` in edit mode, changing amounts, customer assignments, or items → single updated `Sale` retains all item rows in `particulars` without truncating or spawning rogue sales, and unpaid debtor assignments update linked `Receivable` rows cleanly → AC-12 (Value source: edit mode multi row preservation on `/sales/add`)
+- [ ] Run backend startup and simulate SQLite fallback during counterpart sync → `init_db()` adds `payment_method` to local SQLite `sales` table if missing, and `_fetch_authoritative_sale` recovers cleanly without raising column operational errors → AC-13 (Value source: SQLite schema parity in `init_db()`)
 
 ## Commands
 
 - [ ] `python -c "import sqlite3; c=sqlite3.connect('backend/mct_financial.db'); cols=[r[1] for r in c.execute('PRAGMA table_info(receivables)')]; assert 'sale_line_index' in cols and 'customer_phone' not in cols and 'customer_role' not in cols; print('OK', cols)"` → prints `OK` confirming live schema dropped `customer_phone` and `customer_role` and added `sale_line_index` → AC-2
+- [ ] `python -c "import sqlite3; c=sqlite3.connect('backend/mct_financial.db'); cols=[r[1] for r in c.execute('PRAGMA table_info(sales)')]; assert 'payment_method' in cols; print('OK sales columns', cols)"` → prints `OK sales columns` confirming `payment_method` exists on local SQLite `sales` table → AC-13
 - [ ] `cd backend; .\venv\Scripts\python.exe -m pytest tests/test_spec_0027.py` → exits `0` with all receivable lifecycle and company scoped permission tests passing → AC-2, AC-3, AC-5
-- [ ] `cd frontend; npm run build` → exits `0` with zero TypeScript or Vite bundle errors across updated sales and receivables modules → AC-1, AC-2, AC-4, AC-10
+- [ ] `cd frontend; npm run build` → exits `0` with zero TypeScript or Vite bundle errors across updated sales and receivables modules → AC-1, AC-2, AC-4, AC-10, AC-12
 
 ## Acceptance-criteria coverage
 
@@ -34,4 +38,7 @@ _Steps derived from spec 0028 acceptance criteria and value sourcing rules. `/ch
 - AC-8 (`Verified` audit lock across UI and `409 Conflict` backend enforcement) covered by `Audit` verification lock check on `/sales` and `/receivables`
 - AC-9 (Atomic batch debtor `PUT` and `DELETE` endpoints with bank reversal and sale sync) covered by debtor summary row batch edit and delete step
 - AC-10 (Realtime `SALES_UPDATED` and `RECEIVABLES_UPDATED` listeners plus reconnect and focus refetch) covered by live two tab WebSocket check and reconnect/focus recovery step
+- AC-11 (Auto provisioning linked `Sale` for unlinked receivables on edit or payment) covered by unlinked receivable edit step
+- AC-12 (Multi item sale preservation and unpaid assignment sync in edit mode) covered by `/sales/add` edit mode verification step and frontend build
+- AC-13 (SQLite `sales.payment_method` column inspection and query exception guards) covered by SQLite sales column command and fallback check
 

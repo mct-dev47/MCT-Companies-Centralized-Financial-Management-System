@@ -90,6 +90,7 @@ const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
+import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import type { UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
@@ -106,6 +107,7 @@ export const SalesPage: React.FC = () => {
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = isStrictlyCompanyScoped
+  const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -203,6 +205,21 @@ export const SalesPage: React.FC = () => {
   const [tableTab, setTableTab] = React.useState<'Deposit' | 'Sales Record'>(
     'Sales Record'
   )
+  const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('Daily Summary')
+  const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
+  const [dailyPage, setDailyPage] = React.useState(1)
+
+  const toggleDateExpansion = (dateKey: string) => {
+    setExpandedDates((prev) => {
+      const next = new Set(prev)
+      if (next.has(dateKey)) {
+        next.delete(dateKey)
+      } else {
+        next.add(dateKey)
+      }
+      return next
+    })
+  }
 
   // Handle switching period (Daily, Quarterly, Monthly, Annually)
   const handlePeriodChange = (period: PeriodType) => {
@@ -667,9 +684,26 @@ export const SalesPage: React.FC = () => {
     return baseFilteredSales
   }, [baseFilteredSales, tableTab, getRealizedCash])
 
+  // Daily grouped sales for Daily Summary subtab view
+  const dailySalesGroups = React.useMemo(() => {
+    return groupTransactionsByDate(filteredSales, {
+      getDate: (s) => s.rawDate || s.date,
+      getGrossAmount: (s) => (tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit),
+      getRealizedCash: (s) => getRealizedCashForSale(s),
+      getAuditStatus: (s) => s.auditStatus,
+    })
+  }, [filteredSales, tableTab])
+
+  const totalDailyPages = Math.max(1, Math.ceil(dailySalesGroups.length / ITEMS_PER_PAGE))
+  const paginatedDailyGroups = React.useMemo(() => {
+    const start = (dailyPage - 1) * ITEMS_PER_PAGE
+    return dailySalesGroups.slice(start, start + ITEMS_PER_PAGE)
+  }, [dailySalesGroups, dailyPage])
+
   // Reset to page 1 on filter change
   React.useEffect(() => {
     setCurrentPage(1)
+    setDailyPage(1)
   }, [
     dateRange,
     searchQuery,
@@ -677,6 +711,7 @@ export const SalesPage: React.FC = () => {
     selectedCompany,
     selectedPeriod,
     tableTab,
+    subTab,
   ])
 
   // KPI Calculation: Total Sales & Total Cash (AC-5: includes partial & full payments without double-counting)
@@ -728,15 +763,26 @@ export const SalesPage: React.FC = () => {
   const companyForExport = isCompanyScoped ? assignedCompany : selectedCompany
 
   const handleExportCsv = () => {
-    salesService.exportCsv(
-      filteredSales,
-      `sales_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
-    )
+    if (subTab === 'Daily Summary') {
+      salesService.exportDailySummaryCsv(
+        dailySalesGroups,
+        `sales_daily_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    } else {
+      salesService.exportCsv(
+        filteredSales,
+        `sales_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    }
     setIsExportDropdownOpen(false)
   }
 
   const handleExportPdf = () => {
-    salesService.exportPdf(filteredSales, companyForExport)
+    if (subTab === 'Daily Summary') {
+      salesService.exportDailySummaryPdf(dailySalesGroups, companyForExport)
+    } else {
+      salesService.exportPdf(filteredSales, companyForExport)
+    }
     setIsExportDropdownOpen(false)
   }
 
@@ -1298,7 +1344,7 @@ export const SalesPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Dynamic Tab Context Banner */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 mb-2 border-b border-slate-100">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-2 border-b border-slate-100">
           <div className="flex items-center gap-2.5 flex-wrap">
             <span
               className={cn(
@@ -1320,6 +1366,34 @@ export const SalesPage: React.FC = () => {
                 </>
               )}
             </span>
+
+            {/* Subtab Toggle Switcher: Daily Summary vs All Transactions */}
+            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-0.5 gap-0.5">
+              <button
+                type="button"
+                onClick={() => setSubTab('Daily Summary')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'Daily Summary'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
+              >
+                Daily Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('All Transactions')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'All Transactions'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
+              >
+                All Transactions
+              </button>
+            </div>
 
             {statusFilter !== 'All' && (
               <span
@@ -1346,13 +1420,276 @@ export const SalesPage: React.FC = () => {
           </div>
 
           <span className="text-xs text-muted-fg font-medium">
-            {filteredSales.length}{' '}
-            {tableTab === 'Deposit' ? 'deposit' : 'sales'}{' '}
-            {filteredSales.length === 1 ? 'record' : 'records'} shown
+            {subTab === 'Daily Summary'
+              ? `${dailySalesGroups.length} ${dailySalesGroups.length === 1 ? 'day' : 'days'} (${filteredSales.length} total records)`
+              : `${filteredSales.length} ${tableTab === 'Deposit' ? 'deposit' : 'sales'} ${filteredSales.length === 1 ? 'record' : 'records'} shown`}
           </span>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        {subTab === 'Daily Summary' ? (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
+            <Table className="w-full table-fixed min-w-[850px]">
+              <colgroup>
+                <col style={{ width: '22%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '18%' }} />
+                <col style={{ width: '17%' }} />
+                <col style={{ width: '10%' }} />
+              </colgroup>
+              <TableHeader>
+                <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE & DAY
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    TRANSACTIONS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    {tableTab === 'Deposit' ? 'TOTAL DEPOSITED' : 'GROSS SALES'}
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    REALIZED CASH
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    AUDIT STATUS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    DRILLDOWN
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableSkeleton rows={5} columns={6} />
+                ) : paginatedDailyGroups.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={6}
+                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
+                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
+                        </div>
+                        <p className="font-semibold text-focus text-sm sm:text-base">
+                          No daily sales records found
+                        </p>
+                        <p className="text-xs text-muted-fg leading-relaxed">
+                          There are no sales transactions recorded for this period matching your filters.
+                        </p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedDailyGroups.map((group) => {
+                    const isExpanded = expandedDates.has(group.date)
+                    return (
+                      <React.Fragment key={group.date}>
+                        <TableRow
+                          onClick={() => toggleDateExpansion(group.date)}
+                          className={cn(
+                            'border-b border-slate-100 transition-colors cursor-pointer select-none',
+                            isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
+                          )}
+                        >
+                          <TableCell className="px-3.5 py-3.5 text-left">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-focus">{group.formattedDate}</span>
+                              <span className="text-2xs text-muted-fg font-medium">{group.dayOfWeek}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                              {group.transactionCount} {group.transactionCount === 1 ? 'record' : 'records'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-focus text-xs sm:text-sm">
+                            {formatPHP(group.grossTotal)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-emerald-600 text-xs sm:text-sm">
+                            {formatPHP(group.realizedCash)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-2xs font-bold border',
+                                group.auditStatus === 'All Verified'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : group.auditStatus === 'Discrepancy'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              )}
+                            >
+                              {group.auditStatus}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDateExpansion(group.date)
+                              }}
+                              className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
+                            >
+                              <span>{isExpanded ? 'Hide' : 'Show'}</span>
+                              {isExpanded ? (
+                                <ChevronDown className="w-3.5 h-3.5 transition-transform" />
+                              ) : (
+                                <ChevronRight className="w-3.5 h-3.5 transition-transform" />
+                              )}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Expandable Accordion Row */}
+                        {isExpanded && (
+                          <TableRow className="bg-slate-50/40 border-b border-slate-200">
+                            <TableCell colSpan={6} className="p-3 sm:p-4">
+                              <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+                                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-focus">
+                                      Transactions on {group.formattedDate}
+                                    </span>
+                                    <span className="text-2xs text-muted-fg font-medium">
+                                      ({group.items.length} total)
+                                    </span>
+                                  </div>
+                                  <div className="text-2xs text-muted-fg">
+                                    Inspect, edit, delete, or audit individual day records
+                                  </div>
+                                </div>
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
+                                      <tr>
+                                        <th className="px-3 py-2 font-bold">Cheque / Ref</th>
+                                        {showCompanyColumn && <th className="px-3 py-2 font-bold">Company</th>}
+                                        <th className="px-3 py-2 font-bold">Particulars</th>
+                                        <th className="px-3 py-2 font-bold text-center">Payment Status</th>
+                                        <th className="px-3 py-2 font-bold">Payment Method</th>
+                                        <th className="px-3 py-2 font-bold text-right">Amount</th>
+                                        <th className="px-3 py-2 font-bold text-center">Audit Status</th>
+                                        <th className="px-3 py-2 font-bold text-center">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {group.items.map((sale) => (
+                                        <tr key={sale.id} className="hover:bg-slate-50/60 transition-colors">
+                                          <td className="px-3 py-2 font-mono text-xs text-focus font-medium">
+                                            {sale.chequeNo || sale.refNo}
+                                          </td>
+                                          {showCompanyColumn && (
+                                            <td className="px-3 py-2 text-focus font-medium">
+                                              {sale.company}
+                                            </td>
+                                          )}
+                                          <td className="px-3 py-2 text-focus max-w-[260px]">
+                                            <p className="truncate font-medium">{sale.particulars}</p>
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                                                sale.status === 'Paid'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                  : sale.status === 'Pending'
+                                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                                  : 'bg-rose-50 text-rose-700 border-rose-300'
+                                              )}
+                                            >
+                                              {sale.status}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-muted-fg font-medium">
+                                            {sale.paymentMethod || 'Cash'}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-bold tabular-nums text-focus">
+                                            {formatPHP(tableTab === 'Deposit' ? getRealizedCashForSale(sale) : sale.deposit)}
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold border',
+                                                sale.auditStatus === 'Verified'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                  : sale.auditStatus === 'Flagged'
+                                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                  : 'bg-slate-100 text-muted-fg border-slate-200'
+                                              )}
+                                            >
+                                              {sale.auditStatus}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <div className="flex items-center justify-center gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => setSelectedSale(sale)}
+                                                className="p-1 text-slate-500 hover:text-focus hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                                title="View Details"
+                                              >
+                                                <Eye className="w-3.5 h-3.5" />
+                                              </button>
+                                              {canAdd && sale.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    navigate('/sales/add', {
+                                                      state: { editSale: sale },
+                                                    })
+                                                  }
+                                                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Edit Record"
+                                                >
+                                                  <Pencil className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAdd && sale.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setDeleteConfirmSale(sale)}
+                                                  className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Delete Record"
+                                                >
+                                                  <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAuditActions && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setAuditingTransaction(salesService.toDashboardTransaction(sale))
+                                                  }
+                                                  className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Audit Transaction"
+                                                >
+                                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full table-fixed min-w-[940px]">
             <colgroup>
               <col style={{ width: '12%' }} />
@@ -1369,9 +1706,11 @@ export const SalesPage: React.FC = () => {
                 <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                <TableHead className="w-[15%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  COMPANY
-                </TableHead>
+                {showCompanyColumn && (
+                  <TableHead className="w-[15%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    COMPANY
+                  </TableHead>
+                )}
                 <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
                 </TableHead>
@@ -1395,11 +1734,11 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={8} />
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={8}
+                    colSpan={showCompanyColumn ? 8 : 7}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1502,15 +1841,17 @@ export const SalesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Company */}
-                      <TableCell
-                        className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
-                        title={sale.company}
-                      >
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="truncate">{sale.company}</span>
-                        </div>
-                      </TableCell>
+                      {showCompanyColumn && (
+                        <TableCell
+                          className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
+                          title={sale.company}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                            <span className="truncate">{sale.company}</span>
+                          </div>
+                        </TableCell>
+                      )}
 
                       {/* 3. Cheque No */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-xs text-focus/90 truncate font-mono text-left">
@@ -1700,44 +2041,87 @@ export const SalesPage: React.FC = () => {
             </TableBody>
           </Table>
         </div>
+        )}
 
         {/* 6. Pagination Footer */}
         <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredSales.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
-          </span>
+          {subTab === 'Daily Summary' ? (
+            <>
+              <span className="font-medium text-focus/80">
+                {dailySalesGroups.length === 0
+                  ? 'Showing 0 of 0 days'
+                  : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailySalesGroups.length)} of ${dailySalesGroups.length} days`}
+              </span>
 
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {dailyPage} out of {totalDailyPages}
+                </span>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage <= 1}
+                  onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous day page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage >= totalDailyPages}
+                  onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next day page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-focus/80">
+                {filteredSales.length === 0
+                  ? 'Showing 0 of 0 records'
+                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
+              </span>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {currentPage} out of {totalPages}
+                </span>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Card>
 

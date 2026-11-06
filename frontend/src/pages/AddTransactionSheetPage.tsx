@@ -50,6 +50,10 @@ import {
   particularsService,
   type CompanyParticular,
 } from '@/services/particularsService'
+import {
+  paymentMethodService,
+  type CompanyPaymentMethod,
+} from '@/services/paymentMethodService'
 
 export interface UnpaidAssignmentRow {
   rowId: string
@@ -68,34 +72,37 @@ export interface SpreadsheetRow {
   particulars: string
   category: string
   paymentMethod: string
+  serviceFee?: number | ''
   chequeNo: string
   unitPrice: number | ''
   quantity: number | ''
   status: 'Paid' | 'Unpaid' | 'Pending'
 }
 
-const SALES_PAYMENT_METHODS = [
+export interface RowValidationError {
+  rowIndex: number
+  rowId: string
+  missingParticulars: boolean
+  missingCategory: boolean
+  missingPrice: boolean
+}
+
+export const DEFAULT_SALES_PAYMENT_METHODS = [
   'Cash',
-  'GCash',
-  'Maya',
-  'PayMongo',
-  'Panda',
   'Cheque',
-  'Bank Transfer',
-  'In-house',
+  'GCash',
 ] as const
 
-const EXPENSE_PAYMENT_METHODS = [
+export const DEFAULT_EXPENSE_PAYMENT_METHODS = [
   'Cash',
-  'Petty Cash',
-  'GCash',
-  'Maya',
-  'PayMongo',
-  'Panda',
   'Cheque',
-  'Bank Transfer',
-  'In-house',
+  'GCash',
+  'Petty Cash',
 ] as const
+
+const SALES_PAYMENT_METHODS = DEFAULT_SALES_PAYMENT_METHODS
+
+const EXPENSE_PAYMENT_METHODS = DEFAULT_EXPENSE_PAYMENT_METHODS
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
   'Petty Cash',
@@ -170,6 +177,7 @@ interface ParticularsComboboxProps {
   inputRef?: (el: HTMLInputElement | null) => void
   placeholder?: string
   isPartial?: boolean
+  hasError?: boolean
 }
 
 const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
@@ -184,6 +192,7 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
   inputRef,
   placeholder,
   isPartial,
+  hasError,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
@@ -298,6 +307,9 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           placeholder={placeholder || 'Type or select a particular...'}
           value={value}
           onFocus={() => {
+            setHighlightedIndex(-1)
+          }}
+          onClick={() => {
             setIsOpen(true)
             setHighlightedIndex(-1)
           }}
@@ -311,7 +323,9 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           className={cn(
             'w-full h-9 pl-2 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
             canSaveToList ? 'pr-16' : 'pr-2',
-            isPartial
+            hasError
+              ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+              : isPartial
               ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
               : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
           )}
@@ -424,6 +438,7 @@ interface CategoryComboboxProps {
   onPaste?: (e: React.ClipboardEvent) => void
   inputRef?: (el: HTMLInputElement | null) => void
   placeholder?: string
+  hasError?: boolean
 }
 
 const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
@@ -436,6 +451,7 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
   onPaste,
   inputRef,
   placeholder,
+  hasError,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
@@ -560,8 +576,11 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
           className={cn(
-            'w-full h-9 pl-2 text-xs sm:text-sm text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:bg-white focus:outline-none focus:ring-1 focus:ring-focus transition-all box-border truncate',
-            canSaveToList ? 'pr-14' : 'pr-2'
+            'w-full h-9 pl-2 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border truncate',
+            canSaveToList ? 'pr-14' : 'pr-2',
+            hasError
+              ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+              : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
           )}
         />
         {canSaveToList && (
@@ -847,6 +866,69 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     await particularsService.deleteParticular(id, comp)
   }
 
+  // Company Custom Payment Methods (per company)
+  const [companyCustomPaymentMethods, setCompanyCustomPaymentMethods] =
+    React.useState<CompanyPaymentMethod[]>([])
+  const [isAddPaymentMethodModalOpen, setIsAddPaymentMethodModalOpen] =
+    React.useState(false)
+  const [newPaymentMethodName, setNewPaymentMethodName] = React.useState('')
+  const [targetRowForNewPaymentMethod, setTargetRowForNewPaymentMethod] =
+    React.useState<string | null>(null)
+  const [rowValidationErrors, setRowValidationErrors] = React.useState<
+    RowValidationError[]
+  >([])
+
+  React.useEffect(() => {
+    let isMounted = true
+    const comp = isAuditor ? assignedCompany : selectedCompany
+    if (!comp) return
+
+    paymentMethodService.getPaymentMethods(comp).then((data) => {
+      if (isMounted) {
+        setCompanyCustomPaymentMethods(data)
+      }
+    })
+    return () => {
+      isMounted = false
+    }
+  }, [isAuditor, assignedCompany, selectedCompany])
+
+  const handleCreateCustomPaymentMethod = async () => {
+    const comp = isAuditor ? assignedCompany : selectedCompany
+    const trimmed = newPaymentMethodName.trim()
+    if (!comp || !trimmed) return
+
+    try {
+      const created = await paymentMethodService.addPaymentMethod(comp, trimmed)
+      setCompanyCustomPaymentMethods((prev) => {
+        if (
+          prev.some(
+            (m) => m.name.toLowerCase() === created.name.toLowerCase()
+          )
+        ) {
+          return prev
+        }
+        return [...prev, created].sort((a, b) =>
+          a.name.localeCompare(b.name)
+        )
+      })
+      if (targetRowForNewPaymentMethod) {
+        handleRowChange(
+          targetRowForNewPaymentMethod,
+          'paymentMethod',
+          created.name
+        )
+        handleRowChange(targetRowForNewPaymentMethod, 'serviceFee', 0)
+      }
+    } catch (err) {
+      console.warn('Failed to add custom payment method:', err)
+    } finally {
+      setIsAddPaymentMethodModalOpen(false)
+      setNewPaymentMethodName('')
+      setTargetRowForNewPaymentMethod(null)
+    }
+  }
+
   // Categories list
   const [categories, setCategories] = React.useState<string[]>([])
 
@@ -905,12 +987,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       particulars: '',
       category: defaultCategory,
       paymentMethod: 'Cash',
+      serviceFee: 0,
       chequeNo: '',
       unitPrice: '',
       quantity: 1,
       status: 'Paid',
     },
   ])
+
+  const paymentOptions = React.useMemo(() => {
+    const base = isSales
+      ? ['Cash', 'Cheque', 'GCash']
+      : ['Cash', 'Cheque', 'GCash', 'Petty Cash']
+    const customNames = companyCustomPaymentMethods
+      .map((m) => m.name)
+      .filter((name) => !base.includes(name))
+    return [...base, ...customNames]
+  }, [isSales, companyCustomPaymentMethods])
 
   // Dynamically merge saved particulars from database + any particulars currently typed in any row
   const allAvailableParticulars = React.useMemo(() => {
@@ -1093,6 +1186,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         particulars: '',
         category: prevRow?.category || defaultCategory,
         paymentMethod: prevRow?.paymentMethod || 'Cash',
+        serviceFee: 0,
         chequeNo: '',
         unitPrice: '',
         quantity: 1,
@@ -1110,6 +1204,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const duplicated: SpreadsheetRow = {
       ...target,
       id: newId,
+      serviceFee: target.serviceFee !== undefined ? target.serviceFee : 0,
     }
     setRows((prev) => {
       const copy = [...prev]
@@ -1130,6 +1225,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           particulars: '',
           category: defaultCategory,
           paymentMethod: 'Cash',
+          serviceFee: 0,
           chequeNo: '',
           unitPrice: '',
           quantity: 1,
@@ -1139,6 +1235,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
     setRows((prev) => prev.filter((r) => r.id !== id))
+    setRowValidationErrors((prev) => prev.filter((err) => err.rowId !== id))
   }
 
   const handleReset = () => {
@@ -1149,6 +1246,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         particulars: '',
         category: defaultCategory,
         paymentMethod: 'Cash',
+        serviceFee: 0,
         chequeNo: '',
         unitPrice: '',
         quantity: 1,
@@ -1156,6 +1254,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       },
     ])
     setErrorMessage(null)
+    setRowValidationErrors([])
   }
 
   const handleRowChange = (
@@ -1172,6 +1271,38 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         }
       })
     )
+
+    if (rowValidationErrors.length > 0) {
+      setRowValidationErrors((prev) =>
+        prev
+          .map((err) => {
+            if (err.rowId !== id) return err
+            return {
+              ...err,
+              missingParticulars:
+                field === 'particulars'
+                  ? !String(value).trim()
+                  : err.missingParticulars,
+              missingCategory:
+                field === 'category'
+                  ? !String(value).trim()
+                  : err.missingCategory,
+              missingPrice:
+                field === 'unitPrice'
+                  ? value === '' ||
+                    Number(value) <= 0 ||
+                    isNaN(Number(value))
+                  : err.missingPrice,
+            }
+          })
+          .filter(
+            (err) =>
+              err.missingParticulars ||
+              err.missingCategory ||
+              err.missingPrice
+          )
+      )
+    }
   }
 
   // Keyboard navigation across the spreadsheet grid
@@ -1381,17 +1512,28 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return rows.map((r) => {
       const price = typeof r.unitPrice === 'number' ? r.unitPrice : parseFloat(String(r.unitPrice || '')) || 0
       const qty = typeof r.quantity === 'number' ? r.quantity : parseInt(String(r.quantity || '1'), 10) || 1
-      const total = Math.round(price * qty * 100) / 100
+      const pmLower = (r.paymentMethod || '').trim().toLowerCase()
+      const isGCashOrCustom =
+        pmLower === 'gcash' ||
+        !['cash', 'cheque', 'petty cash'].includes(pmLower)
+      const serviceFee = isGCashOrCustom
+        ? typeof r.serviceFee === 'number'
+          ? r.serviceFee
+          : parseFloat(String(r.serviceFee || '0')) || 0
+        : 0
+      const total = Math.round((price * qty + serviceFee) * 100) / 100
       const hasParticulars = r.particulars.trim().length > 0
+      const hasCategory = (r.category || '').trim().length > 0
       const isEmpty =
         !hasParticulars && (!r.unitPrice || r.unitPrice === 0) && !r.chequeNo.trim()
-      const isValid = hasParticulars && price > 0 && qty > 0 && total >= 1
+      const isValid = hasParticulars && hasCategory && price > 0 && qty > 0 && total >= 1
       const isPartial = !isEmpty && !isValid
 
       return {
         ...r,
         numericPrice: price,
         numericQty: qty,
+        serviceFee: isGCashOrCustom ? serviceFee : 0,
         rowTotal: total,
         isEmpty,
         isValid,
@@ -1481,6 +1623,45 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   // Save handler
   const handleSave = async () => {
     setErrorMessage(null)
+    setRowValidationErrors([])
+
+    // Validate rows for missing particulars, missing category, or non-positive price
+    const nonBlankRows = rows.filter(
+      (r) =>
+        r.particulars.trim().length > 0 ||
+        (r.category || '').trim().length > 0 ||
+        (r.unitPrice !== '' && Number(r.unitPrice) > 0) ||
+        r.chequeNo.trim().length > 0
+    )
+
+    const rowsToValidate = nonBlankRows.length > 0 ? nonBlankRows : [rows[0]]
+
+    const errors: RowValidationError[] = []
+    rowsToValidate.forEach((r) => {
+      const rowIndex = rows.findIndex((item) => item.id === r.id) + 1
+      const missingParticulars = !r.particulars || !r.particulars.trim()
+      const missingCategory = !r.category || !r.category.trim()
+      const missingPrice =
+        r.unitPrice === '' ||
+        Number(r.unitPrice) <= 0 ||
+        isNaN(Number(r.unitPrice))
+
+      if (missingParticulars || missingCategory || missingPrice) {
+        errors.push({
+          rowIndex,
+          rowId: r.id,
+          missingParticulars,
+          missingCategory,
+          missingPrice,
+        })
+      }
+    })
+
+    if (errors.length > 0) {
+      setRowValidationErrors(errors)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      return
+    }
 
     if (validRowsCount === 0) {
       setErrorMessage(
@@ -1555,6 +1736,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             particulars: first.particulars.trim(),
             quantity: first.numericQty,
             unitPrice: first.numericPrice,
+            serviceFee: first.serviceFee ? Number(first.serviceFee) : 0,
             total: firstAmount,
             status: first.status,
           },
@@ -1604,6 +1786,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               particulars: row.particulars.trim(),
               quantity: row.numericQty,
               unitPrice: row.numericPrice,
+              serviceFee: row.serviceFee ? Number(row.serviceFee) : 0,
               total: rowAmount,
               status: row.status,
             },
@@ -1650,6 +1833,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               particulars: row.particulars.trim(),
               quantity: row.numericQty,
               unitPrice: row.numericPrice,
+              serviceFee: row.serviceFee ? Number(row.serviceFee) : 0,
               total: rowAmount,
               status: row.status,
             },
@@ -2190,15 +2374,42 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               </div>
             </div>
 
-            {/* Table with fixed layout and colgroup to permanently lock column positions */}
-            <div className="overflow-x-auto relative min-h-[220px]">
-              <Table className="w-full border-collapse table-fixed min-w-[1388px]">
+            {/* Row validation error alert banner */}
+            {rowValidationErrors.length > 0 && (
+              <div className="mb-4 p-4 rounded-xl border border-rose-200 bg-rose-50/90 text-rose-900 text-xs sm:text-sm shadow-xs flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-1">
+                  <p className="font-bold text-rose-950">
+                    Please correct the following row errors before submitting:
+                  </p>
+                  <ul className="list-disc list-inside space-y-0.5 text-rose-800">
+                    {rowValidationErrors.map((err) => {
+                      const missing: string[] = []
+                      if (err.missingParticulars) missing.push('Particulars')
+                      if (err.missingCategory) missing.push('Category')
+                      if (err.missingPrice) missing.push('Price (> 0)')
+                      return (
+                        <li key={err.rowId}>
+                          <span className="font-semibold">Row {err.rowIndex}:</span> Missing {missing.join(', ')}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Table with fixed layout, balanced min-height, and colgroup to permanently lock column positions */}
+            <Table
+              containerClassName="relative min-h-[340px] max-h-[70vh] overflow-auto"
+              className="w-full border-collapse table-fixed min-w-[1388px]"
+            >
                 <colgroup>
                   <col style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }} />
                   <col style={{ width: '145px', minWidth: '145px', maxWidth: '145px' }} />
                   <col style={{ width: '250px', minWidth: '250px', maxWidth: '250px' }} />
                   <col style={{ width: '160px', minWidth: '160px', maxWidth: '160px' }} />
-                  <col style={{ width: '140px', minWidth: '140px', maxWidth: '140px' }} />
+                  <col style={{ width: '155px', minWidth: '155px', maxWidth: '155px' }} />
                   <col style={{ width: '130px', minWidth: '130px', maxWidth: '130px' }} />
                   <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
@@ -2220,7 +2431,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     <TableHead className="w-[160px] max-w-[160px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       CATEGORY
                     </TableHead>
-                    <TableHead className="w-[140px] max-w-[140px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead className="w-[155px] max-w-[155px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       PAYMENT
                     </TableHead>
                     <TableHead className="w-[130px] max-w-[130px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
@@ -2246,27 +2457,37 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
                 <TableBody>
                   {calculatedRows.map((row, index) => {
-                    const paymentOptions = isSales
-                      ? SALES_PAYMENT_METHODS
-                      : EXPENSE_PAYMENT_METHODS
+                    const rowErrors = rowValidationErrors.find(
+                      (err) => err.rowId === row.id
+                    )
+                    const isGCashOrCustom =
+                      (row.paymentMethod || '').toLowerCase() === 'gcash' ||
+                      !['cash', 'cheque', 'petty cash'].includes(
+                        (row.paymentMethod || '').toLowerCase()
+                      )
 
                     return (
                       <TableRow
                         key={row.id}
                         className={cn(
                           'border-b border-slate-200/60 transition-colors',
-                          row.isPartial ? 'bg-amber-50/40' : (!row.isEmpty ? 'hover:bg-slate-50/60' : '')
+                          rowErrors ? 'bg-rose-50/30' : row.isPartial ? 'bg-amber-50/40' : (!row.isEmpty ? 'hover:bg-slate-50/60' : '')
                         )}
                       >
                         {/* Row Index */}
                         <TableCell className="w-[48px] max-w-[48px] text-center text-xs font-mono font-bold text-muted-fg/70 bg-slate-50/50 border-r border-slate-200/60 select-none py-2 px-1 relative box-border">
                           {index + 1}
-                          {row.isPartial && (
+                          {rowErrors ? (
+                            <span
+                              className="absolute left-1 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-rose-500 animate-pulse"
+                              title="Row has missing or invalid fields"
+                            />
+                          ) : row.isPartial ? (
                             <span
                               className="absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-amber-500"
                               title="Incomplete row data"
                             />
-                          )}
+                          ) : null}
                         </TableCell>
 
                         {/* Date */}
@@ -2309,6 +2530,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             onKeyDown={(e) => handleCellKeyDown(e, index, 1)}
                             onPaste={(e) => handlePaste(e, index, 1)}
                             isPartial={row.isPartial && !row.particulars.trim()}
+                            hasError={Boolean(rowErrors?.missingParticulars)}
                           />
                         </TableCell>
 
@@ -2332,23 +2554,44 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             onSaveCategory={handleSaveCategory}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 2)}
                             onPaste={(e) => handlePaste(e, index, 2)}
+                            hasError={Boolean(rowErrors?.missingCategory)}
                           />
                         </TableCell>
 
                         {/* Payment Method */}
-                        <TableCell className="w-[140px] max-w-[140px] border-r border-slate-200/60 p-1 px-2 box-border">
+                        <TableCell className="w-[155px] max-w-[155px] border-r border-slate-200/60 p-1 px-2 box-border">
                           <select
                             ref={(el) => {
                               cellRefs.current[`${index}-3`] = el
                             }}
                             value={row.paymentMethod}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const val = e.target.value
+                              if (val === '__add_custom__') {
+                                setTargetRowForNewPaymentMethod(row.id)
+                                setNewPaymentMethodName('')
+                                setIsAddPaymentMethodModalOpen(true)
+                                return
+                              }
                               handleRowChange(
                                 row.id,
                                 'paymentMethod',
-                                e.target.value
+                                val
                               )
-                            }
+                              const valLower = val.toLowerCase()
+                              if (
+                                valLower === 'cash' ||
+                                valLower === 'cheque' ||
+                                valLower === 'petty cash'
+                              ) {
+                                handleRowChange(row.id, 'serviceFee', 0)
+                              } else if (
+                                row.serviceFee === undefined ||
+                                row.serviceFee === ''
+                              ) {
+                                handleRowChange(row.id, 'serviceFee', 0)
+                              }
+                            }}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 3)}
                             className="w-full h-9 px-2 text-xs sm:text-sm text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:outline-none focus:ring-1 focus:ring-focus transition-all cursor-pointer truncate box-border"
                           >
@@ -2357,7 +2600,43 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 {pm}
                               </option>
                             ))}
+                            <option
+                              value="__add_custom__"
+                              className="font-semibold text-[#960C01]"
+                            >
+                              + Add custom method...
+                            </option>
                           </select>
+                          {isGCashOrCustom && (
+                            <div className="mt-1 flex items-center gap-1 bg-amber-50/80 border border-amber-200/90 rounded-md px-1.5 py-0.5">
+                              <span className="text-[10px] font-semibold text-amber-800 shrink-0">
+                                Fee: ₱
+                              </span>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="0"
+                                value={
+                                  row.serviceFee !== undefined
+                                    ? row.serviceFee
+                                    : 0
+                                }
+                                onChange={(e) => {
+                                  const val =
+                                    e.target.value === ''
+                                      ? ''
+                                      : parseFloat(e.target.value)
+                                  handleRowChange(
+                                    row.id,
+                                    'serviceFee',
+                                    isNaN(val as number) ? '' : val
+                                  )
+                                }}
+                                className="w-full text-xs font-mono font-medium text-focus bg-transparent focus:outline-none"
+                              />
+                            </div>
+                          )}
                         </TableCell>
 
                         {/* Cheque / Ref No. */}
@@ -2408,9 +2687,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               onPaste={(e) => handlePaste(e, index, 5)}
                               className={cn(
                                 'w-full h-9 pl-6 pr-2 text-right text-xs sm:text-sm font-mono text-focus rounded-lg border focus:bg-white focus:outline-none focus:ring-1 transition-all box-border',
-                                row.isPartial && (!row.unitPrice || row.unitPrice === 0)
-                                  ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
-                                  : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
+                                rowErrors?.missingPrice
+                                  ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+                                  : row.isPartial && (!row.unitPrice || row.unitPrice === 0)
+                                    ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
+                                    : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
                               )}
                             />
                           </div>
@@ -2521,7 +2802,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   })}
                 </TableBody>
               </Table>
-            </div>
 
             {/* Bottom Add Row Bar */}
             <div className="p-3 bg-slate-50/70 border-t border-slate-200/60 flex items-center justify-between">
@@ -2639,9 +2919,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               <Button
                 type="button"
                 onClick={handleSave}
-                disabled={
-                  isSubmitting || validRowsCount === 0 || exceedsPettyCash
-                }
+                disabled={isSubmitting || exceedsPettyCash}
                 className={cn(
                   'h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all',
                   'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-40'
@@ -2667,6 +2945,78 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               </Button>
             </div>
           </Card>
+        </div>
+      )}
+
+      {/* Modal: Add Custom Payment Method */}
+      {isAddPaymentMethodModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in-50 duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-focus">
+                Add Custom Payment Method
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddPaymentMethodModalOpen(false)
+                  setNewPaymentMethodName('')
+                  setTargetRowForNewPaymentMethod(null)
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-muted-fg leading-relaxed">
+              Register a custom payment method for{' '}
+              <span className="font-semibold text-focus">
+                {isAuditor ? assignedCompany : selectedCompany}
+              </span>{' '}
+              (e.g. Maya, Panda, GrabPay). This option will be scoped exclusively to your company.
+            </p>
+            <div>
+              <label className="block text-xs font-semibold text-focus mb-1">
+                Payment Method Name <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                autoFocus
+                placeholder="e.g. Maya, GrabPay"
+                value={newPaymentMethodName}
+                onChange={(e) => setNewPaymentMethodName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    handleCreateCustomPaymentMethod()
+                  }
+                }}
+                className="w-full h-10 px-3 text-xs sm:text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-focus"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setIsAddPaymentMethodModalOpen(false)
+                  setNewPaymentMethodName('')
+                  setTargetRowForNewPaymentMethod(null)
+                }}
+                className="h-9 px-4 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleCreateCustomPaymentMethod}
+                disabled={!newPaymentMethodName.trim()}
+                className="h-9 px-4 text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+              >
+                Add Method
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

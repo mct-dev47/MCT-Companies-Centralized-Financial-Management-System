@@ -85,6 +85,7 @@ def test_create_sale_payload_has_clean_audit_fields():
     sale_in = SaleCreate(
         company_id=1,
         transaction_date=date.today(),
+        category="Sales",
         particulars="Test Item [Paid]",
         amount=Decimal("500.00"),
         payment_method="Cash",

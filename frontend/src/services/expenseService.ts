@@ -1,4 +1,5 @@
 import type { DashboardTransactionItem } from './dashboardService'
+import type { DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { formatCreatedAt } from '@/utils/dateUtils'
 import { removeLegacyAuditStorage, saveAuditReview } from './auditReviewApi'
 import {
@@ -52,6 +53,15 @@ export interface ExpenseItem {
   updatedBy?: string
   type: 'Expense'
   bankAccountId?: string
+}
+
+export interface DailyExpenseSummaryOut {
+  date: string
+  day_of_week: string
+  transaction_count: number
+  gross_total: number | string
+  realized_cash: number | string
+  audit_status: string
 }
 
 export interface NewExpenseInput {
@@ -147,6 +157,43 @@ const EXPENSE_CACHE_TTL = 30000
 export const expenseService = {
   invalidateCache(): void {
     expenseCache.clear()
+  },
+
+  async getDailySummary(params?: {
+    company?: string
+    startDate?: string
+    endDate?: string
+    viewType?: string
+    search?: string
+  }): Promise<DailyExpenseSummaryOut[]> {
+    try {
+      const query = new URLSearchParams()
+      if (params?.company && params.company !== 'All Companies') {
+        query.append('company_name', params.company)
+      }
+      if (params?.startDate) query.append('start_date', params.startDate)
+      if (params?.endDate) query.append('end_date', params.endDate)
+      if (params?.viewType) query.append('view_type', params.viewType)
+      if (params?.search) query.append('search', params.search)
+
+      const token =
+        typeof window !== 'undefined'
+          ? sessionStorage.getItem('mct_access_token')
+          : null
+
+      const res = await fetch(`/api/v1/expenses/daily-summary?${query.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      if (res.ok) {
+        return await res.json()
+      }
+    } catch (err) {
+      console.warn('Failed to fetch expenses daily summary:', err)
+    }
+    return []
   },
 
   async getCategories(): Promise<{ category_id: number; name: string }[]> {
@@ -797,6 +844,129 @@ export const expenseService = {
     `)
     printWindow.document.close()
   },
+
+  exportDailySummaryCsv(groups: DailyGroupSummary<ExpenseItem>[], filename = 'expense_daily_summary.csv') {
+    const headers = [
+      'Date',
+      'Day of Week',
+      'Transaction Count',
+      'Gross Total',
+      'Realized Cash Disbursement',
+      'Audit Status',
+    ]
+
+    const rows = groups.map((g) => [
+      g.date,
+      g.dayOfWeek,
+      g.transactionCount,
+      g.grossTotal.toFixed(2),
+      g.realizedCash.toFixed(2),
+      g.auditStatus,
+    ])
+
+    const csvContent =
+      '\uFEFF' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\r\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.setAttribute('href', url)
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  },
+
+  exportDailySummaryPdf(groups: DailyGroupSummary<ExpenseItem>[], company = 'MCT Kitchen') {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+
+    const totalGross = groups.reduce((sum, g) => sum + (g.grossTotal || 0), 0)
+    const totalRealized = groups.reduce((sum, g) => sum + (g.realizedCash || 0), 0)
+    const totalTransactions = groups.reduce((sum, g) => sum + (g.transactionCount || 0), 0)
+
+    const rowsHtml =
+      groups.length === 0
+        ? `<tr><td colspan="6" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No daily expense records available for this selection.</td></tr>`
+        : groups
+            .map(
+              (g) => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${g.formattedDate || g.date}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${g.dayOfWeek}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${g.transactionCount}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #dc2626; font-weight: 600;">₱${g.grossTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">₱${g.realizedCash.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+          <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; ${
+            g.auditStatus === 'All Verified'
+              ? 'background: #dcfce7; color: #15803d;'
+              : g.auditStatus === 'Discrepancy'
+              ? 'background: #ffe4e6; color: #be123c;'
+              : 'background: #fef3c7; color: #b45309;'
+          }">
+            ${g.auditStatus}
+          </span>
+        </td>
+      </tr>
+    `
+            )
+            .join('')
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Daily Expense Summary Report — ${company}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
+            h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
+            p { font-size: 12px; color: #64748B; margin: 0 0 16px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th { background-color: #F8FAFC; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; border-bottom: 2px solid #CBD5E1; }
+            .summary { margin-top: 20px; padding: 12px 16px; background-color: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; font-size: 12px; }
+            @media print {
+              body { padding: 10px; }
+              @page { size: landscape; margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>MCT Group of Companies</h1>
+          <p>Daily Expense Summary Report for <strong>${company}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Day</th>
+                <th style="text-align: center;">Transactions</th>
+                <th style="text-align: right;">Gross Expenses</th>
+                <th style="text-align: right;">Realized Cash</th>
+                <th>Audit Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div><strong>Total Days:</strong> ${groups.length} (Total Tx: ${totalTransactions})</div>
+            <div><strong>Total Gross Expenses:</strong> ₱${totalGross.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+            <div><strong>Total Realized Cash:</strong> ₱${totalRealized.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+  },
+
 
   toDashboardTransaction(expense: ExpenseItem): DashboardTransactionItem {
     return {

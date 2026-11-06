@@ -2,17 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
+from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Expense, Category
 from app.models.company import Company
-from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
+from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyExpenseSummaryOut
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
+from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 
 router = APIRouter()
 
@@ -227,6 +229,201 @@ def get_expenses(
             for exp, c_name, cat_name in rows
         ]
 
+
+def _to_date(val) -> Optional[date]:
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str) and val.strip():
+        try:
+            return date.fromisoformat(val.strip().split("T")[0])
+        except Exception:
+            try:
+                parts = val.strip().split("/")
+                if len(parts) == 3:
+                    m, d, y = parts
+                    if len(y) == 2:
+                        y = "20" + y
+                    return date(int(y), int(m), int(d))
+            except Exception:
+                pass
+    return None
+
+
+def _rollup_audit_status(statuses: List[str]) -> str:
+    if not statuses:
+        return "Pending Audit"
+    cleaned = [s.strip() for s in statuses if s]
+    if any(s.lower() in ("discrepancy", "flagged") for s in cleaned):
+        return "Discrepancy"
+    if all(s.lower() in ("verified", "all verified") for s in cleaned):
+        return "All Verified"
+    return "Pending Audit"
+
+
+@router.get("/daily-summary", response_model=List[DailyExpenseSummaryOut], summary="Daily expense aggregation summary")
+def get_expenses_daily_summary(
+    company_id: Optional[int] = Query(None, description="Filter by Company ID"),
+    company_name: Optional[str] = Query(None, description="Filter by Company Name"),
+    category_id: Optional[int] = Query(None, description="Filter by Category ID"),
+    start_date: Optional[date] = Query(None, description="Filter from date"),
+    end_date: Optional[date] = Query(None, description="Filter to date"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    view_type: Optional[str] = Query(None, description="View type ('withdraw' or 'expense')"),
+    search: Optional[str] = Query(None, description="Search keyword"),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db)
+):
+    user_role = (current_user.get("role") or "").lower()
+    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    raw_records = []
+    use_sb = False
+    try:
+        from app.services.sales_receivables_sync import SalesReceivablesSyncService
+        use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    except Exception:
+        use_sb = True
+
+    try:
+        if not use_sb:
+            raise RuntimeError("In-memory SQLite session")
+        client = get_supabase_admin_client()
+
+        sb_query = client.table("expenses").select("*")
+
+        resolved_company_id = normalize_company_id(company_id)
+        if resolved_company_id:
+            check_company_access(current_user, resolved_company_id)
+            sb_query = sb_query.eq("company_id", resolved_company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved_comp = resolve_company(db, company_name=company_name)
+            target_cid = resolved_comp.company_id
+            check_company_access(current_user, target_cid)
+            sb_query = sb_query.eq("company_id", target_cid)
+        elif user_company_ids:
+            if len(user_company_ids) == 1:
+                sb_query = sb_query.eq("company_id", user_company_ids[0])
+            else:
+                sb_query = sb_query.in_("company_id", user_company_ids)
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            sb_query = sb_query.eq("category_id", category_id)
+        if start_date:
+            sb_query = sb_query.gte("expense_date", start_date.isoformat())
+        if end_date:
+            sb_query = sb_query.lte("expense_date", end_date.isoformat())
+
+        res = sb_query.order("expense_date", desc=True).order("expense_id", desc=True).execute()
+        rows = res.data or []
+        for r in rows:
+            raw_records.append({
+                "expense_date": r.get("expense_date"),
+                "amount": r.get("amount") or 0.0,
+                "amount_paid": r.get("amount_paid") or 0.0,
+                "particulars": r.get("description") or r.get("particulars") or "",
+                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
+                "audit_status": r.get("audit_status") or "Pending Audit",
+            })
+    except HTTPException:
+        raise
+    except Exception:
+        query = db.query(Expense)
+        if company_id:
+            check_company_access(current_user, company_id)
+            query = query.filter(Expense.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Expense.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.join(Company, Expense.company_id == Company.company_id).filter(
+                    func.lower(Company.company_name) == func.lower(company_name.strip())
+                )
+                if not is_privileged:
+                    query = query.filter(Expense.company_id.in_(user_company_ids))
+        elif user_company_ids:
+            query = query.filter(Expense.company_id.in_(user_company_ids))
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            query = query.filter(Expense.category_id == category_id)
+        if start_date:
+            query = query.filter(Expense.expense_date >= start_date)
+        if end_date:
+            query = query.filter(Expense.expense_date <= end_date)
+
+        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+        for e in rows:
+            raw_records.append({
+                "expense_date": e.expense_date,
+                "amount": e.amount,
+                "amount_paid": e.amount_paid or 0.0,
+                "particulars": e.description or "",
+                "cheque_no": e.cheque_number or e.cheque_no or e.reference_no or "",
+                "audit_status": e.audit_status or "Pending Audit",
+            })
+
+    # Group by date
+    daily_groups = defaultdict(lambda: {
+        "count": 0,
+        "gross_total": Decimal("0.00"),
+        "realized_cash": Decimal("0.00"),
+        "audit_statuses": []
+    })
+
+    search_term = (search or "").strip().lower()
+    is_withdraw_view = (view_type or "").lower() == "withdraw"
+
+    for r in raw_records:
+        rec_date = _to_date(r["expense_date"])
+        if not rec_date:
+            continue
+
+        parts = r["particulars"]
+        chq = r["cheque_no"]
+
+        if search_term:
+            if search_term not in parts.lower() and search_term not in chq.lower():
+                continue
+
+        amt = Decimal(str(r["amount"] or 0))
+        amt_paid = Decimal(str(r["amount_paid"] or 0))
+        realized_from_particulars = compute_paid_amount_from_particulars(parts, amt)
+        realized = max(amt_paid, realized_from_particulars)
+
+        if is_withdraw_view and realized <= Decimal("0.00"):
+            continue
+
+        gross = realized if is_withdraw_view else amt
+
+        daily_groups[rec_date]["count"] += 1
+        daily_groups[rec_date]["gross_total"] += gross
+        daily_groups[rec_date]["realized_cash"] += realized
+        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+
+    result = [
+        DailyExpenseSummaryOut(
+            date=d,
+            day_of_week=d.strftime("%A"),
+            transaction_count=data["count"],
+            gross_total=data["gross_total"],
+            realized_cash=data["realized_cash"],
+            audit_status=_rollup_audit_status(data["audit_statuses"])
+        )
+        for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
+    ]
+    return result
+
+
 @router.post("", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED, summary="Record a new expense")
 def create_expense(
     expense_in: ExpenseCreate,
@@ -236,14 +433,18 @@ def create_expense(
 ):
 
     if expense_in.amount < Decimal("1.00"):
-        raise HTTPException(status_code=400, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
+        raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
     if expense_in.expense_date > date.today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")
 
     parts = (expense_in.particulars or expense_in.description or "").strip()
     if not parts:
-        raise HTTPException(status_code=400, detail="Particulars is required.")
+        raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
+
+    cat_str = (expense_in.category or "").strip()
+    if not expense_in.category_id and not cat_str:
+        raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
@@ -597,7 +798,7 @@ def update_expense(
 
     target_amt = expense_in.amount if expense_in.amount is not None else expense_in.withdrawal
     if target_amt is not None and target_amt < Decimal("1.00"):
-        raise HTTPException(status_code=400, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
+        raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
     if expense_in.expense_date is not None and expense_in.expense_date > date.today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")

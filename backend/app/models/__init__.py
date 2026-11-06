@@ -13,6 +13,7 @@ from app.models.bank import BankAccount, BankTransaction
 from app.models.receivable import Receivable, ReceivablePayment
 from app.models.invitation import UserInvitation, InvitationOutbox
 from app.models.particular import CompanyParticular
+from app.models.payment_method import CompanyPaymentMethod
 
 # Alias for backward compatibility
 LendingFacility = Borrower
@@ -48,4 +49,5 @@ __all__ = [
     "UserInvitation",
     "InvitationOutbox",
     "CompanyParticular",
+    "CompanyPaymentMethod",
 ]

@@ -52,6 +52,11 @@ class ExpenseCreate(ExpenseBase):
         self.particulars = parts.strip()
         self.description = self.particulars
 
+        if not self.category_id and (not self.category or not self.category.strip()):
+            raise ValueError("Category is required and cannot be blank.")
+        if self.category and self.category.strip():
+            self.category = self.category.strip()
+
         if self.amount < Decimal("1.00"):
             raise ValueError("Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
@@ -120,8 +125,13 @@ class ExpenseUpdate(BaseModel):
 
         parts = self.particulars or self.description
         if parts is not None:
+            if not parts.strip():
+                raise ValueError("Particulars cannot be blank.")
             self.particulars = parts.strip()
             self.description = self.particulars
+
+        if self.category is not None and not self.category.strip():
+            raise ValueError("Category cannot be blank.")
 
         return self
 
@@ -149,4 +159,16 @@ class ExpenseOut(BaseModel):
     audit_remarks: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DailyExpenseSummaryOut(BaseModel):
+    date: date
+    day_of_week: str
+    transaction_count: int
+    gross_total: Decimal = Field(default=Decimal("0.00"))
+    realized_cash: Decimal = Field(default=Decimal("0.00"))
+    audit_status: str = "Pending Audit"
+
+    model_config = ConfigDict(from_attributes=True)
+
 
