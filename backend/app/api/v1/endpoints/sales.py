@@ -266,6 +266,10 @@ def create_sale(
             "cheque_number": cheque,
             "amount": float(sale_in.amount),
             "particulars": parts,
+            "audit_status": "Pending Audit",
+            "audited_by": None,
+            "audited_at": None,
+            "audit_remarks": None,
         }).execute()
 
         if not sb_insert.data:
@@ -295,7 +299,11 @@ def create_sale(
                 transaction_date=sale_in.transaction_date,
                 cheque_no=cheque,
                 amount=sale_in.amount,
-                particulars=parts
+                particulars=parts,
+                audit_status="Pending Audit",
+                audited_by=None,
+                audited_at=None,
+                audit_remarks=None,
             )
             db.merge(local_sale)
             db.commit()
@@ -375,6 +383,10 @@ def create_sale(
             cheque_no=cheque,
             amount=sale_in.amount,
             particulars=parts,
+            audit_status="Pending Audit",
+            audited_by=None,
+            audited_at=None,
+            audit_remarks=None,
         )
         db.add(sale)
         db.commit()

@@ -297,6 +297,10 @@ def create_expense(
             "amount": float(expense_in.amount),
             "amount_paid": float(expense_in.amount_paid or 0.0),
             "description": parts,
+            "audit_status": "Pending Audit",
+            "audited_by": None,
+            "audited_at": None,
+            "audit_remarks": None,
         }).execute()
 
         if not sb_insert.data:
@@ -330,7 +334,11 @@ def create_expense(
                 cheque_number=cheque,
                 amount=expense_in.amount,
                 amount_paid=expense_in.amount_paid or Decimal("0.00"),
-                description=parts
+                description=parts,
+                audit_status="Pending Audit",
+                audited_by=None,
+                audited_at=None,
+                audit_remarks=None,
             )
             db.merge(local_exp)
             db.commit()
@@ -424,6 +432,10 @@ def create_expense(
             amount=expense_in.amount,
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
+            audit_status="Pending Audit",
+            audited_by=None,
+            audited_at=None,
+            audit_remarks=None,
         )
         db.add(expense)
         db.commit()

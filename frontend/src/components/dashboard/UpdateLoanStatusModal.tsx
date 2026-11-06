@@ -57,7 +57,7 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
     try {
       const updated = await loanService.updateLoan(loan.id, {
         status: selectedStatus,
-        auditStatus: selectedStatus === 'Paid' ? 'Verified' : loan.auditStatus,
+        auditStatus: loan.auditStatus,
         auditNotes: remarks.trim() || loan.auditNotes,
       })
 

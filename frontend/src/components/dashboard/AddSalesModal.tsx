@@ -229,19 +229,6 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
 
       const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Partial' : 'Unpaid'
 
-      // Also record in local Receivables Utang store so both pages sync immediately
-      receivablesStore.addNewSale({
-        customer_name: (paymentOption !== 'Paid in full' && customerName.trim()) ? customerName.trim() : 'Walk-in Customer',
-        customer_type: customerType,
-        items_summary: particulars.trim(),
-        total_amount: parsedAmount,
-        payment_option: paymentOption,
-        amount_paid: paymentOption === 'Paid in full' ? parsedAmount : paymentOption === 'Partial' ? (parseFloat(amountPaid) || 0) : 0,
-        payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
-        date: date.trim() || getTodayIso(),
-        notes: chequeNo.trim() ? `Cheque: ${chequeNo.trim()}` : undefined,
-      })
-
       const payload: NewSalesInput = {
         date: date.trim() || getTodayIso(),
         chequeNo: chequeNo.trim(),
@@ -253,6 +240,24 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         status: effectiveStatus as any,
       }
       const created = await salesService.addSale(payload)
+
+      // Only record in receivables if there is an unpaid balance (Utang / Partial)
+      if (paymentOption !== 'Paid in full') {
+        const parsedSaleId = created?.id ? Number(created.id) : undefined
+        receivablesStore.addNewSale({
+          customer_name: customerName.trim() || 'Walk-in Customer',
+          customer_type: customerType,
+          items_summary: particulars.trim(),
+          total_amount: parsedAmount,
+          payment_option: paymentOption,
+          amount_paid: paymentOption === 'Partial' ? (parseFloat(amountPaid) || 0) : 0,
+          payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
+          date: date.trim() || getTodayIso(),
+          notes: chequeNo.trim() ? `Cheque: ${chequeNo.trim()}` : undefined,
+          company: assignedCompany,
+          sale_id: Number.isFinite(parsedSaleId) ? parsedSaleId : undefined,
+        })
+      }
 
       // Close confirmation and modal
       setIsConfirmOpen(false)
