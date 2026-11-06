@@ -1758,9 +1758,28 @@ export const LendingPage: React.FC = () => {
                                 <td className="py-2.5 px-3.5 text-muted-fg whitespace-normal break-words max-w-[280px] leading-relaxed" title={p.notes || '-'}>
                                   {p.notes || '-'}
                                 </td>
-                                <td className="py-2.5 px-3.5 text-focus font-medium whitespace-nowrap">
-                                  {formatPersonInitialAndLastName(p.recorded_by || p.recordedBy)}
-                                </td>
+                                {(() => {
+                                  const rawRecordedBy = p.recorded_by || p.recordedBy
+                                  const resolvedFullName = rawRecordedBy ? formatRealName(rawRecordedBy) : ''
+                                  const fullRecordedBy = resolvedFullName || rawRecordedBy || ''
+                                  const displayRecordedBy = formatPersonInitialAndLastName(fullRecordedBy || rawRecordedBy)
+                                  const hasName = Boolean(fullRecordedBy && fullRecordedBy !== '—' && fullRecordedBy !== '-')
+                                  const tooltipText = hasName ? fullRecordedBy : undefined
+
+                                  return (
+                                    <td
+                                      className="py-2.5 px-3.5 text-focus font-medium whitespace-nowrap max-w-[160px] truncate"
+                                      title={tooltipText}
+                                    >
+                                      <span
+                                        className={cn(hasName && 'cursor-help')}
+                                        title={tooltipText}
+                                      >
+                                        {displayRecordedBy}
+                                      </span>
+                                    </td>
+                                  )
+                                })()}
                               </tr>
                             )
                           })
