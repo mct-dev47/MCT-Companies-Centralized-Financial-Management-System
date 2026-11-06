@@ -181,24 +181,38 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     form.setValue('role', role)
   }
 
+  const resetFormState = React.useCallback(() => {
+    form.reset({
+      fullName: '',
+      email: '',
+      assignedCompany: '',
+      assignedCompanies: [],
+      role: 'Supervisor',
+      avatarUrl: '',
+    })
+    setProfilePreview(null)
+    setAvatarFile(null)
+    setRawImageForCrop(null)
+    setIsCropperOpen(false)
+    setSelectedCompanies([])
+    setCompanyError(null)
+    setSubmitError(null)
+    setPendingValues(null)
+    setIsConfirmOpen(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [form])
+
+  React.useEffect(() => {
+    if (open) {
+      resetFormState()
+    }
+  }, [open, resetFormState])
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
-      form.reset({
-        fullName: '',
-        email: '',
-        assignedCompany: '',
-        assignedCompanies: [],
-        role: 'Supervisor',
-        avatarUrl: '',
-      })
-      setProfilePreview(null)
-      setAvatarFile(null)
-      setRawImageForCrop(null)
-      setIsCropperOpen(false)
-      setSelectedCompanies([])
-      setCompanyError(null)
-      setPendingValues(null)
-      setIsConfirmOpen(false)
+      resetFormState()
     }
     onOpenChange(nextOpen)
   }
@@ -240,6 +254,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         created.companyName = selectedCompanies.join(', ')
       }
       onSuccess?.(created)
+      resetFormState()
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
@@ -279,7 +294,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           )}
 
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2" autoComplete="off">
               {/* 1. Display Profile Image Upload */}
               <div className="flex flex-col items-center justify-center py-1">
                 <div
@@ -376,6 +391,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                       <Input
                         id="create-full-name"
                         placeholder="e.g. John Doe"
+                        autoComplete="off"
                         className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
                         aria-invalid={!!fieldState.error}
                         {...field}
@@ -400,6 +416,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                         id="create-email-address"
                         type="email"
                         placeholder="e.g. john.doe@example.com"
+                        autoComplete="off"
                         className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
                         aria-invalid={!!fieldState.error}
                         {...field}

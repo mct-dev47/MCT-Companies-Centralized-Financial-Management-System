@@ -8,6 +8,8 @@
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
 | Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
 | Activity Audit Log Changes and IP Tracking | in-progress | [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md) |
+| Company Amount Input Validation and User Form Reset | in-progress | [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md) |
+| User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
 
 ---
 
@@ -74,3 +76,35 @@
   - [x] Milestone 5: CSV and PDF export generators updated with IP and record references (AC-7)
 - [x] Verify it: /check verify activity-audit-log-changes-and-ip-tracking
 - [ ] Test it: /test activity-audit-log-changes-and-ip-tracking
+
+### Company Amount Input Validation and User Form Reset
+**Status**: in-progress
+**Spec**: [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md)
+**Intent**: Automatically replace leading zeros in company balance and petty cash monetary fields while preserving lone 0 and decimals, and ensure Create User modal clears previous employee input and suppresses browser autofill.
+**Done when**: Typing over lone 0 in Starting Balance and Petty Cash fields replaces the 0 with the typed digit without leading zeros, lone 0 and valid decimals remain permitted in company creation and editing, Create User modal resets completely on open and submit, and browser autofill is turned off on user form inputs.
+
+- [x] Design it (spec): [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md)
+- [x] Build it: /develop 0031 (code in `frontend/src/`)
+  - [x] Milestone 1: Reusable numeric input sanitizer helper (AC-1, AC-2, AC-3)
+  - [x] Milestone 2: Starting balance and petty cash input sanitization in Create Company modal (AC-1, AC-2, AC-3)
+  - [x] Milestone 3: Starting balance and petty cash input sanitization in View Company modal edit mode (AC-4)
+  - [x] Milestone 4: Form and avatar state reset on open and submit in Create User modal (AC-5, AC-6)
+  - [x] Milestone 5: Browser autocomplete suppression attributes on Create User form (AC-7)
+- [x] Verify it: /check verify 0031
+- [ ] Test it: /test 0031
+
+### User Form Required Fields Validation Warning
+**Status**: in-progress
+**Spec**: [0032](../specs/0032-user-form-required-fields-validation-warning.md)
+**Intent**: Render a prominent warning alert banner and red field borders when attempting to submit the Create User modal with missing required fields, auto scroll to top, and clear errors dynamically as inputs are corrected.
+**Done when**: Clicking Create User with empty or invalid fields renders an alert banner listing missing fields, highlights offending inputs in red, auto scrolls smoothly to top, clears dynamically upon typing or company selection, and opens the confirmation modal when all mandatory fields are valid.
+
+- [x] Design it (spec): [0032](../specs/0032-user-form-required-fields-validation-warning.md)
+- [ ] Build it: /develop 0032 (code in `frontend/src/`)
+  - [ ] Milestone 1: Top warning alert banner component and state in Create User modal (AC-1, AC-2)
+  - [ ] Milestone 2: Submission validation error handler with auto scroll to top (AC-1, AC-3, AC-4)
+  - [ ] Milestone 3: Assigned company validation integration into warning banner (AC-2, AC-4)
+  - [ ] Milestone 4: Reactive error clearing on input edit and company toggle (AC-5)
+  - [ ] Milestone 5: Seamless progression to confirmation modal on valid form (AC-6)
+- [ ] Verify it: /check verify 0032
+- [ ] Test it: /test 0032

@@ -25,6 +25,7 @@ import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
+import { sanitizeNumericInput } from '@/utils/numericInputUtils'
 
 interface ViewCompanyModalProps {
   open: boolean
@@ -380,16 +381,20 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     <Label htmlFor="edit-comp-start-bal" className="text-xs font-medium text-focus/80">Starting Balance (₱)</Label>
                     <Input
                       id="edit-comp-start-bal"
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="0.00"
                       value={formData.startingBalance === undefined || formData.startingBalance === null ? '' : formData.startingBalance}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E'].includes(e.key)) {
+                          e.preventDefault()
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value
+                        const val = sanitizeNumericInput(e.target.value)
                         setFormData({
                           ...formData,
-                          startingBalance: val === '' ? ('' as unknown as number) : Number(val),
+                          startingBalance: val === '' ? ('' as unknown as number) : (val as unknown as number),
                         })
                       }}
                       className="h-10 rounded-xl text-sm"
@@ -399,16 +404,20 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     <Label htmlFor="edit-comp-petty-cash" className="text-xs font-medium text-focus/80">Petty Cash (₱)</Label>
                     <Input
                       id="edit-comp-petty-cash"
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="0.00"
                       value={formData.pettyCash === undefined || formData.pettyCash === null ? '' : formData.pettyCash}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E'].includes(e.key)) {
+                          e.preventDefault()
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value
+                        const val = sanitizeNumericInput(e.target.value)
                         setFormData({
                           ...formData,
-                          pettyCash: val === '' ? ('' as unknown as number) : Number(val),
+                          pettyCash: val === '' ? ('' as unknown as number) : (val as unknown as number),
                         })
                       }}
                       className="h-10 rounded-xl text-sm"

@@ -33,6 +33,7 @@ import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { employeeService, type Company } from '@/services/employeeService'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
+import { sanitizeNumericInput } from '@/utils/numericInputUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
 interface CreateCompanyModalProps {
@@ -96,24 +97,37 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
     }
   }
 
+  const resetFormState = React.useCallback(() => {
+    form.reset({
+      name: '',
+      address: '',
+      contactNumber: '',
+      telephoneNumber: '',
+      startingBalance: '' as unknown as number,
+      pettyCash: '' as unknown as number,
+      logoUrl: '',
+    })
+    setProfilePreview(null)
+    setProfileFile(null)
+    setRawImageForCrop(null)
+    setIsCropperOpen(false)
+    setPendingValues(null)
+    setIsConfirmOpen(false)
+    setSubmitError(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [form])
+
+  React.useEffect(() => {
+    if (open) {
+      resetFormState()
+    }
+  }, [open, resetFormState])
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
-      form.reset({
-        name: '',
-        address: '',
-        contactNumber: '',
-        telephoneNumber: '',
-        startingBalance: '' as unknown as number,
-        pettyCash: '' as unknown as number,
-        logoUrl: '',
-      })
-      setProfilePreview(null)
-      setProfileFile(null)
-      setRawImageForCrop(null)
-      setIsCropperOpen(false)
-      setPendingValues(null)
-      setIsConfirmOpen(false)
-      setSubmitError(null)
+      resetFormState()
     }
     onOpenChange(nextOpen)
   }
@@ -139,6 +153,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
         logoFile: profileFile || undefined,
       })
       onSuccess?.(created)
+      resetFormState()
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
@@ -396,16 +411,20 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                       <FormControl>
                         <Input
                           id="starting-balance"
-                          type="number"
-                          min="0"
-                          step="0.01"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="0.00"
                           className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
                           aria-invalid={!!fieldState.error}
                           value={field.value ?? ''}
+                          onKeyDown={(e) => {
+                            if (['-', '+', 'e', 'E'].includes(e.key)) {
+                              e.preventDefault()
+                            }
+                          }}
                           onChange={(event) => {
-                            const val = event.target.value
-                            field.onChange(val === '' ? '' : Number(val))
+                            const val = sanitizeNumericInput(event.target.value)
+                            field.onChange(val)
                           }}
                           onBlur={field.onBlur}
                         />
@@ -427,16 +446,20 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                       <FormControl>
                         <Input
                           id="petty-cash"
-                          type="number"
-                          min="0"
-                          step="0.01"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="0.00"
                           className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
                           aria-invalid={!!fieldState.error}
                           value={field.value ?? ''}
+                          onKeyDown={(e) => {
+                            if (['-', '+', 'e', 'E'].includes(e.key)) {
+                              e.preventDefault()
+                            }
+                          }}
                           onChange={(event) => {
-                            const val = event.target.value
-                            field.onChange(val === '' ? '' : Number(val))
+                            const val = sanitizeNumericInput(event.target.value)
+                            field.onChange(val)
                           }}
                           onBlur={field.onBlur}
                         />
