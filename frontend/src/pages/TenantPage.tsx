@@ -55,8 +55,8 @@ import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { useSession } from '@/hooks/useSession'
-import { formatPHP } from '@/lib/format'
-import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
+import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFields'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
@@ -92,6 +92,22 @@ import {
 import { websocketService } from '@/services/websocketService'
 
 export type { DailyRentRecord, TenantLease }
+
+const formatAuditTimestamp = (dateVal?: string | null, isoVal?: string | null): string => {
+  if (dateVal && dateVal !== '-' && dateVal !== '—') {
+    if (dateVal.includes('T') || dateVal.includes('Z')) {
+      const formatted = formatCreatedAt(dateVal)
+      if (formatted) return formatted
+    } else {
+      return dateVal
+    }
+  }
+  if (isoVal) {
+    const formatted = formatCreatedAt(isoVal)
+    if (formatted) return formatted
+  }
+  return ''
+}
 
 // Tenant leases used to be kept in this browser. They are saved in the database now (spec 0017),
 // so the old copy is deleted and never read.
@@ -135,7 +151,7 @@ const EMPTY_FORM: LeaseFormData = {
   totalAmountPayable: '',
   status: 'Active',
   notes: '',
-  repeat: 'None',
+  repeat: 'Daily',
   leaseEndDate: '',
   penaltyRate: '',
 }
@@ -541,9 +557,15 @@ export const TenantPage: React.FC = () => {
 
   // Open Add Modal
   const handleOpenAdd = () => {
+    const today = formatToYYYYMMDD(new Date())
+    const defaults = getDefaultDatesForRepeat('Daily', today)
     setFormData({
       ...EMPTY_FORM,
-      contractDate: formatToYYYYMMDD(new Date()),
+      repeat: 'Daily',
+      contractDate: today,
+      dueDate: defaults.dueDate,
+      leaseEndDate: defaults.leaseEndDate,
+      penaltyRate: '',
     })
     setFormErrors({})
     setIsAddModalOpen(true)
@@ -553,6 +575,7 @@ export const TenantPage: React.FC = () => {
   const handleOpenEdit = (tenant: TenantLease, e?: React.MouseEvent) => {
     if (e) e.stopPropagation()
     setActiveTenant(tenant)
+    const effectiveRepeat = tenant.repeat === 'Monthly' ? 'Monthly' : 'Daily'
     setFormData({
       tenantName: tenant.tenantName,
       unitName: tenant.unitName,
@@ -562,7 +585,7 @@ export const TenantPage: React.FC = () => {
       totalAmountPayable: tenant.totalAmountPayable.toString(),
       status: tenant.status,
       notes: tenant.notes || '',
-      repeat: tenant.repeat || 'None',
+      repeat: effectiveRepeat,
       leaseEndDate: tenant.leaseEndDate || '',
       penaltyRate: typeof tenant.penaltyRate === 'number' ? String(tenant.penaltyRate) : '',
     })
@@ -640,28 +663,51 @@ export const TenantPage: React.FC = () => {
   const validateForm = (existing?: TenantLease) => {
     const errors: Record<string, string> = {}
     const repeating = formData.repeat !== 'None'
-    if (!formData.tenantName.trim()) {
+    const hasPayments = Boolean(
+      existing && (((existing.dailyPayments?.length || 0) > 0) || ((existing.amountPaid || 0) > 0))
+    )
+
+    const trimmedTenant = formData.tenantName.trim()
+    if (!trimmedTenant) {
       errors.tenantName = 'Tenant Name is required.'
+    } else if (trimmedTenant.length < 2 || trimmedTenant.length > 100) {
+      errors.tenantName = 'Tenant Name must be between 2 and 100 characters.'
     }
-    if (!formData.unitName.trim()) {
+
+    const trimmedUnit = formData.unitName.trim()
+    if (!trimmedUnit) {
       errors.unitName = 'Leased Unit / Stall is required.'
+    } else if (trimmedUnit.length > 50) {
+      errors.unitName = 'Leased Unit / Stall must be between 1 and 50 characters.'
     }
-    if (!formData.contractDate) {
-      errors.contractDate = 'Date Contracted is required.'
+
+    if (!formData.contractDate || isNaN(new Date(formData.contractDate).getTime())) {
+      errors.contractDate = 'Date Contracted is required and must be a valid date.'
     }
-    if (!formData.dueDate) {
+
+    if (!formData.dueDate || isNaN(new Date(formData.dueDate).getTime())) {
       errors.dueDate = repeating ? 'First Due Date is required.' : 'Due Date is required.'
+    } else if (formData.contractDate && formData.dueDate < formData.contractDate) {
+      errors.dueDate = 'First Due Date must be on or after Date Contracted.'
     }
+
     const rent = parseFloat(formData.rentAmount)
     if (isNaN(rent) || rent <= 0) {
-      errors.rentAmount = 'Rent amount must be greater than 0.'
+      errors.rentAmount = 'Rent amount must be a positive number greater than 0.'
     }
+
     if (!repeating) {
       const payable = parseFloat(formData.totalAmountPayable || formData.rentAmount)
       if (isNaN(payable) || payable <= 0) {
         errors.totalAmountPayable = 'Total amount payable must be greater than 0.'
       }
     } else {
+      if (!formData.leaseEndDate || isNaN(new Date(formData.leaseEndDate).getTime())) {
+        errors.leaseEndDate = 'Lease End Date is required and must be a valid date.'
+      } else if (formData.dueDate && formData.leaseEndDate < formData.dueDate) {
+        errors.leaseEndDate = 'Lease End Date must be on or after First Due Date.'
+      }
+
       Object.assign(
         errors,
         validateRepeatSettings({
@@ -674,8 +720,30 @@ export const TenantPage: React.FC = () => {
       )
     }
 
-    // Edit locks that depend on payments already recorded (also stops turning repeat off or moving dates)
-    // (Also covers turning a repeat on for an older lease: its saved payments must fit the new schedule.)
+    if (formData.notes && formData.notes.length > 255) {
+      errors.notes = 'Notes cannot exceed 255 characters.'
+    }
+
+    // Edit locks that depend on payments already recorded (AC-6)
+    if (existing && hasPayments) {
+      if (rent !== existing.rentAmount) {
+        errors.rentAmount = 'Rent Amount cannot be changed once payments exist.'
+      }
+      if (formData.repeat !== existing.repeat) {
+        errors.repeat = 'Payment Schedule cannot be changed once payments exist.'
+      }
+      if (formData.contractDate !== existing.contractDate) {
+        errors.contractDate = 'Date Contracted cannot be changed once payments exist.'
+      }
+      if (formData.dueDate !== existing.dueDate) {
+        errors.dueDate = 'First Due Date cannot be changed once payments exist.'
+      }
+      if (formData.leaseEndDate !== (existing.leaseEndDate || '')) {
+        errors.leaseEndDate = 'Lease End Date cannot be changed once payments exist.'
+      }
+    }
+
+    // Additional edit locks against payments
     if (existing && (isRepeating(existing) || repeating) && Object.keys(errors).length === 0) {
       Object.assign(
         errors,
@@ -863,13 +931,14 @@ export const TenantPage: React.FC = () => {
           )
           return
         }
+        const isPartial = amt < period.remaining - 0.005
         input = {
           date: paymentDate,
           amount: amt,
           method: paymentMethod,
           referenceNo: paymentRef.trim() || undefined,
           notes: paymentNotes.trim() || 'Rent payment',
-          status: 'Paid',
+          status: isPartial ? 'Partially Paid' : 'Paid',
           periodIndex: period.index,
         }
       }
@@ -1336,6 +1405,36 @@ export const TenantPage: React.FC = () => {
     })
     const periodLabelByIndex = new Map(fin.periods.map((p) => [p.index, p.label]))
 
+    // Build cycle settlement map to know whether an installment cycle has reached its full target (matching Lending)
+    const isDaily = !activeTenant.repeat || activeTenant.repeat === 'Daily'
+    const cycleDailyTarget = activeTenant.rentAmount || 0
+    const cycleSettledMap = new Map<string, boolean>()
+
+    if (isDaily) {
+      const paidByInstallmentDate = new Map<string, number>()
+      ;(activeTenant.dailyPayments || []).forEach((p) => {
+        if (p.status === 'Missed') return
+        const matchedPeriod = p.periodIndex
+          ? fin.periods.find((per) => per.index === p.periodIndex)
+          : undefined
+        const d = matchedPeriod ? matchedPeriod.dueDate : (p.date || '')
+        if (d) {
+          paidByInstallmentDate.set(d, (paidByInstallmentDate.get(d) || 0) + (p.amount || 0))
+        }
+      })
+      paidByInstallmentDate.forEach((total, d) => {
+        if (total >= cycleDailyTarget - 0.005 || fin.remaining <= 0.005) {
+          cycleSettledMap.set(d, true)
+        }
+      })
+    } else {
+      fin.periods.forEach((m) => {
+        if (m.status === 'Paid' || m.remaining <= 0.005 || fin.remaining <= 0.005) {
+          cycleSettledMap.set(m.dueDate, true)
+        }
+      })
+    }
+
     // Pagination for schedule periods
     const totalSchedulePages = Math.max(1, Math.ceil(filteredPeriods.length / SCHEDULE_ITEMS_PER_PAGE))
     const safeSchedulePage = Math.min(ledgerPage, totalSchedulePages)
@@ -1385,26 +1484,6 @@ export const TenantPage: React.FC = () => {
                 <h1 className="text-2xl sm:text-3xl font-extrabold text-focus tracking-tight">
                   {activeTenant.tenantName}
                 </h1>
-                {activeTenant.auditStatus && (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span
-                      className={cn(
-                        'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
-                        activeTenant.auditStatus === 'Verified'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-                      )}
-                    >
-                      {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                    </span>
-                    {activeTenant.auditedBy && (
-                      <span className="text-xs text-muted-fg font-medium">
-                        by <strong className="text-focus">{activeTenant.auditedBy}</strong>
-                        {activeTenant.auditDate ? ` • ${activeTenant.auditDate}` : ''}
-                      </span>
-                    )}
-                  </div>
-                )}
               </div>
               <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                 <span className="text-xs sm:text-sm text-muted-fg font-medium">
@@ -1636,16 +1715,68 @@ export const TenantPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Auditor Remarks / Discrepancy Note (if any) */}
-              {activeTenant.auditRemarks && (
-                <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-xl text-xs text-rose-900">
-                  <strong className="text-rose-900 font-semibold block mb-0.5 text-[11px] flex items-center gap-1.5">
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                    Auditor Remarks / Discrepancy Note:
-                  </strong>
-                  <p className="leading-relaxed whitespace-pre-wrap">{activeTenant.auditRemarks}</p>
+              {/* Dashed Perforation */}
+              <div className="border-t border-dashed border-slate-200" />
+
+              {/* Dedicated Audit Review Panel (AC-1: Mirroring FilCap Lending) */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-focus" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-fg">
+                      Audit Review
+                    </span>
+                  </div>
+                  {(() => {
+                    const st = activeTenant.auditStatus || (activeTenant as any).audit_status
+                    if (st === 'Verified') {
+                      return (
+                        <span className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                          AUDITED
+                        </span>
+                      )
+                    }
+                    if (st === 'Flagged') {
+                      return (
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#960C01]">
+                          DISCREPANCY
+                        </span>
+                      )
+                    }
+                    return (
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        PENDING AUDIT
+                      </span>
+                    )
+                  })()}
                 </div>
-              )}
+
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Audited By:</span>
+                    <span className="font-semibold text-focus">
+                      {activeTenant.auditedBy || (activeTenant as any).audited_by || '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Audit Date:</span>
+                    <span className="font-mono text-focus">
+                      {formatAuditTimestamp(activeTenant.auditDate, activeTenant.audited_at || (activeTenant as any).auditedAt) || '—'}
+                    </span>
+                  </div>
+                </div>
+
+                {(activeTenant.auditRemarks || (activeTenant as any).audit_remarks) && (
+                  <div className="pt-2 border-t border-slate-200/70 text-xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-fg block mb-1">
+                      Auditor Remarks:
+                    </span>
+                    <p className="text-xs text-focus/90 bg-white p-2.5 rounded-lg border border-slate-200/80 leading-relaxed whitespace-pre-wrap">
+                      {activeTenant.auditRemarks || (activeTenant as any).audit_remarks}
+                    </p>
+                  </div>
+                )}
+              </div>
 
 
             </div>
@@ -1725,6 +1856,7 @@ export const TenantPage: React.FC = () => {
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
+                          <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Created By</th>
                           {!isAudit && !isOwner && (
                             <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                           )}
@@ -1733,7 +1865,7 @@ export const TenantPage: React.FC = () => {
                       <tbody className="divide-y divide-slate-100">
                         {paginatedHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={isAudit || isOwner ? 7 : 8} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={!isAudit && !isOwner ? 9 : 8} className="py-12 text-center text-muted-fg text-xs">
                               <div className="flex flex-col items-center justify-center">
                                 <Coins className="w-6 h-6 text-muted-fg/40 mb-2" />
                                 <p className="font-semibold text-focus">
@@ -1748,8 +1880,9 @@ export const TenantPage: React.FC = () => {
                               ? fin.periods.find((p) => p.index === rec.periodIndex)
                               : undefined
                             const installmentDate = matchedPeriod ? matchedPeriod.dueDate : rec.date
-                            const isPartial = rec.status === 'Partially Paid'
+                            const isCycleSettled = cycleSettledMap.has(installmentDate)
                             const isMissed = rec.status === 'Missed'
+                            const isPartial = !isMissed && !isCycleSettled
 
                             return (
                               <tr
@@ -1772,17 +1905,17 @@ export const TenantPage: React.FC = () => {
                                 </td>
                                 <td className="py-2.5 px-3.5 whitespace-nowrap">
                                   {isMissed ? (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                      <AlertCircle className="w-2.5 h-2.5 text-[#960C01]" />
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#960C01]">
+                                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
                                       <span>Missed</span>
                                     </span>
                                   ) : isPartial ? (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700">
                                       <span>Partially Paid</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#960C01]">
+                                      <Check className="w-3 h-3 text-[#960C01]" />
                                       <span>Paid</span>
                                     </span>
                                   )}
@@ -1799,9 +1932,31 @@ export const TenantPage: React.FC = () => {
                                 <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap">
                                   {rec.referenceNo || '—'}
                                 </td>
-                                <td className="py-2.5 px-3.5 text-muted-fg truncate max-w-[200px]" title={rec.notes || '—'}>
+                                <td className="py-2.5 px-3.5 text-muted-fg whitespace-normal break-words max-w-[320px] text-xs leading-relaxed" title={rec.notes || '—'}>
                                   {rec.notes || '—'}
                                 </td>
+                                {(() => {
+                                  const rawCreatedBy = rec.createdByName
+                                  const resolvedFullName = rawCreatedBy ? formatRealName(rawCreatedBy) : ''
+                                  const fullCreatedBy = resolvedFullName || rawCreatedBy || ''
+                                  const displayCreatedBy = formatPersonInitialAndLastName(fullCreatedBy)
+                                  const hasName = Boolean(fullCreatedBy && fullCreatedBy !== '—' && fullCreatedBy !== '-')
+                                  const tooltipText = hasName ? fullCreatedBy : undefined
+
+                                  return (
+                                    <td
+                                      className="py-2.5 px-3.5 text-focus font-medium whitespace-nowrap max-w-[160px] truncate"
+                                      title={tooltipText}
+                                    >
+                                      <span
+                                        className={cn(hasName ? 'cursor-help' : 'text-muted-fg/40 font-mono')}
+                                        title={tooltipText}
+                                      >
+                                        {hasName ? displayCreatedBy : '-'}
+                                      </span>
+                                    </td>
+                                  )
+                                })()}
                                 {!isAudit && !isOwner && (
                                   <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                     <div className="inline-flex items-center justify-center">
@@ -2363,67 +2518,41 @@ export const TenantPage: React.FC = () => {
       >
         {/* Table matching FilCap Lending layout: clean columns, no separate ID, dedicated Status, Audit & Actions */}
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className={cn('w-full table-fixed', isAudit ? 'min-w-[1240px]' : 'min-w-[1160px]')}>
+          <Table className="w-full table-fixed min-w-[1000px]">
             <colgroup>
-              {isAudit ? (
-                <>
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '8.5%' }} />
-                  <col style={{ width: '5.5%' }} />
-                </>
-              ) : (
-                <>
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '6%' }} />
-                </>
-              )}
+              <col style={{ width: '21%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '15%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[21%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TENANT&apos;S NAME
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   RENT RATE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  CONTRACT DATE
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  DUE DATE
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[15%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[7%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                {isAudit && (
-                  <TableHead className="w-[8.5%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
-                    AUDIT TAG
-                  </TableHead>
-                )}
-                <TableHead className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap")}>
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                  AUDIT TAG
+                </TableHead>
+                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -2431,11 +2560,11 @@ export const TenantPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={isAudit ? 10 : 9} />
+                <TableSkeleton rows={5} columns={8} />
               ) : paginatedTenants.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={isAudit ? 10 : 9}
+                    colSpan={8}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -2456,14 +2585,14 @@ export const TenantPage: React.FC = () => {
                   const fin = financialsById.get(tenant.id) ?? getTenantPeriodFinancials(tenant, todayStr)
                   const repeatingRow = isRepeating(tenant) && fin.periodCount > 0
 
-                  const statusColors = {
-                    Paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    'Advance Paid': 'bg-sky-50 text-sky-700 border-sky-200',
-                    'Partially Paid': 'bg-amber-50 text-amber-700 border-amber-200',
-                    Missed: 'bg-rose-50 text-rose-700 border-rose-200',
-                    Overdue: 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20',
-                    Unpaid: 'bg-slate-100 text-slate-700 border-slate-200',
-                  }[fin.status] || 'bg-slate-100 text-slate-700 border-slate-200'
+                  const statusTextColor = {
+                    Paid: 'text-emerald-700',
+                    'Advance Paid': 'text-sky-700',
+                    'Partially Paid': 'text-amber-700',
+                    Missed: 'text-rose-700',
+                    Overdue: 'text-[#960C01]',
+                    Unpaid: 'text-slate-600',
+                  }[fin.status] || 'text-slate-600'
 
                   return (
                     <TableRow
@@ -2477,19 +2606,11 @@ export const TenantPage: React.FC = () => {
                       )}
                       title="Click to view complete details"
                     >
-                      {/* 1. Tenant's Name & Ref No. / Unit (No separate ID column, matches FilCap) */}
-                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left")}>
-                        <div className="font-semibold text-xs text-focus truncate max-w-[190px]" title={tenant.tenantName}>
-                          {tenant.tenantName}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          <span className="text-[10px] text-muted-fg font-mono">
-                            Ref: <strong className="text-focus">{tenant.tenantId}</strong>
-                          </span>
-                          <span className="text-muted-fg/40">•</span>
-                          <span className="text-[10px] text-muted-fg flex items-center gap-1 truncate max-w-[120px]">
-                            <Store className="w-2.5 h-2.5 text-muted-fg/70 shrink-0" />
-                            <span>{tenant.unitName}</span>
+                      {/* 1. Tenant's Name (clean primary name text only) */}
+                      <TableCell className="w-[21%] px-3.5 py-3 text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-xs text-focus truncate max-w-[240px]" title={tenant.tenantName}>
+                            {tenant.tenantName}
                           </span>
                           {highlightedTenantId === tenant.id && (
                             <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-[#960C01] text-white shadow-xs animate-bounce shrink-0">
@@ -2500,104 +2621,73 @@ export const TenantPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Rent Rate */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[13%] px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap">
                         <div>{formatPHP(tenant.rentAmount)}</div>
-                        <div className="text-[10px] text-muted-fg font-normal">
-                          Per {tenant.repeat === 'Daily' ? 'day' : 'month'}
-                        </div>
                       </TableCell>
 
-                      {/* 3. Contract Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left font-mono text-xs text-muted-fg whitespace-nowrap")}>
-                        {tenant.contractDate}
-                      </TableCell>
-
-                      {/* 4. Due Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left text-xs whitespace-nowrap")}>
-                        <div className="font-mono text-muted-fg font-medium">
-                          {repeatingRow
-                            ? (fin.status === 'Paid'
-                                ? (fin.nextDueDateLabel === 'Fully Paid' ? 'Fully Paid' : fin.nextDueDate)
-                                : fin.activePeriodDueDate)
-                            : tenant.dueDate}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-sans mt-0.5">
-                          {repeatingRow ? fin.activePeriodLabel : 'One-Time'}
-                        </div>
-                      </TableCell>
-
-                      {/* 5. Total Amount Payable */}
-                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      {/* 3. Total Amount Payable */}
+                      <TableCell className="w-[15%] px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap">
                         <div>{formatPHP(fin.totalDue)}</div>
-                        {repeatingRow && fin.totalContractDue !== fin.totalDue && (
-                          <div className="text-[10px] text-muted-fg font-normal truncate">
-                            Contract: {formatPHP(fin.totalContractDue)}
-                          </div>
-                        )}
                       </TableCell>
 
-                      {/* 6. Amount Paid */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
+                      {/* 4. Amount Paid */}
+                      <TableCell className="w-[13%] px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap">
                         <div>{formatPHP(fin.amountPaid)}</div>
-                        {repeatingRow && (
-                          <div className="text-[10px] text-muted-fg font-normal truncate">
-                            {fin.periodsPaid} of {fin.periodCount} paid
-                          </div>
-                        )}
                       </TableCell>
 
-                      {/* 7. Remaining Balance */}
-                      <TableCell className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-left font-bold text-xs tabular-nums whitespace-nowrap")}>
+                      {/* 5. Remaining Balance */}
+                      <TableCell className="w-[14%] px-3.5 py-3 text-left font-bold text-xs tabular-nums whitespace-nowrap">
                         <div className={fin.remaining <= 0.005 ? 'text-emerald-600' : 'text-amber-600'}>
                           {formatPHP(fin.remaining)}
                         </div>
                       </TableCell>
 
-                      {/* 8. Status (Dedicated Column, matches FilCap) */}
-                      <TableCell className="w-[7%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-block px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border uppercase tracking-wider',
-                            statusColors
-                          )}
-                        >
+                      {/* 6. Status (Clean colored text without background pill or border) */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusTextColor)}>
                           {fin.status}
                         </span>
                       </TableCell>
 
-                      {/* 9. Audit Tag (Dedicated column for Auditor account, matches FilCap) */}
-                      {isAudit && (
-                        <TableCell className="w-[8.5%] px-2.5 py-3 text-center whitespace-nowrap">
-                          {tenant.auditStatus ? (
-                            <div className="flex flex-col items-center justify-center gap-0.5">
-                              <span
-                                className={cn(
-                                  'inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
-                                  tenant.auditStatus === 'Verified'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-                                )}
-                              >
-                                {tenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                              </span>
-                              {tenant.auditDate && (
-                                <span
-                                  className="block text-[9.5px] text-muted-fg font-mono whitespace-nowrap mt-0.5"
-                                  title={tenant.auditedBy ? `Audited by ${formatRealName(tenant.auditedBy)}` : undefined}
-                                >
-                                  {tenant.auditDate}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-fg/40 font-mono">-</span>
-                          )}
-                        </TableCell>
-                      )}
+                      {/* 7. Audit Tag (Visible to all authenticated roles) */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        {(() => {
+                          const isVerified = tenant.auditStatus === 'Verified'
+                          const isFlagged = tenant.auditStatus === 'Flagged'
 
-                      {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
+                          if (!isVerified && !isFlagged) {
+                            return <span className="text-xs text-muted-fg/40 font-mono">-</span>
+                          }
+
+                          const tooltipLines: string[] = []
+                          if (tenant.auditedBy && tenant.auditedBy !== '-') {
+                            tooltipLines.push(`Audited by: ${formatRealName(tenant.auditedBy)}`)
+                          }
+                          if (tenant.auditDate) {
+                            tooltipLines.push(`Date: ${tenant.auditDate}`)
+                          }
+                          if (tenant.auditRemarks) {
+                            tooltipLines.push(`Remarks: ${tenant.auditRemarks}`)
+                          }
+                          const tooltip = tooltipLines.length > 0 ? tooltipLines.join('\n') : (isVerified ? 'Audited' : 'Discrepancy')
+
+                          return (
+                            <span
+                              title={tooltip}
+                              className={cn(
+                                'text-xs font-bold uppercase tracking-wider whitespace-nowrap cursor-help',
+                                isVerified ? 'text-emerald-700' : 'text-[#960C01]'
+                              )}
+                            >
+                              {isVerified ? 'Audited' : 'Discrepancy'}
+                            </span>
+                          )
+                        })()}
+                      </TableCell>
+
+                      {/* 8. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
                       <TableCell
-                        className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")}
+                        className="w-[6%] px-2 py-3 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isOwner ? (
@@ -2930,6 +3020,7 @@ export const TenantPage: React.FC = () => {
               error={formErrors.repeat}
             />
 
+            {/* Row 1: Date Contracted (left col) & Lease End Date (right col) (AC-8) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-focus block">
@@ -2941,11 +3032,32 @@ export const TenantPage: React.FC = () => {
                   onChange={(e) => setFormData({ ...formData, contractDate: e.target.value })}
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.contractDate && 'border-red-500')}
                 />
+                {formErrors.contractDate && (
+                  <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                )}
               </div>
 
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-focus block">
-                  {formData.repeat !== 'None' ? 'First Due Date' : 'Due Date'} <span className="text-red-500">*</span>
+                  Lease End Date <span className="text-red-500">*</span>
+                </label>
+                <Input
+                  type="date"
+                  value={formData.leaseEndDate}
+                  onChange={(e) => setFormData({ ...formData, leaseEndDate: e.target.value })}
+                  className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.leaseEndDate && 'border-red-500')}
+                />
+                {formErrors.leaseEndDate && (
+                  <p className="text-[10px] text-red-600 font-medium">{formErrors.leaseEndDate}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Row 2: First Due Date (left col) & Status (right col) (AC-9) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-focus block">
+                  First Due Date <span className="text-red-500">*</span>
                 </label>
                 <Input
                   type="date"
@@ -2957,42 +3069,37 @@ export const TenantPage: React.FC = () => {
                   <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
                 )}
               </div>
-            </div>
 
-            <RepeatDetails
-              repeat={formData.repeat}
-              dueDate={formData.dueDate}
-              leaseEndDate={formData.leaseEndDate}
-              penaltyRate={formData.penaltyRate}
-              rentAmount={formData.rentAmount}
-              onEndDateChange={(leaseEndDate) => setFormData({ ...formData, leaseEndDate })}
-              onPenaltyRateChange={(penaltyRate) => setFormData({ ...formData, penaltyRate })}
-              errors={formErrors}
-            />
-
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">Status</label>
-              <select
-                value={formData.status}
-                onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-              >
-                <option value="Active">Active</option>
-                <option value="Pending">Pending</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Completed">Completed</option>
-              </select>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-focus block">Status</label>
+                <select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
+                >
+                  <option value="Active">Active</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Overdue">Overdue</option>
+                  <option value="Completed">Completed</option>
+                </select>
+              </div>
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">Notes / Remarks</label>
+              <label className="text-xs font-semibold text-focus block">
+                Notes / Remarks <span className="text-muted-fg font-normal">(Optional, up to 255 chars)</span>
+              </label>
               <Input
                 type="text"
+                maxLength={255}
                 placeholder="Optional lease terms or notes..."
                 value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value.slice(0, 255) })}
                 className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
               />
+              {formErrors.notes && (
+                <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
@@ -3034,203 +3141,225 @@ export const TenantPage: React.FC = () => {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmitEdit} className="space-y-3.5 pt-3">
-            {formErrors.form && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-                <span>{formErrors.form}</span>
-              </div>
-            )}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">
-                Tenant / Lessee Name <span className="text-red-500">*</span>
-              </label>
-              <Input
-                type="text"
-                value={formData.tenantName}
-                onChange={(e) => setFormData({ ...formData, tenantName: e.target.value })}
-                className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">
-                Leased Unit / Stall Number <span className="text-red-500">*</span>
-              </label>
-              <Input
-                type="text"
-                value={formData.unitName}
-                onChange={(e) => setFormData({ ...formData, unitName: e.target.value })}
-                className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-focus block">
-                  Rent Amount (₱) <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  value={formData.rentAmount}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setFormData((prev) => ({
-                      ...prev,
-                      rentAmount: val,
-                      totalAmountPayable: prev.repeat === 'None' ? val : prev.totalAmountPayable,
-                    }))
-                  }}
-                  className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.rentAmount && 'border-red-500')}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-focus block">
-                  Total Payable (₱) <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  type="number"
-                  step="any"
-                  readOnly={formData.repeat !== 'None'}
-                  value={
-                    formData.repeat !== 'None'
-                      ? (() => {
-                          const calc = getFormPayable()
-                          return isNaN(calc) || calc <= 0 ? '' : String(calc)
-                        })()
-                      : formData.totalAmountPayable
-                  }
-                  onChange={(e) => setFormData({ ...formData, totalAmountPayable: e.target.value })}
-                  className={cn(
-                    'h-10 text-xs sm:text-sm rounded-xl border-stroke/50',
-                    formData.repeat !== 'None' && 'bg-slate-50 text-muted-fg cursor-not-allowed',
-                    formErrors.totalAmountPayable && 'border-red-500'
-                  )}
-                />
-                {formData.repeat !== 'None' && (
-                  <p className="text-[10px] text-muted-fg">Calculated: rent × number of payments.</p>
-                )}
-                {formErrors.totalAmountPayable && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
-                )}
-              </div>
-            </div>
-
-            {(() => {
-              // Once payments are tied to periods, Repeat and First Due Date are locked (AC-14)
-              const periodsLocked = !!activeTenant && hasPeriodRecords(activeTenant)
-              return (
-                <>
-                  <RepeatSelect
-                    value={formData.repeat}
-                    onChange={(repeat) => {
-                      if (repeat === 'Daily') {
-                        setFormData({ ...formData, repeat, dueDate: todayStr })
-                      } else {
-                        setFormData({ ...formData, repeat })
-                      }
-                    }}
-                    disabled={periodsLocked}
-                    lockedReason="Locked because payments are already recorded against this schedule."
-                    error={formErrors.repeat}
-                  />
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-focus block">
-                        Date Contracted <span className="text-red-500">*</span>
-                      </label>
-                      <Input
-                        type="date"
-                        value={formData.contractDate}
-                        onChange={(e) => setFormData({ ...formData, contractDate: e.target.value })}
-                        className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.contractDate && 'border-red-500')}
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-focus block">
-                        {formData.repeat !== 'None' ? 'First Due Date' : 'Due Date'} <span className="text-red-500">*</span>
-                      </label>
-                      <Input
-                        type="date"
-                        value={formData.dueDate}
-                        disabled={periodsLocked}
-                        onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
-                        className={cn(
-                          'h-10 text-xs sm:text-sm rounded-xl border-stroke/50 disabled:opacity-60 disabled:cursor-not-allowed',
-                          formErrors.dueDate && 'border-red-500'
-                        )}
-                      />
-                      {formErrors.dueDate && (
-                        <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
-                      )}
-                    </div>
+          {(() => {
+            const hasPayments = Boolean(
+              activeTenant && (((activeTenant.dailyPayments?.length || 0) > 0) || ((activeTenant.amountPaid || 0) > 0))
+            )
+            return (
+              <form onSubmit={handleSubmitEdit} className="space-y-3.5 pt-3">
+                {formErrors.form && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                    <span>{formErrors.form}</span>
                   </div>
-                </>
-              )
-            })()}
+                )}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-focus block">
+                    Tenant / Lessee Name <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="text"
+                    value={formData.tenantName}
+                    onChange={(e) => setFormData({ ...formData, tenantName: e.target.value })}
+                    className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
+                  />
+                  {formErrors.tenantName && (
+                    <p className="text-[10px] text-red-600 font-medium">{formErrors.tenantName}</p>
+                  )}
+                </div>
 
-            <RepeatDetails
-              repeat={formData.repeat}
-              dueDate={formData.dueDate}
-              leaseEndDate={formData.leaseEndDate}
-              penaltyRate={formData.penaltyRate}
-              rentAmount={formData.rentAmount}
-              onEndDateChange={(leaseEndDate) => setFormData({ ...formData, leaseEndDate })}
-              onPenaltyRateChange={(penaltyRate) => setFormData({ ...formData, penaltyRate })}
-              errors={formErrors}
-            />
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-focus block">
+                    Leased Unit / Stall Number <span className="text-red-500">*</span>
+                  </label>
+                  <Input
+                    type="text"
+                    value={formData.unitName}
+                    onChange={(e) => setFormData({ ...formData, unitName: e.target.value })}
+                    className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
+                  />
+                  {formErrors.unitName && (
+                    <p className="text-[10px] text-red-600 font-medium">{formErrors.unitName}</p>
+                  )}
+                </div>
 
-            {(formErrors.rentAmount || formErrors.totalAmountPayable) && formData.repeat !== 'None' && (
-              <p className="text-[11px] text-red-600 font-medium">{formErrors.rentAmount || formErrors.totalAmountPayable}</p>
-            )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-focus block">
+                      Rent Amount (₱) <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      step="any"
+                      readOnly={hasPayments}
+                      disabled={hasPayments}
+                      value={formData.rentAmount}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setFormData((prev) => ({
+                          ...prev,
+                          rentAmount: val,
+                          totalAmountPayable: prev.repeat === 'None' ? val : prev.totalAmountPayable,
+                        }))
+                      }}
+                      className={cn(
+                        'h-10 text-xs sm:text-sm rounded-xl border-stroke/50',
+                        hasPayments && 'bg-slate-50 text-muted-fg cursor-not-allowed',
+                        formErrors.rentAmount && 'border-red-500'
+                      )}
+                    />
+                    {formErrors.rentAmount && (
+                      <p className="text-[10px] text-red-600 font-medium">{formErrors.rentAmount}</p>
+                    )}
+                  </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">Status</label>
-              <select
-                value={formData.status}
-                onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-              >
-                <option value="Active">Active</option>
-                <option value="Pending">Pending</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Completed">Completed</option>
-              </select>
-            </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-focus block">
+                      Total Payable (₱) <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="number"
+                      step="any"
+                      readOnly={true}
+                      disabled={hasPayments}
+                      value={
+                        formData.repeat !== 'None'
+                          ? (() => {
+                              const calc = getFormPayable()
+                              return isNaN(calc) || calc <= 0 ? '' : String(calc)
+                            })()
+                          : formData.totalAmountPayable
+                      }
+                      onChange={(e) => setFormData({ ...formData, totalAmountPayable: e.target.value })}
+                      className={cn(
+                        'h-10 text-xs sm:text-sm rounded-xl border-stroke/50 bg-slate-50 text-muted-fg cursor-not-allowed',
+                        formErrors.totalAmountPayable && 'border-red-500'
+                      )}
+                    />
+                    {formErrors.totalAmountPayable && (
+                      <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
+                    )}
+                  </div>
+                </div>
 
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-focus block">Notes / Remarks</label>
-              <Input
-                type="text"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
-              />
-            </div>
+                <RepeatSelect
+                  value={formData.repeat}
+                  onChange={(repeat) => {
+                    if (repeat === 'Daily') {
+                      setFormData({ ...formData, repeat, dueDate: todayStr })
+                    } else {
+                      setFormData({ ...formData, repeat })
+                    }
+                  }}
+                  disabled={hasPayments}
+                  lockedReason={hasPayments ? 'Locked because payments are already recorded against this schedule.' : undefined}
+                  error={formErrors.repeat}
+                />
 
-            <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setIsEditModalOpen(false)}
-                className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 hover:bg-slate-50 text-focus cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={isSubmittingEdit}
-                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-              >
-                {isSubmittingEdit && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
-                <span>{isSubmittingEdit ? 'Saving...' : 'Save Changes'}</span>
-              </Button>
-            </div>
-          </form>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-focus block">
+                      Date Contracted <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="date"
+                      readOnly={hasPayments}
+                      disabled={hasPayments}
+                      value={formData.contractDate}
+                      onChange={(e) => setFormData({ ...formData, contractDate: e.target.value })}
+                      className={cn(
+                        'h-10 text-xs sm:text-sm rounded-xl border-stroke/50',
+                        hasPayments && 'bg-slate-50 text-muted-fg cursor-not-allowed',
+                        formErrors.contractDate && 'border-red-500'
+                      )}
+                    />
+                    {formErrors.contractDate && (
+                      <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-focus block">
+                      First Due Date <span className="text-red-500">*</span>
+                    </label>
+                    <Input
+                      type="date"
+                      value={formData.dueDate}
+                      readOnly={hasPayments}
+                      disabled={hasPayments}
+                      onChange={(e) => setFormData({ ...formData, dueDate: e.target.value })}
+                      className={cn(
+                        'h-10 text-xs sm:text-sm rounded-xl border-stroke/50',
+                        hasPayments && 'bg-slate-50 text-muted-fg cursor-not-allowed',
+                        formErrors.dueDate && 'border-red-500'
+                      )}
+                    />
+                    {formErrors.dueDate && (
+                      <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
+                    )}
+                  </div>
+                </div>
+
+                <RepeatDetails
+                  repeat={formData.repeat}
+                  disabled={hasPayments}
+                  dueDate={formData.dueDate}
+                  leaseEndDate={formData.leaseEndDate}
+                  onEndDateChange={(leaseEndDate) => setFormData({ ...formData, leaseEndDate })}
+                  errors={formErrors}
+                />
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-focus block">Status</label>
+                  <select
+                    value={formData.status}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                    className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
+                  >
+                    <option value="Active">Active</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Overdue">Overdue</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-focus block">
+                    Notes / Remarks <span className="text-muted-fg font-normal">(Optional, up to 255 chars)</span>
+                  </label>
+                  <Input
+                    type="text"
+                    maxLength={255}
+                    value={formData.notes}
+                    onChange={(e) => setFormData({ ...formData, notes: e.target.value.slice(0, 255) })}
+                    className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
+                  />
+                  {formErrors.notes && (
+                    <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsEditModalOpen(false)}
+                    className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 hover:bg-slate-50 text-focus cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={isSubmittingEdit}
+                    className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {isSubmittingEdit && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
+                    <span>{isSubmittingEdit ? 'Saving...' : 'Save Changes'}</span>
+                  </Button>
+                </div>
+              </form>
+            )
+          })()}
         </DialogContent>
       </Dialog>
 
@@ -3290,14 +3419,22 @@ export const TenantPage: React.FC = () => {
             dailyTarget={activeTenant.rentAmount}
             remainingBalance={tenantFin.remaining}
             contractDate={activeTenant.contractDate}
+            firstDueDate={activeTenant.dueDate}
+            leaseEndDate={activeTenant.leaseEndDate}
             dueDate={activeTenant.leaseEndDate || activeTenant.dueDate}
-            existingPayments={(activeTenant.dailyPayments || []).map((p) => ({
-              id: p.id,
-              date: p.date,
-              amount: p.amount,
-              cycleDueDate: p.date,
-              status: p.status,
-            }))}
+            existingPayments={(activeTenant.dailyPayments || []).map((p) => {
+              const matchedPeriod = p.periodIndex
+                ? tenantFin.periods.find((per) => per.index === p.periodIndex)
+                : undefined
+              const cycleDueDate = matchedPeriod ? matchedPeriod.dueDate : p.date
+              return {
+                id: p.id,
+                date: p.date,
+                amount: p.amount,
+                cycleDueDate,
+                status: p.status,
+              }
+            })}
             monthlyProgress={
               activeTenant.repeat === 'Monthly'
                 ? tenantFin.periods.map((p) => ({
@@ -3319,6 +3456,18 @@ export const TenantPage: React.FC = () => {
                 )
                 if (matchedPeriod) {
                   periodIndex = matchedPeriod.index
+                } else if (
+                  typeof subData.cycleIndex === 'number' &&
+                  subData.cycleIndex >= 1 &&
+                  subData.cycleIndex <= tenantFin.periods.length
+                ) {
+                  periodIndex = subData.cycleIndex
+                } else {
+                  const fallbackPeriod =
+                    tenantFin.periods.find((p) => p.remaining > 0.005) || tenantFin.periods[0]
+                  if (fallbackPeriod) {
+                    periodIndex = fallbackPeriod.index
+                  }
                 }
               }
 
@@ -3328,7 +3477,7 @@ export const TenantPage: React.FC = () => {
                 method: subData.method,
                 referenceNo: subData.referenceNo.trim() || undefined,
                 notes: subData.notes.trim() || 'Rent remittance',
-                status: 'Paid',
+                status: subData.status || 'Paid',
                 periodIndex,
               }
 
@@ -3610,7 +3759,7 @@ export const TenantPage: React.FC = () => {
                   />
                 </div>
 
-                {activeTenant.auditStatus && (
+                {activeTenant.auditStatus && (activeTenant.auditStatus === 'Verified' || activeTenant.auditStatus === 'Flagged') && (
                   <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
                     This lease is marked {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Flagged'}. Saving a change
                     sets it back to pending audit.
@@ -3670,7 +3819,7 @@ export const TenantPage: React.FC = () => {
             </div>
           )}
 
-          {activeTenant?.auditStatus && (
+          {activeTenant?.auditStatus && (activeTenant.auditStatus === 'Verified' || activeTenant.auditStatus === 'Flagged') && (
             <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
               This lease is marked {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Flagged'}. This change sets it
               back to pending audit.

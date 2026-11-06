@@ -23,6 +23,8 @@ export interface DailyRentRecord {
   timestamp: string
   /** Starting period (1 based) of a payment on a repeating lease. Extra money flows forward from it. */
   periodIndex?: number
+  createdBy?: number
+  createdByName?: string
 }
 
 export interface TenantLease {
@@ -43,10 +45,12 @@ export interface TenantLease {
   repeat?: LeaseRepeat
   leaseEndDate?: string
   penaltyRate?: number
-  auditStatus?: 'Verified' | 'Flagged'
+  auditStatus?: 'Verified' | 'Flagged' | 'Pending Audit' | string
   auditDate?: string
   auditedBy?: string
   auditRemarks?: string
+  audited_at?: string
+  auditedAt?: string
 }
 
 /** The lease fields the New Lease and Edit forms send. */
@@ -70,7 +74,7 @@ export interface PaymentInput {
   method?: string
   referenceNo?: string
   notes?: string
-  status: 'Paid' | 'Missed'
+  status: 'Paid' | 'Missed' | 'Partially Paid'
   missedReason?: string
   periodIndex?: number
 }
@@ -142,10 +146,11 @@ export function mapLease(b: any): TenantLease {
     repeat,
     leaseEndDate: b.lease_end_date ? String(b.lease_end_date).slice(0, 10) : undefined,
     penaltyRate: b.penalty_rate === null || b.penalty_rate === undefined ? undefined : Number(b.penalty_rate),
-    auditStatus: b.audit_status === 'Verified' || b.audit_status === 'Flagged' ? b.audit_status : undefined,
+    auditStatus: b.audit_status || 'Pending Audit',
     auditDate: formatAuditDate(b.audited_at),
     auditedBy: b.audited_by || undefined,
     auditRemarks: b.audit_remarks || undefined,
+    audited_at: b.audited_at || undefined,
     dailyPayments: (b.payments || []).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (p: any): DailyRentRecord => ({
@@ -159,6 +164,8 @@ export function mapLease(b: any): TenantLease {
         missedReason: p.missed_reason || undefined,
         timestamp: p.created_at || `${String(p.payment_date).slice(0, 10)}T00:00:00Z`,
         periodIndex: p.period_index ?? undefined,
+        createdBy: p.created_by ?? undefined,
+        createdByName: p.created_by_name || undefined,
       })
     ),
   }

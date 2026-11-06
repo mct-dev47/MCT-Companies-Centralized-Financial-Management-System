@@ -11,7 +11,7 @@
 
 export type LeaseRepeat = 'None' | 'Daily' | 'Monthly' | 'Quarterly' | 'Annually'
 
-export const REPEAT_OPTIONS: LeaseRepeat[] = ['None', 'Daily', 'Monthly', 'Quarterly', 'Annually']
+export const REPEAT_OPTIONS: LeaseRepeat[] = ['Daily', 'Monthly']
 
 /** Hard cap on the number of periods a single lease can generate. */
 export const MAX_PERIODS = 1000

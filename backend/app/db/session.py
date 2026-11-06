@@ -162,6 +162,29 @@ def init_db():
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_remarks TEXT"))
 
+        if "tenant_leases" in table_names:
+            tl_cols = {col["name"] for col in inspector.get_columns("tenant_leases")}
+            if "audit_status" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_remarks TEXT"))
+
+        if "tenant_lease_payments" in table_names:
+            try:
+                with engine.begin() as conn:
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(text("ALTER TABLE tenant_lease_payments ALTER COLUMN status TYPE VARCHAR(20)"))
+            except Exception:
+                pass
+
         if "company" in table_names:
             c_cols = {col["name"] for col in inspector.get_columns("company")}
             if "petty_cash" not in c_cols:

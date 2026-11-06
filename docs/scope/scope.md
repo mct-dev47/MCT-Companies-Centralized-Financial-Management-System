@@ -13,6 +13,8 @@
 | User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
 | Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
 | Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
+| Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
+| Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 
 ---
 
@@ -158,3 +160,34 @@
   - [x] Milestone 4: Flag Audit Discrepancy modal full width styling, border, and database persistence (AC-7, AC-8, AC-9)
 - [ ] Verify it: /check verify lending-audit-workflow
 - [ ] Test it: /test lending-audit-workflow
+
+### Tenant Audit Tags and Table Refinements
+**Status**: in-progress
+**Spec**: [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md)
+**Intent**: Clean the main tenant table by removing subtitles and date columns, display status as colored text without pill backgrounds, add an Audit Tag column with multi line hover details for all permitted roles, remove actions from payment history, and display creator name attribution.
+**Done when**: Tenant name cell shows only the tenant name without subtitle reference or stall units, contract date and due date columns are removed while preserved in exports, status badges render as borderless colored text, audit tag column is visible to all roles with multi line title tooltips, payment schedule actions column is removed, and payment schedule created by column displays creator initials and last name with full name hover tooltips.
+
+- [x] Design it (spec): [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md)
+- [x] Build it: /develop tenant-audit-tags (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Backend user name resolution on tenant payment responses (AC-10)
+  - [x] Milestone 2: Main table column cleanup, removing subtitles and date columns (AC-1, AC-2, AC-11)
+  - [x] Milestone 3: Borderless status typography and universal audit tag column with multi line hover tooltips (AC-3, AC-4, AC-5, AC-6)
+  - [x] Milestone 4: Payment schedule action column removal and Created By attribution column (AC-7, AC-8, AC-9)
+- [x] Verify it: /check verify tenant-audit-tags
+- [ ] Test it: /test tenant-audit-tags
+
+### Tenant Audit Review and Lease Refinements
+**Status**: in-progress
+**Spec**: [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md)
+**Intent**: Add a dedicated Audit Review panel to the tenant details view matching FilCap Lending, validate payment fields with 50 character remarks limit, lock core lease terms when payment transactions exist, simplify payment schedules to Daily and Monthly, remove late penalty and repeat summary boxes, realign date inputs into a balanced grid, and ensure all data originates from Supabase.
+**Done when**: Audit Review panel displays in the left summary column of Tenant Details with status, reviewer, timestamp, and discrepancy remarks; Record Payment enforces date, amount, payment method, and 50 character remarks validation; Edit Lease locks rent, total payable, repeat, and date fields when payments exist; New Lease offers strictly Daily and Monthly schedules, realigns dates into a two column grid with Status, removes late penalty and calculation boxes, and validates all inputs; and backend ensures Supabase schema and audit persistence.
+
+- [x] Design it (spec): [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md)
+- [x] Build it: /develop tenant-audit-review (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration and session startup checks for tenant lease audit columns (AC-13, AC-14)
+  - [x] Milestone 2: Record Payment modal validation for dates, amounts, payment methods, and 50 char remarks (AC-2, AC-3, AC-4, AC-5)
+  - [x] Milestone 3: Edit Lease modal read only locking when payments exist and penalty removal (AC-6, AC-10)
+  - [x] Milestone 4: New Lease modal layout realignment, schedule simplification to Daily/Monthly, summary box removal, and field validation (AC-7, AC-8, AC-9, AC-10, AC-11, AC-12)
+  - [x] Milestone 5: Tenant Details dedicated Audit Review card matching FilCap Lending (AC-1)
+- [ ] Verify it: /check verify tenant-audit-review
+- [ ] Test it: /test tenant-audit-review
