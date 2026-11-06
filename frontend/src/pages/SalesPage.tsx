@@ -1,3 +1,4 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import {
   Download,
@@ -349,7 +350,7 @@ export const SalesPage: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     })
-    const auditorName = user?.fullName || 'Audit'
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const updated: SalesItem = {
       ...sale,
       auditStatus: status,

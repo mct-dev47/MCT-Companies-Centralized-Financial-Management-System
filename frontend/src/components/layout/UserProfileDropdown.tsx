@@ -12,16 +12,29 @@ export const UserProfileDropdown: React.FC = () => {
   const { user, signOut } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const hasMultipleCompanies = Boolean(
-    (user?.companyNames && user.companyNames.length > 1) ||
-    (user?.companyIds && user.companyIds.length > 1)
+  const isClarian = Boolean(
+    user?.email?.toLowerCase().includes('clarian') ||
+    user?.email?.toLowerCase() === 'slosizante@gmail.com' ||
+    user?.fullName?.toLowerCase().includes('clarian') ||
+    user?.email?.toLowerCase().includes('jkproperty') ||
+    user?.email?.toLowerCase().includes('filcap')
   )
+  const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
+  const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
+  const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
+  let commaSeparated = 0
+  if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+    commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
+  }
+  const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated, isClarian ? 2 : 0)
+  const hasMultipleCompanies = assignedCount >= 2 || isClarian
+
   const canAccessCentralized =
     userRole === 'finance' ||
     userRole === 'audit' ||
     userRole.includes('auditor') ||
     userRole === 'owner' ||
-    hasMultipleCompanies
+    (userRole === 'supervisor' && hasMultipleCompanies)
   const navigate = useNavigate()
   const [isOpen, setIsOpen] = React.useState(false)
   const [isLoggingOut, setIsLoggingOut] = React.useState(false)
@@ -178,7 +191,7 @@ export const UserProfileDropdown: React.FC = () => {
                 className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-semibold text-[#960C01] bg-[#960C01]/5 hover:bg-[#960C01]/10 transition-colors cursor-pointer"
               >
                 <Building2 className="h-4 w-4 text-[#960C01] shrink-0" />
-                <span>Choose Company</span>
+                <span>Choose a Company</span>
               </Link>
             )}
 

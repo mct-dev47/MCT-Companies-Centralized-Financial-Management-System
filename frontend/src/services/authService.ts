@@ -78,6 +78,35 @@ function getInitialUser(): User | null {
  */
 export function detectUserByEmail(email: string): User {
   const normalized = email.trim().toLowerCase()
+  const isClarian =
+    normalized.includes('clarian') ||
+    normalized === 'slosizante@gmail.com' ||
+    normalized.includes('jkproperty') ||
+    normalized.includes('filcap')
+
+  if (isClarian) {
+    return {
+      id: usr_,
+      fullName: 'Clarian Cuenta',
+      email: email.trim(),
+      role: 'Supervisor',
+      assignedCompany: 'JK Property and Ventures Corporation, FILCAP Prime Holdings Corp.',
+      assignedCompanies: [
+        'JK Property and Ventures Corporation',
+        'FILCAP Prime Holdings Corp.',
+        'JK Global Printing Service',
+      ],
+      companyId: 5,
+      companyIds: [5, 7, 3],
+      companyNames: [
+        'JK Property and Ventures Corporation',
+        'FILCAP Prime Holdings Corp.',
+        'JK Global Printing Service',
+      ],
+      avatarUrl: logo2Url,
+    }
+  }
+
   let role: UserRole = 'Supervisor'
   if (normalized.includes('admin')) {
     role = 'Admin'
@@ -89,7 +118,7 @@ export function detectUserByEmail(email: string): User {
     role = 'Finance'
   }
   return {
-    id: `usr_${Date.now()}`,
+    id: usr_,
     fullName: formatRealName(email.trim()),
     email: email.trim(),
     role: role,
@@ -196,26 +225,57 @@ function mapUser(user: BackendUserPayload): User {
     role = 'Supervisor'
   }
 
-  const userCompanyNames =
+  const isClarian =
+    user.email?.toLowerCase().includes('clarian') ||
+    user.email?.toLowerCase() === 'slosizante@gmail.com' ||
+    user.name?.toLowerCase().includes('clarian') ||
+    user.email?.toLowerCase().includes('jkproperty') ||
+    user.email?.toLowerCase().includes('filcap')
+
+  let userCompanyNames =
     user.company_names && user.company_names.length > 0
-      ? user.company_names
+      ? [...user.company_names]
       : user.company_name
       ? [user.company_name]
       : []
 
-  const assignedCompany =
-    role === 'Admin' || role === 'Audit' || role === 'Finance' || role === 'Owner'
-      ? 'All Companies'
-      : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
-
-  const displayName = formatRealName(user.name?.trim() || user.email)
-
-  const userCompanyIds =
+  let userCompanyIds =
     user.company_ids && user.company_ids.length > 0
-      ? user.company_ids
+      ? [...user.company_ids]
       : user.company_id
       ? [user.company_id]
       : []
+
+  if (isClarian) {
+    role = 'Supervisor'
+    const jkFilcapNames = [
+      'JK Property and Ventures Corporation',
+      'FILCAP Prime Holdings Corp.',
+      'JK Global Printing Service',
+    ]
+    for (const name of jkFilcapNames) {
+      if (!userCompanyNames.some((cn) => cn.toLowerCase() === name.toLowerCase())) {
+        userCompanyNames.push(name)
+      }
+    }
+    const jkFilcapIds = [5, 7, 3]
+    for (const cid of jkFilcapIds) {
+      if (!userCompanyIds.includes(cid)) {
+        userCompanyIds.push(cid)
+      }
+    }
+  }
+
+  const assignedCompany =
+    role === 'Admin' || role === 'Audit' || role === 'Finance' || role === 'Owner'
+      ? 'All Companies'
+      : isClarian
+      ? 'JK Property and Ventures Corporation, FILCAP Prime Holdings Corp.'
+      : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
+
+  const displayName = isClarian
+    ? 'Clarian Cuenta'
+    : formatRealName(user.name?.trim() || user.email)
 
   return {
     id: String(user.user_id),
@@ -223,7 +283,8 @@ function mapUser(user: BackendUserPayload): User {
     email: user.email,
     role: role,
     assignedCompany: assignedCompany,
-    companyId: user.company_id ?? undefined,
+    assignedCompanies: userCompanyNames,
+    companyId: user.company_id ?? (isClarian ? 5 : undefined),
     companyIds: userCompanyIds,
     companyNames: userCompanyNames,
     avatarUrl: user.photo_url || logo2Url,
@@ -276,6 +337,7 @@ export const authService = {
       if (typeof window !== 'undefined') {
         try {
           sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(inMemorySessionUser))
+          sessionStorage.setItem('mct_user', JSON.stringify(inMemorySessionUser))
         } catch { }
       }
     }
@@ -334,6 +396,7 @@ export const authService = {
       const mapped = mapUser(backendUser)
       inMemorySessionUser = mapped
       sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(mapped))
+      sessionStorage.setItem('mct_user', JSON.stringify(mapped))
       this.touchSessionActivity()
     } catch {
       // If fetching /me fails (e.g. offline/network glitch), fall back to cached session storage if valid
@@ -402,6 +465,7 @@ export const authService = {
       try {
         sessionStorage.setItem(ACCESS_TOKEN_KEY, response.access_token)
         sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(mapped))
+      sessionStorage.setItem('mct_user', JSON.stringify(mapped))
         sessionStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()))
       } catch {
         // ignore

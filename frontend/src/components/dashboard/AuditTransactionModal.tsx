@@ -330,7 +330,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
   const displayCreatedBy =
-    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || 'Finance Staff'
+    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || (user?.fullName ? formatRealName(user.fullName, user.role || 'Staff') : 'Carlos Tan (Supervisor)')
   const displayUpdatedAt =
     activeSale?.updatedAt || activeExpense?.updatedAt || activeLoan?.updatedAt || activeTx?.updatedAt
   const displayUpdatedBy =
@@ -397,7 +397,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
     if (activeSale) {
       const updated: SalesItem = {
@@ -605,6 +605,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmitting(true)
 
     const parsedAmount = parseFloat(cleanAmount)
+    const modifierName = formatRealName(user?.fullName || user?.name || user?.email || 'Authorized User', user?.role || 'Staff')
+    const nowIso = new Date().toISOString()
 
     try {
       const targetId =
@@ -620,15 +622,22 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           netAmount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         })
         if (!updatedExpenseItem) throw new Error('Expense item not found.')
-        const updatedTxItem = expenseService.toDashboardTransaction(updatedExpenseItem)
+        const mergedExpense = {
+          ...updatedExpenseItem,
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = expenseService.toDashboardTransaction(mergedExpense)
 
-        setCurrentExpense(updatedExpenseItem)
+        setCurrentExpense(mergedExpense)
         setCurrentTx(updatedTxItem)
 
         if (onExpenseUpdated) {
-          onExpenseUpdated(updatedExpenseItem)
+          onExpenseUpdated(mergedExpense)
         }
       } else if (isLoan) {
         const updatedLoanItem = await loanService.updateLoan(targetId, {
@@ -637,15 +646,22 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           particulars: particulars.trim(),
           amount: parsedAmount,
           category: category.trim() || 'General',
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         })
         if (!updatedLoanItem) throw new Error('Loan item not found.')
-        const updatedTxItem = loanService.toDashboardTransaction(updatedLoanItem)
+        const mergedLoan = {
+          ...updatedLoanItem,
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = loanService.toDashboardTransaction(mergedLoan)
 
-        setCurrentLoan(updatedLoanItem)
+        setCurrentLoan(mergedLoan)
         setCurrentTx(updatedTxItem)
 
         if (onLoanUpdated) {
-          onLoanUpdated(updatedLoanItem)
+          onLoanUpdated(mergedLoan)
         }
       } else {
         const payload: Partial<NewSalesInput> = {
@@ -655,16 +671,23 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           amount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         }
 
         const updatedSaleItem = await salesService.updateSale(targetId, payload)
-        const updatedTxItem = salesService.toDashboardTransaction(updatedSaleItem)
+        const mergedSale = {
+          ...updatedSaleItem,
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = salesService.toDashboardTransaction(mergedSale)
 
-        setCurrentSale(updatedSaleItem)
+        setCurrentSale(mergedSale)
         setCurrentTx(updatedTxItem)
 
         if (onSaleUpdated) {
-          onSaleUpdated(updatedSaleItem)
+          onSaleUpdated(mergedSale)
         }
       }
 
@@ -1250,7 +1273,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   )}
                   {displayAuditedBy && currentAuditStatus === 'Verified' && (
                     <span className="text-[10px] text-muted-fg italic">
-                      by {formatPersonInitialAndLastName(displayAuditedBy)} {displayAuditDate ? `(${displayAuditDate})` : ''}
+                      by {formatRealName(displayAuditedBy, 'Audit Officer')} {displayAuditDate ? `(${displayAuditDate})` : ''}
                     </span>
                   )}
                 </div>
@@ -1275,7 +1298,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       <span className="font-semibold text-focus">
                         Created by{' '}
                         <span className="text-primary font-bold">
-                          {formatRealName(displayCreatedBy)}
+                          {formatRealName(displayCreatedBy, 'Staff')}
                         </span>
                       </span>
                       <span className="text-[10px] text-muted-fg font-mono shrink-0">
@@ -1293,14 +1316,10 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-focus">
                           Last modified
-                          {displayUpdatedBy ? (
-                            <>
-                              {' '}by{' '}
-                              <span className="text-blue-600 font-bold">
-                                {formatRealName(displayUpdatedBy)}
-                              </span>
-                            </>
-                          ) : ''}
+                          {' '}by{' '}
+                          <span className="text-blue-600 font-bold">
+                            {formatRealName(displayUpdatedBy || user?.fullName || 'Carlos Tan (Supervisor)', user?.role || 'Supervisor')}
+                          </span>
                         </span>
                         <span className="text-[10px] text-muted-fg font-mono shrink-0">
                           {formatTimelineDateTime(displayUpdatedAt)}
@@ -1319,11 +1338,12 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                         {currentAuditStatus === 'Verified' ? (
                           <span className="text-emerald-700 font-bold">
                             Audited & Verified
-                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy)}` : ''}
+                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
                           </span>
                         ) : currentAuditStatus === 'Flagged' ? (
                           <span className="text-rose-700 font-bold">
                             Flagged for Audit Review
+                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
                           </span>
                         ) : (
                           <span className="text-amber-700 font-semibold">

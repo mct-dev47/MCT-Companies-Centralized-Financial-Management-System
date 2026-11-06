@@ -76,14 +76,23 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     const sessionUser = await authService.getSession()
     resetState()
     const role = (sessionUser?.role || '').toLowerCase()
+    const isClarian = Boolean(
+      sessionUser?.email?.toLowerCase().includes('clarian') ||
+      sessionUser?.email?.toLowerCase() === 'slosizante@gmail.com' ||
+      sessionUser?.fullName?.toLowerCase().includes('clarian') ||
+      sessionUser?.email?.toLowerCase().includes('jkproperty') ||
+      sessionUser?.email?.toLowerCase().includes('filcap')
+    )
     const assignedCount = Math.max(
       sessionUser?.companyIds?.length || 0,
-      sessionUser?.companyNames?.length || 0
+      sessionUser?.companyNames?.length || 0,
+      sessionUser?.assignedCompanies?.length || 0,
+      isClarian ? 2 : 0
     )
 
     if (role === 'admin') {
       navigate('/employee', { replace: true })
-    } else if (assignedCount >= 2) {
+    } else if (assignedCount >= 2 || isClarian) {
       navigate('/centralized-auth', { replace: true })
     } else if (role === 'finance' || role === 'audit' || role.includes('audit')) {
       navigate('/centralized-auth', { replace: true })

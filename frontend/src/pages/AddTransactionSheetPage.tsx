@@ -35,6 +35,7 @@ import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatRealName } from '@/utils/formatRealName'
 import {
   formatParticularsString,
   parseParticulars,
@@ -1540,6 +1541,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
     setIsSubmitting(true)
     const effectiveBankId = selectedBankAccountId || undefined
+    const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
+    const nowIso = new Date().toISOString()
 
     try {
       if (isEditMode) {
@@ -1570,6 +1573,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             status: first.status,
             items: itemized,
             bankAccountId: effectiveBankId,
+            updatedBy: authorName,
+            updatedAt: nowIso,
           })
         } else {
           await expenseService.updateExpense(editItem.id, {
@@ -1584,6 +1589,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             status: first.status,
             items: itemized,
             bankAccountId: effectiveBankId,
+            updatedBy: authorName,
+            updatedAt: nowIso,
           })
         }
 
@@ -1615,6 +1622,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               items: extraItemized,
               bankAccountId: effectiveBankId,
+              createdBy: authorName,
             })
           } else {
             await expenseService.addExpense({
@@ -1628,6 +1636,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               items: extraItemized,
               bankAccountId: effectiveBankId,
+              createdBy: authorName,
             })
           }
         }
@@ -1659,6 +1668,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               items: itemized,
               bankAccountId: effectiveBankId,
+              createdBy: authorName,
             })
 
             if (row.status === 'Unpaid' && unpaidAssignments.length > 0) {
@@ -1710,6 +1720,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               items: itemized,
               bankAccountId: effectiveBankId,
+              createdBy: authorName,
             })
           }
         }

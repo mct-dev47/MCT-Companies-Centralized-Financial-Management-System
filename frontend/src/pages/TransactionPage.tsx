@@ -1,3 +1,4 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import {
   Search,
@@ -754,7 +755,7 @@ export const TransactionPage: React.FC = () => {
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = user?.fullName || 'Admin'
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
       ...tx,
