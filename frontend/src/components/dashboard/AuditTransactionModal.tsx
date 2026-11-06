@@ -142,7 +142,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const navigate = useNavigate()
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
-  const isAudit = roleLower === 'audit' || roleLower.includes('auditor')
+  const isAudit = roleLower.includes('audit')
   const isAdmin = roleLower === 'admin' || isAudit
   const isOwner = roleLower === 'owner'
   const canAudit = isAdmin && !isOwner
@@ -457,7 +457,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         } else if (activeTx.type === 'Expense') {
           await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName)
         } else if (activeTx.type === 'Loan') {
-          await loanService.updateLoan(activeTx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
         } else if (activeTx.type === 'Income') {
           const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
           await tenantService.saveAuditReview(leaseId, 'Verified')
@@ -534,7 +535,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         } else if (activeTx.type === 'Expense') {
           await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
         } else if (activeTx.type === 'Loan') {
-          await loanService.updateLoan(activeTx.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
         } else if (activeTx.type === 'Income') {
           const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
           await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
@@ -604,7 +606,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         } else if (activeTx.type === 'Expense') {
           await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
         } else if (activeTx.type === 'Loan') {
-          await loanService.updateLoan(activeTx.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
         } else if (activeTx.type === 'Income') {
           const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
           await tenantService.saveAuditReview(leaseId, 'Pending Audit')
@@ -1513,7 +1516,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
             {/* Audit Actions: Mark as Audited, Flag Discrepancy, or Reset */}
             {canAudit && (
-              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
+              <div className="sticky bottom-0 z-20 bg-white flex flex-wrap items-center justify-between gap-2.5 pt-3 pb-1 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (
                     <span className="text-emerald-700 font-semibold flex items-center gap-1">
@@ -1542,7 +1545,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     title="Mark as Audited"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                    <span>{currentAuditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audit'}</span>
+                    <span>{currentAuditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
                   </Button>
 
                   <Button
@@ -1557,7 +1560,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     title="Flag Discrepancy"
                   >
                     <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                    <span>Flag as Discrepancy</span>
+                    <span>Flag Discrepancy</span>
                   </Button>
 
                   {currentAuditStatus !== 'Pending Audit' && (

@@ -31,6 +31,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
+import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1803,23 +1804,15 @@ export const TenantPage: React.FC = () => {
                                 </td>
                                 {!isAudit && !isOwner && (
                                   <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                                    <div className="inline-flex items-center gap-1 justify-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenEditRecord(rec)}
-                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer transition-colors"
-                                        title="Edit this payment"
-                                      >
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setRemoveTarget({ kind: 'record', record: rec })}
-                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
-                                        title="Remove this payment"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </button>
+                                    <div className="inline-flex items-center justify-center">
+                                      <RowActionsMenu
+                                        canEdit
+                                        canDelete
+                                        onEdit={() => handleOpenEditRecord(rec)}
+                                        onDelete={() => setRemoveTarget({ kind: 'record', record: rec })}
+                                        editLabel="Edit Payment"
+                                        deleteLabel="Remove Payment"
+                                      />
                                     </div>
                                   </td>
                                 )}
