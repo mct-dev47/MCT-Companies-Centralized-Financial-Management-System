@@ -13,6 +13,7 @@
 | User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
 | Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
 | Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
+| Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 
 ---
 
@@ -158,3 +159,18 @@
   - [x] Milestone 4: Flag Audit Discrepancy modal full width styling, border, and database persistence (AC-7, AC-8, AC-9)
 - [ ] Verify it: /check verify lending-audit-workflow
 - [ ] Test it: /test lending-audit-workflow
+
+### Tenant Audit Tags and Table Refinements
+**Status**: in-progress
+**Spec**: [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md)
+**Intent**: Clean the main tenant table by removing subtitles and date columns, display status as colored text without pill backgrounds, add an Audit Tag column with multi line hover details for all permitted roles, remove actions from payment history, and display creator name attribution.
+**Done when**: Tenant name cell shows only the tenant name without subtitle reference or stall units, contract date and due date columns are removed while preserved in exports, status badges render as borderless colored text, audit tag column is visible to all roles with multi line title tooltips, payment schedule actions column is removed, and payment schedule created by column displays creator initials and last name with full name hover tooltips.
+
+- [x] Design it (spec): [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md)
+- [x] Build it: /develop tenant-audit-tags (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Backend user name resolution on tenant payment responses (AC-10)
+  - [x] Milestone 2: Main table column cleanup, removing subtitles and date columns (AC-1, AC-2, AC-11)
+  - [x] Milestone 3: Borderless status typography and universal audit tag column with multi line hover tooltips (AC-3, AC-4, AC-5, AC-6)
+  - [x] Milestone 4: Payment schedule action column removal and Created By attribution column (AC-7, AC-8, AC-9)
+- [x] Verify it: /check verify tenant-audit-tags
+- [ ] Test it: /test tenant-audit-tags

@@ -68,6 +68,7 @@ class PaymentOut(BaseModel):
     missed_reason: Optional[str] = None
     period_index: Optional[int] = None
     created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
     created_at: Optional[str] = None
 
 
@@ -94,6 +95,7 @@ class LeaseOut(BaseModel):
     audited_at: Optional[str] = None
     audit_remarks: Optional[str] = None
     created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     payments: List[PaymentOut] = []

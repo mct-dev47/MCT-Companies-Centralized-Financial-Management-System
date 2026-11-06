@@ -23,6 +23,8 @@ export interface DailyRentRecord {
   timestamp: string
   /** Starting period (1 based) of a payment on a repeating lease. Extra money flows forward from it. */
   periodIndex?: number
+  createdBy?: number
+  createdByName?: string
 }
 
 export interface TenantLease {
@@ -159,6 +161,8 @@ export function mapLease(b: any): TenantLease {
         missedReason: p.missed_reason || undefined,
         timestamp: p.created_at || `${String(p.payment_date).slice(0, 10)}T00:00:00Z`,
         periodIndex: p.period_index ?? undefined,
+        createdBy: p.created_by ?? undefined,
+        createdByName: p.created_by_name || undefined,
       })
     ),
   }

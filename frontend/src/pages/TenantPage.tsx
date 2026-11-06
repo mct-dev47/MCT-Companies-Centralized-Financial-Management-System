@@ -54,7 +54,7 @@ import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { useSession } from '@/hooks/useSession'
-import { formatPHP } from '@/lib/format'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFields'
@@ -1724,15 +1724,13 @@ export const TenantPage: React.FC = () => {
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
-                          {!isAudit && !isOwner && (
-                            <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
-                          )}
+                          <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Created By</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={isAudit || isOwner ? 7 : 8} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={8} className="py-12 text-center text-muted-fg text-xs">
                               <div className="flex flex-col items-center justify-center">
                                 <Coins className="w-6 h-6 text-muted-fg/40 mb-2" />
                                 <p className="font-semibold text-focus">
@@ -1801,28 +1799,28 @@ export const TenantPage: React.FC = () => {
                                 <td className="py-2.5 px-3.5 text-muted-fg truncate max-w-[200px]" title={rec.notes || '—'}>
                                   {rec.notes || '—'}
                                 </td>
-                                {!isAudit && !isOwner && (
-                                  <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                                    <div className="inline-flex items-center gap-1 justify-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenEditRecord(rec)}
-                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer transition-colors"
-                                        title="Edit this payment"
+                                {(() => {
+                                  const rawCreatedBy = rec.createdByName
+                                  const resolvedFullName = rawCreatedBy ? formatRealName(rawCreatedBy) : ''
+                                  const fullCreatedBy = resolvedFullName || rawCreatedBy || ''
+                                  const displayCreatedBy = formatPersonInitialAndLastName(fullCreatedBy)
+                                  const hasName = Boolean(fullCreatedBy && fullCreatedBy !== '—' && fullCreatedBy !== '-')
+                                  const tooltipText = hasName ? fullCreatedBy : undefined
+
+                                  return (
+                                    <td
+                                      className="py-2.5 px-3.5 text-focus font-medium whitespace-nowrap max-w-[160px] truncate"
+                                      title={tooltipText}
+                                    >
+                                      <span
+                                        className={cn(hasName ? 'cursor-help' : 'text-muted-fg/40 font-mono')}
+                                        title={tooltipText}
                                       >
-                                        <Pencil className="h-3.5 w-3.5" />
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setRemoveTarget({ kind: 'record', record: rec })}
-                                        className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-rose-500 hover:text-rose-700 hover:bg-rose-50 cursor-pointer transition-colors"
-                                        title="Remove this payment"
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                      </button>
-                                    </div>
-                                  </td>
-                                )}
+                                        {hasName ? displayCreatedBy : '-'}
+                                      </span>
+                                    </td>
+                                  )
+                                })()}
                               </tr>
                             )
                           })
@@ -2370,67 +2368,41 @@ export const TenantPage: React.FC = () => {
       >
         {/* Table matching FilCap Lending layout: clean columns, no separate ID, dedicated Status, Audit & Actions */}
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className={cn('w-full table-fixed', isAudit ? 'min-w-[1240px]' : 'min-w-[1160px]')}>
+          <Table className="w-full table-fixed min-w-[1000px]">
             <colgroup>
-              {isAudit ? (
-                <>
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '8.5%' }} />
-                  <col style={{ width: '5.5%' }} />
-                </>
-              ) : (
-                <>
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '6%' }} />
-                </>
-              )}
+              <col style={{ width: '21%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '15%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[21%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TENANT&apos;S NAME
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   RENT RATE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  CONTRACT DATE
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  DUE DATE
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[15%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[7%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                {isAudit && (
-                  <TableHead className="w-[8.5%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
-                    AUDIT TAG
-                  </TableHead>
-                )}
-                <TableHead className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap")}>
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                  AUDIT TAG
+                </TableHead>
+                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -2438,11 +2410,11 @@ export const TenantPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={isAudit ? 10 : 9} />
+                <TableSkeleton rows={5} columns={8} />
               ) : paginatedTenants.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={isAudit ? 10 : 9}
+                    colSpan={8}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -2463,14 +2435,14 @@ export const TenantPage: React.FC = () => {
                   const fin = financialsById.get(tenant.id) ?? getTenantPeriodFinancials(tenant, todayStr)
                   const repeatingRow = isRepeating(tenant) && fin.periodCount > 0
 
-                  const statusColors = {
-                    Paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    'Advance Paid': 'bg-sky-50 text-sky-700 border-sky-200',
-                    'Partially Paid': 'bg-amber-50 text-amber-700 border-amber-200',
-                    Missed: 'bg-rose-50 text-rose-700 border-rose-200',
-                    Overdue: 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20',
-                    Unpaid: 'bg-slate-100 text-slate-700 border-slate-200',
-                  }[fin.status] || 'bg-slate-100 text-slate-700 border-slate-200'
+                  const statusTextColor = {
+                    Paid: 'text-emerald-700',
+                    'Advance Paid': 'text-sky-700',
+                    'Partially Paid': 'text-amber-700',
+                    Missed: 'text-rose-700',
+                    Overdue: 'text-[#960C01]',
+                    Unpaid: 'text-slate-600',
+                  }[fin.status] || 'text-slate-600'
 
                   return (
                     <TableRow
@@ -2484,19 +2456,11 @@ export const TenantPage: React.FC = () => {
                       )}
                       title="Click to view complete details"
                     >
-                      {/* 1. Tenant's Name & Ref No. / Unit (No separate ID column, matches FilCap) */}
-                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left")}>
-                        <div className="font-semibold text-xs text-focus truncate max-w-[190px]" title={tenant.tenantName}>
-                          {tenant.tenantName}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          <span className="text-[10px] text-muted-fg font-mono">
-                            Ref: <strong className="text-focus">{tenant.tenantId}</strong>
-                          </span>
-                          <span className="text-muted-fg/40">•</span>
-                          <span className="text-[10px] text-muted-fg flex items-center gap-1 truncate max-w-[120px]">
-                            <Store className="w-2.5 h-2.5 text-muted-fg/70 shrink-0" />
-                            <span>{tenant.unitName}</span>
+                      {/* 1. Tenant's Name (clean primary name text only) */}
+                      <TableCell className="w-[21%] px-3.5 py-3 text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-xs text-focus truncate max-w-[240px]" title={tenant.tenantName}>
+                            {tenant.tenantName}
                           </span>
                           {highlightedTenantId === tenant.id && (
                             <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-[#960C01] text-white shadow-xs animate-bounce shrink-0">
@@ -2507,34 +2471,15 @@ export const TenantPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Rent Rate */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[13%] px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap">
                         <div>{formatPHP(tenant.rentAmount)}</div>
                         <div className="text-[10px] text-muted-fg font-normal">
                           Per {tenant.repeat === 'Daily' ? 'day' : 'month'}
                         </div>
                       </TableCell>
 
-                      {/* 3. Contract Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left font-mono text-xs text-muted-fg whitespace-nowrap")}>
-                        {tenant.contractDate}
-                      </TableCell>
-
-                      {/* 4. Due Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left text-xs whitespace-nowrap")}>
-                        <div className="font-mono text-muted-fg font-medium">
-                          {repeatingRow
-                            ? (fin.status === 'Paid'
-                                ? (fin.nextDueDateLabel === 'Fully Paid' ? 'Fully Paid' : fin.nextDueDate)
-                                : fin.activePeriodDueDate)
-                            : tenant.dueDate}
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-sans mt-0.5">
-                          {repeatingRow ? fin.activePeriodLabel : 'One-Time'}
-                        </div>
-                      </TableCell>
-
-                      {/* 5. Total Amount Payable */}
-                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      {/* 3. Total Amount Payable */}
+                      <TableCell className="w-[15%] px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap">
                         <div>{formatPHP(fin.totalDue)}</div>
                         {repeatingRow && fin.totalContractDue !== fin.totalDue && (
                           <div className="text-[10px] text-muted-fg font-normal truncate">
@@ -2543,8 +2488,8 @@ export const TenantPage: React.FC = () => {
                         )}
                       </TableCell>
 
-                      {/* 6. Amount Paid */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
+                      {/* 4. Amount Paid */}
+                      <TableCell className="w-[13%] px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap">
                         <div>{formatPHP(fin.amountPaid)}</div>
                         {repeatingRow && (
                           <div className="text-[10px] text-muted-fg font-normal truncate">
@@ -2553,58 +2498,59 @@ export const TenantPage: React.FC = () => {
                         )}
                       </TableCell>
 
-                      {/* 7. Remaining Balance */}
-                      <TableCell className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-left font-bold text-xs tabular-nums whitespace-nowrap")}>
+                      {/* 5. Remaining Balance */}
+                      <TableCell className="w-[14%] px-3.5 py-3 text-left font-bold text-xs tabular-nums whitespace-nowrap">
                         <div className={fin.remaining <= 0.005 ? 'text-emerald-600' : 'text-amber-600'}>
                           {formatPHP(fin.remaining)}
                         </div>
                       </TableCell>
 
-                      {/* 8. Status (Dedicated Column, matches FilCap) */}
-                      <TableCell className="w-[7%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-block px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border uppercase tracking-wider',
-                            statusColors
-                          )}
-                        >
+                      {/* 6. Status (Clean colored text without background pill or border) */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusTextColor)}>
                           {fin.status}
                         </span>
                       </TableCell>
 
-                      {/* 9. Audit Tag (Dedicated column for Auditor account, matches FilCap) */}
-                      {isAudit && (
-                        <TableCell className="w-[8.5%] px-2.5 py-3 text-center whitespace-nowrap">
-                          {tenant.auditStatus ? (
-                            <div className="flex flex-col items-center justify-center gap-0.5">
-                              <span
-                                className={cn(
-                                  'inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
-                                  tenant.auditStatus === 'Verified'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-                                )}
-                              >
-                                {tenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                              </span>
-                              {tenant.auditDate && (
-                                <span
-                                  className="block text-[9.5px] text-muted-fg font-mono whitespace-nowrap mt-0.5"
-                                  title={tenant.auditedBy ? `Audited by ${formatRealName(tenant.auditedBy)}` : undefined}
-                                >
-                                  {tenant.auditDate}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-fg/40 font-mono">-</span>
-                          )}
-                        </TableCell>
-                      )}
+                      {/* 7. Audit Tag (Visible to all authenticated roles) */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        {(() => {
+                          const isVerified = tenant.auditStatus === 'Verified'
+                          const isFlagged = tenant.auditStatus === 'Flagged'
 
-                      {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
+                          if (!isVerified && !isFlagged) {
+                            return <span className="text-xs text-muted-fg/40 font-mono">-</span>
+                          }
+
+                          const tooltipLines: string[] = []
+                          if (tenant.auditedBy && tenant.auditedBy !== '-') {
+                            tooltipLines.push(`Audited by: ${formatRealName(tenant.auditedBy)}`)
+                          }
+                          if (tenant.auditDate) {
+                            tooltipLines.push(`Date: ${tenant.auditDate}`)
+                          }
+                          if (tenant.auditRemarks) {
+                            tooltipLines.push(`Remarks: ${tenant.auditRemarks}`)
+                          }
+                          const tooltip = tooltipLines.length > 0 ? tooltipLines.join('\n') : (isVerified ? 'Audited' : 'Discrepancy')
+
+                          return (
+                            <span
+                              title={tooltip}
+                              className={cn(
+                                'text-xs font-bold uppercase tracking-wider whitespace-nowrap cursor-help',
+                                isVerified ? 'text-emerald-700' : 'text-[#960C01]'
+                              )}
+                            >
+                              {isVerified ? 'Audited' : 'Discrepancy'}
+                            </span>
+                          )
+                        })()}
+                      </TableCell>
+
+                      {/* 8. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
                       <TableCell
-                        className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")}
+                        className="w-[6%] px-2 py-3 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isOwner ? (
