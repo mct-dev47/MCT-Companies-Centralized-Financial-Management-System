@@ -43,21 +43,7 @@ const DialogContent = React.forwardRef<
     size?: ModalSize
     hideCloseButton?: boolean
   }
->(({ className, overlayClassName, size = 'lg', hideCloseButton = false, children, ...props }, ref) => {
-  React.useEffect(() => {
-    const originalHtmlOverflow = document.documentElement.style.overflow
-    const originalBodyOverflow = document.body.style.overflow
-
-    document.documentElement.style.overflow = 'hidden'
-    document.body.style.overflow = 'hidden'
-
-    return () => {
-      document.documentElement.style.overflow = originalHtmlOverflow
-      document.body.style.overflow = originalBodyOverflow
-    }
-  }, [])
-
-  return (
+>(({ className, overlayClassName, size = 'lg', hideCloseButton = false, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className={overlayClassName} />
     <DialogPrimitive.Content
@@ -78,8 +64,7 @@ const DialogContent = React.forwardRef<
       )}
     </DialogPrimitive.Content>
   </DialogPortal>
-  )
-})
+))
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({
