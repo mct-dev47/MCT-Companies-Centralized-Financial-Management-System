@@ -106,7 +106,7 @@ export const LendingPage: React.FC = () => {
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isOwner = userRole === 'owner'
-  const canAuditActions = (isAudit || userRole === 'admin') && !isOwner
+  const canAuditActions = isAudit && !isOwner
   // Audit Review modal and submission state
   const [isAuditConfirmModalOpen, setIsAuditConfirmModalOpen] = React.useState(false)
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
@@ -117,25 +117,16 @@ export const LendingPage: React.FC = () => {
     if (!activeFacility) return
     setIsSubmittingAudit(true)
     try {
-      const timestamp = new Date().toLocaleString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      })
-      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
-      const updatedFacility: LendingFacility = {
-        ...activeFacility,
-        auditStatus: 'Verified',
-        auditDate: timestamp,
-        auditedBy: auditorName,
+      const auditorName = formatRealName(user?.fullName || (user as any)?.name || user?.email || 'Audit')
+      const updated = await lendingService.saveAuditReview(activeFacility.id, 'Verified', undefined, auditorName)
+      await fetchFacilities()
+      if (activeFacility && (activeFacility.id === updated.id || String(activeFacility.borrower_id) === String(updated.borrower_id))) {
+        setActiveFacility(updated)
       }
-      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
-      saveFacilities(updatedList)
-      setActiveFacility(updatedFacility)
       setIsAuditConfirmModalOpen(false)
+    } catch (err: any) {
+      console.error('Failed to save audit review:', err)
+      alert(err?.message || 'Failed to update audit review in database. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -145,27 +136,18 @@ export const LendingPage: React.FC = () => {
     if (!activeFacility || !discrepancyReason.trim()) return
     setIsSubmittingAudit(true)
     try {
-      const timestamp = new Date().toLocaleString('en-US', {
-        month: '2-digit',
-        day: '2-digit',
-        year: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: true,
-      })
-      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
-      const updatedFacility: LendingFacility = {
-        ...activeFacility,
-        auditStatus: 'Flagged',
-        auditDate: timestamp,
-        auditedBy: auditorName,
-        auditRemarks: discrepancyReason.trim(),
+      const trimmedRemarks = discrepancyReason.trim()
+      const auditorName = formatRealName(user?.fullName || (user as any)?.name || user?.email || 'Audit')
+      const updated = await lendingService.saveAuditReview(activeFacility.id, 'Flagged', trimmedRemarks, auditorName)
+      await fetchFacilities()
+      if (activeFacility && (activeFacility.id === updated.id || String(activeFacility.borrower_id) === String(updated.borrower_id))) {
+        setActiveFacility(updated)
       }
-      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
-      saveFacilities(updatedList)
-      setActiveFacility(updatedFacility)
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')
+    } catch (err: any) {
+      console.error('Failed to flag discrepancy:', err)
+      alert(err?.message || 'Failed to update audit review in database. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -537,7 +519,9 @@ export const LendingPage: React.FC = () => {
       'Amount Paid',
       'Remaining Balance',
       'Status',
-      ...(isAudit ? ['Audit Status', 'Audit Date'] : []),
+      'Audit Status',
+      'Audited By',
+      'Audit Date',
     ]
 
     const rows = filteredFacilities.map((f) => [
@@ -551,7 +535,9 @@ export const LendingPage: React.FC = () => {
       f.amountPaid,
       f.remainingBalance,
       f.status,
-      ...(isAudit ? [f.auditStatus || 'Unreviewed', f.auditDate || ''] : []),
+      f.auditStatus || (f as any).audit_status || 'Unreviewed',
+      f.auditedBy && f.auditedBy !== '-' ? `"${f.auditedBy.replace(/"/g, '""')}"` : ((f as any).audited_by || '-'),
+      f.auditDate || (f as any).auditDate || (f as any).audited_at || '-',
     ])
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
@@ -584,7 +570,9 @@ export const LendingPage: React.FC = () => {
           <td style="text-align: right; color: #059669; font-weight: 600;">${formatPHP(f.amountPaid)}</td>
           <td style="text-align: right; color: #d97706; font-weight: bold;">${formatPHP(f.remainingBalance)}</td>
           <td style="text-align: center;">${f.status}</td>
-          ${isAudit ? `<td style="text-align: center; font-weight: 600;">${f.auditStatus || '-'}</td><td style="text-align: center; font-size: 10px; font-family: monospace;">${f.auditDate || '-'}</td>` : ''}
+          <td style="text-align: center; font-weight: 600;">${f.auditStatus || (f as any).audit_status || '-'}</td>
+          <td style="text-align: center;">${f.auditedBy && f.auditedBy !== '-' ? f.auditedBy : ((f as any).audited_by || '-')}</td>
+          <td style="text-align: center; font-size: 10px; font-family: monospace;">${f.auditDate || (f as any).auditDate || (f as any).audited_at || '-'}</td>
         </tr>
       `
       )
@@ -620,7 +608,9 @@ export const LendingPage: React.FC = () => {
                 <th style="text-align: right;">Amount Paid</th>
                 <th style="text-align: right;">Remaining Balance</th>
                 <th>Status</th>
-                ${isAudit ? '<th>Audit Status</th><th>Audit Date</th>' : ''}
+                <th>Audit Status</th>
+                <th>Audited By</th>
+                <th>Audit Date</th>
               </tr>
             </thead>
             <tbody>
@@ -1384,28 +1374,42 @@ export const LendingPage: React.FC = () => {
               )}
 
               {canAuditActions && (
-                <>
-                  <Button
-                    type="button"
-                    onClick={() => setIsAuditConfirmModalOpen(true)}
-                    className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>{activeFacility.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      setDiscrepancyReason(activeFacility.auditRemarks || '')
-                      setIsDiscrepancyModalOpen(true)
-                    }}
-                    className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <AlertCircle className="h-4 w-4" />
-                    <span>Flag Discrepancy</span>
-                  </Button>
-                </>
+                <div className="flex flex-col items-end gap-1.5">
+                  {(activeFacility.auditedBy || activeFacility.auditDate || (activeFacility as any).audited_by || (activeFacility as any).auditDate) && (
+                    <div className="text-[11px] text-muted-fg font-medium flex items-center gap-1.5">
+                      <span>
+                        Audited by <strong className="font-semibold text-focus">{activeFacility.auditedBy || (activeFacility as any).audited_by}</strong>
+                      </span>
+                      {(activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at) && (
+                        <span>• {activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at}</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      disabled={isSubmittingAudit}
+                      onClick={() => setIsAuditConfirmModalOpen(true)}
+                      className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      <span>{activeFacility.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSubmittingAudit}
+                      onClick={() => {
+                        setDiscrepancyReason(activeFacility.auditRemarks || (activeFacility as any).audit_remarks || '')
+                        setIsDiscrepancyModalOpen(true)
+                      }}
+                      className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <AlertCircle className="h-4 w-4" />
+                      <span>Flag Discrepancy</span>
+                    </Button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -1540,6 +1544,69 @@ export const LendingPage: React.FC = () => {
                   {activeFacility.notes}
                 </div>
               )}
+
+              {/* Dashed Perforation */}
+              <div className="border-t border-dashed border-slate-200" />
+
+              {/* Dedicated Audit Review Panel (AC-6: Available to all roles) */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-focus" />
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-fg">
+                      Audit Review
+                    </span>
+                  </div>
+                  {(() => {
+                    const st = activeFacility.auditStatus || (activeFacility as any).audit_status
+                    if (st === 'Verified') {
+                      return (
+                        <span className="text-xs font-bold text-emerald-700">
+                          Audited
+                        </span>
+                      )
+                    }
+                    if (st === 'Flagged') {
+                      return (
+                        <span className="text-xs font-bold text-[#960C01]">
+                          Discrepancy
+                        </span>
+                      )
+                    }
+                    return (
+                      <span className="text-xs font-semibold text-slate-500">
+                        Pending Audit
+                      </span>
+                    )
+                  })()}
+                </div>
+
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Audited By:</span>
+                    <span className="font-semibold text-focus">
+                      {activeFacility.auditedBy || (activeFacility as any).audited_by || '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center py-0.5">
+                    <span className="text-muted-fg">Audit Date:</span>
+                    <span className="font-mono text-focus">
+                      {activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at || '—'}
+                    </span>
+                  </div>
+                </div>
+
+                {(activeFacility.auditRemarks || (activeFacility as any).audit_remarks) && (
+                  <div className="pt-2 border-t border-slate-200/70 text-xs">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-fg block mb-1">
+                      Auditor Remarks:
+                    </span>
+                    <p className="text-xs text-focus/90 bg-white p-2.5 rounded-lg border border-slate-200/80 leading-relaxed whitespace-pre-wrap">
+                      {activeFacility.auditRemarks || (activeFacility as any).audit_remarks}
+                    </p>
+                  </div>
+                )}
+              </div>
 
 
             </div>  
@@ -1962,56 +2029,40 @@ export const LendingPage: React.FC = () => {
       >
         {/* Table with Requirement 3 columns and Action Buttons */}
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className={cn('w-full table-fixed', isAudit ? 'min-w-[1020px]' : 'min-w-[940px]')}>
+          <Table className="w-full table-fixed min-w-[1020px]">
             <colgroup>
-              {isAudit ? (
-                <>
-                  <col style={{ width: '22%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '16%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '14%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '6%' }} />
-                </>
-              ) : (
-                <>
-                  <col style={{ width: '26%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '18%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '15%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '6%' }} />
-                </>
-              )}
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className={cn(isAudit ? "w-[22%]" : "w-[26%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[22%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   BORROWER'S NAME
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   LOAN AMOUNT
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[16%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
                 <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                {isAudit && (
-                  <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
-                    AUDIT TAG
-                  </TableHead>
-                )}
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                  AUDIT TAG
+                </TableHead>
                 <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
@@ -2019,10 +2070,10 @@ export const LendingPage: React.FC = () => {
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={isAudit ? 8 : 7} />
+                <TableSkeleton rows={5} columns={8} />
               ) : paginatedFacilities.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isAudit ? 8 : 7} className="h-44 text-center py-8">
+                  <TableCell colSpan={8} className="h-44 text-center py-8">
                     <div className="flex flex-col items-center justify-center text-muted-fg">
                       <CreditCard className="h-8 w-8 text-muted-fg/40 mb-2" />
                       <p className="text-sm font-semibold">No borrowers found</p>
@@ -2054,7 +2105,7 @@ export const LendingPage: React.FC = () => {
                       title="Click row to view complete lending and borrower details"
                     >
                       {/* Borrower's Name & Borrower Ref No */}
-                      <TableCell className={cn(isAudit ? "w-[22%]" : "w-[26%]", "px-3.5 py-3 text-left")}>
+                      <TableCell className="w-[22%] px-3.5 py-3 text-left">
                         <div className="font-semibold text-xs text-focus truncate max-w-[240px]" title={facility.borrowerName}>
                           {facility.borrowerName}
                         </div>
@@ -2068,22 +2119,22 @@ export const LendingPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Loan Amount */}
-                      <TableCell className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[12%] px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap">
                         {formatPHP(facility.loanAmount)}
                       </TableCell>
 
                       {/* 3. Total Amount Payable */}
-                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[16%] px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap">
                         {formatPHP(facility.totalAmountPayable)}
                       </TableCell>
 
                       {/* 4. Amount Paid */}
-                      <TableCell className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[12%] px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap">
                         {formatPHP(facility.amountPaid)}
                       </TableCell>
 
                       {/* 5. Remaining Balance */}
-                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap")}>
+                      <TableCell className="w-[14%] px-3.5 py-3 text-left font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap">
                         <div>{formatPHP(facility.remainingBalance)}</div>
                       </TableCell>
 
@@ -2094,38 +2145,45 @@ export const LendingPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 7. Audit Tag (Dedicated column for Auditor account) */}
-                      {isAudit && (
-                        <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
-                          {facility.auditStatus ? (
-                            <div className="flex flex-col items-center justify-center leading-tight">
-                              <span
-                                className={cn(
-                                  'text-xs font-bold whitespace-nowrap',
-                                  facility.auditStatus === 'Verified'
-                                    ? 'text-emerald-700'
-                                    : 'text-[#960C01]'
-                                )}
-                              >
-                                {facility.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                                {facility.auditedBy && facility.auditedBy !== '-'
-                                  ? ` · ${formatAuditorTag(facility.auditedBy)}`
-                                  : ''}
-                              </span>
-                              {facility.auditDate && (
-                                <span
-                                  className="block text-[10px] text-muted-fg font-mono whitespace-nowrap mt-0.5"
-                                  title={facility.auditedBy ? `Audited by ${formatAuditorTag(facility.auditedBy)}` : undefined}
-                                >
-                                  {facility.auditDate}
-                                </span>
+                      {/* 7. Audit Tag (Visible to all authenticated roles) */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        {(() => {
+                          const status = facility.auditStatus || (facility as any).audit_status
+                          const auditedBy = facility.auditedBy || (facility as any).audited_by
+                          const auditDate = facility.auditDate || (facility as any).auditDate || (facility as any).audited_at
+                          const remarks = facility.auditRemarks || (facility as any).audit_remarks
+                          const isVerified = status === 'Verified'
+                          const isFlagged = status === 'Flagged'
+
+                          if (!isVerified && !isFlagged) {
+                            return <span className="text-xs text-muted-fg/40 font-mono">-</span>
+                          }
+
+                          const tooltipParts: string[] = []
+                          if (auditedBy && auditedBy !== '-') {
+                            tooltipParts.push(`Audited by: ${auditedBy}`)
+                          }
+                          if (auditDate) {
+                            tooltipParts.push(`Date: ${auditDate}`)
+                          }
+                          if (remarks) {
+                            tooltipParts.push(`Remarks: ${remarks}`)
+                          }
+                          const tooltip = tooltipParts.join(' | ') || (isVerified ? 'Audited' : 'Discrepancy')
+
+                          return (
+                            <span
+                              title={tooltip}
+                              className={cn(
+                                'text-xs font-bold whitespace-nowrap cursor-help',
+                                isVerified ? 'text-emerald-700' : 'text-[#960C01]'
                               )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-fg/40 font-mono">—</span>
-                          )}
-                        </TableCell>
-                      )}
+                            >
+                              {isVerified ? 'Audited' : 'Discrepancy'}
+                            </span>
+                          )
+                        })()}
+                      </TableCell>
 
                       {/* 8. Actions */}
                       <TableCell className="w-[6%] px-2 py-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -2257,23 +2315,16 @@ export const LendingPage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={async (e) => {
+                  onClick={(e) => {
                     e.stopPropagation()
                     const fac = activeMenuFacility
                     setOpenMenuFacilityId(null)
                     setMenuPosition(null)
                     setActiveMenuFacility(null)
                     if (fac) {
-                      try {
-                        const auditorName = user?.fullName?.trim() || (user as any)?.name?.trim() || undefined
-                        const updated = await lendingService.saveAuditReview(fac.id, 'Flagged', undefined, auditorName)
-                        await fetchFacilities()
-                        if (activeFacility && (activeFacility.id === fac.id || String(activeFacility.borrower_id) === String(fac.borrower_id))) {
-                          setActiveFacility(updated)
-                        }
-                      } catch (err) {
-                        console.error('Failed to save audit review:', err)
-                      }
+                      setActiveFacility(fac)
+                      setDiscrepancyReason(fac.auditRemarks || (fac as any).audit_remarks || '')
+                      setIsDiscrepancyModalOpen(true)
                     }
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-[#960C01] hover:bg-[#960C01]/10 transition-colors text-left cursor-pointer"
@@ -3943,7 +3994,7 @@ export const LendingPage: React.FC = () => {
               value={discrepancyReason}
               onChange={(e) => setDiscrepancyReason(e.target.value)}
               placeholder="Detail any payment discrepancies, unrecorded ledger items, or issues..."
-              className="min-h-[100px] text-xs rounded-xl"
+              className="w-full min-h-[120px] p-3 text-xs rounded-xl border border-slate-300 focus:border-red-500 focus:ring-1 focus:ring-red-500 bg-white text-focus placeholder:text-muted-fg/60 outline-none transition-colors resize-y"
               autoFocus
             ></textarea>
           </div>

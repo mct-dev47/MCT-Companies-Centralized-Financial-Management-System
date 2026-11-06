@@ -1405,18 +1405,6 @@ export const TenantPage: React.FC = () => {
                 <span className="text-xs sm:text-sm text-muted-fg font-medium">
                   Unit / Stall: <strong className="text-focus">{activeTenant.unitName}</strong>
                 </span>
-                <span className="text-muted-fg/40">•</span>
-                <span className="text-xs sm:text-sm text-muted-fg font-medium">
-                  Schedule: <strong className="text-focus">{repeatingLease ? describeRepeat(activeTenant.repeat as LeaseRepeat, activeTenant.dueDate, fin.periodCount) : 'One-Time Lease'}</strong>
-                </span>
-                {activeTenant.leaseEndDate && (
-                  <>
-                    <span className="text-muted-fg/40">•</span>
-                    <span className="text-xs sm:text-sm text-muted-fg font-medium">
-                      Lease End: <strong className="text-focus font-mono">{activeTenant.leaseEndDate}</strong>
-                    </span>
-                  </>
-                )}
               </div>
             </div>
 

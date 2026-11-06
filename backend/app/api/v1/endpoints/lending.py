@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.core.company_features import COMPANY_FEATURE_LENDING, FILCAP_COMPANY_ID, require_company_feature_access
 from app.core.dependencies import (
@@ -10,7 +11,7 @@ from app.core.dependencies import (
     CurrentUser,
     check_company_access,
     get_current_user,
-    require_audit_or_admin_user,
+    require_auditor_user,
     require_business_reader,
     require_business_writer,
 )
@@ -160,7 +161,7 @@ def delete_borrower(
 def review_borrower_audit(
     borrower_id: int,
     payload: AuditReviewIn,
-    user: AuthenticatedUser = Depends(require_audit_or_admin_user),
+    user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)

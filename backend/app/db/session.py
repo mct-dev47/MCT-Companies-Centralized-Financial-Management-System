@@ -161,6 +161,12 @@ def init_db():
             if "audit_remarks" not in b_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_remarks TEXT"))
+
+        if "company" in table_names:
+            c_cols = {col["name"] for col in inspector.get_columns("company")}
+            if "petty_cash" not in c_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE company ADD COLUMN petty_cash NUMERIC(15, 2) DEFAULT 0.00"))
     except Exception:
         pass
 
@@ -200,12 +206,6 @@ def init_db():
         daemon=True,
     )
     sync_thread.start()
-    sync_thread.join(timeout=10)
-    if sync_thread.is_alive():
-        logger.warning(
-            "Supabase company sync did not finish within 10s; continuing startup "
-            "without it. Companies will sync on a later run or via the API."
-        )
 
 # Dependency to get a database session for FastAPI endpoints
 def get_db() -> Generator:

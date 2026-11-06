@@ -811,6 +811,7 @@ class LendingService:
                     "audited_at": audited_at_val,
                     "auditDate": audit_date_str if audit_status_disp else None,
                     "audit_remarks": getattr(b, "audit_remarks", None),
+                    "auditRemarks": getattr(b, "audit_remarks", None),
                     "dailyPayments": repayment_dicts,
                 })
             return results
@@ -1454,7 +1455,10 @@ class LendingService:
                     pass
             b.audited_by = resolved_auditor_name
             b.audited_at = datetime.now(timezone.utc)
-            b.audit_remarks = (remarks or "").strip() or None
+            if audit_status == "Verified":
+                b.audit_remarks = None
+            else:
+                b.audit_remarks = (remarks or "").strip() or None
 
         db.commit()
         db.refresh(b)

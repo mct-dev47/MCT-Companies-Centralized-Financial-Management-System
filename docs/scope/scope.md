@@ -8,6 +8,7 @@
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
 | Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
 | Lending Page and Payment Refinements | in-progress | [0030](../specs/0030-lending-page-and-payment-refinements/index.md) |
+| Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
 
 ---
 
@@ -75,3 +76,18 @@
   - [x] Milestone 6: Record Payment modal required Payment Method and 50 character limit on Remarks (AC-7)
 - [x] Verify it: /check verify lending-page-refinements
 - [x] Test it: /test lending-page-refinements
+
+### Lending Audit Workflow and Visibility
+**Status**: in-progress
+**Spec**: [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md)
+**Intent**: Simplify main table audit tags to clean status badges without initials or dates, open audit visibility to all system roles, display auditor attribution in the details header for auditors, integrate audit remarks into the loan receipt card, and persist discrepancy findings durably to the database via a full width bordered input.
+**Done when**: The Audit Tag column is visible across all roles with clean "Audited", "Discrepancy", or "-" text and hover tooltips, Lending Details displays auditor name and timestamp above the auditor action buttons, a dedicated audit panel in the left agreement receipt card shows full status, auditor name, date, and remarks, the Flag Audit Discrepancy modal has a full width bordered textarea, and confirming audit or discrepancy actions saves directly to the database via `lendingService.saveAuditReview`.
+
+- [x] Design it (spec): [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md)
+- [x] Build it: /develop lending-audit-workflow (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Main table audit column role visibility, clean text badge, and hover tooltips (AC-1, AC-2, AC-3, AC-10)
+  - [x] Milestone 2: Lending details header auditor attribution above audit action buttons (AC-4, AC-5)
+  - [x] Milestone 3: Dedicated audit review panel inside the left loan agreement card (AC-5, AC-6)
+  - [x] Milestone 4: Flag Audit Discrepancy modal full width styling, border, and database persistence (AC-7, AC-8, AC-9)
+- [ ] Verify it: /check verify lending-audit-workflow
+- [ ] Test it: /test lending-audit-workflow
