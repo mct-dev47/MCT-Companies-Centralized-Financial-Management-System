@@ -682,17 +682,9 @@ export const PettyCashPage: React.FC = () => {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 flex-wrap">
           <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                Petty Cash
-              </h1>
-              {pendingCount > 0 && isFinanceOrAdmin && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 animate-pulse">
-                  <Clock className="w-3.5 h-3.5" />
-                  {pendingCount} Pending Finance Review
-                </span>
-              )}
-            </div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Petty Cash
+            </h1>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Petty cash requests, approvals, and disbursements connected live to the MCT database
             </p>
