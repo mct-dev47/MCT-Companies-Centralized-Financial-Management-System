@@ -25,6 +25,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
+import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { bankService, type BankAccount } from '@/services/bankService'
 import type {
   CustomerType,
@@ -734,38 +735,22 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
                               Pay
                             </Button>
                           )}
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={locked}
-                            onClick={() => handleStartEditSale(sale)}
-                            className="h-7 w-7 p-0 rounded-lg text-slate-600 hover:text-focus hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={
-                              locked
-                                ? 'Locked: linked sale has been Verified by an Auditor'
-                                : 'Edit order details and payment status'
+                          <RowActionsMenu
+                            canEdit={!locked}
+                            canDelete={!locked}
+                            onEdit={() => handleStartEditSale(sale)}
+                            onDelete={() => setConfirmDeleteSaleId(sale.id)}
+                            editLabel="Edit Order"
+                            deleteLabel="Delete Order"
+                            customItems={
+                              locked ? (
+                                <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700">
+                                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>Locked (Audited)</span>
+                                </div>
+                              ) : undefined
                             }
-                            aria-label={`Edit order ${sale.id}`}
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            disabled={locked}
-                            onClick={() => setConfirmDeleteSaleId(sale.id)}
-                            className="h-7 w-7 p-0 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                            title={
-                              locked
-                                ? 'Locked: linked sale has been Verified by an Auditor'
-                                : 'Delete receivable order'
-                            }
-                            aria-label={`Delete order ${sale.id}`}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </Button>
+                          />
                         </div>
                       )}
                     </div>

@@ -323,7 +323,7 @@ export const SalesPage: React.FC = () => {
     }
   }
 
-  // 3-Dots Action Menu for Audit
+  // 3-Dots Action Menu state
   const [openMenuSaleId, setOpenMenuSaleId] = React.useState<string | null>(
     null
   )
@@ -335,6 +335,28 @@ export const SalesPage: React.FC = () => {
   const [activeMenuSale, setActiveMenuSale] = React.useState<SalesItem | null>(
     null
   )
+
+  React.useEffect(() => {
+    if (!openMenuSaleId) return
+    const handleCloseMenu = () => {
+      setOpenMenuSaleId(null)
+      setMenuPosition(null)
+      setActiveMenuSale(null)
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCloseMenu()
+    }
+    window.addEventListener('click', handleCloseMenu)
+    window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', handleCloseMenu)
+      window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openMenuSaleId])
 
   const handleMarkSaleAudit = (
     sale: SalesItem,
@@ -1180,8 +1202,8 @@ export const SalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Three Numbers Kept Separate: Total Sales, Cash Collected & Outstanding Utang Side by Side */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* 3. KPI Cards: Total Sales & Cash Collected Side by Side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* 1. Total Sales (date) = all sales that day/period, paid and unpaid */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
@@ -1229,44 +1251,6 @@ export const SalesPage: React.FC = () => {
 
           <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
-          </div>
-        </Card>
-
-        {/* 3. Outstanding Utang = sum of all unpaid balances */}
-        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40 group">
-          <div className="w-full max-w-[calc(100%-60px)]">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-muted-fg block">
-                Outstanding Utang
-              </span>
-              <button
-                type="button"
-                onClick={() => navigate('/receivables')}
-                className="inline-flex items-center text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
-              >
-                View Ledger &rarr;
-              </button>
-            </div>
-            {loading ? (
-              <CardSkeleton inline={true} />
-            ) : (
-              <>
-                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
-                  {formatPHP(receivablesKpis.totalOutstanding)}
-                </h3>
-                <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Ext: {formatPHP(receivablesKpis.totalExternalUtang)} &bull; Staff: {formatPHP(receivablesKpis.totalStaffUtang)}
-                </p>
-              </>
-            )}
-          </div>
-
-          <div
-            onClick={() => navigate('/receivables')}
-            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs cursor-pointer group-hover:bg-slate-200 transition-colors"
-            title="Open Receivables Page"
-          >
-            <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
       </div>
@@ -1613,84 +1597,47 @@ export const SalesPage: React.FC = () => {
                         {formatPHP(rowAmount)}
                       </TableCell>
 
-                      {/* 8. Actions */}
+                      {/* 8. Actions (3-dots menu) */}
                       <TableCell
                         className="w-[8%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-center gap-1">
-                          {canAuditActions ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (openMenuSaleId === sale.id) {
-                                  setOpenMenuSaleId(null)
-                                  setMenuPosition(null)
-                                  setActiveMenuSale(null)
-                                } else {
-                                  const rect =
-                                    e.currentTarget.getBoundingClientRect()
-                                  const openUpward =
-                                    rect.bottom + 140 > window.innerHeight
-                                  setMenuPosition({
-                                    top: openUpward
-                                      ? rect.top - 6
-                                      : rect.bottom + 6,
-                                    right: Math.max(
-                                      12,
-                                      window.innerWidth - rect.right
-                                    ),
-                                    openUpward,
-                                  })
-                                  setActiveMenuSale(sale)
-                                  setOpenMenuSaleId(sale.id)
-                                }
-                              }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                              title="Audit Actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          ) : isOwner ? (
-                            <span className="text-muted-fg text-xs">—</span>
-                          ) : sale.auditStatus === 'Verified' ? (
-                            <span
-                              className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
-                              title="Audited by auditor (locked from editing)"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          ) : (
-                            <>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  navigate('/sales/add', {
-                                    state: { editSale: sale },
-                                  })
-                                }
-                                className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                                title="Edit Sale & Particulars"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleteConfirmSale(sale)}
-                                className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                                title="Delete Sale"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuSaleId === sale.id) {
+                                setOpenMenuSaleId(null)
+                                setMenuPosition(null)
+                                setActiveMenuSale(null)
+                              } else {
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const openUpward =
+                                  rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward
+                                    ? rect.top - 6
+                                    : rect.bottom + 6,
+                                  right: Math.max(
+                                    12,
+                                    window.innerWidth - rect.right
+                                  ),
+                                  openUpward,
+                                })
+                                setActiveMenuSale(sale)
+                                setOpenMenuSaleId(sale.id)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Actions"
+                            aria-label="Open actions menu"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1826,14 +1773,14 @@ export const SalesPage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* 3-Dots Action Portal Menu for Audit */}
+      {/* 3-Dots Action Portal Menu */}
       {openMenuSaleId &&
         activeMenuSale &&
         menuPosition &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-44 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-48 bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -1844,26 +1791,6 @@ export const SalesPage: React.FC = () => {
           >
             <button
               type="button"
-              onClick={(e) =>
-                handleMarkSaleAudit(activeMenuSale, 'Verified', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Mark as Audit</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => handleMarkSaleAudit(activeMenuSale, 'Flagged', e)}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Mark as Discrepancy</span>
-            </button>
-
-            <button
-              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 const s = activeMenuSale
@@ -1872,11 +1799,80 @@ export const SalesPage: React.FC = () => {
                 setActiveMenuSale(null)
                 if (s) handleOpenRow(s)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkSaleAudit(activeMenuSale, 'Verified', e)
+                  }
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{activeMenuSale.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => handleMarkSaleAudit(activeMenuSale, 'Flagged', e)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isAdmin && !isOwner ? (
+              activeMenuSale.auditStatus === 'Verified' ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-emerald-700 bg-emerald-50/70 border-t border-slate-100 mt-1">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Locked (Audited)</span>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const s = activeMenuSale
+                      setOpenMenuSaleId(null)
+                      setMenuPosition(null)
+                      setActiveMenuSale(null)
+                      if (s) {
+                        navigate('/sales/add', {
+                          state: { editSale: s },
+                        })
+                      }
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                    <span>Edit</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const s = activeMenuSale
+                      setOpenMenuSaleId(null)
+                      setMenuPosition(null)
+                      setActiveMenuSale(null)
+                      if (s) setDeleteConfirmSale(s)
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Delete</span>
+                  </button>
+                </>
+              )
+            ) : null}
           </div>,
           document.body
         )}

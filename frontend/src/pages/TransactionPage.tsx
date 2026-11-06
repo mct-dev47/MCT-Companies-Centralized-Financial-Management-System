@@ -230,7 +230,7 @@ export const TransactionPage: React.FC = () => {
   const { user } = useSession()
   const { activeCompany, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isAudit = userRole.includes('audit')
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isCompanyScoped = isStrictlyCompanyScoped
@@ -828,7 +828,7 @@ export const TransactionPage: React.FC = () => {
       auditDate: today,
       auditNotes: undefined,
     }
-    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updatedTx : t)))
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
       if (tx.type === 'Sales') {
@@ -836,7 +836,8 @@ export const TransactionPage: React.FC = () => {
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
       } else if (tx.type === 'Loan') {
-        await loanService.updateLoan(tx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        const loanId = tx.id.replace(/:lender$/, '')
+        await loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
         await tenantService.saveAuditReview(leaseId, 'Verified')
@@ -874,7 +875,7 @@ export const TransactionPage: React.FC = () => {
       auditDate: today,
       auditNotes: trimmed,
     }
-    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updatedTx : t)))
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
       if (tx.type === 'Sales') {
@@ -882,7 +883,8 @@ export const TransactionPage: React.FC = () => {
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
       } else if (tx.type === 'Loan') {
-        await loanService.updateLoan(tx.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
+        const loanId = tx.id.replace(/:lender$/, '')
+        await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
         await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
@@ -917,7 +919,7 @@ export const TransactionPage: React.FC = () => {
     }
 
     setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? updatedTx : t))
+      prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t))
     )
 
     // Spec 0014: the server saves the review. If it fails, tell the user and reload the real status.
@@ -935,7 +937,7 @@ export const TransactionPage: React.FC = () => {
 
   const handleTransactionUpdated = (updatedItem: DashboardTransactionItem) => {
     setTransactions((prev) =>
-      prev.map((t) => (t.id === updatedItem.id ? updatedItem : t))
+      prev.map((t) => (t.id === updatedItem.id && t.type === updatedItem.type ? updatedItem : t))
     )
     setSelectedTx(updatedItem)
   }
@@ -1588,9 +1590,10 @@ export const TransactionPage: React.FC = () => {
                 (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).map((tx) => {
                   const { deposit: depositAmt, withdrawal: withdrawalAmt } = getRowAmounts(tx)
 
+                  const txKey = `${tx.type}:${tx.id}`
                   return (
                     <TableRow
-                      key={tx.id}
+                      key={txKey}
                       onClick={() => handleRowClick(tx)}
                       title="Click to view transaction details and audit history"
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
@@ -1754,7 +1757,7 @@ export const TransactionPage: React.FC = () => {
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              if (openMenuTxId === tx.id) {
+                              if (openMenuTxId === txKey) {
                                 setOpenMenuTxId(null)
                                 setMenuPosition(null)
                                 setActiveMenuTx(null)
@@ -1767,7 +1770,7 @@ export const TransactionPage: React.FC = () => {
                                   openUpward,
                                 })
                                 setActiveMenuTx(tx)
-                                setOpenMenuTxId(tx.id)
+                                setOpenMenuTxId(txKey)
                               }
                             }}
                             className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
@@ -1866,7 +1869,7 @@ export const TransactionPage: React.FC = () => {
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audit'}</span>
+                  <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
                 </button>
 
                 <button

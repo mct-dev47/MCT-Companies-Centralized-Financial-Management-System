@@ -31,6 +31,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
+import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1406,7 +1407,7 @@ export const TenantPage: React.FC = () => {
 
     // Build cycle settlement map to know whether an installment cycle has reached its full target (matching Lending)
     const isDaily = !activeTenant.repeat || activeTenant.repeat === 'Daily'
-    const dailyTarget = activeTenant.rentAmount || 0
+    const cycleDailyTarget = activeTenant.rentAmount || 0
     const cycleSettledMap = new Map<string, boolean>()
 
     if (isDaily) {
@@ -1422,7 +1423,7 @@ export const TenantPage: React.FC = () => {
         }
       })
       paidByInstallmentDate.forEach((total, d) => {
-        if (total >= dailyTarget - 0.005 || fin.remaining <= 0.005) {
+        if (total >= cycleDailyTarget - 0.005 || fin.remaining <= 0.005) {
           cycleSettledMap.set(d, true)
         }
       })
@@ -1856,12 +1857,15 @@ export const TenantPage: React.FC = () => {
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Created By</th>
+                          {!isAudit && !isOwner && (
+                            <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedHistory.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={!isAudit && !isOwner ? 9 : 8} className="py-12 text-center text-muted-fg text-xs">
                               <div className="flex flex-col items-center justify-center">
                                 <Coins className="w-6 h-6 text-muted-fg/40 mb-2" />
                                 <p className="font-semibold text-focus">
@@ -1953,6 +1957,20 @@ export const TenantPage: React.FC = () => {
                                     </td>
                                   )
                                 })()}
+                                {!isAudit && !isOwner && (
+                                  <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                    <div className="inline-flex items-center justify-center">
+                                      <RowActionsMenu
+                                        canEdit
+                                        canDelete
+                                        onEdit={() => handleOpenEditRecord(rec)}
+                                        onDelete={() => setRemoveTarget({ kind: 'record', record: rec })}
+                                        editLabel="Edit Payment"
+                                        deleteLabel="Remove Payment"
+                                      />
+                                    </div>
+                                  </td>
+                                )}
                               </tr>
                             )
                           })

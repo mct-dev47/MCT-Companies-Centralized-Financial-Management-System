@@ -18,10 +18,9 @@
 }
 
 @layer base {
-  html, body {
+  html {
     font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    overflow-x: hidden;
-    max-width: 100vw;
+    scroll-behavior: smooth;
   }
 
   body {
@@ -30,12 +29,7 @@
     -webkit-font-smoothing: antialiased;
     margin: 0;
     padding: 0;
-    overflow-x: hidden;
-    max-width: 100vw;
-  }
-
-  html {
-    scroll-behavior: smooth;
+    min-height: 100vh;
   }
 
   /* One cursor rule for every interactive control (Tailwind preflight resets buttons to `default`). */
@@ -191,17 +185,6 @@ aside::-webkit-scrollbar,
   display: none !important;
   width: 0 !important;
   height: 0 !important;
-}
-
-/* Prevent background page from scrolling when any modal dialog or popup is open */
-html:has([role="dialog"]),
-html:has([data-radix-portal] [role="dialog"]),
-html:has(body[data-scroll-locked]),
-body:has([role="dialog"]),
-body:has([data-radix-portal] [role="dialog"]),
-body[data-scroll-locked] {
-  overflow: hidden !important;
-  overscroll-behavior: none !important;
 }
 
 [role="dialog"] {

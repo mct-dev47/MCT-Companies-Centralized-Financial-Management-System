@@ -192,7 +192,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
         forceExpanded
           ? 'w-full relative shadow-none h-full'
           : cn(
-              'absolute left-0 top-0 bottom-0 h-screen z-50 bg-white dark:bg-slate-900',
+              'fixed left-0 top-0 bottom-0 h-screen z-50 bg-white dark:bg-slate-900',
               isExpanded ? 'w-64 lg:w-72 shadow-2xl' : 'w-[72px] shadow-none'
             ),
         className
