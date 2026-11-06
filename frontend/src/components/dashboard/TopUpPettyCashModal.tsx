@@ -176,6 +176,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
         date: requestDate,
         description: particulars.trim(),
         status: targetStatus,
+        request_type: 'topup',
         bank_account_id: isFinance ? fundingBankId : undefined,
         finance_remark: isFinance ? financeRemark.trim() : undefined,
       })

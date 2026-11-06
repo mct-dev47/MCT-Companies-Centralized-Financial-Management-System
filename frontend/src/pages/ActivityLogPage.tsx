@@ -8,6 +8,11 @@ import {
   ChevronDown,
   FileSpreadsheet,
   FileText,
+  History,
+  User,
+  Building2,
+  Globe,
+  Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,6 +25,13 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import {
   ErrorBanner,
   TableEmptyState,
   TablePagination,
@@ -27,6 +39,7 @@ import {
 } from '@/components/common'
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
+import { formatRealName } from '@/utils/formatRealName'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import {
   formatUserFriendlyErrorMessage,
@@ -57,6 +70,7 @@ export const ActivityLogPage: React.FC = () => {
     endDate: null,
     label: 'All Dates',
   })
+  const [selectedLog, setSelectedLog] = React.useState<ActivityLogItem | null>(null)
 
   // Export dropdown state
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
@@ -491,14 +505,19 @@ export const ActivityLogPage: React.FC = () => {
                 />
               ) : (
                 displayedLogs.map((log) => (
-                  <TableRow key={log.id}>
+                  <TableRow
+                    key={log.id}
+                    onClick={() => setSelectedLog(log)}
+                    className="cursor-pointer hover:bg-slate-50 transition-colors group"
+                    title="Click to view detailed activity timeline"
+                  >
                     <TableCell className="py-4 px-6 text-sm font-medium text-focus whitespace-nowrap">
                       {log.company}
                     </TableCell>
                     <TableCell className="py-4 px-6 text-sm text-focus/90 whitespace-nowrap">
                       <div>{log.action}</div>
                       <div className="text-[11px] text-muted-fg">
-                        by {log.user}
+                        by {formatRealName(log.user)}
                       </div>
                     </TableCell>
                     <TableCell className="py-4 px-6 whitespace-nowrap">
@@ -536,6 +555,136 @@ export const ActivityLogPage: React.FC = () => {
           onPageChange={setCurrentPage}
         />
       </div>
+
+      {/* Activity Detail & Timeline Modal */}
+      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
+        <DialogContent className="sm:max-w-[560px] p-6 max-h-[90vh] overflow-y-auto">
+          {selectedLog && (
+            <div className="space-y-4">
+              <DialogHeader>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0">
+                    <History className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <DialogTitle className="text-lg font-bold text-focus">
+                      Activity Detail & Timeline
+                    </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-fg">
+                      Audit trail record #{selectedLog.id} · Monitored system activity
+                    </DialogDescription>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              {/* Summary Grid */}
+              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-50 border border-stroke/30 text-xs">
+                <div>
+                  <span className="text-[11px] text-muted-fg block">User / Actor</span>
+                  <div className="font-semibold text-focus flex items-center gap-1.5 mt-0.5">
+                    <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{formatRealName(selectedLog.user)}</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] text-muted-fg block">Company</span>
+                  <div className="font-semibold text-focus flex items-center gap-1.5 mt-0.5">
+                    <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span className="truncate">{selectedLog.company}</span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] text-muted-fg block">Module</span>
+                  <div className="mt-0.5">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${getModuleBadgeStyle(selectedLog.module)}`}>
+                      {selectedLog.module}
+                    </span>
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] text-muted-fg block">Target Reference</span>
+                  <div className="font-mono text-xs text-focus font-semibold mt-0.5">
+                    {selectedLog.target}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] text-muted-fg block">Timestamp</span>
+                  <div className="font-medium text-focus mt-0.5">
+                    {selectedLog.time}
+                  </div>
+                </div>
+                <div>
+                  <span className="text-[11px] text-muted-fg block">IP / Access Location</span>
+                  <div className="font-mono text-xs text-focus flex items-center gap-1.5 mt-0.5">
+                    <Globe className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>{selectedLog.ipAddress || 'Internal Network'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Description */}
+              <div className="space-y-1.5 text-xs">
+                <span className="font-semibold text-focus text-xs">Action Description</span>
+                <div className="p-3 rounded-xl bg-surface border border-stroke/40 text-focus text-xs leading-relaxed">
+                  {selectedLog.action}
+                </div>
+              </div>
+
+              {/* Activity Timeline Card */}
+              <div className="pt-2 border-t border-stroke/20 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Activity Timeline & Remarks
+                  </span>
+                  <span className="text-[10px] text-muted-fg font-mono">
+                    LOG-ID: {selectedLog.id}
+                  </span>
+                </div>
+
+                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        Action logged by{' '}
+                        <span className="text-primary font-bold">{formatRealName(selectedLog.user)}</span>
+                      </span>
+                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                        {selectedLog.time}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-fg mt-0.5">
+                      Activity verified in {selectedLog.company} · Module: {selectedLog.module}
+                    </p>
+                  </div>
+
+                  {selectedLog.details && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <span className="font-semibold text-focus text-[11px]">Payload & Remarks:</span>
+                      <pre className="mt-1 p-2 rounded-lg bg-white border border-stroke/30 text-[11px] text-focus font-mono overflow-x-auto max-h-36">
+                        {typeof selectedLog.details === 'string'
+                          ? selectedLog.details
+                          : JSON.stringify(selectedLog.details, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-stroke/20 flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setSelectedLog(null)}
+                  className="h-9 px-4 rounded-xl text-xs font-semibold"
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

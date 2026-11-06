@@ -1,7 +1,8 @@
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+import base64
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import (
@@ -171,7 +172,8 @@ def endorse_topup(
     current_user: AuthenticatedUser = Depends(require_finance_user),
     db: Session = Depends(get_db),
 ):
-    endorser = current_user.get("name") or "Finance Officer"
+    from app.core.user_name_resolver import resolve_real_name
+    endorser = current_user.get("full_name") or current_user.get("name") or resolve_real_name(current_user.get("email")) or "Finance Officer"
     topup = PettyCashService(db).endorse_topup(
         topup_id=topup_id,
         action=endorse_in.action,
@@ -197,7 +199,8 @@ def review_topup(
     current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db),
 ):
-    reviewer = current_user.get("name") or "Internal Auditor"
+    from app.core.user_name_resolver import resolve_real_name
+    reviewer = current_user.get("full_name") or current_user.get("name") or resolve_real_name(current_user.get("email")) or "Internal Auditor"
     topup = PettyCashService(db).review_topup(
         topup_id=topup_id,
         action=review_in.action,
@@ -253,3 +256,40 @@ def update_wallet(
         extra={"low_balance_threshold": float(wallet_in.low_balance_threshold)},
     )
     return summary
+
+
+@router.post("/receipts", summary="Upload receipt image (JPG, PNG, HEIC) or PDF")
+async def upload_receipt(
+    file: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+):
+    content_type = (file.content_type or "").lower()
+    fname = (file.filename or "").lower()
+    is_valid_type = (
+        content_type.startswith("image/")
+        or content_type == "application/pdf"
+        or fname.endswith((".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".pdf"))
+    )
+    if not is_valid_type:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file format. Acceptable formats are JPG, PNG, HEIC, and PDF."
+        )
+    data = await file.read()
+    file_size = len(data)
+    if file_size > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File size exceeds the 5 MB limit."
+        )
+    encoded = base64.b64encode(data).decode("utf-8")
+    final_mime = content_type if content_type.startswith("image/") or content_type == "application/pdf" else "application/octet-stream"
+    data_url = f"data:{final_mime};base64,{encoded}"
+    return {
+        "url": data_url,
+        "filename": file.filename or "receipt",
+        "file_name": file.filename or "receipt",
+        "file_size": file_size,
+        "mime_type": final_mime,
+        "content_type": final_mime
+    }

@@ -18,6 +18,12 @@ class PettyCashTopUpCreate(BaseModel):
     bank_account_id: Optional[str] = None
     finance_remark: Optional[str] = None
     endorsement_remark: Optional[str] = None
+    request_type: Optional[str] = "topup"
+    paid_by: Optional[str] = None
+    receipt_url: Optional[str] = None
+    attachments: Optional[str] = None
+    items: Optional[str] = None
+    category: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_fields(self):
@@ -31,6 +37,11 @@ class PettyCashTopUpCreate(BaseModel):
 class PettyCashTopUpUpdate(BaseModel):
     amount: Optional[Decimal] = Field(None, ge=1, decimal_places=2)
     description: Optional[str] = None
+    paid_by: Optional[str] = None
+    receipt_url: Optional[str] = None
+    attachments: Optional[str] = None
+    items: Optional[str] = None
+    category: Optional[str] = None
 
 
 class PettyCashTopUpOut(BaseModel):
@@ -45,6 +56,12 @@ class PettyCashTopUpOut(BaseModel):
     description: Optional[str] = None
     bank_account_id: Optional[str] = None
     status: str = "Pending Finance Endorsement"
+    request_type: Optional[str] = "topup"
+    paid_by: Optional[str] = None
+    receipt_url: Optional[str] = None
+    attachments: Optional[str] = None
+    items: Optional[str] = None
+    category: Optional[str] = None
     endorsed_by: Optional[str] = None
     endorsed_at: Optional[datetime] = None
     finance_remark: Optional[str] = None
@@ -120,6 +137,11 @@ class PettyCashLedgerEntry(BaseModel):
     amount_out: Decimal
     running_balance: Decimal
     status: Optional[str] = "Approved"
+    request_type: Optional[str] = "topup"
+    paid_by: Optional[str] = None
+    receipt_url: Optional[str] = None
+    attachments: Optional[str] = None
+    items: Optional[str] = None
     endorsed_by: Optional[str] = None
     endorsed_at: Optional[datetime] = None
     finance_remark: Optional[str] = None

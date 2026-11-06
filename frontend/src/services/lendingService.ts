@@ -81,6 +81,7 @@ export interface LendingFacility {
   auditStatus?: 'Verified' | 'Flagged'
   auditDate?: string
   auditedBy?: string
+  auditRemarks?: string
 }
 
 export type Borrower = LendingFacility
