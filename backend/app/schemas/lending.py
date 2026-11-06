@@ -167,6 +167,7 @@ class BorrowerOut(BaseModel):
     audited_by: Optional[str] = None
     auditedBy: Optional[str] = None
     audited_at: Optional[str] = None
+    auditedAt: Optional[str] = None
     auditDate: Optional[str] = None
     audit_remarks: Optional[str] = None
     auditRemarks: Optional[str] = None

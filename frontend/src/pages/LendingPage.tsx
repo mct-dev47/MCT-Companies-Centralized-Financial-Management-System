@@ -1,4 +1,5 @@
 import { formatRealName } from '@/utils/formatRealName'
+import { formatCreatedAt } from '@/utils/dateUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -99,6 +100,22 @@ interface PendingPaymentData {
 interface CompletedPaymentReceipt extends PendingPaymentData {
   transactionId: string
   timestamp: string
+}
+
+const formatAuditTimestamp = (dateVal?: string | null, isoVal?: string | null): string => {
+  if (dateVal && dateVal !== '-' && dateVal !== '—') {
+    if (dateVal.includes('T') || dateVal.includes('Z')) {
+      const formatted = formatCreatedAt(dateVal)
+      if (formatted) return formatted
+    } else {
+      return dateVal
+    }
+  }
+  if (isoVal) {
+    const formatted = formatCreatedAt(isoVal)
+    if (formatted) return formatted
+  }
+  return ''
 }
 
 export const LendingPage: React.FC = () => {
@@ -535,9 +552,9 @@ export const LendingPage: React.FC = () => {
       f.amountPaid,
       f.remainingBalance,
       f.status,
-      f.auditStatus || (f as any).audit_status || 'Unreviewed',
+      f.auditStatus === 'Verified' ? 'AUDITED' : f.auditStatus === 'Flagged' ? 'DISCREPANCY' : 'UNREVIEWED',
       f.auditedBy && f.auditedBy !== '-' ? `"${f.auditedBy.replace(/"/g, '""')}"` : ((f as any).audited_by || '-'),
-      f.auditDate || (f as any).auditDate || (f as any).audited_at || '-',
+      formatAuditTimestamp(f.auditDate, f.audited_at || (f as any).auditedAt) || '-',
     ])
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
@@ -570,9 +587,9 @@ export const LendingPage: React.FC = () => {
           <td style="text-align: right; color: #059669; font-weight: 600;">${formatPHP(f.amountPaid)}</td>
           <td style="text-align: right; color: #d97706; font-weight: bold;">${formatPHP(f.remainingBalance)}</td>
           <td style="text-align: center;">${f.status}</td>
-          <td style="text-align: center; font-weight: 600;">${f.auditStatus || (f as any).audit_status || '-'}</td>
+          <td style="text-align: center; font-weight: 700;">${f.auditStatus === 'Verified' ? 'AUDITED' : f.auditStatus === 'Flagged' ? 'DISCREPANCY' : '-'}</td>
           <td style="text-align: center;">${f.auditedBy && f.auditedBy !== '-' ? f.auditedBy : ((f as any).audited_by || '-')}</td>
-          <td style="text-align: center; font-size: 10px; font-family: monospace;">${f.auditDate || (f as any).auditDate || (f as any).audited_at || '-'}</td>
+          <td style="text-align: center; font-size: 10px; font-family: monospace;">${formatAuditTimestamp(f.auditDate, f.audited_at || (f as any).auditedAt) || '-'}</td>
         </tr>
       `
       )
@@ -1304,18 +1321,6 @@ export const LendingPage: React.FC = () => {
                 <h1 className="text-2xl sm:text-3xl font-extrabold text-focus tracking-tight">
                   {activeFacility.borrowerName}
                 </h1>
-                {activeFacility.auditStatus && (
-                  <span
-                    className={cn(
-                      'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
-                      activeFacility.auditStatus === 'Verified'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-                    )}
-                  >
-                    {activeFacility.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                  </span>
-                )}
               </div>
               <div className="flex items-center gap-3 mt-1.5 flex-wrap">
                 <span className="text-xs sm:text-sm text-muted-fg font-medium">
@@ -1375,14 +1380,15 @@ export const LendingPage: React.FC = () => {
 
               {canAuditActions && (
                 <div className="flex flex-col items-end gap-1.5">
-                  {(activeFacility.auditedBy || activeFacility.auditDate || (activeFacility as any).audited_by || (activeFacility as any).auditDate) && (
+                  {(activeFacility.auditedBy || activeFacility.auditDate || (activeFacility as any).audited_by || (activeFacility as any).audited_at) && (
                     <div className="text-[11px] text-muted-fg font-medium flex items-center gap-1.5">
                       <span>
                         Audited by <strong className="font-semibold text-focus">{activeFacility.auditedBy || (activeFacility as any).audited_by}</strong>
                       </span>
-                      {(activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at) && (
-                        <span>• {activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at}</span>
-                      )}
+                      {(() => {
+                        const stamp = formatAuditTimestamp(activeFacility.auditDate, activeFacility.audited_at || (activeFacility as any).auditedAt)
+                        return stamp ? <span>• {stamp}</span> : null
+                      })()}
                     </div>
                   )}
                   <div className="flex items-center gap-2">
@@ -1561,21 +1567,21 @@ export const LendingPage: React.FC = () => {
                     const st = activeFacility.auditStatus || (activeFacility as any).audit_status
                     if (st === 'Verified') {
                       return (
-                        <span className="text-xs font-bold text-emerald-700">
-                          Audited
+                        <span className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                          AUDITED
                         </span>
                       )
                     }
                     if (st === 'Flagged') {
                       return (
-                        <span className="text-xs font-bold text-[#960C01]">
-                          Discrepancy
+                        <span className="text-xs font-bold uppercase tracking-wide text-[#960C01]">
+                          DISCREPANCY
                         </span>
                       )
                     }
                     return (
-                      <span className="text-xs font-semibold text-slate-500">
-                        Pending Audit
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        PENDING AUDIT
                       </span>
                     )
                   })()}
@@ -1591,7 +1597,7 @@ export const LendingPage: React.FC = () => {
                   <div className="flex justify-between items-center py-0.5">
                     <span className="text-muted-fg">Audit Date:</span>
                     <span className="font-mono text-focus">
-                      {activeFacility.auditDate || (activeFacility as any).auditDate || (activeFacility as any).audited_at || '—'}
+                      {formatAuditTimestamp(activeFacility.auditDate, activeFacility.audited_at || (activeFacility as any).auditedAt) || '—'}
                     </span>
                   </div>
                 </div>
@@ -2150,7 +2156,7 @@ export const LendingPage: React.FC = () => {
                         {(() => {
                           const status = facility.auditStatus || (facility as any).audit_status
                           const auditedBy = facility.auditedBy || (facility as any).audited_by
-                          const auditDate = facility.auditDate || (facility as any).auditDate || (facility as any).audited_at
+                          const auditDate = formatAuditTimestamp(facility.auditDate, facility.audited_at || (facility as any).auditedAt)
                           const remarks = facility.auditRemarks || (facility as any).audit_remarks
                           const isVerified = status === 'Verified'
                           const isFlagged = status === 'Flagged'
@@ -2169,17 +2175,17 @@ export const LendingPage: React.FC = () => {
                           if (remarks) {
                             tooltipParts.push(`Remarks: ${remarks}`)
                           }
-                          const tooltip = tooltipParts.join(' | ') || (isVerified ? 'Audited' : 'Discrepancy')
+                          const tooltip = tooltipParts.join(' | ') || (isVerified ? 'AUDITED' : 'DISCREPANCY')
 
                           return (
                             <span
                               title={tooltip}
                               className={cn(
-                                'text-xs font-bold whitespace-nowrap cursor-help',
+                                'text-xs font-bold uppercase tracking-wide whitespace-nowrap cursor-help',
                                 isVerified ? 'text-emerald-700' : 'text-[#960C01]'
                               )}
                             >
-                              {isVerified ? 'Audited' : 'Discrepancy'}
+                              {isVerified ? 'AUDITED' : 'DISCREPANCY'}
                             </span>
                           )
                         })()}

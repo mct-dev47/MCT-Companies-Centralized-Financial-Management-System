@@ -12,6 +12,8 @@ from app.models.loan import Loan, LoanRepayment
 from app.models.company import Company
 from app.models.lending import Borrower, LendingTransaction
 
+MANILA_TZ = timezone(timedelta(hours=8))
+
 
 def quantize(value: Decimal | float | int | str) -> Decimal:
     """Helper to round monetary values to 2 decimal places."""
@@ -752,7 +754,11 @@ class LendingService:
                 audit_date_str = None
                 if getattr(b, "audited_at", None):
                     try:
-                        audit_date_str = b.audited_at.strftime("%m/%d/%y, %I:%M %p")
+                        dt = b.audited_at
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        dt_local = dt.astimezone(MANILA_TZ)
+                        audit_date_str = dt_local.strftime("%m/%d/%y, %I:%M %p")
                     except Exception:
                         audit_date_str = str(b.audited_at)
 
@@ -809,6 +815,7 @@ class LendingService:
                     "audited_by": audited_by_val,
                     "auditedBy": audited_by_val,
                     "audited_at": audited_at_val,
+                    "auditedAt": audited_at_val,
                     "auditDate": audit_date_str if audit_status_disp else None,
                     "audit_remarks": getattr(b, "audit_remarks", None),
                     "auditRemarks": getattr(b, "audit_remarks", None),
@@ -928,8 +935,10 @@ class LendingService:
                 "audited_by": None,
                 "auditedBy": None,
                 "audited_at": None,
+                "auditedAt": None,
                 "auditDate": None,
                 "audit_remarks": None,
+                "auditRemarks": None,
                 "dailyPayments": repayment_dicts,
             })
 
@@ -1277,8 +1286,10 @@ class LendingService:
             "audited_by": None,
             "auditedBy": None,
             "audited_at": None,
+            "auditedAt": None,
             "auditDate": None,
             "audit_remarks": None,
+            "auditRemarks": None,
             "dailyPayments": [],
         })
 
