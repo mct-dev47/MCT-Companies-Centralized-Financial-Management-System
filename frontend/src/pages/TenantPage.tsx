@@ -1385,16 +1385,24 @@ export const TenantPage: React.FC = () => {
                   {activeTenant.tenantName}
                 </h1>
                 {activeTenant.auditStatus && (
-                  <span
-                    className={cn(
-                      'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
-                      activeTenant.auditStatus === 'Verified'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className={cn(
+                        'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
+                        activeTenant.auditStatus === 'Verified'
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
+                      )}
+                    >
+                      {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
+                    </span>
+                    {activeTenant.auditedBy && (
+                      <span className="text-xs text-muted-fg font-medium">
+                        by <strong className="text-focus">{activeTenant.auditedBy}</strong>
+                        {activeTenant.auditDate ? ` • ${activeTenant.auditDate}` : ''}
+                      </span>
                     )}
-                  >
-                    {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                  </span>
+                  </div>
                 )}
               </div>
               <div className="flex items-center gap-3 mt-1.5 flex-wrap">
@@ -1624,6 +1632,17 @@ export const TenantPage: React.FC = () => {
                 <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-muted-fg">
                   <strong className="text-focus font-semibold block mb-0.5 text-[11px]">Agreement Notes:</strong>
                   {activeTenant.notes}
+                </div>
+              )}
+
+              {/* Auditor Remarks / Discrepancy Note (if any) */}
+              {activeTenant.auditRemarks && (
+                <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-xl text-xs text-rose-900">
+                  <strong className="text-rose-900 font-semibold block mb-0.5 text-[11px] flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    Auditor Remarks / Discrepancy Note:
+                  </strong>
+                  <p className="leading-relaxed whitespace-pre-wrap">{activeTenant.auditRemarks}</p>
                 </div>
               )}
 

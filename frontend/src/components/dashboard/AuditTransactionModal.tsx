@@ -44,6 +44,7 @@ import {
   loanService,
   type LoanItem,
 } from '@/services/loanService'
+import { tenantService } from '@/services/tenantService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { cn } from '@/lib/utils'
 import { formatRealName } from '@/utils/formatRealName'
@@ -141,9 +142,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const navigate = useNavigate()
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
-  const isAdmin = roleLower === 'admin' || roleLower === 'audit'
+  const isAudit = roleLower === 'audit' || roleLower.includes('auditor')
+  const isAdmin = roleLower === 'admin' || isAudit
   const isOwner = roleLower === 'owner'
   const canAudit = isAdmin && !isOwner
+
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
 
   const [currentTx, setCurrentTx] = React.useState<DashboardTransactionItem | null>(transaction)
   const [currentSale, setCurrentSale] = React.useState<SalesItem | null>(sale || null)
@@ -391,7 +397,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     activeLoan?.auditDate ||
     activeTx?.auditDate
 
-  const handleMarkAudit = () => {
+  const handleMarkAudit = async () => {
+    setIsSubmittingAudit(true)
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
@@ -399,108 +406,216 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     })
     const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
-    if (activeSale) {
-      const updated: SalesItem = {
-        ...activeSale,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Verified', auditorName)
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName)
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName)
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName)
+        } else if (activeTx.type === 'Loan') {
+          await loanService.updateLoan(activeTx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Verified')
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentSale(updated)
-      setCurrentTx(salesService.toDashboardTransaction(updated))
-      salesService.updateSaleAuditStatus(updated.id, 'Verified', auditorName)
-      if (onSaleUpdated) onSaleUpdated(updated)
-    } else if (activeExpense) {
-      const updated: ExpenseItem = {
-        ...activeExpense,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentExpense(updated)
-      setCurrentTx(expenseService.toDashboardTransaction(updated))
-      expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName)
-      if (onExpenseUpdated) onExpenseUpdated(updated)
-    } else if (activeLoan) {
-      const updated: LoanItem = {
-        ...activeLoan,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentLoan(updated)
-      setCurrentTx(loanService.toDashboardTransaction(updated))
-      loanService.updateLoan(updated.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
-      if (onLoanUpdated) onLoanUpdated(updated)
-    } else if (activeTx) {
-      const updated: DashboardTransactionItem = {
-        ...activeTx,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentTx(updated)
-      if (activeTx.type === 'Sales') {
-        salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName)
-      } else if (activeTx.type === 'Expense') {
-        expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName)
-      } else if (activeTx.type === 'Loan') {
-        loanService.updateLoan(activeTx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
-      }
-      if (onTransactionUpdated) onTransactionUpdated(updated)
+    } catch (err: any) {
+      console.error('Failed to mark transaction as audited:', err)
+      alert(err?.message || 'Failed to update audit review. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
     }
   }
 
-  const handleUnmarkAudit = () => {
-    if (activeSale) {
-      const updated: SalesItem = {
-        ...activeSale,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
+  const handleConfirmDiscrepancy = async () => {
+    const trimmedRemarks = discrepancyReason.trim()
+    if (!trimmedRemarks) return
+    setIsSubmittingAudit(true)
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
+
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+        } else if (activeTx.type === 'Loan') {
+          await loanService.updateLoan(activeTx.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentSale(updated)
-      setCurrentTx(salesService.toDashboardTransaction(updated))
-      salesService.updateSaleAuditStatus(updated.id, 'Pending Audit')
-      if (onSaleUpdated) onSaleUpdated(updated)
-    } else if (activeExpense) {
-      const updated: ExpenseItem = {
-        ...activeExpense,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+    } catch (err: any) {
+      console.error('Failed to flag discrepancy:', err)
+      alert(err?.message || 'Failed to flag audit discrepancy. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
+  const handleUnmarkAudit = async () => {
+    setIsSubmittingAudit(true)
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Pending Audit')
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined, auditNotes: undefined })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
+        } else if (activeTx.type === 'Loan') {
+          await loanService.updateLoan(activeTx.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentExpense(updated)
-      setCurrentTx(expenseService.toDashboardTransaction(updated))
-      expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
-      if (onExpenseUpdated) onExpenseUpdated(updated)
-    } else if (activeLoan) {
-      const updated: LoanItem = {
-        ...activeLoan,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
-      }
-      setCurrentLoan(updated)
-      setCurrentTx(loanService.toDashboardTransaction(updated))
-      loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-      if (onLoanUpdated) onLoanUpdated(updated)
-    } else if (activeTx) {
-      const updated: DashboardTransactionItem = {
-        ...activeTx,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
-      }
-      setCurrentTx(updated)
-      if (activeTx.type === 'Sales') {
-        salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
-      } else if (activeTx.type === 'Expense') {
-        expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-      } else if (activeTx.type === 'Loan') {
-        loanService.updateLoan(activeTx.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-      }
-      if (onTransactionUpdated) onTransactionUpdated(updated)
+    } catch (err: any) {
+      console.error('Failed to reset audit status:', err)
+      alert(err?.message || 'Failed to reset audit status. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
     }
   }
 
@@ -1261,17 +1376,22 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 </span>
                 <div className="flex items-center gap-1.5 text-right">
                   {currentAuditStatus === 'Verified' ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                       <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                       <span>Audited</span>
                     </span>
+                  ) : currentAuditStatus === 'Flagged' ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                      <AlertCircle className="w-3 h-3 text-rose-600" />
+                      <span>Discrepancy</span>
+                    </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
-                      <AlertCircle className="w-3 h-3 text-amber-600" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
+                      <Clock className="w-3 h-3 text-amber-600" />
                       <span>Pending Audit</span>
                     </span>
                   )}
-                  {displayAuditedBy && currentAuditStatus === 'Verified' && (
+                  {displayAuditedBy && currentAuditStatus !== 'Pending Audit' && (
                     <span className="text-[10px] text-muted-fg italic">
                       by {formatRealName(displayAuditedBy, 'Audit Officer')} {displayAuditDate ? `(${displayAuditDate})` : ''}
                     </span>
@@ -1358,13 +1478,19 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       )}
                     </div>
                     {displayAuditNotes ? (
-                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
-                        Remarks: &ldquo;{displayAuditNotes}&rdquo;
+                      <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs shadow-2xs">
+                        <strong className="text-rose-900 font-bold block mb-1 text-[11px] flex items-center gap-1.5">
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                          Auditor Remarks / Discrepancy Note:
+                        </strong>
+                        <p className="leading-relaxed whitespace-pre-wrap">{displayAuditNotes}</p>
                       </div>
                     ) : (
                       <p className="text-[11px] text-muted-fg mt-0.5">
                         {currentAuditStatus === 'Verified'
-                          ? 'Approved by Internal Audit.'
+                          ? 'Approved and verified by Internal Audit.'
+                          : currentAuditStatus === 'Flagged'
+                          ? 'Flagged for audit review.'
                           : 'Pending review by Internal Audit team.'}
                       </p>
                     )}
@@ -1385,44 +1511,66 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               </div>
             </div>
 
-            {/* Admin Audit Actions: Unmark as Audit / Mark as Audited */}
+            {/* Audit Actions: Mark as Audited, Flag Discrepancy, or Reset */}
             {canAudit && (
-              <div className="flex items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
+              <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (
                     <span className="text-emerald-700 font-semibold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      Verified and marked as Audited
+                      Audited & Verified
+                    </span>
+                  ) : currentAuditStatus === 'Flagged' ? (
+                    <span className="text-rose-700 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      Discrepancy Flagged
                     </span>
                   ) : (
                     <span className="text-amber-700 font-medium flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       Pending Audit Review
                     </span>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {currentAuditStatus === 'Verified' ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={isSubmittingAudit}
+                    onClick={handleMarkAudit}
+                    className="h-9 px-4 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    title="Mark as Audited"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                    <span>{currentAuditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audit'}</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isSubmittingAudit}
+                    onClick={() => {
+                      setDiscrepancyReason(displayAuditNotes || '')
+                      setIsDiscrepancyModalOpen(true)
+                    }}
+                    className="h-9 px-3.5 text-xs font-semibold rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    title="Flag Discrepancy"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Flag as Discrepancy</span>
+                  </Button>
+
+                  {currentAuditStatus !== 'Pending Audit' && (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
+                      disabled={isSubmittingAudit}
                       onClick={handleUnmarkAudit}
-                      className="h-9 px-3.5 text-xs font-semibold rounded-xl border-amber-300 bg-amber-50/70 text-amber-800 hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
-                      title="Unmark as audit"
+                      className="h-9 px-3 text-xs font-medium rounded-xl text-muted-fg hover:text-focus hover:bg-slate-100 flex items-center gap-1.5 cursor-pointer"
+                      title="Reset to Pending Audit"
                     >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Unmark as Audit</span>
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      onClick={handleMarkAudit}
-                      className="h-9 px-4 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                      title="Mark as Audited"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                      <span>Mark as Audited</span>
+                      <RotateCcw className="w-3.5 h-3.5 text-muted-fg" />
+                      <span className="hidden sm:inline">Reset</span>
                     </Button>
                   )}
                 </div>
@@ -1483,6 +1631,79 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           }}
         />
       )}
+      {/* Modal: Flag Discrepancy Reason */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="max-w-[440px] rounded-2xl p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-2 border-b border-stroke/20 pr-6">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold text-focus leading-tight">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Describe the discrepancy or required correction for this transaction.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Discrepancy Reason / Remarks <span className="text-rose-600">*</span>
+              </Label>
+              <textarea
+                rows={3}
+                value={discrepancyReason}
+                onChange={(e) => setDiscrepancyReason(e.target.value)}
+                placeholder="e.g. Voucher amount does not match the attached official receipt..."
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-1 focus:ring-rose-500 font-normal leading-relaxed resize-none"
+              />
+              {!discrepancyReason.trim() && (
+                <p className="text-[10px] text-muted-fg leading-tight">
+                  A reason is required so Finance and Operations can address the discrepancy.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingAudit}
+                onClick={() => {
+                  setIsDiscrepancyModalOpen(false)
+                  setDiscrepancyReason('')
+                }}
+                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!discrepancyReason.trim() || isSubmittingAudit}
+                onClick={handleConfirmDiscrepancy}
+                className="h-9 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSubmittingAudit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Flagging…</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-white" />
+                    <span>Flag Discrepancy</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

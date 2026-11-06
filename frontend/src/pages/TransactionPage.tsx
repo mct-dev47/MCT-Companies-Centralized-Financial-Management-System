@@ -16,6 +16,7 @@ import {
   ArrowDownLeft,
   Check,
   AlertCircle,
+  Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -249,7 +250,7 @@ export const TransactionPage: React.FC = () => {
   const [salesStatusFilter, setSalesStatusFilter] = React.useState<'All' | 'Paid' | 'Unpaid' | 'Pending' | 'On hold'>('All')
   // Record-type filter for the accrual ledger: All | Sales | Expense | Loan | Petty Cash
   const [salesTypeFilter, setSalesTypeFilter] = React.useState<
-    'All' | 'Sales' | 'Expense' | 'Loan' | 'Petty Cash'
+    'All' | 'Sales' | 'Expense' | 'Loan' | 'Petty Cash' | 'Income'
   >('All')
   const [salesDateRange, setSalesDateRange] = React.useState<DateRange>({
     startDate: null,
@@ -488,18 +489,35 @@ export const TransactionPage: React.FC = () => {
   //    Spec 0016: loans and petty cash top ups still waiting for Audit are not money movement yet, so
   //    they are kept off this tab. They stay on the All tab, marked pending.
   const depositBaseList = React.useMemo(() => {
-    // Spec 0013 AC-10: a sale or expense is listed when any part of it is paid, and the row shows
-    // only the paid amount (same rule as the Sales Deposit tab and the Expense Withdraw tab).
+    // Spec 0013 & updated deposit filter: Any transaction that represents a deposit / money in
+    // (Sales, Rental Income, Loan deposit to borrower, Petty Cash top up received) is included.
     let list = transactions
-      .filter((t) =>
-        t.type === 'Sales' || t.type === 'Expense'
-          ? (t.paidAmount || 0) > 0
-          : (t.type === 'Loan' || t.type === 'Petty Cash') && !t.awaitingAudit
-      )
+      .filter((t) => {
+        // Any record with an explicit deposit > 0 must be in the deposit ledger
+        if ((t.deposit || 0) > 0) return true
+        // All tenant rental collections / income are deposits
+        if (t.type === 'Income') return true
+        // Sales are in deposit ledger if paidAmount > 0 or deposit > 0
+        if (t.type === 'Sales' && ((t.paidAmount || 0) > 0 || (t.deposit || 0) > 0)) return true
+        // Expenses are cash ledger withdrawals if paidAmount > 0 or withdrawal > 0
+        if (t.type === 'Expense') return (t.paidAmount || 0) > 0 || (t.withdrawal || 0) > 0
+        // Loans and petty cash movements are included once approved (not awaiting audit)
+        if (t.type === 'Loan' || t.type === 'Petty Cash') return !t.awaitingAudit
+        return false
+      })
       .map((t): DashboardTransactionItem => {
-        const paid = t.paidAmount || 0
-        if (t.type === 'Sales') return { ...t, amount: paid, deposit: paid, withdrawal: 0 }
-        if (t.type === 'Expense') return { ...t, amount: paid, deposit: 0, withdrawal: paid }
+        if (t.type === 'Sales') {
+          const depositVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.deposit || t.amount || 0)
+          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+        }
+        if (t.type === 'Income') {
+          const depositVal = (t.deposit || 0) > 0 ? t.deposit : (t.amount || t.paidAmount || 0)
+          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+        }
+        if (t.type === 'Expense') {
+          const withdrawalVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.withdrawal || t.amount || 0)
+          return { ...t, amount: withdrawalVal, deposit: 0, withdrawal: withdrawalVal }
+        }
         return t
       })
 
@@ -736,9 +754,6 @@ export const TransactionPage: React.FC = () => {
   }, [activeDataset, getRowAmounts])
 
   const handleRowClick = (tx: DashboardTransactionItem) => {
-    // Mirror rows show the other side of a record (the lender's loan row, petty cash rows).
-    // They are read only here: the record is reviewed on its own page (spec 0013, AC-9).
-    if (tx.isMirrorRow) return
     // The cash ledger tab shows only the paid part of a record. The detail window needs the full record.
     const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
     setSelectedTx(fullRecord)
@@ -1356,13 +1371,15 @@ export const TransactionPage: React.FC = () => {
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   COMPANY
                 </TableHead>
-                {/* Type (Sales, Expense, Loan, Petty Cash) shows on both tabs */}
+                {/* Type (Sales, Expense, Loan, Petty Cash, Rental Income) shows on both tabs */}
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   TYPE
                 </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  {activeTab === 'deposit' ? 'CHEQUE NO.' : 'REF NO.'}
-                </TableHead>
+                {activeTab === 'deposit' && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+                    CHEQUE NO.
+                  </TableHead>
+                )}
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   PARTICULARS
                 </TableHead>
@@ -1385,12 +1402,10 @@ export const TransactionPage: React.FC = () => {
                     STATUS
                   </TableHead>
                 )}
-                {!isAudit && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    AUDIT STATUS
-                  </TableHead>
-                )}
-                {isAdmin && !isAudit && (
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  AUDIT STATUS
+                </TableHead>
+                {(isAudit || isAdmin) && (
                   <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     ACTION
                   </TableHead>
@@ -1405,17 +1420,21 @@ export const TransactionPage: React.FC = () => {
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                    {activeTab === 'deposit' && (
+                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                    )}
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-48 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    {!isAudit && (
+                      <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    )}
                     {activeTab === 'all' && (
                       <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
                     )}
                     <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    {isAdmin && (
+                    {(isAudit || isAdmin) && (
                       <TableCell className="px-4 py-3.5 text-center">
                         <Skeleton className="h-6 w-16 rounded-md mx-auto" />
                       </TableCell>
@@ -1424,7 +1443,11 @@ export const TransactionPage: React.FC = () => {
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={activeTab === 'all' ? (isAudit ? 9 : isAdmin ? 12 : 11) : (isAudit ? 8 : isAdmin ? 11 : 10)}
+                  colSpan={
+                    activeTab === 'deposit'
+                      ? 6 + (isAudit ? 0 : 1) + 1 + (isAudit || isAdmin ? 1 : 0)
+                      : 6 + (isAudit ? 0 : 1) + 1 + 1 + (isAudit || isAdmin ? 1 : 0)
+                  }
                   title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -1436,11 +1459,8 @@ export const TransactionPage: React.FC = () => {
                     <TableRow
                       key={tx.id}
                       onClick={() => handleRowClick(tx)}
-                      title={tx.isMirrorRow ? undefined : 'Click to view transaction details'}
-                      className={cn(
-                        'border-b border-slate-100 hover:bg-slate-50/60 transition-colors',
-                        tx.isMirrorRow ? 'cursor-default' : 'cursor-pointer'
-                      )}
+                      title="Click to view transaction details and audit history"
+                      className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
                       {/* 1. Date */}
                       <TableCell className="px-4 py-3.5 text-xs font-medium text-focus whitespace-nowrap">
@@ -1474,10 +1494,12 @@ export const TransactionPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 3. Cheque No / Ref No */}
-                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
-                        {activeTab === 'deposit' ? (tx.chequeNo || '—') : (tx.refNo || '—')}
-                      </TableCell>
+                      {/* 3. Cheque No (Deposit tab only) */}
+                      {activeTab === 'deposit' && (
+                        <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
+                          {tx.chequeNo || '—'}
+                        </TableCell>
+                      )}
 
                       {/* 4. Particulars */}
                       <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-normal max-w-xs" title={tx.particulars || tx.description}>
@@ -1567,13 +1589,17 @@ export const TransactionPage: React.FC = () => {
                         </TableCell>
                       )}
 
-                      {/* 8. Audit Status Badge */}
-                      {!isAudit && (
-                        <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
+                      {/* 8. Audit Status Badge (Visible for all roles) */}
+                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
                         {tx.auditStatus === 'Verified' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             <span>Audited</span>
+                          </span>
+                        ) : tx.auditStatus === 'Flagged' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                            <AlertCircle className="w-3 h-3 text-rose-600" />
+                            <span>Discrepancy</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
@@ -1582,42 +1608,25 @@ export const TransactionPage: React.FC = () => {
                           </span>
                         )}
                       </TableCell>
-                      )}
 
-                      {/* 9. Action for Admin */}
-                      {isAdmin && !isAudit && (
+                      {/* 9. Action Column for Audit & Admin: View Details / Audit */}
+                      {(isAudit || isAdmin) && (
                         <TableCell
                           className="px-4 py-3.5 text-center whitespace-nowrap"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <div className="flex items-center justify-center">
-                            {tx.isMirrorRow || tx.type === 'Loan' ? (
-                              <span className="text-muted-fg/50 font-normal text-xs">—</span>
-                            ) : tx.auditStatus === 'Verified' ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRowClick(tx)}
-                                className="h-7 px-2.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100/80 flex items-center gap-1.5 cursor-pointer border border-emerald-300/80 shadow-2xs transition-all"
-                                title="Audited (Click to inspect or unmark)"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Audited</span>
-                              </Button>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => handleMarkTxAudited(tx, e)}
-                                className="h-7 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-primary hover:bg-red-50/50 flex items-center gap-1.5 cursor-pointer border border-slate-200/80 hover:border-primary/30 shadow-2xs transition-all"
-                                title="Click to verify and mark as audited"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-primary" />
-                                <span>Audit</span>
-                              </Button>
-                            )}
+                          <div className="flex items-center justify-center gap-1.5">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRowClick(tx)}
+                              className="h-7 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-primary hover:bg-slate-100 flex items-center gap-1.5 cursor-pointer border border-slate-200/80 shadow-2xs transition-all"
+                              title="View whole transaction details and audit history"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-primary" />
+                              <span>View</span>
+                            </Button>
                           </div>
                         </TableCell>
                       )}
