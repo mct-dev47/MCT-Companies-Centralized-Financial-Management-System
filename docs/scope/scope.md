@@ -7,6 +7,7 @@
 | Food Receivables and Unpaid Expense Lifecycle | in-progress | [0027](../specs/0027-unpaid-expense-sales-receivables-lifecycle.md) |
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
 | Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
+| Activity Audit Log Changes and IP Tracking | in-progress | [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md) |
 
 ---
 
@@ -57,3 +58,19 @@
   - [x] Milestone 4: Frontend pages refactor replacing isManuel email checks with role checks and table dash placeholders (AC-5, AC-6, AC-7)
 - [x] Verify it: /check verify owner-role-and-account-migration
 - [ ] Test it: /test owner-role-and-account-migration
+
+### Activity Audit Log Changes and IP Tracking
+**Status**: in-progress
+**Spec**: [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md)
+**Intent**: Enhance the admin activity log table at `/activity-log` with client IP address tracking and a detail drawer modal showing what exact fields changed across create, update, and delete actions.
+**Done when**: Admin activity log shows a dedicated IP address column with copy button, clicking any row opens an inspection drawer showing who, when, what record, IP, user agent, and field by field old versus new values, sensitive fields are redacted, and exports contain IP and record references.
+
+- [x] Design it (spec): [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md)
+- [x] Build it: /develop activity-audit-log-changes-and-ip-tracking (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Backend diff helper with sensitive data redaction and proxy IP extraction (AC-4, AC-5, AC-6)
+  - [x] Milestone 2: Service enrichment and Pydantic/TypeScript schema extensions for IP, severity, and diffs (AC-2, AC-4)
+  - [x] Milestone 3: Frontend activity log table IP column and quick copy interaction (AC-1)
+  - [x] Milestone 4: Inspection side drawer modal with formatted field by field diff table and badges (AC-2, AC-3)
+  - [x] Milestone 5: CSV and PDF export generators updated with IP and record references (AC-7)
+- [x] Verify it: /check verify activity-audit-log-changes-and-ip-tracking
+- [ ] Test it: /test activity-audit-log-changes-and-ip-tracking

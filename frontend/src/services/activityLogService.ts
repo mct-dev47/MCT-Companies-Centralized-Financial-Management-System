@@ -15,10 +15,19 @@ export interface ActivityLogItem {
   id: string
   company: string
   user: string
+  userRole?: string
   action: string
   module: string
   target: string
   time: string
+  ipAddress: string
+  severity: 'INFO' | 'WARNING' | 'CRITICAL'
+  recordType?: string
+  recordId?: string | number
+  recordRef?: string
+  userAgent?: string
+  changes?: Record<string, { old: unknown; new: unknown }>
+  rawDetails?: Record<string, unknown>
 }
 
 export interface ActivityLogQueryParams {
@@ -48,6 +57,14 @@ interface RawAuditLogRow {
   description?: string
   module?: string
   target?: string
+  ip_address?: string | null
+  severity?: string | null
+  record_type?: string | null
+  record_id?: string | number | null
+  record_ref?: string | null
+  user_agent?: string | null
+  changes?: Record<string, { old: unknown; new: unknown }> | null
+  details?: Record<string, unknown> | string | null
 }
 
 function getAuthHeaders(): HeadersInit {
@@ -114,15 +131,44 @@ export const activityLogService = {
       }
 
       const rows = (await response.json()) as RawAuditLogRow[]
-      return rows.map((row) => ({
-        id: String(row.audit_log_id),
-        company: row.company_name || 'System',
-        user: row.user_name || 'System',
-        action: row.description || row.action,
-        module: row.module || 'General',
-        target: row.target || '-',
-        time: formatLogTime(row.created_at),
-      }))
+      return rows.map((row) => {
+        let parsedDetails: Record<string, unknown> | undefined
+        if (typeof row.details === 'object' && row.details !== null) {
+          parsedDetails = row.details as Record<string, unknown>
+        } else if (typeof row.details === 'string') {
+          try {
+            parsedDetails = JSON.parse(row.details)
+          } catch {
+            // ignore malformed details
+          }
+        }
+
+        const sev = (row.severity || parsedDetails?.severity || 'INFO') as string
+        const normalizedSeverity: 'INFO' | 'WARNING' | 'CRITICAL' =
+          sev.toUpperCase() === 'CRITICAL'
+            ? 'CRITICAL'
+            : sev.toUpperCase() === 'WARNING'
+            ? 'WARNING'
+            : 'INFO'
+
+        return {
+          id: String(row.audit_log_id),
+          company: row.company_name || 'System',
+          user: row.user_name || 'System',
+          action: row.description || row.action,
+          module: row.module || 'General',
+          target: row.target || (row.record_ref ? String(row.record_ref) : '-'),
+          time: formatLogTime(row.created_at),
+          ipAddress: row.ip_address || (parsedDetails?.ip_address as string) || (parsedDetails?.ip as string) || '-',
+          severity: normalizedSeverity,
+          recordType: row.record_type || (parsedDetails?.record_type as string) || undefined,
+          recordId: row.record_id ?? (parsedDetails?.record_id as string | number) ?? undefined,
+          recordRef: row.record_ref || (parsedDetails?.record_ref as string) || undefined,
+          userAgent: row.user_agent || (parsedDetails?.user_agent as string) || undefined,
+          changes: row.changes || (parsedDetails?.changes as Record<string, { old: unknown; new: unknown }>) || undefined,
+          rawDetails: parsedDetails,
+        }
+      })
     } catch (err) {
       throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to load activity logs. Please try again.'))
     }
