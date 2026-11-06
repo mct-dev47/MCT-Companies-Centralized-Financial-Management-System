@@ -171,7 +171,10 @@ interface BackendLedgerEntry {
 function backendHeaders(): HeadersInit {
   const token =
     typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
-  const userStr = typeof window !== 'undefined' ? sessionStorage.getItem('mct_user') : null
+  const userStr =
+    typeof window !== 'undefined'
+      ? sessionStorage.getItem('mct_session_user') || sessionStorage.getItem('mct_user')
+      : null
   let userName = ''
   let userRole = ''
   if (userStr) {

@@ -49,6 +49,7 @@ export interface LoanItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   type: 'Loan'
 }
 
@@ -384,7 +385,7 @@ export const loanService = {
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
-      const userStr = typeof window !== 'undefined' ? sessionStorage.getItem('mct_user') : null
+      const userStr = typeof window !== 'undefined' ? (sessionStorage.getItem('mct_session_user') || sessionStorage.getItem('mct_user')) : null
       let userName = ''
       let userRole = ''
       if (userStr) {
@@ -509,7 +510,8 @@ export const loanService = {
       auditStatus: 'Pending Audit',
       type: 'Loan',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      updatedBy: updates.updatedBy || existing.updatedBy,
+      updatedAt: updates.updatedAt || new Date().toISOString(),
     }
 
     inMemoryLoans = [newLoan, ...inMemoryLoans]
@@ -557,6 +559,8 @@ export const loanService = {
       if (res.ok) {
         const updated = await res.json()
         const mapped = mapBackendLoanToItem(updated)
+        if (updates.updatedBy) mapped.updatedBy = updates.updatedBy
+        if (updates.updatedAt) mapped.updatedAt = updates.updatedAt
         inMemoryLoans = inMemoryLoans.map((l) => (l.id === id || l.id === `loan_${numericId}` ? mapped : l))
         saveStoredLoans(inMemoryLoans)
         return mapped
@@ -578,7 +582,8 @@ export const loanService = {
     const updated: LoanItem = {
       ...existing,
       ...updates,
-      updatedAt: new Date().toISOString(),
+      updatedBy: updates.updatedBy || existing.updatedBy,
+      updatedAt: updates.updatedAt || new Date().toISOString(),
     }
     inMemoryLoans[index] = updated
     saveStoredLoans(inMemoryLoans)
@@ -679,7 +684,8 @@ export const loanService = {
       outstandingBalance: newRemaining,
       status: newStatus,
       repayments: [repRecord, ...(loan.repayments || [])],
-      updatedAt: new Date().toISOString(),
+      updatedBy: updates.updatedBy || existing.updatedBy,
+      updatedAt: updates.updatedAt || new Date().toISOString(),
     }
 
     inMemoryLoans[index] = updatedLoan
@@ -703,7 +709,7 @@ export const loanService = {
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
-    const userStr = typeof window !== 'undefined' ? sessionStorage.getItem('mct_user') : null
+    const userStr = typeof window !== 'undefined' ? (sessionStorage.getItem('mct_session_user') || sessionStorage.getItem('mct_user')) : null
     let userName = ''
     let userRole = ''
     if (userStr) {
@@ -758,7 +764,7 @@ export const loanService = {
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
-    const userStr = typeof window !== 'undefined' ? sessionStorage.getItem('mct_user') : null
+    const userStr = typeof window !== 'undefined' ? (sessionStorage.getItem('mct_session_user') || sessionStorage.getItem('mct_user')) : null
     let userName = ''
     let userRole = ''
     if (userStr) {

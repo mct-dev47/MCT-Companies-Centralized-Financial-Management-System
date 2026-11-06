@@ -44,14 +44,23 @@ export const SignInForm: React.FC = () => {
 
       if (response.status === 'authenticated') {
         const role = (response.user.role || '').toLowerCase()
+        const isClarian = Boolean(
+          response.user.email?.toLowerCase().includes('clarian') ||
+          response.user.email?.toLowerCase() === 'slosizante@gmail.com' ||
+          response.user.fullName?.toLowerCase().includes('clarian') ||
+          response.user.email?.toLowerCase().includes('jkproperty') ||
+          response.user.email?.toLowerCase().includes('filcap')
+        )
         const assignedCount = Math.max(
           response.user.companyIds?.length || 0,
-          response.user.companyNames?.length || 0
+          response.user.companyNames?.length || 0,
+          response.user.assignedCompanies?.length || 0,
+          isClarian ? 2 : 0
         )
 
         if (role === 'admin') {
           navigate('/employee', { replace: true })
-        } else if (assignedCount >= 2) {
+        } else if (assignedCount >= 2 || isClarian) {
           navigate('/centralized-auth', { replace: true })
         } else if (role === 'finance' || role === 'audit' || role.includes('audit')) {
           navigate('/centralized-auth', { replace: true })

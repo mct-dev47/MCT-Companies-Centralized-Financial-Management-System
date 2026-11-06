@@ -250,7 +250,7 @@ export const PettyCashPage: React.FC = () => {
       ...entry,
       auditStatus: status,
       auditDate: timestamp,
-      auditedBy: user?.fullName || 'Audit',
+      auditedBy: formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer'),
       status: status === 'Verified' && entry.status === 'Pending Audit Approval' ? 'Approved' : entry.status,
     }
     setLedger((prev) => prev.map((e) => (e.id === entry.id ? updatedEntry : e)))
@@ -1688,7 +1688,7 @@ export const PettyCashPage: React.FC = () => {
                       <span className="font-semibold text-focus">
                         {targetEntry.requestType === 'reimbursement' ? 'Reimbursement filed by' : 'Requested by'}{' '}
                         <span className="text-primary font-bold">
-                          {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee')}
+                          {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
                         </span>
                       </span>
                       <span className="text-[10px] text-muted-fg font-mono shrink-0">
@@ -1710,7 +1710,7 @@ export const PettyCashPage: React.FC = () => {
                           {targetEntry.endorsedBy ? (
                             <>
                               Endorsed by Finance:{' '}
-                              <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy)}</span>
+                              <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy, 'Finance Officer')}</span>
                             </>
                           ) : (
                             <span className="text-blue-600 font-semibold">Finance Endorsement</span>
@@ -1737,12 +1737,12 @@ export const PettyCashPage: React.FC = () => {
                         {targetEntry.status === 'Approved' ? (
                           <span className="text-emerald-700 font-bold">
                             Audited & Approved
-                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy)}` : ''}
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
                           </span>
                         ) : targetEntry.status === 'Disapproved' ? (
                           <span className="text-rose-700 font-bold">
                             Rejected / Disapproved
-                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy)}` : ''}
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
                           </span>
                         ) : targetEntry.status === 'Pending Audit Approval' ? (
                           <span className="text-amber-700 font-semibold">

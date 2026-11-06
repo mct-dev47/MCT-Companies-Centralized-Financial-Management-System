@@ -65,6 +65,9 @@ export interface NewExpenseInput {
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
   items?: ParticularItem[]
   bankAccountId?: string
+  createdBy?: string
+  updatedBy?: string
+  updatedAt?: string
 }
 
 const EXPENSES_STORAGE_KEY = 'mct_expense_records_v1'
@@ -398,9 +401,10 @@ export const expenseService = {
       ),
       auditStatus: 'Pending Audit',
       auditNotes: 'Newly recorded expense transaction.',
-      createdBy: 'Finance Staff',
+      createdBy: input.createdBy || 'Carlos Tan (Supervisor)',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      updatedBy: input.updatedBy,
+      updatedAt: input.updatedAt,
       type: 'Expense',
     }
 
@@ -466,6 +470,12 @@ export const expenseService = {
       if (res.ok) {
         const updated = await res.json()
         const mapped = mapBackendExpenseToItem(updated)
+        if (updates.updatedBy) {
+          mapped.updatedBy = updates.updatedBy
+        }
+        if (updates.updatedAt) {
+          mapped.updatedAt = updates.updatedAt
+        }
         if (updates.items && updates.items.length > 0) {
           mapped.items = updates.items
           mapped.status = deriveRecordStatusFromParticulars(
@@ -542,6 +552,7 @@ export const expenseService = {
       rawDate: rawDate,
       withdrawal: finalWithdrawal,
       netAmount: finalWithdrawal,
+      updatedBy: exp.updatedBy,
       updatedAt: new Date().toISOString(),
     }
 
@@ -593,6 +604,7 @@ export const expenseService = {
       outstandingBalance: newRemaining,
       status: newStatus,
       repayments: [repRecord, ...(exp.repayments || [])],
+      updatedBy: exp.updatedBy,
       updatedAt: new Date().toISOString(),
     }
 
@@ -661,7 +673,8 @@ export const expenseService = {
         auditedBy: mapped.auditedBy,
         auditDate: mapped.auditDate,
         auditNotes: mapped.auditNotes,
-        updatedAt: new Date().toISOString(),
+        updatedBy: inMemoryExpenses[index].updatedBy,
+        updatedAt: inMemoryExpenses[index].updatedAt,
       }
       inMemoryExpenses[index] = updated
       saveStoredExpenses(inMemoryExpenses)

@@ -23,6 +23,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { formatCreatedAt } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatRealName } from '@/utils/formatRealName'
 import { Clock } from 'lucide-react'
 
 interface AuditReviewLoanModalProps {
@@ -158,7 +159,7 @@ export const AuditReviewLoanModal: React.FC<AuditReviewLoanModalProps> = ({
               </p>
               {loan.endorsedBy && (
                 <div className="text-[11px] text-blue-800 pt-0.5">
-                  Endorsed by: <strong>{loan.endorsedBy}</strong>
+                  Endorsed by: <strong>{formatRealName(loan.endorsedBy, 'Finance Officer')}</strong>
                   {loan.endorsedAt && (
                     <span> on {new Date(loan.endorsedAt).toLocaleString()}</span>
                   )}

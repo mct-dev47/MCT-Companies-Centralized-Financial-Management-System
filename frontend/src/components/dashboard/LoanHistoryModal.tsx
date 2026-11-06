@@ -21,6 +21,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { formatPHP } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
+import { formatRealName } from '@/utils/formatRealName'
 import type { LoanItem } from '@/services/loanService'
 import { cn } from '@/lib/utils'
 
@@ -217,7 +218,7 @@ export const LoanHistoryModal: React.FC<LoanHistoryModalProps> = ({
                 <p className="text-[11px] text-muted-fg mt-0.5">
                   Facility created for <strong className="text-focus">{loan.company}</strong> by{' '}
                   <span className="text-focus/90 font-medium">
-                    {loan.createdBy || 'Authorized Accounting Specialist'}
+                    {formatRealName(loan.createdBy || 'Authorized Accounting Specialist', 'Finance Officer')}
                   </span>
                   . Amount disbursed: <strong className="text-focus">{formatPHP(loan.amount)}</strong>.
                 </p>
@@ -235,7 +236,7 @@ export const LoanHistoryModal: React.FC<LoanHistoryModalProps> = ({
                 <p className="text-[11px] text-muted-fg mt-0.5">
                   Verified by{' '}
                   <span className="text-focus/90 font-medium">
-                    {loan.auditedBy || 'Financial Auditor'}
+                    {formatRealName(loan.auditedBy || 'Financial Auditor', 'Audit Officer')}
                   </span>
                   . Audit Status:{' '}
                   <span className="font-semibold text-focus">{loan.auditStatus}</span>.

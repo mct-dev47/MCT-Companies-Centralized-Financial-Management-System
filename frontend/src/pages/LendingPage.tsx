@@ -2258,7 +2258,7 @@ export const LendingPage: React.FC = () => {
                       })
                       const updated = facilities.map((item) =>
                         item.id === fac.id
-                          ? { ...item, auditStatus: 'Verified' as const, auditDate: timestamp, auditedBy: user?.fullName || 'Audit' }
+                          ? { ...item, auditStatus: 'Verified' as const, auditDate: timestamp, auditedBy: formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer') }
                           : item
                       )
                       setFacilities(updated)
@@ -2292,7 +2292,7 @@ export const LendingPage: React.FC = () => {
                       })
                       const updated = facilities.map((item) =>
                         item.id === fac.id
-                          ? { ...item, auditStatus: 'Flagged' as const, auditDate: timestamp, auditedBy: user?.fullName || 'Audit' }
+                          ? { ...item, auditStatus: 'Flagged' as const, auditDate: timestamp, auditedBy: formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer') }
                           : item
                       )
                       setFacilities(updated)

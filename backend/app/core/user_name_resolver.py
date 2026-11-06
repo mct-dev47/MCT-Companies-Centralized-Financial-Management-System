@@ -11,8 +11,10 @@ KNOWN_EMAIL_NAMES = {
     "audit@mct.com": "Audit Officer",
     "finance@mct.com": "Finance Officer",
     "temporaryemployee@gmail.com": "Temporary Employee",
-    "jkproperty@mct.com": "Jessica Kho",
-    "filcap@mct.com": "Carlos Tan",
+    "jkproperty@mct.com": "Clarian Cuenta",
+    "filcap@mct.com": "Clarian Cuenta",
+    "clarian@mct.com": "Clarian Cuenta",
+    "slosizante@gmail.com": "Clarian Cuenta",
 }
 
 
