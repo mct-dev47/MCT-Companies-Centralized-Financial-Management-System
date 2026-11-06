@@ -33,6 +33,7 @@ export interface ConfirmModalProps {
   onConfirm: () => void | Promise<void>
   isLoading?: boolean
   loadingLabel?: string
+  confirmDisabled?: boolean
 }
 
 /**
@@ -57,6 +58,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   onConfirm,
   isLoading = false,
   loadingLabel = 'Processing…',
+  confirmDisabled = false,
 }) => {
   const isModalOpen = open ?? isOpen ?? false
   const handleOpenChange = (val: boolean) => {
@@ -141,9 +143,9 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             <Button
               type="button"
               variant={variant === 'destructive' ? 'destructive' : 'default'}
-              disabled={isLoading}
+              disabled={isLoading || confirmDisabled}
               onClick={onConfirm}
-              className="w-full sm:flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
+              className="w-full sm:flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#960C01]"
             >
               {isLoading ? (
                 <>

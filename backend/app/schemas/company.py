@@ -9,7 +9,7 @@ class CompanyBase(BaseModel):
     location: str = Field(min_length=1, max_length=100)
     contact_number: Optional[str] = Field(default=None, max_length=11)
     phone: Optional[str] = Field(default=None, max_length=8)
-    starting_balance: Decimal = Field(decimal_places=2)
+    starting_balance: Decimal = Field(default=Decimal("0.00"), decimal_places=2)
     petty_cash: Optional[Decimal] = Field(default=Decimal("0.00"), decimal_places=2)
     logo_url: Optional[str] = None
 

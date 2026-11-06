@@ -60,7 +60,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
     defaultValues: {
       name: '',
       address: '',
-      contactNumber: '',
+      contactNumber: '09',
       telephoneNumber: '',
       startingBalance: '' as unknown as number,
       pettyCash: '' as unknown as number,
@@ -101,7 +101,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
     form.reset({
       name: '',
       address: '',
-      contactNumber: '',
+      contactNumber: '09',
       telephoneNumber: '',
       startingBalance: '' as unknown as number,
       pettyCash: '' as unknown as number,
@@ -344,7 +344,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                   render={({ field, fieldState }) => (
                     <FormItem className="space-y-1.5">
                       <Label htmlFor="contact-number" className="text-xs sm:text-sm font-medium text-focus/90">
-                        Contact Number <span className="text-red-500">*</span> <span className="text-muted-fg text-xs font-normal">(11 digits)</span>
+                        Contact Number <span className="text-red-500">*</span> <span className="text-muted-fg text-xs font-normal">(11 digits, starts with 09)</span>
                       </Label>
                       <FormControl>
                         <Input
@@ -352,11 +352,28 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                           type="tel"
                           inputMode="numeric"
                           maxLength={11}
-                          placeholder="e.g. 09171234567"
-                          value={field.value}
+                          placeholder="09171234567"
+                          value={field.value || '09'}
                           onChange={(e) => {
-                            const val = e.target.value.replace(/\D/g, '').slice(0, 11)
-                            field.onChange(val)
+                            let val = e.target.value.replace(/\D/g, '')
+                            if (!val.startsWith('09')) {
+                              if (val === '0' || val === '') {
+                                val = '09'
+                              } else if (val.startsWith('9')) {
+                                val = '0' + val
+                              } else {
+                                val = '09' + val
+                              }
+                            }
+                            field.onChange(val.slice(0, 11))
+                          }}
+                          onKeyDown={(e) => {
+                            if (
+                              (e.key === 'Backspace' || e.key === 'Delete') &&
+                              (field.value === '09' || (e.currentTarget.selectionStart !== null && e.currentTarget.selectionStart <= 2 && e.currentTarget.selectionEnd !== null && e.currentTarget.selectionEnd <= 2))
+                            ) {
+                              e.preventDefault()
+                            }
                           }}
                           className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
                           aria-invalid={!!fieldState.error}
@@ -406,7 +423,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                   render={({ field, fieldState }) => (
                     <FormItem className="space-y-1.5">
                       <Label htmlFor="starting-balance" className="text-xs sm:text-sm font-medium text-focus/90">
-                        Starting Balance (₱) <span className="text-red-500">*</span>
+                        Starting Balance (₱) <span className="text-muted-fg text-xs font-normal">(Optional, default 0)</span>
                       </Label>
                       <FormControl>
                         <Input
@@ -441,7 +458,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                   render={({ field, fieldState }) => (
                     <FormItem className="space-y-1.5">
                       <Label htmlFor="petty-cash" className="text-xs sm:text-sm font-medium text-focus/90">
-                        Petty Cash (₱) <span className="text-red-500">*</span>
+                        Petty Cash (₱) <span className="text-muted-fg text-xs font-normal">(Optional, default 0)</span>
                       </Label>
                       <FormControl>
                         <Input

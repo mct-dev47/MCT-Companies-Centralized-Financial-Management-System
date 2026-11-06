@@ -1,7 +1,7 @@
 # 0032. User Form Required Fields Validation Warning
 
 **Date**: 2026-11-06
-**Status**: Proposed
+**Status**: In Progress
 
 ## Summary
 
@@ -112,11 +112,11 @@ None.
 
 ## Build plan
 
-1. Add top level warning alert state and alert banner component to `CreateUserModal.tsx`, satisfies **AC-1**, **AC-2**.
-2. Connect `form.handleSubmit` error callback to aggregate missing field labels and trigger smooth auto scroll to top, satisfies **AC-1**, **AC-3**, **AC-4**.
-3. Integrate assigned company selection validation into the top warning banner aggregation, satisfies **AC-2**, **AC-4**.
-4. Wire reactive clearing of the top warning banner and error borders as user edits inputs or selects companies, satisfies **AC-5**.
-5. Verify clean transition to confirmation modal on valid form submission, satisfies **AC-6**.
+- [x] 1. Add top level warning alert state and alert banner component to `CreateUserModal.tsx`, satisfies **AC-1**, **AC-2**.
+- [x] 2. Connect `form.handleSubmit` error callback to aggregate missing field labels and trigger smooth auto scroll to top, satisfies **AC-1**, **AC-3**, **AC-4**.
+- [x] 3. Integrate assigned company selection validation into the top warning banner aggregation, satisfies **AC-2**, **AC-4**.
+- [x] 4. Wire reactive clearing of the top warning banner and error borders as user edits inputs or selects companies, satisfies **AC-5**.
+- [x] 5. Verify clean transition to confirmation modal on valid form submission, satisfies **AC-6**.
 
 ## Consequences
 

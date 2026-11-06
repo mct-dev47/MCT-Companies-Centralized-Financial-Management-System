@@ -10,6 +10,7 @@
 | Activity Audit Log Changes and IP Tracking | in-progress | [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md) |
 | Company Amount Input Validation and User Form Reset | in-progress | [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md) |
 | User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
+| Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
 
 ---
 
@@ -100,11 +101,26 @@
 **Done when**: Clicking Create User with empty or invalid fields renders an alert banner listing missing fields, highlights offending inputs in red, auto scrolls smoothly to top, clears dynamically upon typing or company selection, and opens the confirmation modal when all mandatory fields are valid.
 
 - [x] Design it (spec): [0032](../specs/0032-user-form-required-fields-validation-warning.md)
-- [ ] Build it: /develop 0032 (code in `frontend/src/`)
-  - [ ] Milestone 1: Top warning alert banner component and state in Create User modal (AC-1, AC-2)
-  - [ ] Milestone 2: Submission validation error handler with auto scroll to top (AC-1, AC-3, AC-4)
-  - [ ] Milestone 3: Assigned company validation integration into warning banner (AC-2, AC-4)
-  - [ ] Milestone 4: Reactive error clearing on input edit and company toggle (AC-5)
-  - [ ] Milestone 5: Seamless progression to confirmation modal on valid form (AC-6)
+- [x] Build it: /develop 0032 (code in `frontend/src/`)
+  - [x] Milestone 1: Top warning alert banner component and state in Create User modal (AC-1, AC-2)
+  - [x] Milestone 2: Submission validation error handler with auto scroll to top (AC-1, AC-3, AC-4)
+  - [x] Milestone 3: Assigned company validation integration into warning banner (AC-2, AC-4)
+  - [x] Milestone 4: Reactive error clearing on input edit and company toggle (AC-5)
+  - [x] Milestone 5: Seamless progression to confirmation modal on valid form (AC-6)
 - [ ] Verify it: /check verify 0032
 - [ ] Test it: /test 0032
+
+### Company Deletion Cascade Cleanup and Typed Name Confirmation
+**Status**: in-progress
+**Spec**: [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md)
+**Intent**: Require typing exact company name to confirm deletion in the admin modal, and cascade company deletion across all financial ledgers, receivables, tenant leases, bank accounts, user links, and cloud storage files.
+**Done when**: Admin delete company modal requires exact matching company name to unlock the delete action, closing or reopening resets input state, company deletion deletes child receivables and payments, tenant leases and payments, bank accounts and transactions, user company links, and cloud storage logo files while keeping audit log history.
+
+- [x] Design it (spec): [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md)
+- [x] Build it: /develop 0033 (code in `frontend/src/`, `backend/app/`)
+  - [x] Milestone 1: Typed company name confirmation modal with warning card and state reset (AC-1, AC-2, AC-3)
+  - [x] Milestone 2: Backend cascade deletion across receivables, tenant leases, bank accounts, and user links (AC-4, AC-5, AC-6, AC-7)
+  - [x] Milestone 3: Cloud storage company logo deletion with missing file tolerance (AC-8)
+  - [x] Milestone 4: End to end deletion tests and audit log decoupling verification (AC-9)
+- [x] Verify it: /check verify 0033
+- [ ] Test it: /test 0033
