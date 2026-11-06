@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import {
   Check,
@@ -9,6 +9,8 @@ import {
   Crop,
   Building2,
   User as UserIcon,
+  AlertTriangle,
+  X,
 } from 'lucide-react'
 import {
   Dialog,
@@ -55,13 +57,6 @@ const ROLES = [
   'Owner',
 ] as const
 
-const formatCompanyList = (names: string[]): string => {
-  if (!names || names.length === 0) return 'no company'
-  if (names.length === 1) return names[0]
-  if (names.length === 2) return `${names[0]} and ${names[1]}`
-  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
-}
-
 
 export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   open,
@@ -84,6 +79,26 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   const [selectedCompanies, setSelectedCompanies] = React.useState<string[]>([])
   const [companyError, setCompanyError] = React.useState<string | null>(null)
   const [submitError, setSubmitError] = React.useState<string | null>(null)
+
+  // Validation warning alert banner state
+  const [validationWarning, setValidationWarning] = React.useState<{
+    missingFields: string[]
+  } | null>(null)
+
+  // Scroll target refs for smooth scrolling to top of modal container
+  const contentRef = React.useRef<HTMLDivElement>(null)
+  const topRef = React.useRef<HTMLDivElement>(null)
+
+  const scrollToTop = React.useCallback(() => {
+    requestAnimationFrame(() => {
+      if (contentRef.current) {
+        contentRef.current.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+      if (topRef.current) {
+        topRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    })
+  }, [])
 
   const form = useForm<CreateUserFormValues>({
     resolver: zodResolver(createUserSchema),
@@ -114,9 +129,13 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     setSelectedCompanies((prev) => {
       const exists = prev.includes(companyName)
       const next = exists ? prev.filter((c) => c !== companyName) : [...prev, companyName]
-      form.setValue('assignedCompanies', next)
+      form.setValue('assignedCompanies', next, { shouldValidate: true })
       form.setValue('assignedCompany', next[0] || '')
-      if (next.length > 0) setCompanyError(null)
+      if (next.length > 0) {
+        setCompanyError(null)
+        form.clearErrors('assignedCompanies')
+      }
+      setValidationWarning(null)
       setSubmitError(null)
       return next
     })
@@ -125,15 +144,20 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   const handleSelectAllCompanies = () => {
     const all = companies.map((c) => c.name)
     setSelectedCompanies(all)
-    form.setValue('assignedCompanies', all)
+    form.setValue('assignedCompanies', all, { shouldValidate: true })
     form.setValue('assignedCompany', all[0] || '')
-    if (all.length > 0) setCompanyError(null)
+    if (all.length > 0) {
+      setCompanyError(null)
+      form.clearErrors('assignedCompanies')
+    }
+    setValidationWarning(null)
   }
 
   const handleClearCompanies = () => {
     setSelectedCompanies([])
-    form.setValue('assignedCompanies', [])
+    form.setValue('assignedCompanies', [], { shouldValidate: true })
     form.setValue('assignedCompany', '')
+    setValidationWarning(null)
   }
 
   // Handle image upload with FileReader preview & open cropper
@@ -181,35 +205,91 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     form.setValue('role', role)
   }
 
+  const resetFormState = React.useCallback(() => {
+    form.reset({
+      fullName: '',
+      email: '',
+      assignedCompany: '',
+      assignedCompanies: [],
+      role: 'Supervisor',
+      avatarUrl: '',
+    })
+    setProfilePreview(null)
+    setAvatarFile(null)
+    setRawImageForCrop(null)
+    setIsCropperOpen(false)
+    setSelectedCompanies([])
+    setCompanyError(null)
+    setValidationWarning(null)
+    setSubmitError(null)
+    setPendingValues(null)
+    setIsConfirmOpen(false)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [form])
+
+  React.useEffect(() => {
+    if (open) {
+      resetFormState()
+    }
+  }, [open, resetFormState])
+
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
-      form.reset({
-        fullName: '',
-        email: '',
-        assignedCompany: '',
-        assignedCompanies: [],
-        role: 'Supervisor',
-        avatarUrl: '',
-      })
-      setProfilePreview(null)
-      setAvatarFile(null)
-      setRawImageForCrop(null)
-      setIsCropperOpen(false)
-      setSelectedCompanies([])
-      setCompanyError(null)
-      setPendingValues(null)
-      setIsConfirmOpen(false)
+      resetFormState()
     }
     onOpenChange(nextOpen)
+  }
+
+  const collectMissingFields = (errors?: FieldErrors<CreateUserFormValues>): string[] => {
+    const missing: string[] = []
+
+    const nameVal = form.getValues('fullName')?.trim() || ''
+    if (errors?.fullName || !nameVal || nameVal.length < 2) {
+      missing.push('Full Name (minimum 2 characters)')
+    }
+
+    const emailVal = form.getValues('email')?.trim() || ''
+    if (errors?.email || !emailVal || !emailVal.toLowerCase().endsWith('@gmail.com')) {
+      missing.push('Email Address (valid @gmail.com format)')
+    }
+
+    const roleVal = form.getValues('role')
+    if (errors?.role || !roleVal) {
+      missing.push('Role')
+    }
+
+    if (selectedCompanies.length === 0 || errors?.assignedCompanies) {
+      missing.push('Assigned Company (at least one company selection)')
+    }
+
+    return missing
+  }
+
+  const onInvalidSubmit = (errors: FieldErrors<CreateUserFormValues>) => {
+    const missing = collectMissingFields(errors)
+    if (selectedCompanies.length === 0) {
+      setCompanyError('Please select at least one assigned company.')
+    }
+    if (missing.length > 0) {
+      setValidationWarning({ missingFields: missing })
+      scrollToTop()
+    }
   }
 
   const onSubmit = (values: CreateUserFormValues) => {
     if (selectedCompanies.length === 0) {
       setCompanyError('Please select at least one assigned company.')
+      setValidationWarning({
+        missingFields: ['Assigned Company (at least one company selection)'],
+      })
+      scrollToTop()
       return
     }
     setCompanyError(null)
     setSubmitError(null)
+    setValidationWarning(null)
     setPendingValues(values)
     setIsConfirmOpen(true)
   }
@@ -240,6 +320,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
         created.companyName = selectedCompanies.join(', ')
       }
       onSuccess?.(created)
+      resetFormState()
       setIsConfirmOpen(false)
       onOpenChange(false)
     } catch (error) {
@@ -255,7 +336,11 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-[680px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
+        <DialogContent
+          ref={contentRef}
+          className="sm:max-w-[680px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl"
+        >
+          <div ref={topRef} />
           <DialogHeader className="text-left sm:text-left space-y-1">
             <DialogTitle className="text-xl sm:text-2xl font-bold text-focus">
               Create User
@@ -264,6 +349,41 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               Register an employee and appoint them to a company
             </DialogDescription>
           </DialogHeader>
+
+          {/* Validation Warning Alert Banner */}
+          {validationWarning && (
+            <div
+              role="alert"
+              className="p-4 my-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm animate-in fade-in-0 duration-200 shadow-2xs"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold text-amber-950 text-sm">
+                      Please complete all required fields
+                    </p>
+                    <p className="text-xs text-amber-800">
+                      The following required fields must be completed before creating the user:
+                    </p>
+                    <ul className="list-disc list-inside space-y-0.5 text-xs text-amber-900 font-medium pt-1">
+                      {validationWarning.missingFields.map((f) => (
+                        <li key={f}>{f}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setValidationWarning(null)}
+                  className="text-amber-600 hover:text-amber-800 p-1 rounded-lg hover:bg-amber-100/60 transition-colors cursor-pointer shrink-0"
+                  aria-label="Dismiss warning"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {submitError && (
             <div className="p-3 my-2 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs sm:text-sm flex items-start justify-between gap-2">
@@ -279,7 +399,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           )}
 
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 pt-2">
+            <form onSubmit={form.handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-4 pt-2" autoComplete="off">
               {/* 1. Display Profile Image Upload */}
               <div className="flex flex-col items-center justify-center py-1">
                 <div
@@ -369,19 +489,35 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                 name="fullName"
                 render={({ field, fieldState }) => (
                   <FormItem className="space-y-1.5">
-                    <Label htmlFor="create-full-name" className="text-xs sm:text-sm font-medium text-focus/90">
+                    <Label
+                      htmlFor="create-full-name"
+                      className={cn(
+                        'text-xs sm:text-sm font-medium transition-colors',
+                        fieldState.error ? 'text-red-600 font-semibold' : 'text-focus/90'
+                      )}
+                    >
                       Full Name <span className="text-red-500">*</span>
                     </Label>
                     <FormControl>
                       <Input
                         id="create-full-name"
                         placeholder="e.g. John Doe"
-                        className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
+                        autoComplete="off"
+                        className={cn(
+                          'h-11 rounded-xl border-[0.5px] text-sm focus-visible:ring-1 transition-colors',
+                          fieldState.error
+                            ? 'border-red-500 ring-1 ring-red-500 focus-visible:border-red-500 focus-visible:ring-red-500 bg-red-50/10'
+                            : 'border-stroke/60 focus-visible:ring-focus'
+                        )}
                         aria-invalid={!!fieldState.error}
                         {...field}
+                        onChange={(e) => {
+                          field.onChange(e)
+                          setValidationWarning(null)
+                        }}
                       />
                     </FormControl>
-                    <FormMessage className="text-xs text-error" />
+                    <FormMessage className="text-xs text-error font-medium" />
                   </FormItem>
                 )}
               />
@@ -392,20 +528,36 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                 name="email"
                 render={({ field, fieldState }) => (
                   <FormItem className="space-y-1.5">
-                    <Label htmlFor="create-email-address" className="text-xs sm:text-sm font-medium text-focus/90">
+                    <Label
+                      htmlFor="create-email-address"
+                      className={cn(
+                        'text-xs sm:text-sm font-medium transition-colors',
+                        fieldState.error ? 'text-red-600 font-semibold' : 'text-focus/90'
+                      )}
+                    >
                       Email Address <span className="text-red-500">*</span>
                     </Label>
                     <FormControl>
                       <Input
                         id="create-email-address"
                         type="email"
-                        placeholder="e.g. john.doe@example.com"
-                        className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
+                        placeholder="e.g. john.doe@gmail.com"
+                        autoComplete="off"
+                        className={cn(
+                          'h-11 rounded-xl border-[0.5px] text-sm focus-visible:ring-1 transition-colors',
+                          fieldState.error
+                            ? 'border-red-500 ring-1 ring-red-500 focus-visible:border-red-500 focus-visible:ring-red-500 bg-red-50/10'
+                            : 'border-stroke/60 focus-visible:ring-focus'
+                        )}
                         aria-invalid={!!fieldState.error}
                         {...field}
+                        onChange={(e) => {
+                          field.onChange(e)
+                          setValidationWarning(null)
+                        }}
                       />
                     </FormControl>
-                    <FormMessage className="text-xs text-error" />
+                    <FormMessage className="text-xs text-error font-medium" />
                   </FormItem>
                 )}
               />
@@ -416,7 +568,13 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                 name="role"
                 render={({ field, fieldState }) => (
                   <FormItem className="space-y-1.5">
-                    <Label htmlFor="create-user-role" className="text-xs sm:text-sm font-medium text-focus/90">
+                    <Label
+                      htmlFor="create-user-role"
+                      className={cn(
+                        'text-xs sm:text-sm font-medium transition-colors',
+                        fieldState.error ? 'text-red-600 font-semibold' : 'text-focus/90'
+                      )}
+                    >
                       Role <span className="text-red-500">*</span>
                     </Label>
                     <FormControl>
@@ -424,8 +582,16 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                         <select
                           id="create-user-role"
                           value={field.value}
-                          onChange={(e) => handleRoleChange(e.target.value)}
-                          className="flex h-11 w-full rounded-xl border-[0.5px] border-stroke/60 bg-background px-3.5 py-2.5 text-sm text-focus shadow-none transition-colors appearance-none focus-visible:border-focus focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus cursor-pointer"
+                          onChange={(e) => {
+                            handleRoleChange(e.target.value)
+                            setValidationWarning(null)
+                          }}
+                          className={cn(
+                            'flex h-11 w-full rounded-xl border-[0.5px] bg-background px-3.5 py-2.5 text-sm text-focus shadow-none transition-colors appearance-none focus-visible:outline-none focus-visible:ring-1 cursor-pointer',
+                            fieldState.error
+                              ? 'border-red-500 ring-1 ring-red-500 focus-visible:border-red-500 focus-visible:ring-red-500 bg-red-50/10'
+                              : 'border-stroke/60 focus-visible:border-focus focus-visible:ring-focus'
+                          )}
                           aria-invalid={!!fieldState.error}
                         >
                           {ROLES.map((role) => (
@@ -445,7 +611,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                         </div>
                       </div>
                     </FormControl>
-                    <FormMessage className="text-xs text-error" />
+                    <FormMessage className="text-xs text-error font-medium" />
                   </FormItem>
                 )}
               />
@@ -454,7 +620,12 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Label className="text-xs sm:text-sm font-medium text-focus/90">
+                    <Label
+                      className={cn(
+                        'text-xs sm:text-sm font-medium transition-colors',
+                        companyError ? 'text-red-600 font-semibold' : 'text-focus/90'
+                      )}
+                    >
                       Company Assigned <span className="text-red-500">*</span>
                     </Label>
                     <span
@@ -462,6 +633,8 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                         'text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors',
                         selectedCompanies.length > 0
                           ? 'bg-red-100/70 text-primary'
+                          : companyError
+                          ? 'bg-red-50 text-red-600 border border-red-200'
                           : 'bg-slate-100 text-muted-fg'
                       )}
                     >
@@ -489,7 +662,14 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                   </div>
                 </div>
 
-                <div className="max-h-48 overflow-y-auto pr-1 space-y-2 rounded-xl border border-stroke/40 p-2.5 bg-slate-50/50">
+                <div
+                  className={cn(
+                    'max-h-48 overflow-y-auto pr-1 space-y-2 rounded-xl border p-2.5 transition-colors',
+                    companyError
+                      ? 'border-red-500 ring-1 ring-red-500 bg-red-50/20'
+                      : 'border-stroke/40 bg-slate-50/50'
+                  )}
+                >
                   {companies.length === 0 ? (
                     <div className="p-4 text-center text-xs text-muted-fg">No companies available</div>
                   ) : (

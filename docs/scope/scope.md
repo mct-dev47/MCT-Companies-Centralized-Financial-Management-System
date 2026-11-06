@@ -7,7 +7,11 @@
 | Food Receivables and Unpaid Expense Lifecycle | in-progress | [0027](../specs/0027-unpaid-expense-sales-receivables-lifecycle.md) |
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
 | Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
+| Activity Audit Log Changes and IP Tracking | in-progress | [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md) |
 | Lending Page and Payment Refinements | in-progress | [0030](../specs/0030-lending-page-and-payment-refinements/index.md) |
+| Company Amount Input Validation and User Form Reset | in-progress | [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md) |
+| User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
+| Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
 | Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
 
 ---
@@ -59,6 +63,69 @@
   - [x] Milestone 4: Frontend pages refactor replacing isManuel email checks with role checks and table dash placeholders (AC-5, AC-6, AC-7)
 - [x] Verify it: /check verify owner-role-and-account-migration
 - [ ] Test it: /test owner-role-and-account-migration
+
+### Activity Audit Log Changes and IP Tracking
+**Status**: in-progress
+**Spec**: [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md)
+**Intent**: Enhance the admin activity log table at `/activity-log` with client IP address tracking and a detail drawer modal showing what exact fields changed across create, update, and delete actions.
+**Done when**: Admin activity log shows a dedicated IP address column with copy button, clicking any row opens an inspection drawer showing who, when, what record, IP, user agent, and field by field old versus new values, sensitive fields are redacted, and exports contain IP and record references.
+
+- [x] Design it (spec): [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md)
+- [x] Build it: /develop activity-audit-log-changes-and-ip-tracking (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Backend diff helper with sensitive data redaction and proxy IP extraction (AC-4, AC-5, AC-6)
+  - [x] Milestone 2: Service enrichment and Pydantic/TypeScript schema extensions for IP, severity, and diffs (AC-2, AC-4)
+  - [x] Milestone 3: Frontend activity log table IP column and quick copy interaction (AC-1)
+  - [x] Milestone 4: Inspection side drawer modal with formatted field by field diff table and badges (AC-2, AC-3)
+  - [x] Milestone 5: CSV and PDF export generators updated with IP and record references (AC-7)
+- [x] Verify it: /check verify activity-audit-log-changes-and-ip-tracking
+- [ ] Test it: /test activity-audit-log-changes-and-ip-tracking
+
+### Company Amount Input Validation and User Form Reset
+**Status**: in-progress
+**Spec**: [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md)
+**Intent**: Automatically replace leading zeros in company balance and petty cash monetary fields while preserving lone 0 and decimals, and ensure Create User modal clears previous employee input and suppresses browser autofill.
+**Done when**: Typing over lone 0 in Starting Balance and Petty Cash fields replaces the 0 with the typed digit without leading zeros, lone 0 and valid decimals remain permitted in company creation and editing, Create User modal resets completely on open and submit, and browser autofill is turned off on user form inputs.
+
+- [x] Design it (spec): [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md)
+- [x] Build it: /develop 0031 (code in `frontend/src/`)
+  - [x] Milestone 1: Reusable numeric input sanitizer helper (AC-1, AC-2, AC-3)
+  - [x] Milestone 2: Starting balance and petty cash input sanitization in Create Company modal (AC-1, AC-2, AC-3)
+  - [x] Milestone 3: Starting balance and petty cash input sanitization in View Company modal edit mode (AC-4)
+  - [x] Milestone 4: Form and avatar state reset on open and submit in Create User modal (AC-5, AC-6)
+  - [x] Milestone 5: Browser autocomplete suppression attributes on Create User form (AC-7)
+- [x] Verify it: /check verify 0031
+- [ ] Test it: /test 0031
+
+### User Form Required Fields Validation Warning
+**Status**: in-progress
+**Spec**: [0032](../specs/0032-user-form-required-fields-validation-warning.md)
+**Intent**: Render a prominent warning alert banner and red field borders when attempting to submit the Create User modal with missing required fields, auto scroll to top, and clear errors dynamically as inputs are corrected.
+**Done when**: Clicking Create User with empty or invalid fields renders an alert banner listing missing fields, highlights offending inputs in red, auto scrolls smoothly to top, clears dynamically upon typing or company selection, and opens the confirmation modal when all mandatory fields are valid.
+
+- [x] Design it (spec): [0032](../specs/0032-user-form-required-fields-validation-warning.md)
+- [x] Build it: /develop 0032 (code in `frontend/src/`)
+  - [x] Milestone 1: Top warning alert banner component and state in Create User modal (AC-1, AC-2)
+  - [x] Milestone 2: Submission validation error handler with auto scroll to top (AC-1, AC-3, AC-4)
+  - [x] Milestone 3: Assigned company validation integration into warning banner (AC-2, AC-4)
+  - [x] Milestone 4: Reactive error clearing on input edit and company toggle (AC-5)
+  - [x] Milestone 5: Seamless progression to confirmation modal on valid form (AC-6)
+- [ ] Verify it: /check verify 0032
+- [ ] Test it: /test 0032
+
+### Company Deletion Cascade Cleanup and Typed Name Confirmation
+**Status**: in-progress
+**Spec**: [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md)
+**Intent**: Require typing exact company name to confirm deletion in the admin modal, and cascade company deletion across all financial ledgers, receivables, tenant leases, bank accounts, user links, and cloud storage files.
+**Done when**: Admin delete company modal requires exact matching company name to unlock the delete action, closing or reopening resets input state, company deletion deletes child receivables and payments, tenant leases and payments, bank accounts and transactions, user company links, and cloud storage logo files while keeping audit log history.
+
+- [x] Design it (spec): [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md)
+- [x] Build it: /develop 0033 (code in `frontend/src/`, `backend/app/`)
+  - [x] Milestone 1: Typed company name confirmation modal with warning card and state reset (AC-1, AC-2, AC-3)
+  - [x] Milestone 2: Backend cascade deletion across receivables, tenant leases, bank accounts, and user links (AC-4, AC-5, AC-6, AC-7)
+  - [x] Milestone 3: Cloud storage company logo deletion with missing file tolerance (AC-8)
+  - [x] Milestone 4: End to end deletion tests and audit log decoupling verification (AC-9)
+- [x] Verify it: /check verify 0033
+- [ ] Test it: /test 0033
 
 ### Lending Page and Payment Refinements
 **Status**: in-progress

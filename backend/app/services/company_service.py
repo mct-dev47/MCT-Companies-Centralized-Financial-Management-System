@@ -107,7 +107,7 @@ class CompanyService:
             location=company_in.location,
             contact_number=company_in.contact_number,
             phone=company_in.phone,
-            starting_balance=company_in.starting_balance,
+            starting_balance=company_in.starting_balance if company_in.starting_balance is not None else Decimal("0.00"),
             petty_cash=company_in.petty_cash or Decimal("0.00"),
             logo_url=company_in.logo_url,
         )
@@ -146,7 +146,7 @@ class CompanyService:
             location=company_in.location,
             contact_number=company_in.contact_number,
             phone=company_in.phone,
-            starting_balance=company_in.starting_balance,
+            starting_balance=company_in.starting_balance if company_in.starting_balance is not None else Decimal("0.00"),
             petty_cash=company_in.petty_cash or Decimal("0.00"),
         )
         storage_path = ""
@@ -260,6 +260,43 @@ class CompanyService:
         except Exception:
             logger.exception("Could not clean up company picture: %s", storage_path)
 
+    def _cleanup_company_storage(self, company_id: int, logo_url: Optional[str]) -> None:
+        try:
+            storage = get_supabase_admin_client().storage.from_(
+                self._company_picture_bucket
+            )
+            folder = f"company/{company_id}"
+            files_to_remove: List[str] = []
+            try:
+                listing = storage.list(folder)
+                if listing and isinstance(listing, list):
+                    for item in listing:
+                        name = (
+                            item.get("name")
+                            if isinstance(item, dict)
+                            else getattr(item, "name", None)
+                        )
+                        if name:
+                            files_to_remove.append(f"{folder}/{name}")
+            except Exception:
+                logger.warning("Could not list storage files in folder %s", folder)
+
+            if logo_url:
+                bucket_token = (
+                    "Company%20Profiles%20Pictures/"
+                    if "Company%20Profiles%20Pictures/" in logo_url
+                    else "Company Profiles Pictures/"
+                )
+                if bucket_token in logo_url:
+                    parsed_path = logo_url.split(bucket_token)[-1].split("?")[0]
+                    if parsed_path and parsed_path not in files_to_remove:
+                        files_to_remove.append(parsed_path)
+
+            if files_to_remove:
+                storage.remove(files_to_remove)
+        except Exception:
+            logger.exception("Could not clean up storage files for company: %s", company_id)
+
     #updates an existing company in the database. It first retrieves the company using the get_company method. If the company is found, it updates its attributes based on the provided CompanyUpdate object, ensuring that required fields are not set to None. After updating, it commits the changes to the database and returns a CompanyOut object representing the updated company. If the company is not found, it returns None.
     def update_company(
         self,
@@ -298,8 +335,19 @@ class CompanyService:
         if not company:
             return False
 
+        logo_url = company.logo_url
+
         try:
             # Cascade deletion of all dependent child records
+            self.db.execute(text("DELETE FROM receivable_payments WHERE receivable_id IN (SELECT receivable_id FROM receivables WHERE company_id = :id)"), {"id": company_id})
+            self.db.execute(text("DELETE FROM receivables WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM tenant_lease_payments WHERE lease_id IN (SELECT lease_id FROM tenant_leases WHERE company_id = :id)"), {"id": company_id})
+            self.db.execute(text("DELETE FROM tenant_leases WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM bank_transactions WHERE bank_account_id IN (SELECT id FROM bank_accounts WHERE company_id = :id)"), {"id": company_id})
+            self.db.execute(text("DELETE FROM bank_accounts WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM user_companies WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM notifications WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM notification_outbox WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM petty_cash_topups WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM petty_cash_wallets WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM bill_payments WHERE bill_id IN (SELECT bill_id FROM bills WHERE company_id = :id)"), {"id": company_id})
@@ -316,9 +364,11 @@ class CompanyService:
 
             self.db.delete(company)
             self.db.commit()
-            return True
         except SQLAlchemyError as error:
             raise self._database_error("delete company", error)
+
+        self._cleanup_company_storage(company_id, logo_url)
+        return True
 
     #converts a Company object into a CompanyOut object, including financial summary data retrieved from the FinanceService.
     def to_response(self, company: Company) -> CompanyOut:
@@ -351,7 +401,7 @@ class CompanyService:
             location=company.location,
             contact_number=company.contact_number,
             phone=company.phone,
-            starting_balance=float(company.starting_balance),
+            starting_balance=float(company.starting_balance) if company.starting_balance is not None else 0.0,
             petty_cash=float(getattr(company, "petty_cash", 0.0) or 0.0),
             logo_url=company.logo_url,
             total_revenue=total_revenue,

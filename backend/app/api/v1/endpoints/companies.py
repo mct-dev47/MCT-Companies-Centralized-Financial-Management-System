@@ -205,7 +205,7 @@ async def create_company_with_picture(
     location: str = Form(...),
     contact_number: str | None = Form(None),
     phone: str | None = Form(None),
-    starting_balance: Decimal = Form(...),
+    starting_balance: Decimal = Form(Decimal("0.00")),
     petty_cash: Decimal = Form(Decimal("0.00")),
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),

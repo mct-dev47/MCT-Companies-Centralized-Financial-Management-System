@@ -197,6 +197,13 @@ export function DropdownFilter<T extends string = string>({
       ? effectivePlaceholder
       : selectedOption?.label ?? String(value)
 
+  const renderIcon = () => {
+    if (!Icon) return null
+    if (React.isValidElement(Icon)) return Icon
+    const IconComp = Icon as React.ComponentType<{ className?: string }>
+    return <IconComp className="h-4 w-4 text-muted-fg shrink-0" />
+  }
+
   return (
     <div ref={containerRef} className="relative inline-block">
       <button
@@ -213,6 +220,7 @@ export function DropdownFilter<T extends string = string>({
           className
         )}
       >
+        {renderIcon()}
         <span className="font-medium truncate max-w-[160px]">{displayLabel}</span>
         <ChevronDown
           className={cn(

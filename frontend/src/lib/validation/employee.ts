@@ -28,7 +28,7 @@ export const createCompanySchema = z.object({
     .string()
     .trim()
     .min(1, 'Contact number is required')
-    .regex(/^\d{11}$/, 'Contact number must be exactly 11 digits'),
+    .regex(/^09\d{9}$/, 'Contact number must be exactly 11 digits starting with 09'),
   telephoneNumber: z
     .string()
     .trim()
@@ -36,18 +36,24 @@ export const createCompanySchema = z.object({
       message: 'Telephone number must be exactly 8 digits',
     })
     .optional(),
-  startingBalance: z.coerce
-    .number({
-      required_error: 'Starting balance is required',
-      invalid_type_error: 'Starting balance must be a valid number',
-    })
-    .min(0, 'Starting balance must be 0 or greater'),
-  pettyCash: z.coerce
-    .number({
-      required_error: 'Petty cash is required',
-      invalid_type_error: 'Petty cash must be a valid number',
-    })
-    .min(0, 'Petty cash must be 0 or greater'),
+  startingBalance: z.preprocess(
+    (val) => (val === '' || val === null || val === undefined ? 0 : val),
+    z.coerce
+      .number({
+        invalid_type_error: 'Starting balance must be a valid number',
+      })
+      .min(0, 'Starting balance must be 0 or greater')
+      .default(0)
+  ),
+  pettyCash: z.preprocess(
+    (val) => (val === '' || val === null || val === undefined ? 0 : val),
+    z.coerce
+      .number({
+        invalid_type_error: 'Petty cash must be a valid number',
+      })
+      .min(0, 'Petty cash must be 0 or greater')
+      .default(0)
+  ),
   logoUrl: z.string().optional(),
   // Optional legacy fields for backward compatibility
   email: z.string().trim().optional(),

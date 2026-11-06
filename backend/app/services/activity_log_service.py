@@ -121,6 +121,8 @@ def _parse_details(raw: Optional[Any]) -> dict:
 
 
 def _target_for(details: dict) -> str:
+    if details.get("record_ref"):
+        return str(details["record_ref"])
     if details.get("ref"):
         return str(details["ref"])
     if details.get("reference_no"):
@@ -439,6 +441,17 @@ class ActivityLogService:
             module = _module_for(action, category)
             target = _target_for(details)
 
+            ip_address = r.get("ip_address") or details.get("ip_address") or details.get("ip")
+            severity = str(
+                details.get("severity")
+                or ("CRITICAL" if action in ("ACCOUNT_LOCKED", "LOGIN_FAILED", "PASSWORD_RESET_FAILED") else "INFO")
+            ).upper()
+            record_type = details.get("record_type")
+            record_id = details.get("record_id")
+            record_ref = details.get("record_ref") or details.get("ref") or details.get("reference_no")
+            user_agent = details.get("user_agent")
+            changes = details.get("changes") if isinstance(details.get("changes"), dict) else None
+
             results.append(
                 ActivityLogOut(
                     audit_log_id=r["audit_log_id"],
@@ -446,7 +459,7 @@ class ActivityLogService:
                     company_id=r.get("company_id"),
                     action=action,
                     action_category=category,
-                    ip_address=r.get("ip_address"),
+                    ip_address=ip_address,
                     details=r.get("details"),
                     created_at=str(r.get("created_at")) if r.get("created_at") else None,
                     user_name=user_name,
@@ -454,6 +467,12 @@ class ActivityLogService:
                     description=description,
                     module=module,
                     target=target,
+                    severity=severity,
+                    record_type=record_type,
+                    record_id=record_id,
+                    record_ref=record_ref,
+                    user_agent=user_agent,
+                    changes=changes,
                 )
             )
 

@@ -2296,7 +2296,7 @@ export const LendingPage: React.FC = () => {
                     setActiveMenuFacility(null)
                     if (fac) {
                       try {
-                        const auditorName = user?.fullName?.trim() || (user as any)?.name?.trim() || undefined
+                        const auditorName = formatRealName(user?.fullName || (user as any)?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
                         const updated = await lendingService.saveAuditReview(fac.id, 'Verified', undefined, auditorName)
                         await fetchFacilities()
                         if (activeFacility && (activeFacility.id === fac.id || String(activeFacility.borrower_id) === String(fac.borrower_id))) {

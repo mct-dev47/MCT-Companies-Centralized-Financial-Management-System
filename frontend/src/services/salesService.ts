@@ -44,6 +44,9 @@ export interface NewSalesInput {
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
   items?: ParticularItem[]
   bankAccountId?: string
+  createdBy?: string
+  updatedBy?: string
+  updatedAt?: string
 }
 
 removeLegacyAuditStorage()
@@ -281,7 +284,8 @@ export const salesService = {
         auditStatus: 'Pending Audit',
         createdBy: 'Company Staff',
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
         type: 'Sales',
       }
 
@@ -328,6 +332,12 @@ export const salesService = {
       if (res.ok) {
         const updated = await res.json()
         const mapped = mapBackendSaleToItem(updated)
+        if (input.updatedBy) {
+          mapped.updatedBy = input.updatedBy
+        }
+        if (input.updatedAt) {
+          mapped.updatedAt = input.updatedAt
+        }
         if (input.items && input.items.length > 0) {
           mapped.items = input.items
           mapped.status = deriveRecordStatusFromParticulars(
@@ -381,7 +391,8 @@ export const salesService = {
         items: updatedItems,
         deposit: amt,
         netAmount: amt,
-        updatedAt: new Date().toISOString(),
+        updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
       }
     })
     this.invalidateCache()
@@ -437,7 +448,8 @@ export const salesService = {
               auditedBy: mapped.auditedBy,
               auditDate: mapped.auditDate,
               auditNotes: mapped.auditNotes,
-              updatedAt: new Date().toISOString(),
+              updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
             }
           : s
       )

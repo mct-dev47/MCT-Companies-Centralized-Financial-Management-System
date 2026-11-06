@@ -6,6 +6,7 @@ import {
   Check,
   Upload,
   Crop,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   Dialog,
@@ -25,6 +26,7 @@ import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
+import { sanitizeNumericInput } from '@/utils/numericInputUtils'
 
 interface ViewCompanyModalProps {
   open: boolean
@@ -44,6 +46,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [isEditing, setIsEditing] = React.useState(false)
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
+  const [deleteConfirmationName, setDeleteConfirmationName] = React.useState('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
@@ -67,12 +70,25 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
 
   const handleStartEdit = () => {
     if (company) {
+      const rawContact = (company.contactNumber || '').replace(/\D/g, '')
+      let initContact = rawContact
+      if (!initContact.startsWith('09')) {
+        if (initContact.startsWith('9')) {
+          initContact = '0' + initContact
+        } else if (initContact === '0' || initContact === '') {
+          initContact = '09'
+        } else {
+          initContact = '09' + initContact
+        }
+      }
+      initContact = initContact.slice(0, 11)
+
       setFormData({
         name: company.name,
         address: company.address,
-        contactNumber: company.contactNumber,
+        contactNumber: initContact,
         telephoneNumber: company.telephoneNumber || '',
-        startingBalance: company.startingBalance,
+        startingBalance: company.startingBalance ?? 0,
         pettyCash: company.pettyCash || 0,
         logoUrl: company.logoUrl,
       })
@@ -130,6 +146,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       setIsEditing(false)
       setIsConfirmEditOpen(false)
       setIsConfirmDeleteOpen(false)
+      setDeleteConfirmationName('')
       setProfilePreview(null)
       setProfileFile(null)
       setRawImageForCrop(null)
@@ -144,8 +161,8 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const errors: Record<string, string> = {}
-    if (!formData.contactNumber || !/^\d{11}$/.test(formData.contactNumber)) {
-      errors.contactNumber = 'Contact number must be exactly 11 digits'
+    if (!formData.contactNumber || !/^09\d{9}$/.test(formData.contactNumber)) {
+      errors.contactNumber = 'Contact number must be exactly 11 digits starting with 09'
     }
     if (formData.telephoneNumber && !/^\d{8}$/.test(formData.telephoneNumber)) {
       errors.telephoneNumber = 'Telephone number must be exactly 8 digits'
@@ -181,17 +198,38 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     }
   }
 
+  const isDeleteMatch = company ? deleteConfirmationName.trim() === company.name.trim() : false
+
+  const handleOpenDeleteConfirm = () => {
+    setDeleteConfirmationName('')
+    setActionError(null)
+    setIsConfirmDeleteOpen(true)
+  }
+
+  const handleDeleteOpenChange = (nextOpen: boolean) => {
+    setIsConfirmDeleteOpen(nextOpen)
+    setDeleteConfirmationName('')
+    if (!nextOpen) {
+      setActionError(null)
+    }
+  }
+
   const handleConfirmDelete = async () => {
+    if (!company) return
+    if (deleteConfirmationName.trim() !== company.name.trim()) return
+
     try {
       setIsSubmitting(true)
       await employeeService.deleteCompany(company.id)
       onDelete?.(company.id)
       setIsConfirmDeleteOpen(false)
+      setDeleteConfirmationName('')
       onOpenChange(false)
     } catch (error) {
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please try again.')
       setActionError(errorMsg)
       setIsConfirmDeleteOpen(false)
+      setDeleteConfirmationName('')
       notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
@@ -328,18 +366,36 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   <div className="space-y-1">
                     <Label htmlFor="edit-comp-contact-num" className="text-xs font-medium text-focus/80">
                       Contact Number <span className="text-primary">*</span>
-                      <span className="text-[10px] text-muted-fg ml-1">(11 digits)</span>
+                      <span className="text-[10px] text-muted-fg ml-1">(11 digits, starts with 09)</span>
                     </Label>
                     <Input
                       id="edit-comp-contact-num"
                       type="tel"
                       inputMode="numeric"
                       maxLength={11}
-                      value={formData.contactNumber}
+                      value={formData.contactNumber || '09'}
                       onChange={(e) => {
-                        const val = e.target.value.replace(/\D/g, '').slice(0, 11)
+                        let val = e.target.value.replace(/\D/g, '')
+                        if (!val.startsWith('09')) {
+                          if (val === '0' || val === '') {
+                            val = '09'
+                          } else if (val.startsWith('9')) {
+                            val = '0' + val
+                          } else {
+                            val = '09' + val
+                          }
+                        }
+                        val = val.slice(0, 11)
                         setFormData({ ...formData, contactNumber: val })
                         if (formErrors.contactNumber) setFormErrors((prev) => ({ ...prev, contactNumber: '' }))
+                      }}
+                      onKeyDown={(e) => {
+                        if (
+                          (e.key === 'Backspace' || e.key === 'Delete') &&
+                          (formData.contactNumber === '09' || (e.currentTarget.selectionStart !== null && e.currentTarget.selectionStart <= 2 && e.currentTarget.selectionEnd !== null && e.currentTarget.selectionEnd <= 2))
+                        ) {
+                          e.preventDefault()
+                        }
                       }}
                       placeholder="09171234567"
                       className="h-10 rounded-xl text-sm"
@@ -377,38 +433,50 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label htmlFor="edit-comp-start-bal" className="text-xs font-medium text-focus/80">Starting Balance (₱)</Label>
+                    <Label htmlFor="edit-comp-start-bal" className="text-xs font-medium text-focus/80">
+                      Starting Balance (₱) <span className="text-[10px] text-muted-fg ml-1">(Optional, default 0)</span>
+                    </Label>
                     <Input
                       id="edit-comp-start-bal"
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="0.00"
                       value={formData.startingBalance === undefined || formData.startingBalance === null ? '' : formData.startingBalance}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E'].includes(e.key)) {
+                          e.preventDefault()
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value
+                        const val = sanitizeNumericInput(e.target.value)
                         setFormData({
                           ...formData,
-                          startingBalance: val === '' ? ('' as unknown as number) : Number(val),
+                          startingBalance: val === '' ? ('' as unknown as number) : (val as unknown as number),
                         })
                       }}
                       className="h-10 rounded-xl text-sm"
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label htmlFor="edit-comp-petty-cash" className="text-xs font-medium text-focus/80">Petty Cash (₱)</Label>
+                    <Label htmlFor="edit-comp-petty-cash" className="text-xs font-medium text-focus/80">
+                      Petty Cash (₱) <span className="text-[10px] text-muted-fg ml-1">(Optional, default 0)</span>
+                    </Label>
                     <Input
                       id="edit-comp-petty-cash"
-                      type="number"
-                      min="0"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="0.00"
                       value={formData.pettyCash === undefined || formData.pettyCash === null ? '' : formData.pettyCash}
+                      onKeyDown={(e) => {
+                        if (['-', '+', 'e', 'E'].includes(e.key)) {
+                          e.preventDefault()
+                        }
+                      }}
                       onChange={(e) => {
-                        const val = e.target.value
+                        const val = sanitizeNumericInput(e.target.value)
                         setFormData({
                           ...formData,
-                          pettyCash: val === '' ? ('' as unknown as number) : Number(val),
+                          pettyCash: val === '' ? ('' as unknown as number) : (val as unknown as number),
                         })
                       }}
                       className="h-10 rounded-xl text-sm"
@@ -496,7 +564,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Starting Balance:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {company.startingBalance ? formatPHP(company.startingBalance) : '—'}
+                    {formatPHP(Number(company.startingBalance) || 0)}
                   </span>
                 </div>
 
@@ -505,7 +573,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Petty Cash:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {company.pettyCash ? formatPHP(company.pettyCash) : '—'}
+                    {formatPHP(Number(company.pettyCash) || 0)}
                   </span>
                 </div>
               </div>
@@ -516,7 +584,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   type="button"
                   variant="outline"
                   disabled={isSubmitting}
-                  onClick={() => setIsConfirmDeleteOpen(true)}
+                  onClick={handleOpenDeleteConfirm}
                   className="h-11 px-5 rounded-xl border border-stroke/50 text-focus hover:text-primary hover:border-primary/40 hover:bg-primary/5 font-medium text-sm flex items-center gap-2 transition-colors"
                 >
                   <Trash2 className="h-4 w-4 text-primary" />
@@ -559,7 +627,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       {/* Confirmation Dialog for Delete */}
       <ConfirmationDialog
         open={isConfirmDeleteOpen}
-        onOpenChange={setIsConfirmDeleteOpen}
+        onOpenChange={handleDeleteOpenChange}
         title="Delete Company"
         description={
           <span>
@@ -572,8 +640,36 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
         actionType="delete"
         variant="destructive"
         isLoading={isSubmitting}
+        confirmDisabled={!isDeleteMatch}
         onConfirm={handleConfirmDelete}
-      />
+      >
+        <div className="space-y-4 pt-2 text-left w-full">
+          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm space-y-1.5">
+            <div className="flex items-center gap-1.5 font-semibold text-rose-900">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+              <span>Permanent deletion warning</span>
+            </div>
+            <p className="text-xs text-rose-700 leading-relaxed">
+              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-rose-950">{company.name}</strong>.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="confirm-company-name" className="text-xs sm:text-sm font-medium text-focus block">
+              Please type <span className="font-bold select-all text-primary">"{company.name}"</span> to confirm.
+            </Label>
+            <Input
+              id="confirm-company-name"
+              type="text"
+              value={deleteConfirmationName}
+              onChange={(e) => setDeleteConfirmationName(e.target.value)}
+              placeholder={company.name}
+              autoComplete="off"
+              className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
+            />
+          </div>
+        </div>
+      </ConfirmationDialog>
 
       {/* Image Cropper Modal */}
       <ImageCropperModal

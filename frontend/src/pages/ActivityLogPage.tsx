@@ -8,10 +8,8 @@ import {
   ChevronDown,
   FileSpreadsheet,
   FileText,
-  History,
-  User,
-  Building2,
-  Globe,
+  Copy,
+  Check,
   Eye,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -25,19 +23,13 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
-import {
   ErrorBanner,
   TableEmptyState,
   TablePagination,
   TableSkeleton,
 } from '@/components/common'
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
+import { ActivityLogDetailDrawer } from '@/components/admin/ActivityLogDetailDrawer'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { formatRealName } from '@/utils/formatRealName'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
@@ -45,6 +37,7 @@ import {
   formatUserFriendlyErrorMessage,
   notifyError,
   notifyWarning,
+  notifySuccess,
 } from '@/utils/errorUtils'
 
 // Helper to parse date string like "Oct 6, 2026 · 9:15 AM" or "2026-10-05 08:14"
@@ -70,7 +63,25 @@ export const ActivityLogPage: React.FC = () => {
     endDate: null,
     label: 'All Dates',
   })
+
+  // Drawer inspection state
   const [selectedLog, setSelectedLog] = React.useState<ActivityLogItem | null>(null)
+  const [isDrawerOpen, setIsDrawerOpen] = React.useState(false)
+
+  // Copy IP feedback state
+  const [copiedIpId, setCopiedIpId] = React.useState<string | null>(null)
+
+  const handleCopyIp = async (logId: string, ip: string) => {
+    if (!ip || ip === '-') return
+    try {
+      await navigator.clipboard.writeText(ip)
+      setCopiedIpId(logId)
+      notifySuccess('IP address copied to clipboard')
+      setTimeout(() => setCopiedIpId(null), 2000)
+    } catch {
+      // Fallback
+    }
+  }
 
   // Export dropdown state
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
@@ -155,6 +166,8 @@ export const ActivityLogPage: React.FC = () => {
           l.action.toLowerCase().includes(q) ||
           l.module.toLowerCase().includes(q) ||
           l.target.toLowerCase().includes(q) ||
+          (l.recordRef && l.recordRef.toLowerCase().includes(q)) ||
+          l.ipAddress.toLowerCase().includes(q) ||
           l.time.toLowerCase().includes(q)
       )
     }
@@ -195,13 +208,24 @@ export const ActivityLogPage: React.FC = () => {
   // Export CSV handler
   const handleExportCsv = () => {
     try {
-      const headers = ['Company', 'User', 'Action', 'Module', 'Target', 'Time']
+      const headers = [
+        'Company',
+        'User',
+        'Action',
+        'Module',
+        'Record / Target',
+        'Client IP',
+        'Severity',
+        'Time',
+      ]
       const rows = filteredLogs.map((l) => [
         csvCell(l.company),
         csvCell(l.user),
         csvCell(l.action),
         csvCell(l.module),
-        csvCell(l.target),
+        csvCell(l.recordRef || l.target || '-'),
+        csvCell(l.ipAddress || '-'),
+        csvCell(l.severity || 'INFO'),
         csvCell(l.time),
       ])
 
@@ -234,7 +258,7 @@ export const ActivityLogPage: React.FC = () => {
 
     const rowsHtml =
       filteredLogs.length === 0
-        ? `<tr><td colspan="6" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No activity logs found for this selection.</td></tr>`
+        ? `<tr><td colspan="8" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No activity logs found for this selection.</td></tr>`
         : filteredLogs
             .map(
               (l) => `
@@ -243,7 +267,9 @@ export const ActivityLogPage: React.FC = () => {
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(l.user)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(l.action)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(l.module)}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-family: monospace;">${escapeHtml(l.target)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-family: monospace;">${escapeHtml(l.recordRef || l.target || '-')}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-family: monospace;">${escapeHtml(l.ipAddress || '-')}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(l.severity || 'INFO')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748B;">${escapeHtml(l.time)}</td>
         </tr>
       `
@@ -278,7 +304,9 @@ export const ActivityLogPage: React.FC = () => {
                 <th>User</th>
                 <th>Action</th>
                 <th>Module</th>
-                <th>Target</th>
+                <th>Record</th>
+                <th>Client IP</th>
+                <th>Severity</th>
                 <th>Time</th>
               </tr>
             </thead>
@@ -289,15 +317,14 @@ export const ActivityLogPage: React.FC = () => {
           <div class="summary">
             <div><strong>Total Activity Records:</strong> ${filteredLogs.length}</div>
           </div>
-          <script>
-            window.onload = function() {
-              window.print();
-            };
-          </script>
         </body>
       </html>
     `)
     printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => {
+      printWindow.print()
+    }, 250)
     setIsExportDropdownOpen(false)
   }
 
@@ -441,14 +468,16 @@ export const ActivityLogPage: React.FC = () => {
       {/* Main Table Card */}
       <div className="bg-white rounded-[20px] border border-stroke/30 shadow-xs p-4 sm:p-6 lg:p-8">
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className="w-full min-w-[850px] text-left">
+          <Table className="w-full min-w-[980px] text-left">
             <TableHeader>
               <TableRow>
-                <TableHead className="px-6 w-[25%]">Company</TableHead>
-                <TableHead className="px-6 w-[22%]">Action</TableHead>
-                <TableHead className="px-6 w-[16%]">Module</TableHead>
-                <TableHead className="px-6 w-[17%]">Target</TableHead>
-                <TableHead className="px-6 w-[20%]">Time</TableHead>
+                <TableHead className="px-5 w-[18%]">Company</TableHead>
+                <TableHead className="px-5 w-[18%]">Action</TableHead>
+                <TableHead className="px-4 w-[12%]">Module</TableHead>
+                <TableHead className="px-4 w-[13%]">Record</TableHead>
+                <TableHead className="px-4 w-[15%]">Client IP</TableHead>
+                <TableHead className="px-4 w-[14%]">Time</TableHead>
+                <TableHead className="px-4 w-[10%] text-right">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -456,16 +485,18 @@ export const ActivityLogPage: React.FC = () => {
                 <TableSkeleton
                   rows={8}
                   columns={[
-                    { width: 'w-36' },
                     { width: 'w-32' },
-                    { width: 'w-20', shape: 'pill' },
+                    { width: 'w-28' },
+                    { width: 'w-16', shape: 'pill' },
+                    { width: 'w-20' },
                     { width: 'w-24' },
-                    { width: 'w-32' },
+                    { width: 'w-24' },
+                    { width: 'w-16' },
                   ]}
                 />
               ) : displayedLogs.length === 0 ? (
                 <TableEmptyState
-                  colSpan={5}
+                  colSpan={7}
                   icon={Clock}
                   title={
                     loadError
@@ -505,22 +536,17 @@ export const ActivityLogPage: React.FC = () => {
                 />
               ) : (
                 displayedLogs.map((log) => (
-                  <TableRow
-                    key={log.id}
-                    onClick={() => setSelectedLog(log)}
-                    className="cursor-pointer hover:bg-slate-50 transition-colors group"
-                    title="Click to view detailed activity timeline"
-                  >
+                  <TableRow key={log.id}>
                     <TableCell className="py-4 px-6 text-sm font-medium text-focus whitespace-nowrap">
                       {log.company}
                     </TableCell>
-                    <TableCell className="py-4 px-6 text-sm text-focus/90 whitespace-nowrap">
-                      <div>{log.action}</div>
+                    <TableCell className="py-4 px-5 text-sm text-focus/90 whitespace-nowrap">
+                      <div className="font-medium">{log.action}</div>
                       <div className="text-[11px] text-muted-fg">
                         by {formatRealName(log.user)}
                       </div>
                     </TableCell>
-                    <TableCell className="py-4 px-6 whitespace-nowrap">
+                    <TableCell className="py-4 px-4 whitespace-nowrap">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getModuleBadgeStyle(
                           log.module
@@ -529,13 +555,55 @@ export const ActivityLogPage: React.FC = () => {
                         {log.module}
                       </span>
                     </TableCell>
-                    <TableCell className="py-4 px-6 whitespace-nowrap">
+                    <TableCell className="py-4 px-4 whitespace-nowrap">
                       <span className="font-mono text-xs px-2 py-1 rounded-md bg-surface border border-stroke/30 text-focus/80">
-                        {log.target}
+                        {log.recordRef || log.target}
                       </span>
                     </TableCell>
-                    <TableCell className="py-4 px-6 text-sm text-focus/70 tabular-nums whitespace-nowrap">
+                    <TableCell className="py-4 px-4 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs text-focus/80">
+                          {log.ipAddress || '-'}
+                        </span>
+                        {log.ipAddress && log.ipAddress !== '-' && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleCopyIp(log.id, log.ipAddress)
+                            }}
+                            className="h-7 w-7 p-0 rounded-md text-muted-fg hover:text-focus hover:bg-surface opacity-70 group-hover:opacity-100 transition-opacity"
+                            aria-label="Copy IP address"
+                          >
+                            {copiedIpId === log.id ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="py-4 px-4 text-sm text-focus/70 tabular-nums whitespace-nowrap">
                       {log.time}
+                    </TableCell>
+                    <TableCell className="py-4 px-4 text-right whitespace-nowrap">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedLog(log)
+                          setIsDrawerOpen(true)
+                        }}
+                        className="h-8 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-focus hover:bg-surface border border-stroke/30 inline-flex items-center gap-1.5"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Inspect</span>
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))
@@ -556,135 +624,12 @@ export const ActivityLogPage: React.FC = () => {
         />
       </div>
 
-      {/* Activity Detail & Timeline Modal */}
-      <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
-        <DialogContent className="sm:max-w-[560px] p-6 max-h-[90vh] overflow-y-auto">
-          {selectedLog && (
-            <div className="space-y-4">
-              <DialogHeader>
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0">
-                    <History className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <DialogTitle className="text-lg font-bold text-focus">
-                      Activity Detail & Timeline
-                    </DialogTitle>
-                    <DialogDescription className="text-xs text-muted-fg">
-                      Audit trail record #{selectedLog.id} · Monitored system activity
-                    </DialogDescription>
-                  </div>
-                </div>
-              </DialogHeader>
-
-              {/* Summary Grid */}
-              <div className="grid grid-cols-2 gap-3 p-3.5 rounded-xl bg-slate-50 border border-stroke/30 text-xs">
-                <div>
-                  <span className="text-[11px] text-muted-fg block">User / Actor</span>
-                  <div className="font-semibold text-focus flex items-center gap-1.5 mt-0.5">
-                    <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{formatRealName(selectedLog.user)}</span>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg block">Company</span>
-                  <div className="font-semibold text-focus flex items-center gap-1.5 mt-0.5">
-                    <Building2 className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span className="truncate">{selectedLog.company}</span>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg block">Module</span>
-                  <div className="mt-0.5">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border ${getModuleBadgeStyle(selectedLog.module)}`}>
-                      {selectedLog.module}
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg block">Target Reference</span>
-                  <div className="font-mono text-xs text-focus font-semibold mt-0.5">
-                    {selectedLog.target}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg block">Timestamp</span>
-                  <div className="font-medium text-focus mt-0.5">
-                    {selectedLog.time}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg block">IP / Access Location</span>
-                  <div className="font-mono text-xs text-focus flex items-center gap-1.5 mt-0.5">
-                    <Globe className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                    <span>{selectedLog.ipAddress || 'Internal Network'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Description */}
-              <div className="space-y-1.5 text-xs">
-                <span className="font-semibold text-focus text-xs">Action Description</span>
-                <div className="p-3 rounded-xl bg-surface border border-stroke/40 text-focus text-xs leading-relaxed">
-                  {selectedLog.action}
-                </div>
-              </div>
-
-              {/* Activity Timeline Card */}
-              <div className="pt-2 border-t border-stroke/20 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
-                    <History className="w-3.5 h-3.5 text-primary" />
-                    Activity Timeline & Remarks
-                  </span>
-                  <span className="text-[10px] text-muted-fg font-mono">
-                    LOG-ID: {selectedLog.id}
-                  </span>
-                </div>
-
-                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
-                  <div className="min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-focus">
-                        Action logged by{' '}
-                        <span className="text-primary font-bold">{formatRealName(selectedLog.user)}</span>
-                      </span>
-                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                        {selectedLog.time}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-muted-fg mt-0.5">
-                      Activity verified in {selectedLog.company} · Module: {selectedLog.module}
-                    </p>
-                  </div>
-
-                  {selectedLog.details && (
-                    <div className="pt-2 border-t border-stroke/15 min-w-0">
-                      <span className="font-semibold text-focus text-[11px]">Payload & Remarks:</span>
-                      <pre className="mt-1 p-2 rounded-lg bg-white border border-stroke/30 text-[11px] text-focus font-mono overflow-x-auto max-h-36">
-                        {typeof selectedLog.details === 'string'
-                          ? selectedLog.details
-                          : JSON.stringify(selectedLog.details, null, 2)}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="pt-3 border-t border-stroke/20 flex justify-end">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setSelectedLog(null)}
-                  className="h-9 px-4 rounded-xl text-xs font-semibold"
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Activity Log Inspection Detail Drawer */}
+      <ActivityLogDetailDrawer
+        open={isDrawerOpen}
+        onOpenChange={setIsDrawerOpen}
+        log={selectedLog}
+      />
     </div>
   )
 }
