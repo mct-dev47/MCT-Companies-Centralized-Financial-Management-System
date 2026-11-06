@@ -1,5 +1,6 @@
 import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import {
   Search,
   ChevronLeft,
@@ -17,9 +18,19 @@ import {
   Check,
   AlertCircle,
   Eye,
+  MoreVertical,
+  Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TablePagination } from '@/components/common/TablePagination'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
@@ -228,6 +239,38 @@ export const TransactionPage: React.FC = () => {
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
+
+  const isOwner = userRole === 'owner'
+  const canAudit = (isAdmin || isAudit) && !isOwner
+
+  // 3-Dots Action Menu state
+  const [openMenuTxId, setOpenMenuTxId] = React.useState<string | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
+  const [activeMenuTx, setActiveMenuTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+
+  // Close floating 3-dots action menu on click outside, scroll or resize
+  React.useEffect(() => {
+    const handleCloseMenu = () => {
+      setOpenMenuTxId(null)
+      setMenuPosition(null)
+      setActiveMenuTx(null)
+    }
+    window.addEventListener('click', handleCloseMenu)
+    window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
+    return () => {
+      window.removeEventListener('click', handleCloseMenu)
+      window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
+    }
+  }, [])
 
   // Switch bar tab: 'deposit' (cash/bank ledger) | 'all' (full accrual ledger)
   const [activeTab, setActiveTab] = React.useState<'deposit' | 'all'>('deposit')
@@ -758,6 +801,100 @@ export const TransactionPage: React.FC = () => {
     const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
     setSelectedTx(fullRecord)
     setIsModalOpen(true)
+  }
+
+  const handleMenuViewDetails = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    handleRowClick(tx)
+  }
+
+  const handleMenuMarkAudit = async (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+
+    const updatedTx: DashboardTransactionItem = {
+      ...tx,
+      auditStatus: 'Verified',
+      auditedBy: auditorName,
+      auditDate: today,
+      auditNotes: undefined,
+    }
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updatedTx : t)))
+
+    try {
+      if (tx.type === 'Sales') {
+        await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName)
+      } else if (tx.type === 'Expense') {
+        await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
+      } else if (tx.type === 'Loan') {
+        await loanService.updateLoan(tx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+      } else if (tx.type === 'Income') {
+        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+        await tenantService.saveAuditReview(leaseId, 'Verified')
+      }
+    } catch (err) {
+      reportAuditSaveFailure(err)
+      fetchAllTransactions(true)
+    }
+  }
+
+  const handleMenuOpenDiscrepancy = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(tx)
+    setDiscrepancyReason(tx.auditNotes || '')
+    setIsDiscrepancyModalOpen(true)
+  }
+
+  const handleConfirmQuickDiscrepancy = async () => {
+    if (!activeMenuTx || !discrepancyReason.trim()) return
+    setIsSubmittingAudit(true)
+    const tx = activeMenuTx
+    const trimmed = discrepancyReason.trim()
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+
+    const updatedTx: DashboardTransactionItem = {
+      ...tx,
+      auditStatus: 'Flagged',
+      auditedBy: auditorName,
+      auditDate: today,
+      auditNotes: trimmed,
+    }
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id ? updatedTx : t)))
+
+    try {
+      if (tx.type === 'Sales') {
+        await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
+      } else if (tx.type === 'Expense') {
+        await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
+      } else if (tx.type === 'Loan') {
+        await loanService.updateLoan(tx.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
+      } else if (tx.type === 'Income') {
+        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+        await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
+      }
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+      setActiveMenuTx(null)
+    } catch (err: any) {
+      alert(err?.message || 'Failed to flag audit discrepancy. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
   }
 
   const handleMarkTxAudited = (tx: DashboardTransactionItem, e: React.MouseEvent) => {
@@ -1405,11 +1542,9 @@ export const TransactionPage: React.FC = () => {
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   AUDIT STATUS
                 </TableHead>
-                {(isAudit || isAdmin) && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    ACTION
-                  </TableHead>
-                )}
+                <TableHead className="w-12 px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  ACTION
+                </TableHead>
               </TableRow>
             </TableHeader>
 
@@ -1434,19 +1569,17 @@ export const TransactionPage: React.FC = () => {
                       <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
                     )}
                     <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    {(isAudit || isAdmin) && (
-                      <TableCell className="px-4 py-3.5 text-center">
-                        <Skeleton className="h-6 w-16 rounded-md mx-auto" />
-                      </TableCell>
-                    )}
+                    <TableCell className="px-3 py-3.5 text-center">
+                      <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
+                    </TableCell>
                   </TableRow>
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
                   colSpan={
                     activeTab === 'deposit'
-                      ? 6 + (isAudit ? 0 : 1) + 1 + (isAudit || isAdmin ? 1 : 0)
-                      : 6 + (isAudit ? 0 : 1) + 1 + 1 + (isAudit || isAdmin ? 1 : 0)
+                      ? 7 + (isAudit ? 0 : 1) + 1 + 1
+                      : 6 + (isAudit ? 0 : 1) + 1 + 1 + 1
                   }
                   title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
                   message="No records match your active company, date range, or search criteria."
@@ -1609,27 +1742,42 @@ export const TransactionPage: React.FC = () => {
                         )}
                       </TableCell>
 
-                      {/* 9. Action Column for Audit & Admin: View Details / Audit */}
-                      {(isAudit || isAdmin) && (
-                        <TableCell
-                          className="px-4 py-3.5 text-center whitespace-nowrap"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center justify-center gap-1.5">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleRowClick(tx)}
-                              className="h-7 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-primary hover:bg-slate-100 flex items-center gap-1.5 cursor-pointer border border-slate-200/80 shadow-2xs transition-all"
-                              title="View whole transaction details and audit history"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-primary" />
-                              <span>View</span>
-                            </Button>
-                          </div>
-                        </TableCell>
-                      )}
+                      {/* 9. Actions: 3 dots action button */}
+                      <TableCell
+                        className="px-3 py-3.5 text-center whitespace-nowrap"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuTxId === tx.id) {
+                                setOpenMenuTxId(null)
+                                setMenuPosition(null)
+                                setActiveMenuTx(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuTx(tx)
+                                setOpenMenuTxId(tx.id)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Actions"
+                            aria-label="Open action menu"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   )
                 })
@@ -1696,6 +1844,131 @@ export const TransactionPage: React.FC = () => {
         onTransactionUpdated={handleTransactionUpdated}
         editable={!isAdmin}
       />
+
+      {/* 7. Floating 3-Dots Action Portal Menu */}
+      {openMenuTxId && activeMenuTx && menuPosition && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${menuPosition.top}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {canAudit && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleMenuMarkAudit(activeMenuTx)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audit'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleMenuOpenDiscrepancy(activeMenuTx)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleMenuViewDetails(activeMenuTx)}
+              className={cn(
+                "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer",
+                canAudit && "border-t border-slate-100 mt-1 pt-1.5"
+              )}
+            >
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>View Details</span>
+            </button>
+          </div>,
+          document.body
+        )}
+
+      {/* 8. Quick Discrepancy Modal from Action Menu */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="max-w-[440px] rounded-2xl p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-2 border-b border-stroke/20 pr-6">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold text-focus leading-tight">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Describe the discrepancy or required correction for this transaction.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Discrepancy Reason / Remarks <span className="text-rose-600">*</span>
+              </Label>
+              <textarea
+                rows={3}
+                value={discrepancyReason}
+                onChange={(e) => setDiscrepancyReason(e.target.value)}
+                placeholder="e.g. Voucher amount does not match the attached receipt..."
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-1 focus:ring-rose-500 font-normal leading-relaxed resize-none"
+              />
+              {!discrepancyReason.trim() && (
+                <p className="text-[10px] text-muted-fg leading-tight">
+                  A reason is required so Finance and Operations can address the discrepancy.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingAudit}
+                onClick={() => {
+                  setIsDiscrepancyModalOpen(false)
+                  setDiscrepancyReason('')
+                  setActiveMenuTx(null)
+                }}
+                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!discrepancyReason.trim() || isSubmittingAudit}
+                onClick={handleConfirmQuickDiscrepancy}
+                className="h-9 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSubmittingAudit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Flagging…</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-white" />
+                    <span>Flag Discrepancy</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
