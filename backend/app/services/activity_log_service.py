@@ -433,7 +433,9 @@ class ActivityLogService:
             action = str(r.get("action") or "")
             category = r.get("action_category")
 
-            user_name = users.get(r.get("user_id")) or (str(details["email"]) if details.get("email") else "System")
+            from app.core.user_name_resolver import resolve_real_name
+            user_name = users.get(r.get("user_id")) or (resolve_real_name(str(details["email"])) if details.get("email") else "System")
+            user_name = resolve_real_name(user_name)
             company_name = companies.get(r.get("company_id")) or "System"
             description = _ACTION_DESCRIPTIONS.get(action) or action.replace("_", " ").capitalize()
             module = _module_for(action, category)

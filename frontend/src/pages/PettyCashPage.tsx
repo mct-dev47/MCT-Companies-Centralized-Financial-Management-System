@@ -24,7 +24,12 @@ import {
   Trash2,
   MoreVertical,
   Eye,
+  Receipt,
+  User,
+  History,
 } from 'lucide-react'
+import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
+import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -77,6 +82,34 @@ const COMPANY_LIST = [
 
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
+
+function downloadReceipt(url: string, name?: string) {
+  if (!url) return
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name || 'official_receipt'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } catch {
+    window.open(url, '_blank')
+  }
+}
+
+function formatTimelineDateTime(dateStr?: string | null): string {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
 
 export const PettyCashPage: React.FC = () => {
   const { user } = useSession()
@@ -161,6 +194,12 @@ export const PettyCashPage: React.FC = () => {
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
+  const requestDropdownRef = React.useRef<HTMLDivElement>(null)
+  const typeDropdownRef = React.useRef<HTMLDivElement>(null)
+  const [isRequestDropdownOpen, setIsRequestDropdownOpen] = React.useState(false)
+  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Top-up' | 'Reimbursement'>('All')
+  const [isTypeDropdownOpen, setIsTypeDropdownOpen] = React.useState(false)
+  const [isReimbursementModalOpen, setIsReimbursementModalOpen] = React.useState(false)
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -169,6 +208,7 @@ export const PettyCashPage: React.FC = () => {
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)
   const [isSummaryModalOpen, setIsSummaryModalOpen] = React.useState(false)
+  const [previewReceipt, setPreviewReceipt] = React.useState<{ url: string; name: string } | null>(null)
   const [isReviewConfirmModalOpen, setIsReviewConfirmModalOpen] = React.useState(false)
 
   // Target entry & review data
@@ -362,6 +402,12 @@ export const PettyCashPage: React.FC = () => {
       if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
         setIsCompanyDropdownOpen(false)
       }
+      if (requestDropdownRef.current && !requestDropdownRef.current.contains(target)) {
+        setIsRequestDropdownOpen(false)
+      }
+      if (typeDropdownRef.current && !typeDropdownRef.current.contains(target)) {
+        setIsTypeDropdownOpen(false)
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -420,6 +466,13 @@ export const PettyCashPage: React.FC = () => {
         if (statusFilter === 'Expense' && item.type !== 'expense') return false
       }
 
+      // 2b. Type Filter (All / Top-up / Reimbursement)
+      if (typeFilter !== 'All') {
+        const reqType = (item.requestType || (item.type === 'expense' ? 'expense' : 'topup')).toLowerCase()
+        if (typeFilter === 'Top-up' && (reqType !== 'topup' || item.type === 'expense')) return false
+        if (typeFilter === 'Reimbursement' && reqType !== 'reimbursement') return false
+      }
+
       // 3. Search Query Filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim()
@@ -428,7 +481,9 @@ export const PettyCashPage: React.FC = () => {
         const matchesCat = (item.category || '').toLowerCase().includes(q)
         const matchesRemark = (item.remark || '').toLowerCase().includes(q)
         const matchesFinRemark = (item.financeRemark || '').toLowerCase().includes(q)
-        if (!matchesDesc && !matchesComp && !matchesCat && !matchesRemark && !matchesFinRemark) {
+        const matchesPaidBy = (item.paidBy || '').toLowerCase().includes(q)
+        const matchesItems = (item.items || '').toLowerCase().includes(q)
+        if (!matchesDesc && !matchesComp && !matchesCat && !matchesRemark && !matchesFinRemark && !matchesPaidBy && !matchesItems) {
           return false
         }
       }
@@ -442,7 +497,7 @@ export const PettyCashPage: React.FC = () => {
 
       return true
     })
-  }, [ledger, isAllCompanies, selectedCompany, statusFilter, searchQuery, dateRange, isAudit])
+  }, [ledger, isAllCompanies, selectedCompany, statusFilter, typeFilter, searchQuery, dateRange, isAudit])
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredLedger.length / itemsPerPage))
@@ -499,8 +554,9 @@ export const PettyCashPage: React.FC = () => {
       return
     }
 
-    // Spec 0012: Finance must choose a funding bank before endorsing.
-    if (reviewAction === 'endorse' && !selectedFundingBankId) {
+    // Spec 0012: Finance must choose a funding bank before endorsing top-ups.
+    const isReimbursement = (targetEntry.requestType || '').toLowerCase() === 'reimbursement'
+    if (reviewAction === 'endorse' && !isReimbursement && !selectedFundingBankId) {
       setReviewError('Please choose a funding bank account before endorsing.')
       return
     }
@@ -684,35 +740,142 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
-            {/* Request Petty Cash Button (Hidden for Audit) */}
+            {/* Request Petty Cash Dropdown Button (Hidden for Audit) */}
             {!isAudit && !isOwner && (
-              <Button
-                type="button"
-                onClick={() => setIsTopUpModalOpen(true)}
-                className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
-              >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span>Request Petty Cash</span>
-              </Button>
+              <div ref={requestDropdownRef} className="relative inline-block">
+                <Button
+                  type="button"
+                  onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
+                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                  aria-haspopup="true"
+                  aria-expanded={isRequestDropdownOpen}
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span>Request Petty Cash</span>
+                  <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
+                </Button>
+
+                {isRequestDropdownOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRequestDropdownOpen(false)
+                        setIsTopUpModalOpen(true)
+                      }}
+                      className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-[#960C01] group-hover:text-white transition-colors">
+                        <Wallet className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-focus group-hover:text-[#960C01] transition-colors">Top-up Request</div>
+                        <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                          Ask for more petty cash funds when your current balance is short.
+                        </div>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRequestDropdownOpen(false)
+                        setIsReimbursementModalOpen(true)
+                      }}
+                      className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group border-t border-stroke/20 mt-1"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                        <Receipt className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Reimbursement Request</div>
+                        <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                          Get paid back for expenses you paid out of your own pocket.
+                        </div>
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
 
         {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          {/* Extended Width Search Bar */}
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-            <Input
-              type="search"
-              placeholder="Search by particulars, company, category, remarks…"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value)
-                setCurrentPage(1)
-              }}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pt-1">
+          {/* Search Bar & Type Filter Dropdown Group */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+              <Input
+                type="search"
+                placeholder="Search particulars, company, category…"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value)
+                  setCurrentPage(1)
+                }}
+                className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+              />
+            </div>
+
+            {/* Type Filter Dropdown Button */}
+            <div ref={typeDropdownRef} className="relative inline-block shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsTypeDropdownOpen((prev) => !prev)}
+                className={cn(
+                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  typeFilter !== 'All' && 'bg-[#960C01]/5 border-[#960C01]/40 text-[#960C01] font-semibold',
+                  isTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                )}
+              >
+                <span className="font-medium">
+                  {typeFilter === 'All'
+                    ? 'All'
+                    : typeFilter === 'Top-up'
+                    ? 'Petty Cash Request'
+                    : 'Reimbursement'}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                    isTypeDropdownOpen && 'transform rotate-180'
+                  )}
+                />
+              </button>
+
+              {isTypeDropdownOpen && (
+                <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                  {[
+                    { id: 'All', label: 'All' },
+                    { id: 'Top-up', label: 'Petty Cash Request' },
+                    { id: 'Reimbursement', label: 'Reimbursement' },
+                  ].map((tp) => (
+                    <button
+                      key={tp.id}
+                      type="button"
+                      onClick={() => {
+                        setTypeFilter(tp.id as any)
+                        setIsTypeDropdownOpen(false)
+                        setCurrentPage(1)
+                      }}
+                      className={cn(
+                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                        typeFilter === tp.id
+                          ? 'bg-[#960C01]/10 text-[#960C01] font-semibold'
+                          : 'text-focus/80 hover:bg-slate-50'
+                      )}
+                    >
+                      <span>{tp.label}</span>
+                      {typeFilter === tp.id && (
+                        <Check className="h-3.5 w-3.5 text-[#960C01] shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
@@ -822,6 +985,8 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
+
+
             {/* Date Range Picker */}
             <DateRangePicker
               value={dateRange}
@@ -917,14 +1082,15 @@ export const PettyCashPage: React.FC = () => {
             <colgroup>
               <col style={{ width: '9%' }} />
               <col style={{ width: '11%' }} />
+              <col style={{ width: '9%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '9%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
@@ -933,6 +1099,9 @@ export const PettyCashPage: React.FC = () => {
                 </TableHead>
                 <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   COMPANY
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  TYPE
                 </TableHead>
                 <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
@@ -963,10 +1132,10 @@ export const PettyCashPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={10} />
+                <TableSkeleton rows={5} columns={11} />
               ) : paginatedLedger.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
+                  <TableCell colSpan={11} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
                     <Wallet className="w-8 h-8 text-muted-fg/40 mx-auto mb-2" />
                     No petty cash transactions found for the selected criteria.
                   </TableCell>
@@ -1023,14 +1192,45 @@ export const PettyCashPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 3. Particulars & Remarks */}
+                      {/* 2b. Type Indicator */}
+                      <TableCell className="px-3 py-3.5 text-center">
+                        {entry.requestType === 'reimbursement' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
+                            <span>Reimbursement</span>
+                          </span>
+                        ) : entry.type === 'expense' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
+                            <span>Expense</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                            <Wallet className="w-3 h-3 text-blue-600 shrink-0" />
+                            <span>Top-up</span>
+                          </span>
+                        )}
+                      </TableCell>
+
+                      {/* 3. Particulars & Category (Remarks shown in modal per specification) */}
                       <TableCell className="px-3 py-3.5">
+                        {entry.requestType === 'reimbursement' && entry.paidBy && (
+                          <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
+                            <User className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
+                            {entry.receiptUrl && (
+                              <span className="inline-flex items-center text-[10px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/60 ml-1">
+                                <Receipt className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
+                                Receipt
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {(() => {
                           const summary = getParticularsSummary(entry.description)
                           if (summary.count > 1) {
                             return (
                               <div className="flex items-center gap-1.5 min-w-0" title={entry.description}>
-                                <span className="font-medium text-xs text-focus truncate block">{summary.firstItemName}</span>
+                                <span className="font-semibold text-xs text-focus truncate block">{summary.firstItemName}</span>
                                 <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
                                   +{summary.count - 1} more
                                 </span>
@@ -1038,26 +1238,14 @@ export const PettyCashPage: React.FC = () => {
                             )
                           }
                           return (
-                            <div className="font-medium text-xs text-focus line-clamp-1" title={entry.description}>
+                            <div className="font-semibold text-xs text-focus line-clamp-1" title={entry.description}>
                               {summary.firstItemName || '—'}
                             </div>
                           )
                         })()}
-                        {entry.financeRemark && (
-                          <div className="text-[11px] text-blue-800 bg-blue-50/80 px-2 py-0.5 rounded-md mt-1 inline-flex items-center gap-1 max-w-full truncate border border-blue-200/50">
-                            <MessageSquare className="w-3 h-3 shrink-0 text-blue-600" />
-                            <span className="truncate italic">Finance: {entry.financeRemark}</span>
-                          </div>
-                        )}
-                        {entry.remark && (
-                          <div className="text-[11px] text-amber-800 bg-amber-50/80 px-2 py-0.5 rounded-md mt-1 inline-flex items-center gap-1 max-w-full truncate border border-amber-200/50">
-                            <MessageSquare className="w-3 h-3 shrink-0 text-amber-600" />
-                            <span className="truncate italic">Audit: {entry.remark}</span>
-                          </div>
-                        )}
-                        {entry.category && !entry.remark && !entry.financeRemark && (
-                          <div className="text-[11px] text-muted-fg line-clamp-1">{entry.category}</div>
-                        )}
+                        <div className="text-[11px] text-muted-fg line-clamp-1 mt-0.5">
+                          {entry.category || 'General'}
+                        </div>
                       </TableCell>
 
                       {/* 3b. Funding Bank (spec 0014): the bank Finance chose and the company that owns it */}
@@ -1316,6 +1504,133 @@ export const PettyCashPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* If Reimbursement: Show Paid By, Line Items, and Receipt Proof */}
+              {targetEntry.requestType === 'reimbursement' && (
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/60 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <Receipt className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Reimbursement Details</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-100 text-amber-800">
+                      Paid By: {targetEntry.paidBy || 'Employee'}
+                    </span>
+                  </div>
+
+                  {/* Line Items breakdown if present */}
+                  {(() => {
+                    if (!targetEntry.items) return null
+                    try {
+                      const items: Array<{ particulars: string; category?: string; amount: number }> = JSON.parse(targetEntry.items)
+                      if (!Array.isArray(items) || items.length === 0) return null
+                      return (
+                        <div className="rounded-lg border border-amber-200/80 overflow-hidden bg-white mt-2">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-amber-100/50 text-amber-900 font-bold border-b border-amber-200/60 text-[11px]">
+                                <th className="px-3 py-1.5 text-left">Particulars</th>
+                                <th className="px-3 py-1.5 text-left">Category</th>
+                                <th className="px-3 py-1.5 text-right">Amount (₱)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-amber-100">
+                              {items.map((it, idx) => (
+                                <tr key={idx}>
+                                  <td className="px-3 py-1.5 text-focus font-medium">{it.particulars}</td>
+                                  <td className="px-3 py-1.5 text-muted-fg">{it.category || '—'}</td>
+                                  <td className="px-3 py-1.5 text-right font-semibold text-focus tabular-nums">{formatPHP(it.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    } catch {
+                      return null
+                    }
+                  })()}
+
+                  {/* Receipt Attachments Section */}
+                  {(() => {
+                    let files: Array<{ file_url: string; file_name: string; file_size?: number }> = []
+                    if (targetEntry.attachments) {
+                      try {
+                        const parsed = typeof targetEntry.attachments === 'string'
+                          ? JSON.parse(targetEntry.attachments)
+                          : targetEntry.attachments
+                        if (Array.isArray(parsed)) {
+                          files = parsed.map((item: any, idx: number) => ({
+                            file_url: item.file_url || item.url || '',
+                            file_name: item.file_name || item.name || item.filename || `Receipt #${idx + 1}`,
+                            file_size: item.file_size || item.size,
+                          })).filter((f) => Boolean(f.file_url))
+                        }
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    if (files.length === 0 && targetEntry.receiptUrl) {
+                      files = [{ file_url: targetEntry.receiptUrl, file_name: 'Official Receipt' }]
+                    }
+
+                    if (files.length === 0) {
+                      return (
+                        <div className="pt-1">
+                          <span className="text-[11px] font-semibold text-focus block mb-1">Receipt / Proof Attachments:</span>
+                          <div className="p-3 rounded-xl bg-slate-50 border border-stroke/30 text-xs text-muted-fg italic flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                            <span>No receipt attached</span>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <div className="pt-1 space-y-2">
+                        <span className="text-[11px] font-semibold text-focus block">
+                          Receipt / Proof Attachments ({files.length}):
+                        </span>
+                        {files.map((file, fIdx) => (
+                          <div key={fIdx} className="p-2.5 rounded-xl bg-white border border-stroke/40 flex items-center justify-between gap-3 shadow-2xs">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                                <FileText className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-focus truncate max-w-[200px] sm:max-w-[280px]">
+                                  {file.file_name}
+                                </div>
+                                <div className="text-[10px] text-emerald-700 font-medium">Verified attachment</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewReceipt({ url: file.file_url, name: file.file_name })}
+                                className="h-8 px-2.5 rounded-lg text-xs font-semibold text-[#960C01] bg-[#960C01]/10 hover:bg-[#960C01]/20 flex items-center gap-1 transition-colors cursor-pointer"
+                                title="Preview proof"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>View</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadReceipt(file.file_url, file.file_name)}
+                                className="h-8 px-2.5 rounded-lg text-xs font-semibold text-white bg-[#960C01] hover:bg-[#800a01] flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                                title="Download proof"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
+                </div>
+              )}
+
               {/* Funding bank chosen by Finance (spec 0014). Top ups and requests only, never the account number. */}
               {targetEntry.type !== 'expense' && (
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-stroke/30 space-y-1 text-xs">
@@ -1354,45 +1669,113 @@ export const PettyCashPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* Display Finance Endorsement Remark if present */}
-              {targetEntry.financeRemark && (
-                <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 space-y-1 text-xs">
-                  <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wider block">
-                    Finance Endorsement Remark
+              {/* Activity Timeline & Remarks Section (unified without circle bullet) */}
+              <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
+                <div className="flex items-center justify-between pb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Activity Timeline & Remarks
                   </span>
-                  <p className="text-xs text-blue-950 font-medium italic leading-relaxed">
-                    "{targetEntry.financeRemark}"
-                  </p>
-                  {targetEntry.endorsedBy && (
-                    <div className="text-[11px] text-blue-800 pt-1">
-                      Endorsed by: <strong>{targetEntry.endorsedBy}</strong>
-                      {targetEntry.endorsedAt && (
-                        <span> on {new Date(targetEntry.endorsedAt).toLocaleString()}</span>
-                      )}
-                    </div>
-                  )}
+                  <span className="text-[10px] text-muted-fg font-mono">
+                    ID: {targetEntry.id || '—'}
+                  </span>
                 </div>
-              )}
 
-              {/* Display Audit Review Remark if present */}
-              {targetEntry.remark && (
-                <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 space-y-1 text-xs">
-                  <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider block">
-                    Audit Review Remark
-                  </span>
-                  <p className="text-xs text-amber-950 font-medium italic leading-relaxed">
-                    "{targetEntry.remark}"
-                  </p>
-                  {targetEntry.reviewedBy && (
-                    <div className="text-[11px] text-amber-800 pt-1">
-                      Reviewed by: <strong>{targetEntry.reviewedBy}</strong>
-                      {targetEntry.reviewedAt && (
-                        <span> on {new Date(targetEntry.reviewedAt).toLocaleString()}</span>
+                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                  {/* Created / Requested Event */}
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        {targetEntry.requestType === 'reimbursement' ? 'Reimbursement filed by' : 'Requested by'}{' '}
+                        <span className="text-primary font-bold">
+                          {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee')}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                        {formatTimelineDateTime(targetEntry.createdAt || targetEntry.date)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-fg mt-0.5">
+                      {targetEntry.requestType === 'reimbursement'
+                        ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
+                        : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
+                    </p>
+                  </div>
+
+                  {/* Finance Endorsement Event */}
+                  {(targetEntry.endorsedBy || targetEntry.financeRemark) && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          {targetEntry.endorsedBy ? (
+                            <>
+                              Endorsed by Finance:{' '}
+                              <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy)}</span>
+                            </>
+                          ) : (
+                            <span className="text-blue-600 font-semibold">Finance Endorsement</span>
+                          )}
+                        </span>
+                        {targetEntry.endorsedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.endorsedAt)}
+                          </span>
+                        )}
+                      </div>
+                      {targetEntry.financeRemark && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-blue-50/90 border border-blue-200/80 text-blue-900 text-[11px] italic">
+                          Remarks: &ldquo;{targetEntry.financeRemark}&rdquo;
+                        </div>
                       )}
                     </div>
                   )}
+
+                  {/* Audit Review Event */}
+                  <div className="pt-2 border-t border-stroke/15 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        {targetEntry.status === 'Approved' ? (
+                          <span className="text-emerald-700 font-bold">
+                            Audited & Approved
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy)}` : ''}
+                          </span>
+                        ) : targetEntry.status === 'Disapproved' ? (
+                          <span className="text-rose-700 font-bold">
+                            Rejected / Disapproved
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy)}` : ''}
+                          </span>
+                        ) : targetEntry.status === 'Pending Audit Approval' ? (
+                          <span className="text-amber-700 font-semibold">
+                            Pending Audit Review
+                          </span>
+                        ) : (
+                          <span className="text-slate-600 font-medium">
+                            {targetEntry.status}
+                          </span>
+                        )}
+                      </span>
+                      {targetEntry.reviewedAt && (
+                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                          {formatTimelineDateTime(targetEntry.reviewedAt)}
+                        </span>
+                      )}
+                    </div>
+                    {targetEntry.remark ? (
+                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                        Remarks: &ldquo;{targetEntry.remark}&rdquo;
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        {targetEntry.status === 'Approved'
+                          ? 'Approved by Internal Audit.'
+                          : targetEntry.status === 'Disapproved'
+                          ? 'Request rejected by reviewer.'
+                          : 'Awaiting audit review and verification.'}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              )}
+              </div>
 
               {/* Footer Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
@@ -1825,6 +2208,22 @@ export const PettyCashPage: React.FC = () => {
         onSuccess={handleTopUpSuccess}
       />
 
+      {/* Reimbursement Request Modal */}
+      <ReimbursementModal
+        open={isReimbursementModalOpen}
+        onOpenChange={setIsReimbursementModalOpen}
+        company={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : (user?.assignedCompany || 'MCT Kitchen'))}
+        currentBalance={currentBalance}
+        companies={companyList}
+        onSuccess={(newRecord) => {
+          if (newRecord) {
+            setLedger((prev) => [newRecord, ...prev])
+          }
+          loadData()
+          setIsReimbursementModalOpen(false)
+        }}
+      />
+
       {/* Audit Action Portal Menu */}
       {openMenuPettyId && menuPosition && activeMenuPetty && typeof document !== 'undefined' &&
         createPortal(
@@ -1868,6 +2267,51 @@ export const PettyCashPage: React.FC = () => {
           </div>,
           document.body
         )}
+      {/* Proof Preview Modal */}
+      <Dialog open={!!previewReceipt} onOpenChange={(open) => !open && setPreviewReceipt(null)}>
+        <DialogContent className="sm:max-w-[720px] p-6 max-h-[90vh] flex flex-col">
+          {previewReceipt && (
+            <div className="flex flex-col h-full space-y-4">
+              <DialogHeader>
+                <div className="flex items-center justify-between gap-3 pr-6">
+                  <div className="min-w-0">
+                    <DialogTitle className="text-base font-bold text-focus truncate max-w-[420px]">
+                      {previewReceipt.name}
+                    </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-fg">
+                      Uploaded proof of expense / Official Receipt
+                    </DialogDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => downloadReceipt(previewReceipt.url, previewReceipt.name)}
+                    className="h-8 px-3 rounded-lg text-xs font-semibold text-white bg-[#960C01] hover:bg-[#800a01] flex items-center gap-1.5 shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download</span>
+                  </Button>
+                </div>
+              </DialogHeader>
+
+              <div className="flex-1 min-h-[320px] max-h-[62vh] overflow-auto rounded-xl bg-slate-900/5 border border-stroke/30 flex items-center justify-center p-2">
+                {previewReceipt.url.startsWith('data:application/pdf') || previewReceipt.name.toLowerCase().endsWith('.pdf') ? (
+                  <iframe
+                    src={previewReceipt.url}
+                    title={previewReceipt.name}
+                    className="w-full h-[58vh] rounded-lg border-0 bg-white"
+                  />
+                ) : (
+                  <img
+                    src={previewReceipt.url}
+                    alt={previewReceipt.name}
+                    className="max-w-full max-h-[58vh] object-contain rounded-lg shadow-xs"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -11,7 +11,6 @@ import {
   Copy,
   Check,
   Eye,
-  Globe,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +31,7 @@ import {
 import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
 import { ActivityLogDetailDrawer } from '@/components/admin/ActivityLogDetailDrawer'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
+import { formatRealName } from '@/utils/formatRealName'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import {
   formatUserFriendlyErrorMessage,
@@ -536,21 +536,14 @@ export const ActivityLogPage: React.FC = () => {
                 />
               ) : (
                 displayedLogs.map((log) => (
-                  <TableRow
-                    key={log.id}
-                    onClick={() => {
-                      setSelectedLog(log)
-                      setIsDrawerOpen(true)
-                    }}
-                    className="cursor-pointer hover:bg-surface/50 transition-colors group"
-                  >
-                    <TableCell className="py-4 px-5 text-sm font-medium text-focus whitespace-nowrap">
+                  <TableRow key={log.id}>
+                    <TableCell className="py-4 px-6 text-sm font-medium text-focus whitespace-nowrap">
                       {log.company}
                     </TableCell>
                     <TableCell className="py-4 px-5 text-sm text-focus/90 whitespace-nowrap">
                       <div className="font-medium">{log.action}</div>
                       <div className="text-[11px] text-muted-fg">
-                        by {log.user}
+                        by {formatRealName(log.user)}
                       </div>
                     </TableCell>
                     <TableCell className="py-4 px-4 whitespace-nowrap">

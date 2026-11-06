@@ -13,6 +13,8 @@ class AuthenticatedUser(TypedDict, total=False):
     auth_user_id: str
     user_id: int | None
     email: str | None
+    name: str | None
+    full_name: str | None
     company_id: int | None
     company_ids: list[int]
     is_admin: bool
@@ -48,6 +50,7 @@ def get_current_user(
     email = claims.get("email") if isinstance(claims.get("email"), str) else None
 
     user_id = None
+    user_name = None
     company_ids = [company_id] if company_id else []
 
     if email:
@@ -56,6 +59,7 @@ def get_current_user(
         db_user = db.query(User).filter(func.lower(User.email) == resolved_email.lower()).first()
         if db_user:
             user_id = db_user.user_id
+            user_name = getattr(db_user, "name", None)
             is_admin = bool(db_user.is_admin or db_user.user_id == 1 or (db_user.role and db_user.role.lower() == "admin"))
             role = "admin" if is_admin else (db_user.role or "supervisor").lower()
             if role in ("company", "company employee"):
@@ -75,6 +79,7 @@ def get_current_user(
                 if supa_res.data:
                     su = supa_res.data[0]
                     user_id = su.get("user_id")
+                    user_name = su.get("name")
                     is_admin = bool(su.get("is_admin") is True or (su.get("role") and su.get("role").lower() == "admin") or user_id == 1)
                     role = "admin" if is_admin else (su.get("role") or "supervisor").lower()
                     if role in ("company", "company employee"):
@@ -121,10 +126,26 @@ def get_current_user(
                 detail="Password setup required before accessing application resources.",
             )
 
+    from app.core.user_name_resolver import resolve_real_name
+    real_name = None
+    if db_user and (getattr(db_user, "name", None) or "").strip():
+        real_name = str(db_user.name).strip()
+    elif isinstance(claims.get("user_metadata"), dict):
+        um = claims["user_metadata"]
+        real_name = um.get("full_name") or um.get("name")
+    if not real_name and claims.get("name"):
+        real_name = claims.get("name")
+    if not real_name:
+        real_name = resolve_real_name(email)
+
     return {
         "auth_user_id": claims.get("sub", ""),
         "user_id": user_id,
+        "name": user_name,
+        "full_name": user_name,
         "email": email,
+        "name": real_name,
+        "full_name": real_name,
         "company_id": company_id,
         "company_ids": company_ids,
         "is_admin": is_admin,

@@ -29,6 +29,7 @@ export interface SalesItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   type: 'Sales'
 }
 
@@ -91,8 +92,10 @@ function mapBackendSaleToItem(b: any): SalesItem {
     auditedBy: b.audited_by || undefined,
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
     auditNotes: b.audit_remarks || undefined,
-    createdBy: b.created_by || 'Company Staff',
+    createdBy: b.created_by || b.created_by_name || 'Finance Staff',
     createdAt: b.created_at || new Date().toISOString(),
+    updatedAt: b.updated_at || undefined,
+    updatedBy: b.updated_by || b.updated_by_name || undefined,
     type: 'Sales',
   }
 }
@@ -166,10 +169,22 @@ export const salesService = {
 
   async addSale(input: NewSalesInput): Promise<SalesItem> {
     this.invalidateCache()
+    let rawDate = input.date
+    if (rawDate && rawDate.includes('/')) {
+      const p = rawDate.split('/')
+      if (p.length === 3) {
+        const m = p[0].padStart(2, '0')
+        const d = p[1].padStart(2, '0')
+        const y = p[2].length === 2 ? `20${p[2]}` : p[2]
+        rawDate = `${y}-${m}-${d}`
+      }
+    }
+    const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+
     const payload = {
       company: input.company,
-      transaction_date: input.date,
-      amount: input.amount,
+      transaction_date: rawDate,
+      amount: cleanAmount,
       particulars: input.particulars,
       description: input.particulars,
       category: input.category && input.category !== 'None' ? input.category : null,
@@ -212,9 +227,21 @@ export const salesService = {
         return newItem
       } else {
         const errData = await res.json().catch(() => ({}))
-        const errorMsg =
-          errData.detail ||
-          (typeof errData === 'string' ? errData : 'Failed to record sales entry.')
+        let errorMsg = 'Failed to record sales entry.'
+        if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail
+            .map((d: any) => {
+              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+            })
+            .join('; ')
+        } else if (errData.detail && typeof errData.detail === 'object') {
+          errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+        } else if (typeof errData.message === 'string') {
+          errorMsg = errData.message
+        }
         throw new Error(errorMsg)
       }
     } catch (err: any) {

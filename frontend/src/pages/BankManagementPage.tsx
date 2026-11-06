@@ -3212,7 +3212,7 @@ export const BankManagementPage: React.FC = () => {
 
                         status: 'Paid',
 
-                        auditStatus: 'Verified',
+                        auditStatus: (tx as any).auditStatus || 'Pending Audit',
 
                         createdAt: tx.date,
 

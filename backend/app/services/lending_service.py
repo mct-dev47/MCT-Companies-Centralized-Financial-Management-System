@@ -1,6 +1,6 @@
 import json
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
@@ -693,6 +693,8 @@ class LendingService:
                         "notes": t.notes or "-",
                         "status": "Paid" if (t.status or "").lower() == "completed" else (t.status or "Paid"),
                         "timestamp": t.created_at.isoformat() if t.created_at else "",
+                        "recorded_by": t.recorded_by,
+                        "recordedBy": t.recorded_by,
                     }
                     for t in txs
                 ]
@@ -746,6 +748,33 @@ class LendingService:
                 else:
                     derived_status = b.status or "Active"
 
+                audited_at_val = b.audited_at.isoformat() if getattr(b, "audited_at", None) else None
+                audit_date_str = None
+                if getattr(b, "audited_at", None):
+                    try:
+                        audit_date_str = b.audited_at.strftime("%m/%d/%y, %I:%M %p")
+                    except Exception:
+                        audit_date_str = str(b.audited_at)
+
+                audit_st = getattr(b, "audit_status", None) or "Pending Audit"
+                audit_status_disp = audit_st if audit_st in ("Verified", "Flagged") else None
+                audited_by_val = getattr(b, "audited_by", None) if audit_status_disp else None
+                if audited_by_val and "@" in str(audited_by_val):
+                    try:
+                        from app.models.user import User
+                        db_user = db.query(User).filter(func.lower(User.email) == str(audited_by_val).lower().strip()).first()
+                        if db_user and db_user.name:
+                            audited_by_val = db_user.name
+                        else:
+                            from app.db.supabase import get_supabase_admin_client
+                            client = get_supabase_admin_client()
+                            if client:
+                                res = client.table("users").select("name").ilike("email", str(audited_by_val).lower().strip()).limit(1).execute()
+                                if res.data and res.data[0].get("name"):
+                                    audited_by_val = res.data[0]["name"]
+                    except Exception:
+                        pass
+
                 results.append({
                     "id": str(b.borrower_id),
                     "borrower_id": b.borrower_id,
@@ -775,6 +804,13 @@ class LendingService:
                     "complianceStatus": compliance_status,
                     "missedCyclesCount": missed_cycles_count,
                     "notes": b.notes or "",
+                    "audit_status": audit_st,
+                    "auditStatus": audit_status_disp,
+                    "audited_by": audited_by_val,
+                    "auditedBy": audited_by_val,
+                    "audited_at": audited_at_val,
+                    "auditDate": audit_date_str if audit_status_disp else None,
+                    "audit_remarks": getattr(b, "audit_remarks", None),
                     "dailyPayments": repayment_dicts,
                 })
             return results
@@ -886,6 +922,13 @@ class LendingService:
                 "complianceStatus": compliance_status,
                 "missedCyclesCount": missed_cycles_count,
                 "notes": meta.get("notes", ""),
+                "audit_status": "Pending Audit",
+                "auditStatus": None,
+                "audited_by": None,
+                "auditedBy": None,
+                "audited_at": None,
+                "auditDate": None,
+                "audit_remarks": None,
                 "dailyPayments": repayment_dicts,
             })
 
@@ -939,6 +982,8 @@ class LendingService:
                     "notes": t.notes or "-",
                     "status": "Paid" if (t.status or "").lower() == "completed" else (t.status or "Paid"),
                     "timestamp": t.created_at.isoformat() if t.created_at else "",
+                    "recorded_by": t.recorded_by,
+                    "recordedBy": t.recorded_by,
                 }
                 for t in txs
             ]
@@ -1226,6 +1271,13 @@ class LendingService:
             "complianceStatus": "Compliant",
             "missedCyclesCount": 0,
             "notes": notes or "",
+            "audit_status": "Pending Audit",
+            "auditStatus": None,
+            "audited_by": None,
+            "auditedBy": None,
+            "audited_at": None,
+            "auditDate": None,
+            "audit_remarks": None,
             "dailyPayments": [],
         })
 
@@ -1325,6 +1377,21 @@ class LendingService:
 
         db.commit()
         db.refresh(b)
+
+        # Also update remote Supabase table if Supabase client is configured
+        try:
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            if client:
+                client.table("borrowers").update({
+                    "audit_status": b.audit_status,
+                    "audited_by": b.audited_by,
+                    "audited_at": b.audited_at.isoformat() if b.audited_at else None,
+                    "audit_remarks": b.audit_remarks,
+                }).eq("borrower_id", borrower_id).execute()
+        except Exception:
+            pass
+
         system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower_id)
 
@@ -1347,6 +1414,67 @@ class LendingService:
             return {"success": True, "message": "Borrower deleted successfully."}
 
         raise HTTPException(status_code=404, detail="Borrower not found.")
+
+    @classmethod
+    def save_audit_review(
+        cls,
+        db: Session,
+        borrower_id: int,
+        audit_status: str,
+        remarks: Optional[str] = None,
+        auditor_name: Optional[str] = "Auditor",
+    ) -> Dict[str, Any]:
+        """Save the audit review for a borrower facility."""
+        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        if not b:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+
+        if audit_status == "Pending Audit":
+            b.audit_status = "Pending Audit"
+            b.audited_by = None
+            b.audited_at = None
+            b.audit_remarks = None
+        else:
+            b.audit_status = audit_status
+            resolved_auditor_name = auditor_name
+            if resolved_auditor_name and "@" in str(resolved_auditor_name):
+                try:
+                    from app.models.user import User
+                    db_user = db.query(User).filter(func.lower(User.email) == str(resolved_auditor_name).lower().strip()).first()
+                    if db_user and db_user.name:
+                        resolved_auditor_name = db_user.name
+                    else:
+                        from app.db.supabase import get_supabase_admin_client
+                        client = get_supabase_admin_client()
+                        if client:
+                            res = client.table("users").select("name").ilike("email", str(resolved_auditor_name).lower().strip()).limit(1).execute()
+                            if res.data and res.data[0].get("name"):
+                                resolved_auditor_name = res.data[0]["name"]
+                except Exception:
+                    pass
+            b.audited_by = resolved_auditor_name
+            b.audited_at = datetime.now(timezone.utc)
+            b.audit_remarks = (remarks or "").strip() or None
+
+        db.commit()
+        db.refresh(b)
+
+        # Also update remote Supabase table if Supabase client is configured
+        try:
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            if client:
+                client.table("borrowers").update({
+                    "audit_status": b.audit_status,
+                    "audited_by": b.audited_by,
+                    "audited_at": b.audited_at.isoformat() if b.audited_at else None,
+                    "audit_remarks": b.audit_remarks,
+                }).eq("borrower_id", borrower_id).execute()
+        except Exception:
+            pass
+
+        system_cache.invalidate_tag("notifications")
+        return cls.get_borrower(db=db, borrower_id=borrower_id)
 
     @hybrid_method
     def record_payment(
@@ -1520,6 +1648,7 @@ class LendingService:
                 reference_no=ref_clean,
                 status=tx_db_status,
                 notes=(notes or "").strip(),
+                recorded_by=recorded_by,
             )
             db.add(new_tx)
 
@@ -1569,6 +1698,8 @@ class LendingService:
                 "payment_method": new_tx.payment_method,
                 "reference_no": ref_clean or "",
                 "notes": notes or "",
+                "recorded_by": new_tx.recorded_by,
+                "recordedBy": new_tx.recorded_by,
             })
 
         # Fallback to legacy loan table
@@ -1723,6 +1854,7 @@ class LendingService:
                 "reference_no": t.reference_no or "-",
                 "status": t.status or "Completed",
                 "notes": t.notes or "-",
+                "recorded_by": t.recorded_by,
                 "created_at": t.created_at.isoformat() if t.created_at else "",
                 "updated_at": t.updated_at.isoformat() if t.updated_at else "",
             }
@@ -1753,6 +1885,7 @@ class LendingService:
             "reference_no": t.reference_no or "-",
             "status": t.status or "Completed",
             "notes": t.notes or "-",
+            "recorded_by": t.recorded_by,
             "created_at": t.created_at.isoformat() if t.created_at else "",
             "updated_at": t.updated_at.isoformat() if t.updated_at else "",
         }

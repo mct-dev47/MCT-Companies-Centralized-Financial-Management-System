@@ -43,6 +43,7 @@ export interface DashboardTransactionItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   attachments?: string[]
   items?: ParticularItem[]
   /** The other side of a record shown for another company (lender loan row, petty cash rows). Read only. */
@@ -119,7 +120,7 @@ export const dashboardService = {
             category: 'Rental Income',
             paymentMethod: p.method,
             status: 'Paid',
-            auditStatus: (lease.auditStatus as any) || 'Verified',
+            auditStatus: (lease.auditStatus as any) || 'Pending Audit',
             auditedBy: lease.auditedBy,
             auditNotes: lease.auditRemarks,
             auditDate: lease.auditDate,
@@ -143,7 +144,7 @@ export const dashboardService = {
           category: 'Rental Income',
           paymentMethod: 'Cash',
           status: 'Paid',
-          auditStatus: (lease.auditStatus as any) || 'Verified',
+          auditStatus: (lease.auditStatus as any) || 'Pending Audit',
           auditedBy: lease.auditedBy,
           auditNotes: lease.auditRemarks,
           auditDate: lease.auditDate,

@@ -68,7 +68,8 @@ class LendingPaymentCreateRequest(BaseModel):
     penalty_amount: Optional[Decimal] = Field(default=Decimal("0.00"), ge=0.0)
     method: str = Field(default="Cash")
     reference_no: Optional[str] = ""
-    notes: Optional[str] = ""
+    notes: Optional[str] = Field(default="", max_length=50)
+    recorded_by: Optional[str] = None
 
 
 class LendingTransactionCreateRequest(BaseModel):
@@ -82,7 +83,8 @@ class LendingTransactionCreateRequest(BaseModel):
     payment_method: str = Field(default="Cash")
     transaction_type: str = Field(default="Repayment")
     reference_no: Optional[str] = ""
-    notes: Optional[str] = ""
+    notes: Optional[str] = Field(default="", max_length=50)
+    recorded_by: Optional[str] = None
 
 
 class LendingTransactionOut(BaseModel):
@@ -103,6 +105,7 @@ class LendingTransactionOut(BaseModel):
     reference_no: Optional[str] = "-"
     status: str = "Completed"
     notes: Optional[str] = "-"
+    recorded_by: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -126,6 +129,8 @@ class DailyPaymentRecordOut(BaseModel):
     cycle_due_date: Optional[str] = None
     is_late: Optional[bool] = False
     days_late: Optional[int] = 0
+    recorded_by: Optional[str] = None
+    recordedBy: Optional[str] = None
 
 
 class BorrowerOut(BaseModel):
@@ -157,6 +162,13 @@ class BorrowerOut(BaseModel):
     complianceStatus: str = "Compliant"
     missedCyclesCount: int = 0
     notes: Optional[str] = ""
+    audit_status: Optional[str] = "Pending Audit"
+    auditStatus: Optional[str] = None
+    audited_by: Optional[str] = None
+    auditedBy: Optional[str] = None
+    audited_at: Optional[str] = None
+    auditDate: Optional[str] = None
+    audit_remarks: Optional[str] = None
     dailyPayments: List[Dict[str, Any]] = []
 
     model_config = ConfigDict(from_attributes=True)

@@ -49,6 +49,7 @@ export interface ExpenseItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   type: 'Expense'
   bankAccountId?: string
 }
@@ -130,8 +131,10 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     auditDate: exp.audited_at ? formatCreatedAt(exp.audited_at) : undefined,
     auditNotes: exp.audit_remarks || undefined,
     type: 'Expense',
+    createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
     createdAt: exp.created_at || new Date().toISOString(),
-    updatedAt: exp.updated_at || new Date().toISOString(),
+    updatedAt: exp.updated_at || undefined,
+    updatedBy: exp.updated_by || exp.updated_by_name || undefined,
   }
 }
 
@@ -276,7 +279,17 @@ export const expenseService = {
 
   async addExpense(input: NewExpenseInput): Promise<ExpenseItem> {
     this.invalidateCache()
-    const rawDate = input.date
+    let rawDate = input.date
+    if (rawDate && rawDate.includes('/')) {
+      const p = rawDate.split('/')
+      if (p.length === 3) {
+        const m = p[0].padStart(2, '0')
+        const d = p[1].padStart(2, '0')
+        const y = p[2].length === 2 ? `20${p[2]}` : p[2]
+        rawDate = `${y}-${m}-${d}`
+      }
+    }
+
     const parts = rawDate.split('-')
     const formattedDate =
       parts.length === 3
@@ -285,6 +298,7 @@ export const expenseService = {
 
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
+    const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
 
     try {
       const token =
@@ -294,10 +308,10 @@ export const expenseService = {
 
       const payload = {
         company: input.company,
-        expense_date: input.date,
+        expense_date: rawDate,
         particulars: input.particulars,
         description: input.particulars,
-        amount: input.amount,
+        amount: cleanAmount,
         category: input.category,
         payment_method: input.paymentMethod || null,
         cheque_no: input.chequeNo || null,
@@ -334,9 +348,21 @@ export const expenseService = {
         return mapped
       } else {
         const errData = await res.json().catch(() => ({}))
-        const errorMsg =
-          errData.detail ||
-          (typeof errData === 'string' ? errData : 'Failed to record expense entry.')
+        let errorMsg = 'Failed to record expense entry.'
+        if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail
+            .map((d: any) => {
+              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+            })
+            .join('; ')
+        } else if (errData.detail && typeof errData.detail === 'object') {
+          errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+        } else if (typeof errData.message === 'string') {
+          errorMsg = errData.message
+        }
         throw new Error(errorMsg)
       }
     } catch (err: any) {

@@ -11,6 +11,10 @@ import {
   Receipt,
   RotateCcw,
   Lock,
+  History,
+  Clock,
+  ShieldCheck,
+  UserCheck,
 } from 'lucide-react'
 import { UpdateLoanStatusModal } from './UpdateLoanStatusModal'
 import { parseParticulars } from '@/utils/particularsUtils'
@@ -24,7 +28,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatPHP } from '@/lib/format'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
 import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import {
@@ -42,6 +46,7 @@ import {
 } from '@/services/loanService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { cn } from '@/lib/utils'
+import { formatRealName } from '@/utils/formatRealName'
 import { useSession } from '@/hooks/useSession'
 
 interface AuditTransactionModalProps {
@@ -99,6 +104,24 @@ const DEFAULT_SPECIFIC_CATEGORIES = [
   'Hotel Supplies',
   'Revolving Funds',
 ]
+
+function formatTimelineDateTime(dateStr?: string | null): string {
+  if (!dateStr) return '—'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return String(dateStr)
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return String(dateStr)
+  }
+}
 
 export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   open,
@@ -306,6 +329,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     : (activeSale?.status || activeExpense?.status || activeLoan?.status || activeTx?.status || '—')
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
+  const displayCreatedBy =
+    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || 'Finance Staff'
+  const displayUpdatedAt =
+    activeSale?.updatedAt || activeExpense?.updatedAt || activeLoan?.updatedAt || activeTx?.updatedAt
+  const displayUpdatedBy =
+    activeSale?.updatedBy || activeExpense?.updatedBy || activeLoan?.updatedBy || activeTx?.updatedBy
+  const displayAuditNotes =
+    activeSale?.auditNotes || activeExpense?.auditNotes || activeLoan?.auditNotes || activeTx?.auditNotes
 
   const withdrawalVal = isExpense
     ? (activeExpense?.withdrawal ?? activeTx?.withdrawal ?? 0)
@@ -366,7 +397,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = user?.fullName || 'Admin'
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor')
 
     if (activeSale) {
       const updated: SalesItem = {
@@ -1219,23 +1250,119 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   )}
                   {displayAuditedBy && currentAuditStatus === 'Verified' && (
                     <span className="text-[10px] text-muted-fg italic">
-                      by {displayAuditedBy} {displayAuditDate ? `(${displayAuditDate})` : ''}
+                      by {formatPersonInitialAndLastName(displayAuditedBy)} {displayAuditDate ? `(${displayAuditDate})` : ''}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* 8. Created At (if present) */}
-              {displayCreatedAt && (
-                <div className="flex items-center justify-between gap-3 py-1.5">
-                  <span className="text-[11px] font-medium text-muted-fg shrink-0">
-                    Created At:
+              {/* Activity Timeline & Remarks Section */}
+              <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
+                <div className="flex items-center justify-between pb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Activity Timeline & Remarks
                   </span>
-                  <span className="font-mono text-focus text-right text-[11px]">
-                    {displayCreatedAt}
+                  <span className="text-[10px] text-muted-fg font-mono">
+                    ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
                   </span>
                 </div>
-              )}
+
+                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                  {/* Created Event */}
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        Created by{' '}
+                        <span className="text-primary font-bold">
+                          {formatRealName(displayCreatedBy)}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                        {formatTimelineDateTime(displayCreatedAt)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-fg">
+                      Initial record added to {displayCompany} ledger
+                    </p>
+                  </div>
+
+                  {/* Modified Event (if updated) */}
+                  {displayUpdatedAt && displayUpdatedAt !== displayCreatedAt && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          Last modified
+                          {displayUpdatedBy ? (
+                            <>
+                              {' '}by{' '}
+                              <span className="text-blue-600 font-bold">
+                                {formatRealName(displayUpdatedBy)}
+                              </span>
+                            </>
+                          ) : ''}
+                        </span>
+                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                          {formatTimelineDateTime(displayUpdatedAt)}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-fg">
+                        Transaction details or items modified
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Audit Review Event */}
+                  <div className="pt-2 border-t border-stroke/15 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        {currentAuditStatus === 'Verified' ? (
+                          <span className="text-emerald-700 font-bold">
+                            Audited & Verified
+                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy)}` : ''}
+                          </span>
+                        ) : currentAuditStatus === 'Flagged' ? (
+                          <span className="text-rose-700 font-bold">
+                            Flagged for Audit Review
+                          </span>
+                        ) : (
+                          <span className="text-amber-700 font-semibold">
+                            Pending Audit Review
+                          </span>
+                        )}
+                      </span>
+                      {displayAuditDate && (
+                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                          {formatTimelineDateTime(displayAuditDate)}
+                        </span>
+                      )}
+                    </div>
+                    {displayAuditNotes ? (
+                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                        Remarks: &ldquo;{displayAuditNotes}&rdquo;
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        {currentAuditStatus === 'Verified'
+                          ? 'Approved by Internal Audit.'
+                          : 'Pending review by Internal Audit team.'}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Reference / Cheque Remark */}
+                  {displayChequeNo && displayChequeNo !== '—' && (
+                    <div className="flex items-center justify-between pt-2 border-t border-stroke/15 text-[11px]">
+                      <span className="text-muted-fg font-medium">
+                        Cheque / Reference No:
+                      </span>
+                      <span className="font-mono font-semibold text-focus bg-white px-2 py-0.5 rounded border border-stroke/30">
+                        {displayChequeNo}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Admin Audit Actions: Unmark as Audit / Mark as Audited */}

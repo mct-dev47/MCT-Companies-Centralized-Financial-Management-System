@@ -77,6 +77,7 @@ def init_db():
     import app.models.notification
     import app.models.receivable
     import app.models.invitation
+    import app.models.particular
     from app.db.migrations import run_migrations
     from app.models.company import Company
 
@@ -139,6 +140,27 @@ def init_db():
                             conn.execute(text(f"ALTER TABLE receivables DROP COLUMN {obsolete_col}"))
                     except Exception as drop_err:
                         logger.warning("Could not drop obsolete column receivables.%s: %s", obsolete_col, drop_err)
+
+        if "lending_transactions" in table_names:
+            lt_cols = {col["name"] for col in inspector.get_columns("lending_transactions")}
+            if "recorded_by" not in lt_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE lending_transactions ADD COLUMN recorded_by VARCHAR(255)"))
+
+        if "borrowers" in table_names:
+            b_cols = {col["name"] for col in inspector.get_columns("borrowers")}
+            if "audit_status" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_remarks TEXT"))
     except Exception:
         pass
 

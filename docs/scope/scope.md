@@ -8,6 +8,7 @@
 | Receivables UI Refinements and Bidirectional Sales Sync | in-progress | [0028](../specs/0028-receivables-refinements-bidirectional-sync/index.md) |
 | Owner Role and Account Migration | in-progress | [0029](../specs/0029-owner-role-and-account-migration/index.md) |
 | Activity Audit Log Changes and IP Tracking | in-progress | [0030](../specs/0030-activity-audit-log-changes-and-ip-tracking.md) |
+| Lending Page and Payment Refinements | in-progress | [0030](../specs/0030-lending-page-and-payment-refinements/index.md) |
 | Company Amount Input Validation and User Form Reset | in-progress | [0031](../specs/0031-company-amount-validation-and-user-modal-cache-clearing.md) |
 | User Form Required Fields Validation Warning | in-progress | [0032](../specs/0032-user-form-required-fields-validation-warning.md) |
 | Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
@@ -124,3 +125,20 @@
   - [x] Milestone 4: End to end deletion tests and audit log decoupling verification (AC-9)
 - [x] Verify it: /check verify 0033
 - [ ] Test it: /test 0033
+
+### Lending Page and Payment Refinements
+**Status**: in-progress
+**Spec**: [0030](../specs/0030-lending-page-and-payment-refinements/index.md)
+**Intent**: Optimize the Lending Page table by removing Date Borrowed and Due Date columns on screen, removing borders from status labels and audit tags, displaying compact auditor details, supporting multi line remarks wrapping, displaying transaction creator initials, and validating payment inputs.
+**Done when**: Date Borrowed and Due Date are removed from the main table on screen while preserved in CSV and Excel exports, status badges and audit tags render without outline borders, auditor tag shows two line format (status label and auditor name on line one, timestamp on line two), payment history remarks wrap with expanding row height, payment history includes a CREATED BY column with creator initials and last name, Payment Method in Record Payment has a required red asterisk, and Remarks has a 50 character limit with live counter and validation.
+
+- [x] Design it (spec): [0030](../specs/0030-lending-page-and-payment-refinements/index.md)
+- [x] Build it: /develop lending-page-refinements (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Database column, lending transaction schema, and endpoint updates for `recorded_by` (AC-6)
+  - [x] Milestone 2: Name formatting utility for first initial and last name pattern (AC-4, AC-6)
+  - [x] Milestone 3: Main table column removal for Date Borrowed and Due Date with export retention (AC-1, AC-2)
+  - [x] Milestone 4: Main table and payment schedule borderless status and compact two line audit tag (AC-3, AC-4)
+  - [x] Milestone 5: Payment schedule remarks text wrapping and CREATED BY column (AC-3, AC-5, AC-6)
+  - [x] Milestone 6: Record Payment modal required Payment Method and 50 character limit on Remarks (AC-7)
+- [x] Verify it: /check verify lending-page-refinements
+- [x] Test it: /test lending-page-refinements

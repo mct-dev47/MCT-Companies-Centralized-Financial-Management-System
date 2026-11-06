@@ -100,7 +100,7 @@ class PettyCashService:
 
             rows = query.execute().data or []
             # Exclude any sample or seeded rows
-            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-")]
+            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-") and not (r.get("reference_no") or "").upper().startswith("REIMB-")]
 
             return [
                 {
@@ -129,7 +129,7 @@ class PettyCashService:
             )
             if company_id:
                 query = query.filter(Expense.company_id == company_id)
-            query = query.filter(~Expense.reference_no.like("SEED-%") | (Expense.reference_no == None))
+            query = query.filter((~Expense.reference_no.like("SEED-%") & ~Expense.reference_no.like("REIMB-%")) | (Expense.reference_no == None))
             return [
                 {
                     "expense_id": exp.expense_id,
@@ -163,11 +163,18 @@ class PettyCashService:
 
     def get_balance(self, company_id: int, exclude_expense_id: Optional[int] = None) -> Decimal:
         approved_topups = [t for t in self._topups(company_id) if (t.status or "Approved").lower() == "approved"]
-        topped_up = sum((_to_decimal(t.amount) for t in approved_topups), ZERO)
+        topped_up = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement"),
+            ZERO,
+        )
         spent = sum(
             (e["amount"] for e in self._petty_cash_expenses(company_id) if e["expense_id"] != exclude_expense_id),
             ZERO,
-        )
+        ) + reimbursed
         return topped_up - spent
 
     def ensure_sufficient_balance(
@@ -190,10 +197,24 @@ class PettyCashService:
         end: Optional[date],
     ) -> PettyCashSummaryOut:
         approved_topups = [t for t in topups if (t.status or "Approved").lower() == "approved"]
-        total_topups = sum((_to_decimal(t.amount) for t in approved_topups), ZERO)
-        total_spent = sum((e["amount"] for e in expenses), ZERO)
-        period_topups = sum((_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end)), ZERO)
-        period_spent = sum((e["amount"] for e in expenses if _in_period(e["expense_date"], start, end)), ZERO)
+        total_topups = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement"),
+            ZERO,
+        )
+        total_spent = sum((e["amount"] for e in expenses), ZERO) + reimbursed
+        period_topups = sum(
+            (_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end) and (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        period_reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end) and (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement"),
+            ZERO,
+        )
+        period_spent = sum((e["amount"] for e in expenses if _in_period(e["expense_date"], start, end)), ZERO) + period_reimbursed
         balance = total_topups - total_spent
         threshold = self._threshold(company.company_id)
         return PettyCashSummaryOut(
@@ -274,6 +295,22 @@ class PettyCashService:
             amt = _to_decimal(t.amount)
             funding = self._resolve_funding(t, banks, comp_map, name_to_id)
             funding_bank = funding["bank"] if funding else None
+            req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
+            is_reimbursement = req_type == "reimbursement"
+
+            amt_in = ZERO
+            amt_out = ZERO
+            if is_approved:
+                if is_reimbursement:
+                    amt_out = amt
+                else:
+                    amt_in = amt
+
+            default_desc = (
+                "Petty cash reimbursement" if is_reimbursement
+                else ("Top-up from sales" if is_approved else "Petty cash replenishment request")
+            )
+
             entries.append({
                 "funding_bank_id": funding_bank.id if funding_bank else None,
                 "funding_bank_name": funding_bank.bank_name if funding_bank else None,
@@ -281,18 +318,23 @@ class PettyCashService:
                 "funding_company_name": funding["company_name"] if funding else None,
                 "is_own_account": bool(funding and funding["is_own_account"]),
                 "entry_id": f"topup-{t.topup_id}",
-                "entry_type": "topup" if is_approved else "request",
+                "entry_type": ("expense" if is_reimbursement else "topup") if is_approved else "request",
                 "record_id": t.topup_id,
                 "company_id": t.company_id,
                 "company_name": comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown"),
                 "entry_date": t.topup_date,
-                "description": t.description or ("Top-up from sales" if is_approved else "Petty cash replenishment request"),
-                "category": None,
+                "description": t.description or default_desc,
+                "category": getattr(t, "category", None) or ("Reimbursement" if is_reimbursement else None),
                 "reference_no": t.reference_no,
                 "amount_requested": amt,
-                "amount_in": amt if is_approved else ZERO,
-                "amount_out": ZERO,
+                "amount_in": amt_in,
+                "amount_out": amt_out,
                 "status": status_val,
+                "request_type": req_type,
+                "paid_by": getattr(t, "paid_by", None),
+                "receipt_url": getattr(t, "receipt_url", None),
+                "attachments": getattr(t, "attachments", None),
+                "items": getattr(t, "items", None),
                 "endorsed_by": t.endorsed_by,
                 "endorsed_at": t.endorsed_at,
                 "finance_remark": t.finance_remark,
@@ -320,6 +362,11 @@ class PettyCashService:
                 "amount_in": ZERO,
                 "amount_out": amt_out,
                 "status": "Approved",
+                "request_type": "expense",
+                "paid_by": None,
+                "receipt_url": None,
+                "attachments": None,
+                "items": None,
                 "endorsed_by": None,
                 "endorsed_at": None,
                 "finance_remark": None,
@@ -464,6 +511,7 @@ class PettyCashService:
             fin_remark = topup_in.finance_remark or topup_in.endorsement_remark or "Endorsed upon creation by Finance"
             bank_id = str(topup_in.bank_account_id).strip() if topup_in.bank_account_id else None
 
+        req_type = (topup_in.request_type or "topup").strip().lower()
         topup = PettyCashTopUp(
             company_id=company.company_id,
             amount=topup_in.amount,
@@ -472,6 +520,12 @@ class PettyCashService:
             description=(topup_in.description or "").strip() or None,
             bank_account_id=bank_id,
             status=status_to_use,
+            request_type=req_type,
+            paid_by=(topup_in.paid_by or "").strip() or None,
+            receipt_url=topup_in.receipt_url,
+            attachments=topup_in.attachments,
+            items=topup_in.items,
+            category=(topup_in.category or "").strip() or None,
             endorsed_by=endorser_name,
             endorsed_at=endorsed_time,
             finance_remark=fin_remark,
@@ -541,8 +595,9 @@ class PettyCashService:
 
         is_endorse = action.lower() == "endorse"
 
-        #Finance must choose a funding bank before endorsing (not required for a rejection).
-        if is_endorse and not (bank_account_id and str(bank_account_id).strip()):
+        # For topups, Finance must choose a funding bank before endorsing.
+        is_topup_type = (getattr(topup, "request_type", "topup") or "topup").lower() == "topup"
+        if is_endorse and is_topup_type and not (bank_account_id and str(bank_account_id).strip()):
             raise HTTPException(status_code=422, detail="Please choose a funding bank account before endorsing.")
 
         new_status = "Pending Audit Approval" if is_endorse else "Rejected by Finance"
@@ -590,7 +645,30 @@ class PettyCashService:
 
         # Disapproval moves nothing.
         if is_approve:
-            self._disburse_to_bank(topup)
+            req_type = (getattr(topup, "request_type", "topup") or "topup").lower()
+            if req_type == "reimbursement":
+                try:
+                    cat_obj = None
+                    if topup.category:
+                        cat_obj = self.db.query(Category).filter(func.lower(Category.name) == topup.category.strip().lower()).first()
+                    new_exp = Expense(
+                        company_id=topup.company_id,
+                        category_id=cat_obj.category_id if cat_obj else None,
+                        expense_date=topup.topup_date or date.today(),
+                        amount=topup.amount,
+                        description=topup.description or f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'}",
+                        payment_method="Petty Cash",
+                        reference_no=f"REIMB-{topup.topup_id}",
+                    )
+                    self.db.add(new_exp)
+                    self.db.commit()
+                except Exception as exp_err:
+                    print(f"Warning: Failed to create Expense record for reimbursement {topup.topup_id}: {exp_err}")
+
+                if topup.bank_account_id:
+                    self._disburse_to_bank(topup)
+            else:
+                self._disburse_to_bank(topup)
 
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")

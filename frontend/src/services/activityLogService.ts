@@ -28,6 +28,8 @@ export interface ActivityLogItem {
   userAgent?: string
   changes?: Record<string, { old: unknown; new: unknown }>
   rawDetails?: Record<string, unknown>
+  details?: any
+  rawCreatedAt?: string
 }
 
 export interface ActivityLogQueryParams {
@@ -51,6 +53,7 @@ export interface PurgeExpiredResult {
 interface RawAuditLogRow {
   audit_log_id: number
   action: string
+  action_category?: string
   created_at?: string | null
   user_name?: string
   company_name?: string
@@ -64,7 +67,7 @@ interface RawAuditLogRow {
   record_ref?: string | null
   user_agent?: string | null
   changes?: Record<string, { old: unknown; new: unknown }> | null
-  details?: Record<string, unknown> | string | null
+  details?: any
 }
 
 function getAuthHeaders(): HeadersInit {
@@ -159,7 +162,7 @@ export const activityLogService = {
           module: row.module || 'General',
           target: row.target || (row.record_ref ? String(row.record_ref) : '-'),
           time: formatLogTime(row.created_at),
-          ipAddress: row.ip_address || (parsedDetails?.ip_address as string) || (parsedDetails?.ip as string) || '-',
+          ipAddress: row.ip_address || (parsedDetails?.ip_address as string) || (parsedDetails?.ip as string) || '—',
           severity: normalizedSeverity,
           recordType: row.record_type || (parsedDetails?.record_type as string) || undefined,
           recordId: row.record_id ?? (parsedDetails?.record_id as string | number) ?? undefined,
@@ -167,6 +170,8 @@ export const activityLogService = {
           userAgent: row.user_agent || (parsedDetails?.user_agent as string) || undefined,
           changes: row.changes || (parsedDetails?.changes as Record<string, { old: unknown; new: unknown }>) || undefined,
           rawDetails: parsedDetails,
+          details: row.details,
+          rawCreatedAt: row.created_at || '',
         }
       })
     } catch (err) {

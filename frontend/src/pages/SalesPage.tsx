@@ -547,7 +547,7 @@ export const SalesPage: React.FC = () => {
             : u.payment_status === 'Partial'
               ? 'Pending'
               : 'Unpaid') as any,
-          auditStatus: u.is_locked ? 'Verified' : 'Pending Audit',
+          auditStatus: 'Pending Audit',
           createdAt: `${u.date}T10:00:00Z`,
           type: 'Sales' as const,
           isStandaloneUtang: true,

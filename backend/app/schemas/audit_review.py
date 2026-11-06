@@ -12,6 +12,7 @@ VALID_AUDIT_STATUSES = ("Pending Audit", "Verified", "Flagged")
 class AuditReviewIn(BaseModel):
     audit_status: AuditStatusValue
     remarks: Optional[str] = Field(None, max_length=2000)
+    auditor_name: Optional[str] = Field(None, max_length=150)
 
 
 def audit_fields(source: Any) -> dict:
