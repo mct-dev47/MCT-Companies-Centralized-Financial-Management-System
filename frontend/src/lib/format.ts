@@ -13,3 +13,6 @@ export function formatPHP(
     ...options,
   }).format(amount)
 }
+
+export { formatPersonInitialAndLastName } from '../utils/formatUtils'
+

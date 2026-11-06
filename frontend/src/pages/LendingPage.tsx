@@ -1,7 +1,6 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Download,
   Plus,
   Search,
   ChevronDown,
@@ -10,7 +9,6 @@ import {
   Check,
   FileSpreadsheet,
   FileText,
-  Calendar,
   CreditCard,
   AlertCircle,
   Pencil,
@@ -20,7 +18,6 @@ import {
   MoreVertical,
   Eye,
   Lock,
-  Building2,
   Loader2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -47,7 +44,7 @@ import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { useSession } from '@/hooks/useSession'
-import { formatPHP } from '@/lib/format'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
@@ -55,7 +52,6 @@ import {
   type DailyPaymentRecord,
   type LendingFacility,
   lendingService,
-  LENDING_STORAGE_KEY as STORAGE_KEY,
   getMonthlyProgress,
   getNextInstallmentInfo,
   getCycleDueDate,
@@ -73,7 +69,7 @@ const HISTORY_ITEMS_PER_PAGE = 9 // Total no. of payment records in payment hist
 interface PendingPaymentData {
   facilityId: string
   borrowerName: string
-  loanId: string
+  loanId: string | number
   paymentDate: string
   targetInstallmentDate?: string
   cycleDueDate?: string
@@ -103,7 +99,6 @@ interface CompletedPaymentReceipt extends PendingPaymentData {
 export const LendingPage: React.FC = () => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
-  const isFinance = userRole === 'finance'
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -115,40 +110,50 @@ export const LendingPage: React.FC = () => {
 
   const [isLoading, setIsLoading] = React.useState(true)
 
-  // Load facilities from backend or empty cache
-  const [facilities, setFacilities] = React.useState<LendingFacility[]>(() => {
-    return lendingService.loadFromStorage()
-  })
+  // Facilities loaded exclusively from backend Supabase database
+  const [facilities, setFacilities] = React.useState<LendingFacility[]>([])
 
-  // Sync with backend lending service on mount
-  React.useEffect(() => {
+  const fetchFacilities = React.useCallback(async () => {
     setIsLoading(true)
-    lendingService
-      .getFacilities()
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setFacilities(data)
-        }
-      })
-      .catch((err) => {
-        console.warn('Lending backend sync notice:', err)
-      })
-      .finally(() => {
-        setIsLoading(false)
-      })
-  }, [])
-
-  // Save to sessionStorage whenever facilities update
-  const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
-    setFacilities(newFacilities)
-    if (typeof window !== 'undefined') {
-      try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(newFacilities))
-      } catch (err) {
-        console.error('Error saving lending facilities:', err)
-      }
+    try {
+      const data = await lendingService.getFacilities()
+      setFacilities(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.warn('Lending backend sync notice:', err)
+      setFacilities([])
+    } finally {
+      setIsLoading(false)
     }
   }, [])
+
+  // Sync with backend lending service and purge any stale browser storage on mount
+  React.useEffect(() => {
+    lendingService.clearStorage()
+    fetchFacilities()
+  }, [fetchFacilities])
+
+  const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
+    setFacilities(newFacilities)
+  }, [])
+
+  // Helper to format auditor tag initials from user's actual name rather than email
+  const formatAuditorTag = React.useCallback(
+    (auditedBy?: string | null): string => {
+      if (!auditedBy || auditedBy === '-') return ''
+      const trimmed = auditedBy.trim()
+      // If the stored audit tag has the current user's email, resolve to the logged in user's full name
+      if (
+        user &&
+        user.fullName &&
+        (trimmed.toLowerCase() === (user.email || '').toLowerCase() ||
+          trimmed.toLowerCase() === user.fullName.toLowerCase())
+      ) {
+        return formatPersonInitialAndLastName(user.fullName)
+      }
+      return formatPersonInitialAndLastName(trimmed)
+    },
+    [user]
+  )
 
   // Filter toolbar state matching SalesPage
   const [dateRange, setDateRange] = React.useState<DateRange>({
@@ -611,8 +616,7 @@ export const LendingPage: React.FC = () => {
         notes: formData.notes.trim(),
       })
 
-      const updatedList = [newFacility, ...facilities.filter((f) => f.id !== newFacility.id)]
-      saveFacilities(updatedList)
+      await fetchFacilities()
       setIsAddModalOpen(false)
       setAddModalError(null)
 
@@ -706,8 +710,7 @@ export const LendingPage: React.FC = () => {
         notes: editFormData.notes.trim(),
       })
 
-      const updatedList = facilities.map((f) => (f.id === activeFacility.id || String(f.borrower_id) === String(borrowerDbId) ? updated : f))
-      saveFacilities(updatedList)
+      await fetchFacilities()
       setIsEditModalOpen(false)
       setEditModalError(null)
       setActiveFacility(updated)
@@ -833,6 +836,16 @@ export const LendingPage: React.FC = () => {
       return
     }
 
+    if (!paymentForm.method || !paymentForm.method.trim()) {
+      setPaymentError('Payment Method is required.')
+      return
+    }
+
+    if ((paymentForm.notes || '').length > 50) {
+      setPaymentError('Remarks cannot exceed 50 characters.')
+      return
+    }
+
     const rawPenalty = parseFloat(paymentForm.penaltyAmount)
     if (!isNaN(rawPenalty) && rawPenalty < 0) {
       setPaymentError('Late payment charges can be ₱0.00 but can never be a negative value.')
@@ -955,6 +968,7 @@ export const LendingPage: React.FC = () => {
         method: pendingPayment.method,
         referenceNo: pendingPayment.referenceNo,
         notes: pendingPayment.notes,
+        recorded_by: user?.fullName || undefined,
       })
       if (!backendRes.success) {
         setPaymentError(
@@ -1008,6 +1022,8 @@ export const LendingPage: React.FC = () => {
         referenceNo: pendingPayment.referenceNo,
         notes: pendingPayment.notes,
         status: pendingPayment.paymentStatus,
+        recorded_by: backendTx?.recorded_by || backendTx?.recordedBy || user?.fullName || undefined,
+        recordedBy: backendTx?.recorded_by || backendTx?.recordedBy || user?.fullName || undefined,
         monthIndex: pendingPayment.monthIndex,
         periodLabel: pendingPayment.periodLabel,
         timestamp: timestampIso,
@@ -1038,18 +1054,14 @@ export const LendingPage: React.FC = () => {
         dailyPayments: [newPaymentRecord, ...existingUpdated],
       }
 
-      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
-      saveFacilities(updatedList)
-      setActiveFacility(updatedFacility)
-
-      // Re-fetch latest borrower from backend to guarantee complete consistency
+      await fetchFacilities()
       const borrowerDbId = activeFacility.borrower_id || activeFacility.borrowerId || activeFacility.id
-      lendingService.getBorrower(borrowerDbId).then((fresh) => {
+      try {
+        const fresh = await lendingService.getBorrower(borrowerDbId)
         if (fresh) {
           setActiveFacility(fresh)
-          setFacilities((prev) => prev.map((f) => (f.id === fresh.id ? fresh : f)))
         }
-      }).catch(() => {})
+      } catch (e) {}
 
       setCompletedReceipt({
         ...pendingPayment,
@@ -1088,8 +1100,7 @@ export const LendingPage: React.FC = () => {
     setIsDeletingBorrower(true)
     try {
       await lendingService.deleteBorrower(borrowerDbId)
-      const updatedList = facilities.filter((f) => f.id !== activeFacility.id && String(f.borrower_id) !== String(borrowerDbId))
-      saveFacilities(updatedList)
+      await fetchFacilities()
       setIsDeleteConfirmOpen(false)
       setDeleteModalError(null)
       setActiveFacility(null)
@@ -1506,12 +1517,13 @@ export const LendingPage: React.FC = () => {
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
+                          <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Created By</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedHistoryPayments.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={8} className="py-12 text-center text-muted-fg text-xs">
                               <div className="flex flex-col items-center justify-center">
                                 <Coins className="w-6 h-6 text-muted-fg/40 mb-2" />
                                 <p className="font-semibold text-focus">
@@ -1542,17 +1554,17 @@ export const LendingPage: React.FC = () => {
                                 </td>
                                 <td className="py-2.5 px-3.5 whitespace-nowrap">
                                   {isPartial ? (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700">
                                       <span>Partially Paid</span>
                                     </span>
                                   ) : (p.is_late || p.isLate || (p.status && p.status.includes('Late'))) ? (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                      <AlertCircle className="w-2.5 h-2.5 text-[#960C01]" />
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#960C01]">
+                                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
                                       <span>Paid</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                      <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
+                                      <Check className="w-3 h-3 text-emerald-600" />
                                       <span>Paid</span>
                                     </span>
                                   )}
@@ -1574,8 +1586,11 @@ export const LendingPage: React.FC = () => {
                                 <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap">
                                   {p.referenceNo || '-'}
                                 </td>
-                                <td className="py-2.5 px-3.5 text-muted-fg truncate max-w-[240px]" title={p.notes || '-'}>
+                                <td className="py-2.5 px-3.5 text-muted-fg whitespace-normal break-words max-w-[280px] leading-relaxed" title={p.notes || '-'}>
                                   {p.notes || '-'}
+                                </td>
+                                <td className="py-2.5 px-3.5 text-focus font-medium whitespace-nowrap">
+                                  {formatPersonInitialAndLastName(p.recorded_by || p.recordedBy)}
                                 </td>
                               </tr>
                             )
@@ -1851,77 +1866,67 @@ export const LendingPage: React.FC = () => {
       >
         {/* Table with Requirement 3 columns and Action Buttons */}
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className={cn('w-full table-fixed', isAudit ? 'min-w-[1240px]' : 'min-w-[1160px]')}>
+          <Table className={cn('w-full table-fixed', isAudit ? 'min-w-[1020px]' : 'min-w-[940px]')}>
             <colgroup>
               {isAudit ? (
                 <>
+                  <col style={{ width: '22%' }} />
+                  <col style={{ width: '12%' }} />
                   <col style={{ width: '16%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '12%' }} />
                   <col style={{ width: '14%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '8.5%' }} />
-                  <col style={{ width: '5.5%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '6%' }} />
                 </>
               ) : (
                 <>
+                  <col style={{ width: '26%' }} />
+                  <col style={{ width: '13%' }} />
                   <col style={{ width: '18%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '13%' }} />
                   <col style={{ width: '15%' }} />
-                  <col style={{ width: '11%' }} />
-                  <col style={{ width: '12%' }} />
-                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '9%' }} />
                   <col style={{ width: '6%' }} />
                 </>
               )}
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className={cn(isAudit ? "w-[22%]" : "w-[26%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
                   BORROWER'S NAME
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
                   LOAN AMOUNT
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  DATE BORROWED
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
-                  DUE DATE
-                </TableHead>
-                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
+                <TableHead className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap")}>
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[7%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
                 {isAudit && (
-                  <TableHead className="w-[8.5%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                  <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                     AUDIT TAG
                   </TableHead>
                 )}
-                <TableHead className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap")}>
+                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={isAudit ? 10 : 9} />
+                <TableSkeleton rows={5} columns={isAudit ? 8 : 7} />
               ) : paginatedFacilities.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={isAudit ? 10 : 9} className="h-44 text-center py-8">
+                  <TableCell colSpan={isAudit ? 8 : 7} className="h-44 text-center py-8">
                     <div className="flex flex-col items-center justify-center text-muted-fg">
                       <CreditCard className="h-8 w-8 text-muted-fg/40 mb-2" />
                       <p className="text-sm font-semibold">No borrowers found</p>
@@ -1933,12 +1938,12 @@ export const LendingPage: React.FC = () => {
                 </TableRow>
               ) : (
                 paginatedFacilities.map((facility) => {
-                  const statusColors = {
-                    Active: 'bg-blue-50 text-blue-700 border-blue-200',
-                    Completed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                    Pending: 'bg-amber-50 text-amber-700 border-amber-200',
-                    Overdue: 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20',
-                  }[facility.status]
+                  const statusColorText = {
+                    Active: 'text-blue-600',
+                    Completed: 'text-emerald-600',
+                    Pending: 'text-amber-600',
+                    Overdue: 'text-[#960C01]',
+                  }[facility.status] || 'text-slate-600'
 
                   const isHighlighted = highlightedFacilityId === facility.id
 
@@ -1953,13 +1958,13 @@ export const LendingPage: React.FC = () => {
                       title="Click row to view complete lending and borrower details"
                     >
                       {/* Borrower's Name & Borrower Ref No */}
-                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left")}>
-                        <div className="font-semibold text-xs text-focus truncate max-w-[190px]" title={facility.borrowerName}>
+                      <TableCell className={cn(isAudit ? "w-[22%]" : "w-[26%]", "px-3.5 py-3 text-left")}>
+                        <div className="font-semibold text-xs text-focus truncate max-w-[240px]" title={facility.borrowerName}>
                           {facility.borrowerName}
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                           {facility.borrowerContact && (
-                            <span className="text-[10px] text-muted-fg truncate max-w-[120px]">
+                            <span className="text-[10px] text-muted-fg truncate max-w-[150px]">
                               {facility.borrowerContact}
                             </span>
                           )}
@@ -1967,87 +1972,67 @@ export const LendingPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Loan Amount */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      <TableCell className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-left font-semibold text-xs text-focus tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.loanAmount)}
                       </TableCell>
 
-                      {/* 3. Date Borrowed */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left font-mono text-xs text-muted-fg whitespace-nowrap")}>
-                        {facility.dateBorrowed}
-                      </TableCell>
-
-                      {/* 4. Due Date */}
-                      <TableCell className={cn(isAudit ? "w-[9%]" : "w-[10%]", "px-3.5 py-3 text-left text-xs whitespace-nowrap")}>
-                        <div className="font-mono text-muted-fg font-medium">{facility.dueDate}</div>
-                        <div className="text-[10px] text-slate-400 font-sans mt-0.5">
-                          {(() => {
-                            const isDaily = !facility.paymentFrequency || facility.paymentFrequency === 'Daily'
-                            const t = facility.termDays || (isDaily ? 40 : 2)
-                            const unit = isDaily ? 'days' : t === 1 ? 'month' : 'months'
-                            return `${t} ${unit} term`
-                          })()}
-                        </div>
-                      </TableCell>
-
-                      {/* 5. Total Amount Payable */}
-                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
+                      {/* 3. Total Amount Payable */}
+                      <TableCell className={cn(isAudit ? "w-[16%]" : "w-[18%]", "px-3.5 py-3 text-left font-bold text-xs text-focus tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.totalAmountPayable)}
                       </TableCell>
 
-                      {/* 6. Amount Paid */}
-                      <TableCell className={cn(isAudit ? "w-[10%]" : "w-[11%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
+                      {/* 4. Amount Paid */}
+                      <TableCell className={cn(isAudit ? "w-[12%]" : "w-[13%]", "px-3.5 py-3 text-left font-semibold text-xs text-emerald-600 tabular-nums whitespace-nowrap")}>
                         {formatPHP(facility.amountPaid)}
                       </TableCell>
 
-                      {/* 7. Remaining Balance */}
-                      <TableCell className={cn(isAudit ? "w-[11%]" : "w-[12%]", "px-3.5 py-3 text-left font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap")}>
+                      {/* 5. Remaining Balance */}
+                      <TableCell className={cn(isAudit ? "w-[14%]" : "w-[15%]", "px-3.5 py-3 text-left font-bold text-xs text-amber-600 tabular-nums whitespace-nowrap")}>
                         <div>{formatPHP(facility.remainingBalance)}</div>
                       </TableCell>
 
-                      {/* 8. Status */}
-                      <TableCell className="w-[7%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-block px-2.5 py-0.5 rounded-full text-[10.5px] font-bold border uppercase tracking-wider',
-                            statusColors
-                          )}
-                        >
+                      {/* 6. Status */}
+                      <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
+                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusColorText)}>
                           {facility.status}
                         </span>
                       </TableCell>
 
-                      {/* 9. Audit Tag (Dedicated column for Auditor account) */}
+                      {/* 7. Audit Tag (Dedicated column for Auditor account) */}
                       {isAudit && (
-                        <TableCell className="w-[8.5%] px-2.5 py-3 text-center whitespace-nowrap">
+                        <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
                           {facility.auditStatus ? (
-                            <div className="flex flex-col items-center justify-center gap-0.5">
+                            <div className="flex flex-col items-center justify-center leading-tight">
                               <span
                                 className={cn(
-                                  'inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
+                                  'text-xs font-bold whitespace-nowrap',
                                   facility.auditStatus === 'Verified'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                    : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
+                                    ? 'text-emerald-700'
+                                    : 'text-[#960C01]'
                                 )}
                               >
                                 {facility.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
+                                {facility.auditedBy && facility.auditedBy !== '-'
+                                  ? ` · ${formatAuditorTag(facility.auditedBy)}`
+                                  : ''}
                               </span>
                               {facility.auditDate && (
                                 <span
-                                  className="block text-[9.5px] text-muted-fg font-mono whitespace-nowrap mt-0.5"
-                                  title={facility.auditedBy ? `Audited by ${facility.auditedBy}` : undefined}
+                                  className="block text-[10px] text-muted-fg font-mono whitespace-nowrap mt-0.5"
+                                  title={facility.auditedBy ? `Audited by ${formatAuditorTag(facility.auditedBy)}` : undefined}
                                 >
                                   {facility.auditDate}
                                 </span>
                               )}
                             </div>
                           ) : (
-                            <span className="text-xs text-muted-fg/40 font-mono">-</span>
+                            <span className="text-xs text-muted-fg/40 font-mono">—</span>
                           )}
                         </TableCell>
                       )}
 
-                      {/* 10. Actions: 3 dots dropdown (Edit, Delete, Update for staff; Mark Audit / Flag Discrepancy for Auditor) */}
-                      <TableCell className={cn(isAudit ? "w-[5.5%]" : "w-[6%]", "px-2 py-3 text-center whitespace-nowrap")} onClick={(e) => e.stopPropagation()}>
+                      {/* 8. Actions */}
+                      <TableCell className="w-[6%] px-2 py-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         {isOwner ? (
                           <span className="text-muted-fg text-xs">—</span>
                         ) : (
@@ -2149,30 +2134,23 @@ export const LendingPage: React.FC = () => {
               <>
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation()
                     const fac = activeMenuFacility
+                    setOpenMenuFacilityId(null)
+                    setMenuPosition(null)
+                    setActiveMenuFacility(null)
                     if (fac) {
-                      const timestamp = new Date().toLocaleString('en-US', {
-                        month: '2-digit',
-                        day: '2-digit',
-                        year: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                      })
-                      const updated = facilities.map((item) =>
-                        item.id === fac.id
-                          ? { ...item, auditStatus: 'Verified' as const, auditDate: timestamp, auditedBy: user?.fullName || 'Audit' }
-                          : item
-                      )
-                      setFacilities(updated)
-                      if (typeof window !== 'undefined') {
-                        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
+                      try {
+                        const auditorName = user?.fullName?.trim() || (user as any)?.name?.trim() || undefined
+                        const updated = await lendingService.saveAuditReview(fac.id, 'Verified', undefined, auditorName)
+                        await fetchFacilities()
+                        if (activeFacility && (activeFacility.id === fac.id || String(activeFacility.borrower_id) === String(fac.borrower_id))) {
+                          setActiveFacility(updated)
+                        }
+                      } catch (err) {
+                        console.error('Failed to save audit review:', err)
                       }
-                      setOpenMenuFacilityId(null)
-                      setMenuPosition(null)
-                      setActiveMenuFacility(null)
                     }
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
@@ -2183,30 +2161,23 @@ export const LendingPage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation()
                     const fac = activeMenuFacility
+                    setOpenMenuFacilityId(null)
+                    setMenuPosition(null)
+                    setActiveMenuFacility(null)
                     if (fac) {
-                      const timestamp = new Date().toLocaleString('en-US', {
-                        month: '2-digit',
-                        day: '2-digit',
-                        year: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: true,
-                      })
-                      const updated = facilities.map((item) =>
-                        item.id === fac.id
-                          ? { ...item, auditStatus: 'Flagged' as const, auditDate: timestamp, auditedBy: user?.fullName || 'Audit' }
-                          : item
-                      )
-                      setFacilities(updated)
-                      if (typeof window !== 'undefined') {
-                        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(updated)) } catch (err) {}
+                      try {
+                        const auditorName = user?.fullName?.trim() || (user as any)?.name?.trim() || undefined
+                        const updated = await lendingService.saveAuditReview(fac.id, 'Flagged', undefined, auditorName)
+                        await fetchFacilities()
+                        if (activeFacility && (activeFacility.id === fac.id || String(activeFacility.borrower_id) === String(fac.borrower_id))) {
+                          setActiveFacility(updated)
+                        }
+                      } catch (err) {
+                        console.error('Failed to save audit review:', err)
                       }
-                      setOpenMenuFacilityId(null)
-                      setMenuPosition(null)
-                      setActiveMenuFacility(null)
                     }
                   }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-[#960C01] hover:bg-[#960C01]/10 transition-colors text-left cursor-pointer"
@@ -3112,9 +3083,10 @@ export const LendingPage: React.FC = () => {
                     {/* Payment Method */}
                     <div>
                       <label className="text-xs font-semibold text-focus block mb-1">
-                        Payment Method
+                        Payment Method <span className="text-[#960C01]">*</span>
                       </label>
                       <select
+                        required
                         value={paymentForm.method}
                         onChange={(e) =>
                           setPaymentForm({ ...paymentForm, method: e.target.value })
@@ -3143,18 +3115,31 @@ export const LendingPage: React.FC = () => {
                       />
                     </div>
 
-                    {/* Remarks / Notes (Longer text field without default value) */}
+                    {/* Remarks / Notes (max 50 chars with live counter) */}
                     <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Remarks / Notes
-                      </label>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-semibold text-focus">
+                          Remarks / Notes
+                        </label>
+                        <span
+                          className={cn(
+                            'text-[11px] font-mono',
+                            (paymentForm.notes?.length || 0) >= 50
+                              ? 'text-[#960C01] font-semibold'
+                              : 'text-muted-fg'
+                          )}
+                        >
+                          {paymentForm.notes?.length || 0}/50
+                        </span>
+                      </div>
                       <textarea
                         rows={3}
+                        maxLength={50}
                         value={paymentForm.notes}
                         onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, notes: e.target.value })
+                          setPaymentForm({ ...paymentForm, notes: e.target.value.slice(0, 50) })
                         }
-                        placeholder="Enter payment remarks or notes..."
+                        placeholder="Enter payment remarks or notes (max 50 chars)..."
                         className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
                       />
                     </div>

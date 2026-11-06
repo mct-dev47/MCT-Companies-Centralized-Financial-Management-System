@@ -10,9 +10,11 @@ from app.core.dependencies import (
     CurrentUser,
     check_company_access,
     get_current_user,
+    require_audit_or_admin_user,
     require_business_reader,
     require_business_writer,
 )
+from app.schemas.audit_review import AuditReviewIn
 from app.db.session import get_db
 from app.services.lending_service import LendingService
 from app.schemas.lending import (
@@ -150,6 +152,38 @@ def delete_borrower(
     return LendingService.delete_borrower(db=db, borrower_id=borrower_id)
 
 
+@router.patch(
+    "/borrowers/{borrower_id}/audit",
+    response_model=BorrowerOut,
+    summary="Save the audit review of a borrower facility (Auditor only)",
+)
+def review_borrower_audit(
+    borrower_id: int,
+    payload: AuditReviewIn,
+    user: AuthenticatedUser = Depends(require_audit_or_admin_user),
+    db: Session = Depends(get_db),
+):
+    _enforce_lending_access(user)
+    user_name = user.get("full_name") or user.get("name")
+    if not user_name and user.get("email"):
+        from app.models.user import User
+        db_u = db.query(User).filter(func.lower(User.email) == user.get("email").lower().strip()).first()
+        if db_u and db_u.name:
+            user_name = db_u.name
+
+    auditor_name = payload.auditor_name or user_name or "Auditor"
+    if "@" in str(auditor_name) and user_name and "@" not in str(user_name):
+        auditor_name = user_name
+
+    return LendingService.save_audit_review(
+        db=db,
+        borrower_id=borrower_id,
+        audit_status=payload.audit_status,
+        remarks=payload.remarks,
+        auditor_name=auditor_name,
+    )
+
+
 @router.get(
     "/ledger/{borrower_id}",
     response_model=LendingLedgerResponse,
@@ -215,6 +249,7 @@ def create_transaction(
 ):
     _enforce_lending_access(user)
     penalty_val = payload.penalty_amount if payload.penalty_amount is not None else payload.penalty_portion
+    recorded_by = payload.recorded_by or user.get("full_name") or user.get("name") or user.get("email") or "System"
     return LendingService.record_payment(
         db=db,
         borrower_id=payload.borrower_id,
@@ -224,6 +259,7 @@ def create_transaction(
         method=payload.payment_method,
         reference_no=payload.reference_no,
         notes=payload.notes,
+        recorded_by=recorded_by,
         transaction_type=payload.transaction_type,
         cycle_due_date_val=payload.cycle_due_date,
         cycle_index_val=payload.cycle_index,
@@ -241,6 +277,7 @@ def record_payment(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
+    recorded_by = payload.recorded_by or user.get("full_name") or user.get("name") or user.get("email") or "System"
     return LendingService.record_payment(
         db=db,
         borrower_id=payload.borrower_id,
@@ -250,6 +287,7 @@ def record_payment(
         method=payload.method,
         reference_no=payload.reference_no,
         notes=payload.notes,
+        recorded_by=recorded_by,
         cycle_due_date_val=payload.cycle_due_date,
         cycle_index_val=payload.cycle_index,
     )

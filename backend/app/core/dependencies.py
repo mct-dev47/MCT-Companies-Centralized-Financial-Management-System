@@ -48,6 +48,7 @@ def get_current_user(
     email = claims.get("email") if isinstance(claims.get("email"), str) else None
 
     user_id = None
+    user_name = None
     company_ids = [company_id] if company_id else []
 
     if email:
@@ -56,6 +57,7 @@ def get_current_user(
         db_user = db.query(User).filter(func.lower(User.email) == resolved_email.lower()).first()
         if db_user:
             user_id = db_user.user_id
+            user_name = getattr(db_user, "name", None)
             is_admin = bool(db_user.is_admin or db_user.user_id == 1 or (db_user.role and db_user.role.lower() == "admin"))
             role = "admin" if is_admin else (db_user.role or "supervisor").lower()
             if role in ("company", "company employee"):
@@ -75,6 +77,7 @@ def get_current_user(
                 if supa_res.data:
                     su = supa_res.data[0]
                     user_id = su.get("user_id")
+                    user_name = su.get("name")
                     is_admin = bool(su.get("is_admin") is True or (su.get("role") and su.get("role").lower() == "admin") or user_id == 1)
                     role = "admin" if is_admin else (su.get("role") or "supervisor").lower()
                     if role in ("company", "company employee"):
@@ -124,6 +127,8 @@ def get_current_user(
     return {
         "auth_user_id": claims.get("sub", ""),
         "user_id": user_id,
+        "name": user_name,
+        "full_name": user_name,
         "email": email,
         "company_id": company_id,
         "company_ids": company_ids,

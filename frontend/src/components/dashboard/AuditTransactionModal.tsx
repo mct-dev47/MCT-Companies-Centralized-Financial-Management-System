@@ -24,7 +24,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatPHP } from '@/lib/format'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
 import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import {
@@ -1219,7 +1219,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   )}
                   {displayAuditedBy && currentAuditStatus === 'Verified' && (
                     <span className="text-[10px] text-muted-fg italic">
-                      by {displayAuditedBy} {displayAuditDate ? `(${displayAuditDate})` : ''}
+                      by {formatPersonInitialAndLastName(displayAuditedBy)} {displayAuditDate ? `(${displayAuditDate})` : ''}
                     </span>
                   )}
                 </div>

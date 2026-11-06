@@ -45,6 +45,8 @@ export interface DailyPaymentRecord {
   target?: number
   penalty?: number
   penalty_portion?: number
+  recordedBy?: string
+  recorded_by?: string
 }
 
 export interface LendingFacility {
@@ -138,6 +140,8 @@ export interface LendingRecordPaymentPayload {
   method: string
   referenceNo?: string
   notes?: string
+  recordedBy?: string
+  recorded_by?: string
 }
 
 export interface LendingTransactionRecord {
@@ -229,36 +233,32 @@ export const INITIAL_FACILITIES: LendingFacility[] = []
 
 class LendingServiceGateway {
   /**
-   * Load facilities from sessionStorage cache.
+   * Purge any legacy browser storage keys for lending facilities.
    */
-  loadFromStorage(): LendingFacility[] {
+  clearStorage(): void {
     if (typeof window !== 'undefined') {
       try {
-        const saved = sessionStorage.getItem(LENDING_STORAGE_KEY)
-        if (saved) {
-          const parsed = JSON.parse(saved)
-          if (Array.isArray(parsed)) {
-            return parsed
-          }
-        }
-      } catch (err) {
-        console.error('Error loading stored lending facilities:', err)
-      }
+        sessionStorage.removeItem(LENDING_STORAGE_KEY)
+        sessionStorage.removeItem('mct_filcap_lending_facilities')
+        localStorage.removeItem(LENDING_STORAGE_KEY)
+        localStorage.removeItem('mct_filcap_lending_facilities')
+      } catch (err) {}
     }
+  }
+
+  /**
+   * Always return empty array so UI only renders live database records from Supabase.
+   */
+  loadFromStorage(): LendingFacility[] {
     return []
   }
 
   /**
-   * Save facilities to sessionStorage cache.
+   * No-op storage writer: facilities are exclusively stored and fetched from the backend.
    */
-  saveToStorage(facilities: LendingFacility[]): void {
+  saveToStorage(_facilities: LendingFacility[]): void {
     if (typeof window !== 'undefined') {
-      try {
-        sessionStorage.setItem(LENDING_STORAGE_KEY, JSON.stringify(facilities))
-        window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
-      } catch (err) {
-        console.error('Error saving lending facilities to storage:', err)
-      }
+      window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
     }
   }
 
@@ -319,7 +319,7 @@ class LendingServiceGateway {
   }
 
   /**
-   * Fetch borrowers list from backend with sessionStorage fallback.
+   * Fetch borrowers list strictly from backend Supabase database.
    */
   async getFacilities(companyId?: number): Promise<LendingFacility[]> {
     try {
@@ -328,18 +328,17 @@ class LendingServiceGateway {
       if (res.ok) {
         const data = await res.json()
         if (Array.isArray(data)) {
-          this.saveToStorage(data)
           return data
         }
       }
     } catch (err) {
-      console.warn('LendingServiceGateway.getFacilities backend request failed, using cached storage:', err)
+      console.warn('LendingServiceGateway.getFacilities backend request failed:', err)
     }
-    return this.loadFromStorage()
+    return []
   }
 
   /**
-   * Fetch single borrower by ID from backend with fallback to cached storage.
+   * Fetch single borrower by ID strictly from backend Supabase database.
    */
   async getBorrower(borrowerId: string | number): Promise<LendingFacility | null> {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
@@ -348,7 +347,7 @@ class LendingServiceGateway {
         const res = await fetch(`/api/v1/lending/borrowers/${numId}`, { headers: getAuthHeaders() })
         if (res.ok) {
           const data = await res.json()
-          if (data && data.id) {
+          if (data && (data.id || data.borrower_id)) {
             return data
           }
         }
@@ -356,8 +355,7 @@ class LendingServiceGateway {
         console.warn('LendingServiceGateway.getBorrower backend request failed:', err)
       }
     }
-    const all = this.loadFromStorage()
-    return all.find((f) => String(f.id) === String(borrowerId)) || null
+    return null
   }
 
   /**
@@ -390,11 +388,7 @@ class LendingServiceGateway {
         )
         throw new Error(friendly)
       }
-      const created = await res.json()
-      const existing = this.loadFromStorage()
-      const updated = [created, ...existing]
-      this.saveToStorage(updated)
-      return created
+      return await res.json()
     } catch (err: any) {
       console.error('LendingServiceGateway.createFacility failed:', err)
       throw new Error(
@@ -445,11 +439,7 @@ class LendingServiceGateway {
         )
         throw new Error(friendly)
       }
-      const updated = await res.json()
-      const cached = this.loadFromStorage()
-      const nextList = cached.map((f) => (String(f.id) === String(borrowerId) || String(f.borrower_id) === String(numId) ? updated : f))
-      this.saveToStorage(nextList)
-      return updated
+      return await res.json()
     } catch (err: any) {
       console.error('LendingServiceGateway.updateBorrower failed:', err)
       throw new Error(
@@ -476,15 +466,44 @@ class LendingServiceGateway {
         )
         throw new Error(friendly)
       }
-      const result = await res.json()
-      const cached = this.loadFromStorage()
-      const nextList = cached.filter((f) => String(f.id) !== String(borrowerId) && String(f.borrower_id) !== String(numId))
-      this.saveToStorage(nextList)
-      return result
+      return await res.json()
     } catch (err: any) {
       console.error('LendingServiceGateway.deleteBorrower failed:', err)
       throw new Error(
         formatUserFriendlyErrorMessage(err, 'Unable to delete borrower record. Please try again.')
+      )
+    }
+  }
+
+  /**
+   * Save audit review status for a borrower facility strictly to Supabase database.
+   */
+  async saveAuditReview(
+    borrowerId: string | number,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string,
+    auditorName?: string
+  ): Promise<LendingFacility> {
+    const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
+    try {
+      const res = await fetch(`/api/v1/lending/borrowers/${numId}/audit`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          audit_status: status,
+          remarks: remarks || null,
+          auditor_name: auditorName || null,
+        }),
+      })
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData?.detail || 'Failed to update audit review in database.')
+      }
+      return await res.json()
+    } catch (err: any) {
+      console.error('LendingServiceGateway.saveAuditReview failed:', err)
+      throw new Error(
+        formatUserFriendlyErrorMessage(err, 'Failed to update audit review in database. Please try again.')
       )
     }
   }
@@ -533,6 +552,7 @@ class LendingServiceGateway {
           method: payload.method,
           reference_no: payload.referenceNo || '',
           notes: payload.notes || '',
+          recorded_by: payload.recorded_by || payload.recordedBy || undefined,
         }),
       })
 
