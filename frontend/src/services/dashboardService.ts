@@ -43,6 +43,7 @@ export interface DashboardTransactionItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   attachments?: string[]
   items?: ParticularItem[]
   /** The other side of a record shown for another company (lender loan row, petty cash rows). Read only. */

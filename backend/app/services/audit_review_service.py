@@ -14,12 +14,15 @@ from app.schemas.audit_review import PENDING_AUDIT, AuditReviewIn
 
 def _auditor_name(db: Session, user: AuthenticatedUser) -> str:
     """The name stamped on the review comes from the signed in user, never from the request."""
+    from app.core.user_name_resolver import resolve_real_name
     user_id = user.get("user_id")
     if user_id:
         db_user = db.query(User).filter(User.user_id == user_id).first()
         if db_user and (db_user.name or "").strip():
             return db_user.name.strip()
-    return (user.get("email") or "Auditor").strip()
+    if user.get("full_name") or user.get("name"):
+        return user.get("full_name") or user.get("name")
+    return resolve_real_name(user.get("email") or "Auditor")
 
 
 def apply_audit_review(

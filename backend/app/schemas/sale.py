@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
@@ -10,6 +10,28 @@ class SaleBase(BaseModel):
     cheque_no: Optional[str] = None
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Amount must be at least 1.00 (cannot be 0 or less than 1)")
     particulars: Optional[str] = Field(None, description="Particulars / description")
+
+    @field_validator('amount', mode='before')
+    @classmethod
+    def round_amount(cls, v):
+        if v is not None:
+            try:
+                return Decimal(str(round(float(v), 2)))
+            except Exception:
+                return v
+        return v
+
+    @field_validator('transaction_date', mode='before')
+    @classmethod
+    def parse_transaction_date(cls, v):
+        if isinstance(v, str) and '/' in v:
+            parts = v.strip().split('/')
+            if len(parts) == 3:
+                m, d, y = parts
+                if len(y) == 2:
+                    y = '20' + y
+                return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+        return v
 
 class SaleCreate(SaleBase):
     company: Optional[str] = None
@@ -52,6 +74,28 @@ class SaleUpdate(BaseModel):
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     particulars: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator('amount', mode='before')
+    @classmethod
+    def round_update_amount(cls, v):
+        if v is not None:
+            try:
+                return Decimal(str(round(float(v), 2)))
+            except Exception:
+                return v
+        return v
+
+    @field_validator('transaction_date', mode='before')
+    @classmethod
+    def parse_update_transaction_date(cls, v):
+        if isinstance(v, str) and '/' in v:
+            parts = v.strip().split('/')
+            if len(parts) == 3:
+                m, d, y = parts
+                if len(y) == 2:
+                    y = '20' + y
+                return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+        return v
 
     @model_validator(mode="after")
     def validate_update_fields(self):

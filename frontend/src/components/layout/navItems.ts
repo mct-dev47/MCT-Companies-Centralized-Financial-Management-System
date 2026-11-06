@@ -211,16 +211,22 @@ export function getSidebarNavSections(
   const operationsItems: NavItem[] = []
 
   if (isAudit) {
-    // Audit has view-only oversight over all core operations including Tenants and Lending
+    // Audit has view-only oversight over all core operations
     operationsItems.push(
       NAV_ITEM_SALES,
       NAV_ITEM_RECEIVABLES,
       NAV_ITEM_EXPENSE,
       NAV_ITEM_LOAN,
-      NAV_ITEM_BANK_MANAGEMENT,
-      NAV_ITEM_TENANTS,
-      NAV_ITEM_LENDING
+      NAV_ITEM_BANK_MANAGEMENT
     )
+    if (isFilCap) {
+      operationsItems.push(NAV_ITEM_LENDING)
+    } else if (isJK) {
+      operationsItems.push(NAV_ITEM_TENANTS)
+    } else {
+      // General view (All Companies or unselected overview)
+      operationsItems.push(NAV_ITEM_TENANTS, NAV_ITEM_LENDING)
+    }
   } else {
     // Filcap (Lending) and JK do not have the Sales page per business specifications
     if (!isFilCap && !isJK) {
@@ -232,13 +238,13 @@ export function getSidebarNavSections(
     // Bank Management in Operations for Finance and Company accounts
     operationsItems.push(NAV_ITEM_BANK_MANAGEMENT)
 
-    // FilCap gets Lending in Operations exclusively
-    if (isFilCap) {
+    // FilCap gets Lending in Operations exclusively (strictly excluded for JK)
+    if (isFilCap && !isJK) {
       operationsItems.push(NAV_ITEM_LENDING)
     }
 
-    // JK Property gets Tenants in Operations exclusively
-    if (isJK) {
+    // JK Property gets Tenants in Operations exclusively (strictly excluded for FilCap)
+    if (isJK && !isFilCap) {
       operationsItems.push(NAV_ITEM_TENANTS)
     }
   }

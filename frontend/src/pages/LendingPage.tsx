@@ -1,6 +1,10 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ShieldCheck,
+  CheckCircle2,
+  Download,
   Plus,
   Search,
   ChevronDown,
@@ -22,6 +26,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -101,7 +106,71 @@ export const LendingPage: React.FC = () => {
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isOwner = userRole === 'owner'
-  const canAuditActions = isAudit && !isOwner
+  const canAuditActions = (isAudit || userRole === 'admin') && !isOwner
+  // Audit Review modal and submission state
+  const [isAuditConfirmModalOpen, setIsAuditConfirmModalOpen] = React.useState(false)
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+
+  const handleConfirmAudit = async () => {
+    if (!activeFacility) return
+    setIsSubmittingAudit(true)
+    try {
+      const timestamp = new Date().toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
+      const updatedFacility: LendingFacility = {
+        ...activeFacility,
+        auditStatus: 'Verified',
+        auditDate: timestamp,
+        auditedBy: auditorName,
+      }
+      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
+      saveFacilities(updatedList)
+      setActiveFacility(updatedFacility)
+      setIsAuditConfirmModalOpen(false)
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
+  const handleConfirmDiscrepancy = async () => {
+    if (!activeFacility || !discrepancyReason.trim()) return
+    setIsSubmittingAudit(true)
+    try {
+      const timestamp = new Date().toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      })
+      const auditorName = formatRealName(user?.fullName || user?.email || 'Audit')
+      const updatedFacility: LendingFacility = {
+        ...activeFacility,
+        auditStatus: 'Flagged',
+        auditDate: timestamp,
+        auditedBy: auditorName,
+        auditRemarks: discrepancyReason.trim(),
+      }
+      const updatedList = facilities.map((f) => (f.id === activeFacility.id ? updatedFacility : f))
+      saveFacilities(updatedList)
+      setActiveFacility(updatedFacility)
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
 
   // Set document title
   React.useEffect(() => {
@@ -1289,7 +1358,7 @@ export const LendingPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Record Payment & Edit Buttons in the same row as the Borrower's Name */}
+            {/* Record Payment, Edit Terms & Audit Action Buttons */}
             <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 shrink-0">
               {!isAudit && activeFacility.remainingBalance > 0 && (
                 <Button
@@ -1312,6 +1381,31 @@ export const LendingPage: React.FC = () => {
                   <Pencil className="h-3.5 w-3.5" />
                   <span>Edit Terms</span>
                 </Button>
+              )}
+
+              {canAuditActions && (
+                <>
+                  <Button
+                    type="button"
+                    onClick={() => setIsAuditConfirmModalOpen(true)}
+                    className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    <span>{activeFacility.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setDiscrepancyReason(activeFacility.auditRemarks || '')
+                      setIsDiscrepancyModalOpen(true)
+                    }}
+                    className="h-10 px-4 rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <AlertCircle className="h-4 w-4" />
+                    <span>Flag Discrepancy</span>
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -1446,6 +1540,8 @@ export const LendingPage: React.FC = () => {
                   {activeFacility.notes}
                 </div>
               )}
+
+
             </div>  
           </div>
 
@@ -3773,6 +3869,114 @@ export const LendingPage: React.FC = () => {
                 </>
               ) : (
                 <span>Delete Borrower</span>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Modal: Mark as Audited Confirmation */}
+      <Dialog open={isAuditConfirmModalOpen} onOpenChange={setIsAuditConfirmModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              <span>Confirm Audit Verification</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
+              Are you sure you want to mark the loan facility for{' '}
+              <strong className="text-focus">{activeFacility?.borrowerName}</strong> as audited? This will record
+              your verification and timestamp.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 mt-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmittingAudit}
+              onClick={() => setIsAuditConfirmModalOpen(false)}
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSubmittingAudit}
+              onClick={handleConfirmAudit}
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isSubmittingAudit ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Verifying...</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Confirm & Mark Audited</span>
+                </>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: Flag Discrepancy Reason */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-[#960C01]" />
+              <span>Flag Audit Discrepancy</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
+              Please specify the audit findings, discrepancies, or notes for{' '}
+              <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-2">
+            <label className="text-xs font-semibold text-focus block">
+              Discrepancy Reason / Findings <span className="text-[#960C01]">*</span>
+            </label>
+            <textarea
+              value={discrepancyReason}
+              onChange={(e) => setDiscrepancyReason(e.target.value)}
+              placeholder="Detail any payment discrepancies, unrecorded ledger items, or issues..."
+              className="min-h-[100px] text-xs rounded-xl"
+              autoFocus
+            ></textarea>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSubmittingAudit}
+              onClick={() => {
+                setIsDiscrepancyModalOpen(false)
+                setDiscrepancyReason('')
+              }}
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSubmittingAudit || !discrepancyReason.trim()}
+              onClick={handleConfirmDiscrepancy}
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isSubmittingAudit ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Flagging...</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Flag Discrepancy</span>
+                </>
               )}
             </Button>
           </div>
