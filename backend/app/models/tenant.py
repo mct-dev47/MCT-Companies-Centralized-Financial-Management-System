@@ -94,7 +94,7 @@ class TenantLeasePayment(Base):
     method = Column(String(50), nullable=True)
     reference_no = Column(String(100), nullable=True)
     notes = Column(Text, nullable=True)
-    status = Column(String(10), nullable=False, default="Paid")
+    status = Column(String(20), nullable=False, default="Paid")
     missed_reason = Column(Text, nullable=True)
     period_index = Column(Integer, nullable=True)
     created_by = Column(Integer, nullable=True)

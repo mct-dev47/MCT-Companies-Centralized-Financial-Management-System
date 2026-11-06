@@ -9,7 +9,7 @@ MAX_MONEY = 99_999_999_999.0
 
 RepeatMode = Literal["None", "Daily", "Monthly", "Quarterly", "Annually"]
 LeaseStatus = Literal["Active", "Completed", "Overdue", "Pending"]
-PaymentStatus = Literal["Paid", "Missed"]
+PaymentStatus = Literal["Paid", "Missed", "Partially Paid"]
 
 
 class LeaseCreate(BaseModel):

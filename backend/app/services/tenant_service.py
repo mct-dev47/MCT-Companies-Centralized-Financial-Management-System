@@ -713,7 +713,7 @@ class TenantService:
             "method": (body.method or "Cash").strip(),
             "reference_no": (body.reference_no or "").strip() or None,
             "notes": (body.notes or "").strip() or None,
-            "status": "Paid",
+            "status": (body.status or "Paid").strip(),
             "missed_reason": None,
             "period_index": period,
         }
