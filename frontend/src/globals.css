@@ -18,10 +18,9 @@
 }
 
 @layer base {
-  html, body {
+  html {
     font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    overflow-x: hidden;
-    max-width: 100vw;
+    scroll-behavior: smooth;
   }
 
   body {
@@ -30,12 +29,7 @@
     -webkit-font-smoothing: antialiased;
     margin: 0;
     padding: 0;
-    overflow-x: hidden;
-    max-width: 100vw;
-  }
-
-  html {
-    scroll-behavior: smooth;
+    min-height: 100vh;
   }
 
   /* One cursor rule for every interactive control (Tailwind preflight resets buttons to `default`). */
@@ -77,6 +71,12 @@
     }
   }
 
+
+  /* Disable native Edge/IE password reveal eye icon so it doesn't clash with custom toggle */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none !important;
+  }
   input[type="date"] {
     position: relative;
   }
@@ -88,6 +88,29 @@
     top: 50%;
     transform: translateY(-50%);
     margin: 0;
+  }
+
+  /* Prevent spinner arrows and wheel scrolling on number text fields */
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+
+  /* Prevent unnecessary scrollbars on textareas and text fields */
+  textarea.no-scrollbar,
+  textarea.resize-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  textarea.no-scrollbar::-webkit-scrollbar,
+  textarea.resize-none::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 }
 
@@ -162,4 +185,8 @@ aside::-webkit-scrollbar,
   display: none !important;
   width: 0 !important;
   height: 0 !important;
+}
+
+[role="dialog"] {
+  overscroll-behavior: contain !important;
 }

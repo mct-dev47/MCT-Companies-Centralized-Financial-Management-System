@@ -1,5 +1,6 @@
 import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import {
   Search,
   ChevronLeft,
@@ -16,9 +17,20 @@ import {
   ArrowDownLeft,
   Check,
   AlertCircle,
+  Eye,
+  MoreVertical,
+  Loader2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TablePagination } from '@/components/common/TablePagination'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
@@ -218,7 +230,7 @@ export const TransactionPage: React.FC = () => {
   const { user } = useSession()
   const { activeCompany, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isAudit = userRole.includes('audit')
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isCompanyScoped = isStrictlyCompanyScoped
@@ -227,6 +239,38 @@ export const TransactionPage: React.FC = () => {
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [loading, setLoading] = React.useState(true)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
+
+  const isOwner = userRole === 'owner'
+  const canAudit = (isAdmin || isAudit) && !isOwner
+
+  // 3-Dots Action Menu state
+  const [openMenuTxId, setOpenMenuTxId] = React.useState<string | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
+  const [activeMenuTx, setActiveMenuTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+
+  // Close floating 3-dots action menu on click outside, scroll or resize
+  React.useEffect(() => {
+    const handleCloseMenu = () => {
+      setOpenMenuTxId(null)
+      setMenuPosition(null)
+      setActiveMenuTx(null)
+    }
+    window.addEventListener('click', handleCloseMenu)
+    window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
+    return () => {
+      window.removeEventListener('click', handleCloseMenu)
+      window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
+    }
+  }, [])
 
   // Switch bar tab: 'deposit' (cash/bank ledger) | 'all' (full accrual ledger)
   const [activeTab, setActiveTab] = React.useState<'deposit' | 'all'>('deposit')
@@ -249,7 +293,7 @@ export const TransactionPage: React.FC = () => {
   const [salesStatusFilter, setSalesStatusFilter] = React.useState<'All' | 'Paid' | 'Unpaid' | 'Pending' | 'On hold'>('All')
   // Record-type filter for the accrual ledger: All | Sales | Expense | Loan | Petty Cash
   const [salesTypeFilter, setSalesTypeFilter] = React.useState<
-    'All' | 'Sales' | 'Expense' | 'Loan' | 'Petty Cash'
+    'All' | 'Sales' | 'Expense' | 'Loan' | 'Petty Cash' | 'Income'
   >('All')
   const [salesDateRange, setSalesDateRange] = React.useState<DateRange>({
     startDate: null,
@@ -488,18 +532,35 @@ export const TransactionPage: React.FC = () => {
   //    Spec 0016: loans and petty cash top ups still waiting for Audit are not money movement yet, so
   //    they are kept off this tab. They stay on the All tab, marked pending.
   const depositBaseList = React.useMemo(() => {
-    // Spec 0013 AC-10: a sale or expense is listed when any part of it is paid, and the row shows
-    // only the paid amount (same rule as the Sales Deposit tab and the Expense Withdraw tab).
+    // Spec 0013 & updated deposit filter: Any transaction that represents a deposit / money in
+    // (Sales, Rental Income, Loan deposit to borrower, Petty Cash top up received) is included.
     let list = transactions
-      .filter((t) =>
-        t.type === 'Sales' || t.type === 'Expense'
-          ? (t.paidAmount || 0) > 0
-          : (t.type === 'Loan' || t.type === 'Petty Cash') && !t.awaitingAudit
-      )
+      .filter((t) => {
+        // Any record with an explicit deposit > 0 must be in the deposit ledger
+        if ((t.deposit || 0) > 0) return true
+        // All tenant rental collections / income are deposits
+        if (t.type === 'Income') return true
+        // Sales are in deposit ledger if paidAmount > 0 or deposit > 0
+        if (t.type === 'Sales' && ((t.paidAmount || 0) > 0 || (t.deposit || 0) > 0)) return true
+        // Expenses are cash ledger withdrawals if paidAmount > 0 or withdrawal > 0
+        if (t.type === 'Expense') return (t.paidAmount || 0) > 0 || (t.withdrawal || 0) > 0
+        // Loans and petty cash movements are included once approved (not awaiting audit)
+        if (t.type === 'Loan' || t.type === 'Petty Cash') return !t.awaitingAudit
+        return false
+      })
       .map((t): DashboardTransactionItem => {
-        const paid = t.paidAmount || 0
-        if (t.type === 'Sales') return { ...t, amount: paid, deposit: paid, withdrawal: 0 }
-        if (t.type === 'Expense') return { ...t, amount: paid, deposit: 0, withdrawal: paid }
+        if (t.type === 'Sales') {
+          const depositVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.deposit || t.amount || 0)
+          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+        }
+        if (t.type === 'Income') {
+          const depositVal = (t.deposit || 0) > 0 ? t.deposit : (t.amount || t.paidAmount || 0)
+          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+        }
+        if (t.type === 'Expense') {
+          const withdrawalVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.withdrawal || t.amount || 0)
+          return { ...t, amount: withdrawalVal, deposit: 0, withdrawal: withdrawalVal }
+        }
         return t
       })
 
@@ -736,13 +797,106 @@ export const TransactionPage: React.FC = () => {
   }, [activeDataset, getRowAmounts])
 
   const handleRowClick = (tx: DashboardTransactionItem) => {
-    // Mirror rows show the other side of a record (the lender's loan row, petty cash rows).
-    // They are read only here: the record is reviewed on its own page (spec 0013, AC-9).
-    if (tx.isMirrorRow) return
     // The cash ledger tab shows only the paid part of a record. The detail window needs the full record.
     const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
     setSelectedTx(fullRecord)
     setIsModalOpen(true)
+  }
+
+  const handleMenuViewDetails = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    handleRowClick(tx)
+  }
+
+  const handleMenuMarkAudit = async (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+
+    const updatedTx: DashboardTransactionItem = {
+      ...tx,
+      auditStatus: 'Verified',
+      auditedBy: auditorName,
+      auditDate: today,
+      auditNotes: undefined,
+    }
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
+
+    try {
+      if (tx.type === 'Sales') {
+        await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName)
+      } else if (tx.type === 'Expense') {
+        await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
+      } else if (tx.type === 'Loan') {
+        const loanId = tx.id.replace(/:lender$/, '')
+        await loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+      } else if (tx.type === 'Income') {
+        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+        await tenantService.saveAuditReview(leaseId, 'Verified')
+      }
+    } catch (err) {
+      reportAuditSaveFailure(err)
+      fetchAllTransactions(true)
+    }
+  }
+
+  const handleMenuOpenDiscrepancy = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(tx)
+    setDiscrepancyReason(tx.auditNotes || '')
+    setIsDiscrepancyModalOpen(true)
+  }
+
+  const handleConfirmQuickDiscrepancy = async () => {
+    if (!activeMenuTx || !discrepancyReason.trim()) return
+    setIsSubmittingAudit(true)
+    const tx = activeMenuTx
+    const trimmed = discrepancyReason.trim()
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+
+    const updatedTx: DashboardTransactionItem = {
+      ...tx,
+      auditStatus: 'Flagged',
+      auditedBy: auditorName,
+      auditDate: today,
+      auditNotes: trimmed,
+    }
+    setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
+
+    try {
+      if (tx.type === 'Sales') {
+        await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
+      } else if (tx.type === 'Expense') {
+        await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
+      } else if (tx.type === 'Loan') {
+        const loanId = tx.id.replace(/:lender$/, '')
+        await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
+      } else if (tx.type === 'Income') {
+        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+        await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
+      }
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+      setActiveMenuTx(null)
+    } catch (err: any) {
+      alert(err?.message || 'Failed to flag audit discrepancy. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
   }
 
   const handleMarkTxAudited = (tx: DashboardTransactionItem, e: React.MouseEvent) => {
@@ -765,7 +919,7 @@ export const TransactionPage: React.FC = () => {
     }
 
     setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id ? updatedTx : t))
+      prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t))
     )
 
     // Spec 0014: the server saves the review. If it fails, tell the user and reload the real status.
@@ -783,7 +937,7 @@ export const TransactionPage: React.FC = () => {
 
   const handleTransactionUpdated = (updatedItem: DashboardTransactionItem) => {
     setTransactions((prev) =>
-      prev.map((t) => (t.id === updatedItem.id ? updatedItem : t))
+      prev.map((t) => (t.id === updatedItem.id && t.type === updatedItem.type ? updatedItem : t))
     )
     setSelectedTx(updatedItem)
   }
@@ -1356,13 +1510,15 @@ export const TransactionPage: React.FC = () => {
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   COMPANY
                 </TableHead>
-                {/* Type (Sales, Expense, Loan, Petty Cash) shows on both tabs */}
+                {/* Type (Sales, Expense, Loan, Petty Cash, Rental Income) shows on both tabs */}
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   TYPE
                 </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  {activeTab === 'deposit' ? 'CHEQUE NO.' : 'REF NO.'}
-                </TableHead>
+                {activeTab === 'deposit' && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+                    CHEQUE NO.
+                  </TableHead>
+                )}
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   PARTICULARS
                 </TableHead>
@@ -1385,16 +1541,12 @@ export const TransactionPage: React.FC = () => {
                     STATUS
                   </TableHead>
                 )}
-                {!isAudit && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    AUDIT STATUS
-                  </TableHead>
-                )}
-                {isAdmin && !isAudit && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    ACTION
-                  </TableHead>
-                )}
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  AUDIT STATUS
+                </TableHead>
+                <TableHead className="w-12 px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  ACTION
+                </TableHead>
               </TableRow>
             </TableHeader>
 
@@ -1405,26 +1557,32 @@ export const TransactionPage: React.FC = () => {
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                    {activeTab === 'deposit' && (
+                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                    )}
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-48 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    {!isAudit && (
+                      <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                    )}
                     {activeTab === 'all' && (
                       <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
                     )}
                     <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    {isAdmin && (
-                      <TableCell className="px-4 py-3.5 text-center">
-                        <Skeleton className="h-6 w-16 rounded-md mx-auto" />
-                      </TableCell>
-                    )}
+                    <TableCell className="px-3 py-3.5 text-center">
+                      <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
+                    </TableCell>
                   </TableRow>
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={activeTab === 'all' ? (isAudit ? 9 : isAdmin ? 12 : 11) : (isAudit ? 8 : isAdmin ? 11 : 10)}
+                  colSpan={
+                    activeTab === 'deposit'
+                      ? 7 + (isAudit ? 0 : 1) + 1 + 1
+                      : 6 + (isAudit ? 0 : 1) + 1 + 1 + 1
+                  }
                   title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -1432,15 +1590,13 @@ export const TransactionPage: React.FC = () => {
                 (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).map((tx) => {
                   const { deposit: depositAmt, withdrawal: withdrawalAmt } = getRowAmounts(tx)
 
+                  const txKey = `${tx.type}:${tx.id}`
                   return (
                     <TableRow
-                      key={tx.id}
+                      key={txKey}
                       onClick={() => handleRowClick(tx)}
-                      title={tx.isMirrorRow ? undefined : 'Click to view transaction details'}
-                      className={cn(
-                        'border-b border-slate-100 hover:bg-slate-50/60 transition-colors',
-                        tx.isMirrorRow ? 'cursor-default' : 'cursor-pointer'
-                      )}
+                      title="Click to view transaction details and audit history"
+                      className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
                       {/* 1. Date */}
                       <TableCell className="px-4 py-3.5 text-xs font-medium text-focus whitespace-nowrap">
@@ -1474,10 +1630,12 @@ export const TransactionPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 3. Cheque No / Ref No */}
-                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
-                        {activeTab === 'deposit' ? (tx.chequeNo || '—') : (tx.refNo || '—')}
-                      </TableCell>
+                      {/* 3. Cheque No (Deposit tab only) */}
+                      {activeTab === 'deposit' && (
+                        <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
+                          {tx.chequeNo || '—'}
+                        </TableCell>
+                      )}
 
                       {/* 4. Particulars */}
                       <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-normal max-w-xs" title={tx.particulars || tx.description}>
@@ -1567,13 +1725,17 @@ export const TransactionPage: React.FC = () => {
                         </TableCell>
                       )}
 
-                      {/* 8. Audit Status Badge */}
-                      {!isAudit && (
-                        <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
+                      {/* 8. Audit Status Badge (Visible for all roles) */}
+                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
                         {tx.auditStatus === 'Verified' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             <span>Audited</span>
+                          </span>
+                        ) : tx.auditStatus === 'Flagged' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                            <AlertCircle className="w-3 h-3 text-rose-600" />
+                            <span>Discrepancy</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
@@ -1582,45 +1744,43 @@ export const TransactionPage: React.FC = () => {
                           </span>
                         )}
                       </TableCell>
-                      )}
 
-                      {/* 9. Action for Admin */}
-                      {isAdmin && !isAudit && (
-                        <TableCell
-                          className="px-4 py-3.5 text-center whitespace-nowrap"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center justify-center">
-                            {tx.isMirrorRow || tx.type === 'Loan' ? (
-                              <span className="text-muted-fg/50 font-normal text-xs">—</span>
-                            ) : tx.auditStatus === 'Verified' ? (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRowClick(tx)}
-                                className="h-7 px-2.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100/80 flex items-center gap-1.5 cursor-pointer border border-emerald-300/80 shadow-2xs transition-all"
-                                title="Audited (Click to inspect or unmark)"
-                              >
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span>Audited</span>
-                              </Button>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => handleMarkTxAudited(tx, e)}
-                                className="h-7 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-primary hover:bg-red-50/50 flex items-center gap-1.5 cursor-pointer border border-slate-200/80 hover:border-primary/30 shadow-2xs transition-all"
-                                title="Click to verify and mark as audited"
-                              >
-                                <FileText className="w-3.5 h-3.5 text-primary" />
-                                <span>Audit</span>
-                              </Button>
-                            )}
-                          </div>
-                        </TableCell>
-                      )}
+                      {/* 9. Actions: 3 dots action button */}
+                      <TableCell
+                        className="px-3 py-3.5 text-center whitespace-nowrap"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuTxId === txKey) {
+                                setOpenMenuTxId(null)
+                                setMenuPosition(null)
+                                setActiveMenuTx(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuTx(tx)
+                                setOpenMenuTxId(txKey)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Actions"
+                            aria-label="Open action menu"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   )
                 })
@@ -1687,6 +1847,131 @@ export const TransactionPage: React.FC = () => {
         onTransactionUpdated={handleTransactionUpdated}
         editable={!isAdmin}
       />
+
+      {/* 7. Floating 3-Dots Action Portal Menu */}
+      {openMenuTxId && activeMenuTx && menuPosition && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${menuPosition.top}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {canAudit && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleMenuMarkAudit(activeMenuTx)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleMenuOpenDiscrepancy(activeMenuTx)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            )}
+
+            <button
+              type="button"
+              onClick={() => handleMenuViewDetails(activeMenuTx)}
+              className={cn(
+                "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer",
+                canAudit && "border-t border-slate-100 mt-1 pt-1.5"
+              )}
+            >
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>View Details</span>
+            </button>
+          </div>,
+          document.body
+        )}
+
+      {/* 8. Quick Discrepancy Modal from Action Menu */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="max-w-[440px] rounded-2xl p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-2 border-b border-stroke/20 pr-6">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold text-focus leading-tight">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Describe the discrepancy or required correction for this transaction.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Discrepancy Reason / Remarks <span className="text-rose-600">*</span>
+              </Label>
+              <textarea
+                rows={3}
+                value={discrepancyReason}
+                onChange={(e) => setDiscrepancyReason(e.target.value)}
+                placeholder="e.g. Voucher amount does not match the attached receipt..."
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-1 focus:ring-rose-500 font-normal leading-relaxed resize-none"
+              />
+              {!discrepancyReason.trim() && (
+                <p className="text-[10px] text-muted-fg leading-tight">
+                  A reason is required so Finance and Operations can address the discrepancy.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingAudit}
+                onClick={() => {
+                  setIsDiscrepancyModalOpen(false)
+                  setDiscrepancyReason('')
+                  setActiveMenuTx(null)
+                }}
+                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!discrepancyReason.trim() || isSubmittingAudit}
+                onClick={handleConfirmQuickDiscrepancy}
+                className="h-9 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSubmittingAudit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Flagging…</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-white" />
+                    <span>Flag Discrepancy</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

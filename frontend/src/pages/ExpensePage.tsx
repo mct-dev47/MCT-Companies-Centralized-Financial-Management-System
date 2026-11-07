@@ -653,7 +653,7 @@ export const ExpensePage: React.FC = () => {
     }
   }
 
-  // 3-Dots Action Menu for Audit
+  // 3-Dots Action Menu
   const [openMenuExpenseId, setOpenMenuExpenseId] = React.useState<
     string | null
   >(null)
@@ -664,6 +664,28 @@ export const ExpensePage: React.FC = () => {
   } | null>(null)
   const [activeMenuExpense, setActiveMenuExpense] =
     React.useState<ExpenseItem | null>(null)
+
+  React.useEffect(() => {
+    if (!openMenuExpenseId) return
+    const handleClose = () => {
+      setOpenMenuExpenseId(null)
+      setMenuPosition(null)
+      setActiveMenuExpense(null)
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClose()
+    }
+    window.addEventListener('click', handleClose)
+    window.addEventListener('scroll', handleClose, true)
+    window.addEventListener('resize', handleClose)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', handleClose)
+      window.removeEventListener('scroll', handleClose, true)
+      window.removeEventListener('resize', handleClose)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openMenuExpenseId])
 
   const handleMarkExpenseAudit = (
     expense: ExpenseItem,
@@ -1794,79 +1816,42 @@ export const ExpensePage: React.FC = () => {
                         className="w-[8%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-center gap-1">
-                          {canAuditActions ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (openMenuExpenseId === expense.id) {
-                                  setOpenMenuExpenseId(null)
-                                  setMenuPosition(null)
-                                  setActiveMenuExpense(null)
-                                } else {
-                                  const rect =
-                                    e.currentTarget.getBoundingClientRect()
-                                  const openUpward =
-                                    rect.bottom + 140 > window.innerHeight
-                                  setMenuPosition({
-                                    top: openUpward
-                                      ? rect.top - 6
-                                      : rect.bottom + 6,
-                                    right: Math.max(
-                                      12,
-                                      window.innerWidth - rect.right
-                                    ),
-                                    openUpward,
-                                  })
-                                  setActiveMenuExpense(expense)
-                                  setOpenMenuExpenseId(expense.id)
-                                }
-                              }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                              title="Audit Actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          ) : isOwner ? (
-                            <span className="text-muted-fg text-xs">—</span>
-                          ) : expense.auditStatus === 'Verified' ? (
-                            <span
-                              className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
-                              title="Audited by auditor (locked from editing)"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          ) : (
-                            <>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  navigate('/expense/add', {
-                                    state: { editExpense: expense },
-                                  })
-                                }
-                                className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                                title="Edit Expense & Particulars"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleteConfirmExpense(expense)}
-                                className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                                title="Delete Expense"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuExpenseId === expense.id) {
+                                setOpenMenuExpenseId(null)
+                                setMenuPosition(null)
+                                setActiveMenuExpense(null)
+                              } else {
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const openUpward =
+                                  rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward
+                                    ? rect.top - 6
+                                    : rect.bottom + 6,
+                                  right: Math.max(
+                                    12,
+                                    window.innerWidth - rect.right
+                                  ),
+                                  openUpward,
+                                })
+                                setActiveMenuExpense(expense)
+                                setOpenMenuExpenseId(expense.id)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Row Actions"
+                            aria-label="Open row actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -2049,14 +2034,14 @@ export const ExpensePage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* 3-Dots Action Portal Menu for Audit */}
+      {/* 3-Dots Action Portal Menu */}
       {openMenuExpenseId &&
         activeMenuExpense &&
         menuPosition &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-44 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-48 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -2067,28 +2052,6 @@ export const ExpensePage: React.FC = () => {
           >
             <button
               type="button"
-              onClick={(e) =>
-                handleMarkExpenseAudit(activeMenuExpense, 'Verified', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Mark as Audit</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) =>
-                handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Mark as Discrepancy</span>
-            </button>
-
-            <button
-              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 const exp = activeMenuExpense
@@ -2097,11 +2060,82 @@ export const ExpensePage: React.FC = () => {
                 setActiveMenuExpense(null)
                 if (exp) handleOpenRow(exp)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkExpenseAudit(activeMenuExpense, 'Verified', e)
+                  }
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Mark as Audited</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
+                  }
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isOwner ? (
+              activeMenuExpense.auditStatus === 'Verified' ? (
+                <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700 border-t border-slate-100 mt-1 pt-1.5">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Locked (Audited)</span>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const exp = activeMenuExpense
+                      setOpenMenuExpenseId(null)
+                      setMenuPosition(null)
+                      setActiveMenuExpense(null)
+                      if (exp) {
+                        navigate('/expense/add', {
+                          state: { editExpense: exp },
+                        })
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                    <span>Edit Expense</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const exp = activeMenuExpense
+                      setOpenMenuExpenseId(null)
+                      setMenuPosition(null)
+                      setActiveMenuExpense(null)
+                      if (exp) setDeleteConfirmExpense(exp)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Delete Expense</span>
+                  </button>
+                </>
+              )
+            ) : null}
           </div>,
           document.body
         )}

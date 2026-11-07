@@ -82,6 +82,9 @@ export interface SharedPaymentModalProps {
   dailyTarget: number
   remainingBalance: number
   contractDate?: string
+  firstDueDate?: string
+  leaseEndDate?: string
+  dueDate?: string
   existingPayments: PaymentRecordItem[]
   monthlyProgress?: MonthlyProgressItem[]
   onSubmitPayment: (data: PaymentSubmissionData) => Promise<void>
@@ -99,6 +102,9 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   dailyTarget,
   remainingBalance,
   contractDate,
+  firstDueDate,
+  leaseEndDate,
+  dueDate,
   existingPayments,
   monthlyProgress,
   onSubmitPayment,
@@ -154,35 +160,52 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
         }
       })
 
-      if (lockedDates.has(initialDate)) {
-        const start = contractDate ? new Date(contractDate) : new Date(initialDate)
-        const curDate = new Date(start)
-        const todayD = new Date(initialDate)
-        let foundUnpaid: string | null = null
+      const startDateStr = firstDueDate || contractDate || todayStr
+      const endDateStr = leaseEndDate || dueDate || ''
+      const curDate = new Date(startDateStr)
+      const maxDate = endDateStr ? new Date(endDateStr) : new Date(todayStr)
+      let foundUnpaid: string | null = null
 
-        if (!isNaN(curDate.getTime())) {
-          while (curDate <= todayD) {
-            const d = formatToYYYYMMDD(curDate)
-            if (!lockedDates.has(d)) {
-              foundUnpaid = d
-              break
-            }
-            curDate.setDate(curDate.getDate() + 1)
+      if (!isNaN(curDate.getTime())) {
+        while (curDate <= maxDate) {
+          const d = formatToYYYYMMDD(curDate)
+          if (!lockedDates.has(d)) {
+            foundUnpaid = d
+            break
           }
+          curDate.setDate(curDate.getDate() + 1)
         }
+      }
 
-        if (foundUnpaid) {
-          initialDate = foundUnpaid
-        } else {
-          const tomorrow = new Date(todayD)
-          tomorrow.setDate(tomorrow.getDate() + 1)
-          initialDate = formatToYYYYMMDD(tomorrow)
-        }
+      if (foundUnpaid) {
+        initialDate = foundUnpaid
+      } else if (endDateStr && todayStr > endDateStr) {
+        initialDate = endDateStr
+      } else if (startDateStr && todayStr < startDateStr) {
+        initialDate = startDateStr
+      } else {
+        initialDate = todayStr
       }
     }
 
+    let initialRemainingDue = 0
+    if (isMonthly && monthlyProgress && monthlyProgress.length > 0) {
+      const activeM = monthlyProgress.find((m) => m.remaining > 0.005) || monthlyProgress[0]
+      if (activeM) {
+        initialRemainingDue = Math.min(remainingBalance, activeM.remaining)
+      }
+    } else if (isDaily) {
+      const paidOnInitial = existingPayments
+        .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === initialDate)
+        .reduce((sum, p) => sum + (p.amount || 0), 0)
+      initialRemainingDue = Math.min(
+        remainingBalance,
+        Math.max(0, Math.round((dailyTarget - paidOnInitial) * 100) / 100)
+      )
+    }
+
     setPaymentForm({
-      paymentAmount: '',
+      paymentAmount: initialRemainingDue > 0 ? String(initialRemainingDue) : '',
       paymentDate: todayStr,
       targetInstallmentDate: initialDate,
       cycleIndex: initialCycleIndex,
@@ -191,9 +214,10 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       notes: '',
       penaltyAmount: '0',
     })
-    setPaymentCalendarMonth(new Date())
+    const initialCalDate = new Date(initialDate)
+    setPaymentCalendarMonth(!isNaN(initialCalDate.getTime()) ? initialCalDate : new Date())
     setPaymentError(null)
-  }, [open, isDaily, isMonthly, contractDate, dailyTarget, existingPayments, monthlyProgress])
+  }, [open, isDaily, isMonthly, contractDate, firstDueDate, leaseEndDate, dueDate, dailyTarget, existingPayments, monthlyProgress])
 
   // Calculations
   const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
@@ -214,7 +238,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   const currentPaymentNum = parseFloat(paymentForm.paymentAmount)
   const isAmountValid =
     !isNaN(currentPaymentNum) &&
-    currentPaymentNum >= 1 &&
+    currentPaymentNum > 0 &&
     currentPaymentNum <= maxAllowed &&
     !isPenaltyNegative
 
@@ -250,6 +274,36 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     if (isAudit) return
     setPaymentError(null)
 
+    const todayStr = formatToYYYYMMDD(new Date())
+    if (!cashReceivedDate) {
+      setPaymentError('Date Cash Received is required.')
+      return
+    }
+    if (cashReceivedDate > todayStr) {
+      setPaymentError('Date Cash Received cannot be a future date.')
+      return
+    }
+
+    if (!targetInstallmentDate) {
+      setPaymentError('Please select an installment date or period.')
+      return
+    }
+
+    if (!paymentForm.method || !paymentForm.method.trim()) {
+      setPaymentError('Payment Method is required.')
+      return
+    }
+
+    if (paymentForm.referenceNo && paymentForm.referenceNo.trim().length > 100) {
+      setPaymentError('Receipt / Reference Number cannot exceed 100 characters.')
+      return
+    }
+
+    if (paymentForm.notes && paymentForm.notes.length > 255) {
+      setPaymentError('Remarks / Notes cannot exceed 255 characters.')
+      return
+    }
+
     if (isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005 && dailyTarget > 0) {
       setPaymentError(
         `Installment date ${targetInstallmentDate} is already fully paid and locked. You cannot duplicate payments for a settled date.`
@@ -257,8 +311,23 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       return
     }
 
-    if (isNaN(currentPaymentNum) || currentPaymentNum < 1) {
-      setPaymentError('Payment Amount cannot be lower than ₱1.00.')
+    if (isMonthly && monthlyProgress) {
+      const selectedMonth =
+        monthlyProgress.find(
+          (m) =>
+            (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
+            m.dueDate === targetInstallmentDate
+        )
+      if (selectedMonth && selectedMonth.remaining <= 0.005) {
+        setPaymentError(
+          `Installment month ${selectedMonth.monthIndex} (${selectedMonth.dueDate}) is already fully paid and locked. You cannot duplicate payments for a settled month.`
+        )
+        return
+      }
+    }
+
+    if (isNaN(currentPaymentNum) || currentPaymentNum <= 0) {
+      setPaymentError('Payment Amount is required and must be greater than ₱0.00.')
       return
     }
 
@@ -402,10 +471,12 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                             onClick={() => {
                               if (!isFullyPaid) {
                                 setPaymentError(null)
+                                const remMonth = Math.min(remainingBalance, m.remaining)
                                 setPaymentForm({
                                   ...paymentForm,
                                   targetInstallmentDate: m.dueDate,
                                   cycleIndex: m.monthIndex,
+                                  paymentAmount: remMonth > 0 ? String(remMonth) : '',
                                 })
                               }
                             }}
@@ -530,7 +601,8 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                           paidByDateMap.set(dt, (paidByDateMap.get(dt) || 0) + (p.amount || 0))
                         })
 
-                        const startBorrowed = contractDate || ''
+                        const startBorrowed = firstDueDate || contractDate || ''
+                        const endBorrowed = leaseEndDate || dueDate || ''
                         const todayStr = formatToYYYYMMDD(new Date())
 
                         return (
@@ -546,12 +618,13 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                               const dateStr = `${calYear}-${mStr}-${dStr}`
 
                               const isBefore = startBorrowed ? dateStr < startBorrowed : false
+                              const isAfter = endBorrowed ? dateStr > endBorrowed : false
                               const paidOnDate = paidByDateMap.get(dateStr) || 0
                               const isPaid = paidOnDate >= dailyTarget - 0.005 && dailyTarget > 0
                               const isPartial = !isPaid && paidOnDate > 0
-                              const isMissed = !isBefore && !isPaid && dateStr < todayStr
+                              const isMissed = !isBefore && !isAfter && !isPaid && dateStr < todayStr
                               const isSelected = targetInstallmentDate === dateStr
-                              const isDisabled = isBefore || isPaid
+                              const isDisabled = isBefore || isAfter || isPaid
 
                               return (
                                 <button
@@ -561,9 +634,14 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                                   onClick={() => {
                                     if (!isDisabled) {
                                       setPaymentError(null)
+                                      const remDate = Math.min(
+                                        remainingBalance,
+                                        Math.max(0, Math.round((dailyTarget - paidOnDate) * 100) / 100)
+                                      )
                                       setPaymentForm({
                                         ...paymentForm,
                                         targetInstallmentDate: dateStr,
+                                        paymentAmount: remDate > 0 ? String(remDate) : '',
                                       })
                                     }
                                   }}
@@ -581,13 +659,14 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                                       isMissed &&
                                       'bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/30 cursor-pointer font-bold hover:bg-[#960C01]/20',
                                     !isSelected &&
-                                      isBefore &&
+                                      (isBefore || isAfter) &&
                                       'text-slate-300 cursor-not-allowed bg-slate-50/50',
                                     !isSelected &&
                                       !isPaid &&
                                       !isPartial &&
                                       !isMissed &&
                                       !isBefore &&
+                                      !isAfter &&
                                       'hover:bg-slate-100 text-focus cursor-pointer hover:font-bold border border-transparent'
                                   )}
                                   title={
@@ -595,6 +674,8 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                                       ? `${dateStr}: Fully Paid & Locked (Cannot select)`
                                       : isBefore
                                       ? `${dateStr}: Prior to start date`
+                                      : isAfter
+                                      ? `${dateStr}: After lease end date`
                                       : isMissed
                                       ? `${dateStr}: Missed installment (Due ${dateStr}) — Click to settle`
                                       : isPartial
@@ -691,6 +772,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   <Input
                     type="date"
                     required
+                    max={formatToYYYYMMDD(new Date())}
                     value={paymentForm.paymentDate}
                     onChange={(e) => {
                       setPaymentError(null)
@@ -716,7 +798,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   <Input
                     required
                     type="number"
-                    min="1"
+                    min="0.01"
                     max={maxAllowed}
                     step="any"
                     value={paymentForm.paymentAmount}
@@ -737,8 +819,8 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   />
                   {paymentForm.paymentAmount && !isAmountValid && (
                     <p className="text-[11px] text-[#960C01] mt-1">
-                      {currentPaymentNum < 1
-                        ? 'Payment amount cannot be lower than ₱1.00.'
+                      {currentPaymentNum <= 0
+                        ? 'Payment amount must be greater than ₱0.00.'
                         : currentPaymentNum > maxAllowed
                         ? `Payment amount cannot exceed ${formatPHP(maxAllowed)}.`
                         : isPenaltyNegative
@@ -827,7 +909,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                 {/* Payment Method */}
                 <div>
                   <label className="text-xs font-semibold text-focus block mb-1">
-                    Payment Method
+                    Payment Method <span className="text-[#960C01]">*</span>
                   </label>
                   <select
                     value={paymentForm.method}
@@ -846,7 +928,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                 {/* Receipt / Ref No. */}
                 <div>
                   <label className="text-xs font-semibold text-focus block mb-1">
-                    Receipt / Ref No.
+                    Receipt / Ref No. <span className="text-muted-fg font-normal">(Optional)</span>
                   </label>
                   <Input
                     value={paymentForm.referenceNo}
@@ -860,18 +942,35 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
 
                 {/* Remarks / Notes */}
                 <div>
-                  <label className="text-xs font-semibold text-focus block mb-1">
-                    Remarks / Notes
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-focus">
+                      Remarks / Notes <span className="text-muted-fg font-normal">(Optional)</span>
+                    </label>
+                    <span
+                      className={cn(
+                        'text-[10.5px] font-mono',
+                        paymentForm.notes.length > 255 ? 'text-[#960C01] font-bold' : 'text-muted-fg'
+                      )}
+                    >
+                      {paymentForm.notes.length}/255
+                    </span>
+                  </div>
                   <textarea
                     rows={3}
+                    maxLength={255}
                     value={paymentForm.notes}
-                    onChange={(e) =>
-                      setPaymentForm({ ...paymentForm, notes: e.target.value })
-                    }
-                    placeholder="Enter payment remarks or notes..."
+                    onChange={(e) => {
+                      setPaymentError(null)
+                      setPaymentForm({ ...paymentForm, notes: e.target.value.slice(0, 255) })
+                    }}
+                    placeholder="Enter payment remarks or notes (maximum 255 characters)..."
                     className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
                   />
+                  {paymentForm.notes.length >= 255 && (
+                    <p className="text-[10px] text-amber-600 font-medium mt-1">
+                      Maximum 255 character limit reached.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

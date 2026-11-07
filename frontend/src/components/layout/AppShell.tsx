@@ -43,17 +43,20 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* Mobile Top Bar with Sheet Drawer (< lg) */}
       <MobileTopBar />
 
-      {/* Desktop Persistent Sidebar Rail (>= lg) */}
-      <div className="hidden lg:block shrink-0 w-[72px] min-h-screen self-stretch relative z-50">
+      {/* Desktop Persistent Sidebar Spacer Rail (>= lg) */}
+      <div className="hidden lg:block shrink-0 w-[72px]" aria-hidden="true" />
+
+      {/* Desktop Persistent Sticky Sidebar (>= lg) */}
+      <div className="hidden lg:block">
         <AppSidebar />
       </div>
 
       {/* Right Column: Top Notification Header + Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="hidden lg:block">
+        <div className="hidden lg:block sticky top-0 z-30">
           <TopHeader />
         </div>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 bg-surface overflow-x-hidden">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 bg-surface">
           {children || <Outlet />}
         </main>
       </div>

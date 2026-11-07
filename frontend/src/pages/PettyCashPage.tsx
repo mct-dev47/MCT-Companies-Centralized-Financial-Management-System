@@ -223,18 +223,28 @@ export const PettyCashPage: React.FC = () => {
   const [selectedFundingBankId, setSelectedFundingBankId] = React.useState('')
   const [approvalFeedback, setApprovalFeedback] = React.useState<string | null>(null)
 
-  // Audit Actions Menu State
+  // Row Actions Menu State
   const [openMenuPettyId, setOpenMenuPettyId] = React.useState<string | null>(null)
-  const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number } | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
   const [activeMenuPetty, setActiveMenuPetty] = React.useState<PettyCashTransaction | null>(null)
 
   React.useEffect(() => {
-    const handleCloseMenu = () => setOpenMenuPettyId(null)
+    const handleCloseMenu = () => {
+      setOpenMenuPettyId(null)
+      setMenuPosition(null)
+      setActiveMenuPetty(null)
+    }
     window.addEventListener('click', handleCloseMenu)
     window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
     return () => {
       window.removeEventListener('click', handleCloseMenu)
       window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
     }
   }, [])
 
@@ -682,17 +692,9 @@ export const PettyCashPage: React.FC = () => {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 flex-wrap">
           <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                Petty Cash
-              </h1>
-              {pendingCount > 0 && isFinanceOrAdmin && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 animate-pulse">
-                  <Clock className="w-3.5 h-3.5" />
-                  {pendingCount} Pending Finance Review
-                </span>
-              )}
-            </div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Petty Cash
+            </h1>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Petty cash requests, approvals, and disbursements connected live to the MCT database
             </p>
@@ -1319,63 +1321,36 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 9. Actions */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {canAuditActions ? (
+                        <div className="flex items-center justify-center">
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              setMenuPosition({
-                                top: rect.bottom + window.scrollY + 4,
-                                left: Math.min(window.innerWidth - 180, Math.max(10, rect.right + window.scrollX - 160)),
-                              })
-                              setActiveMenuPetty(entry)
-                              setOpenMenuPettyId(openMenuPettyId === entry.id ? null : entry.id)
+                              if (openMenuPettyId === entry.id) {
+                                setOpenMenuPettyId(null)
+                                setMenuPosition(null)
+                                setActiveMenuPetty(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuPetty(entry)
+                                setOpenMenuPettyId(entry.id)
+                              }
                             }}
-                            className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                            title="Audit Actions"
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Row Actions"
+                            aria-label="Open row actions"
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
-                        ) : isOwner ? (
-                          <span className="text-muted-fg text-xs">—</span>
-                        ) : isPendingFinance && entry.type === 'topup' ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenEdit(entry)}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                              title="Edit Top Up Request"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenDelete(entry)}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                              title="Delete Top Up Request"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleOpenSummary(entry)}
-                            className="h-7 px-2 text-[11px] text-muted-fg hover:text-focus hover:bg-slate-100 rounded-lg cursor-pointer"
-                            title="View details"
-                          >
-                            View
-                          </Button>
-                        )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -2224,46 +2199,88 @@ export const PettyCashPage: React.FC = () => {
         }}
       />
 
-      {/* Audit Action Portal Menu */}
+      {/* Row Action Portal Menu */}
       {openMenuPettyId && menuPosition && activeMenuPetty && typeof document !== 'undefined' &&
         createPortal(
           <div
             style={{
-              position: 'absolute',
               top: `${menuPosition.top}px`,
-              left: `${menuPosition.left}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
             }}
-            className="z-50 w-48 rounded-xl bg-white border border-slate-200 shadow-xl py-1 animate-in fade-in zoom-in-95 duration-100"
+            className="fixed z-[99999] w-48 rounded-xl bg-white border border-slate-200 shadow-2xl p-1.5 animate-in fade-in-50 zoom-in-95 duration-150"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <button
               type="button"
-              onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Verified')}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Mark as Audit</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-              <span>Mark as Discrepancy</span>
-            </button>
-            <div className="h-px bg-slate-100 my-1" />
-            <button
-              type="button"
               onClick={() => {
-                handleOpenSummary(activeMenuPetty)
+                const target = activeMenuPetty
                 setOpenMenuPettyId(null)
+                setMenuPosition(null)
+                setActiveMenuPetty(null)
+                handleOpenSummary(target)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
-              <Eye className="w-3.5 h-3.5 text-slate-500" />
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Verified')}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Mark as Audited</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isOwner &&
+              (activeMenuPetty.status === 'Pending Finance Endorsement' ||
+                activeMenuPetty.status === 'Pending Finance Approval') &&
+              activeMenuPetty.type === 'topup' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenEdit(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>Edit Top-Up Request</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenDelete(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Delete Top-Up Request</span>
+                </button>
+              </>
+            ) : null}
           </div>,
           document.body
         )}

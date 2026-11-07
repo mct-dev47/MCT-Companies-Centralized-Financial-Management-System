@@ -17,6 +17,7 @@ from app.core.company_resolver import resolve_company
 from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.models.company import Company
 from app.models.tenant import TenantLease, TenantLeasePayment
+from app.models.user import User
 from app.schemas.audit_review import PENDING_AUDIT
 
 logger = logging.getLogger(__name__)
@@ -365,11 +366,28 @@ class TenantService:
         rows = self.db.query(Company.company_id, Company.company_name).filter(Company.company_id.in_(ids)).all()
         return {r[0]: r[1] for r in rows}
 
-    def to_out(self, row: Dict[str, Any], names: Optional[Dict[int, str]] = None) -> Dict[str, Any]:
+    def _user_names(self, ids: List[int]) -> Dict[int, str]:
+        valid_ids = [i for i in ids if i is not None]
+        if not valid_ids:
+            return {}
+        rows = self.db.query(User.user_id, User.name).filter(User.user_id.in_(valid_ids)).all()
+        return {r[0]: r[1] for r in rows}
+
+    def to_out(
+        self,
+        row: Dict[str, Any],
+        names: Optional[Dict[int, str]] = None,
+        user_names: Optional[Dict[int, str]] = None,
+    ) -> Dict[str, Any]:
         payments = row.get("payments") or []
         paid = round2(sum(float(p.get("amount") or 0) for p in payments if p.get("status") != "Missed"))
         total = float(row.get("total_amount_payable") or 0)
         names = names if names is not None else self._company_names([row["company_id"]])
+        if user_names is None:
+            user_ids = [p.get("created_by") for p in payments if p.get("created_by") is not None]
+            if row.get("created_by") is not None:
+                user_ids.append(row.get("created_by"))
+            user_names = self._user_names(user_ids)
         out = {k: row.get(k) for k in LEASE_COLUMNS}
         for key in ("rent_amount", "penalty_rate", "total_amount_payable"):
             out[key] = float(out[key]) if out.get(key) is not None else None
@@ -379,11 +397,13 @@ class TenantService:
         out["company_name"] = names.get(row["company_id"])
         out["amount_paid"] = paid
         out["remaining_balance"] = max(0.0, round2(total - paid))
+        out["created_by_name"] = user_names.get(row.get("created_by"))
         out["payments"] = [
             {
                 **{k: p.get(k) for k in PAYMENT_COLUMNS},
                 "amount": float(p.get("amount") or 0),
                 "created_at": _iso(p.get("created_at")),
+                "created_by_name": user_names.get(p.get("created_by")),
             }
             for p in payments
         ]
@@ -393,7 +413,15 @@ class TenantService:
     def list_leases(self, company_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
         rows = self._run("list_leases", company_ids)
         names = self._company_names(sorted({r["company_id"] for r in rows}))
-        return [self.to_out(r, names) for r in rows]
+        user_ids = set()
+        for r in rows:
+            if r.get("created_by") is not None:
+                user_ids.add(r.get("created_by"))
+            for p in r.get("payments") or []:
+                if p.get("created_by") is not None:
+                    user_ids.add(p.get("created_by"))
+        user_names = self._user_names(list(user_ids))
+        return [self.to_out(r, names, user_names) for r in rows]
 
     def get_row(self, lease_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         row = self._run("get_lease", lease_id)
@@ -685,7 +713,7 @@ class TenantService:
             "method": (body.method or "Cash").strip(),
             "reference_no": (body.reference_no or "").strip() or None,
             "notes": (body.notes or "").strip() or None,
-            "status": "Paid",
+            "status": (body.status or "Paid").strip(),
             "missed_reason": None,
             "period_index": period,
         }

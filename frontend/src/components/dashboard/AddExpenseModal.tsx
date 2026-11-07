@@ -108,6 +108,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   )
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_EXPENSE_CATEGORIES)
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
+  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
 
   // Petty cash is strictly determined by payment method being Petty Cash
@@ -189,10 +190,11 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   }, [open])
 
   const filteredCategoryOptions = React.useMemo(() => {
+    if (!isCategoryTyping) return categoryOptions
     const q = category.trim().toLowerCase()
     if (!q) return categoryOptions
     return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions])
+  }, [category, categoryOptions, isCategoryTyping])
 
   // Close category dropdown on click outside
   React.useEffect(() => {
@@ -202,6 +204,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         !categoryContainerRef.current.contains(e.target as Node)
       ) {
         setIsCategoryOpen(false)
+        setIsCategoryTyping(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -224,6 +227,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         setCategory(DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
       }
       setIsCategoryOpen(false)
+      setIsCategoryTyping(false)
       setIsConfirmOpen(false)
       setIsSubmitting(false)
       setError('')
@@ -584,6 +588,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     onChange={(e) => {
                       const newCat = e.target.value
                       setCategory(newCat)
+                      setIsCategoryTyping(true)
                       setIsCategoryOpen(true)
                       if (newCat.trim().toLowerCase() === 'petty cash') {
                         setPaymentMethod('Petty Cash')
@@ -592,7 +597,17 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                         setFieldErrors((prev) => ({ ...prev, category: undefined }))
                       }
                     }}
-                    onFocus={() => setIsCategoryOpen(true)}
+                    onFocus={(e) => {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen(true)
+                      e.currentTarget.select()
+                    }}
+                    onClick={() => {
+                      if (!isCategoryOpen) {
+                        setIsCategoryTyping(false)
+                        setIsCategoryOpen(true)
+                      }
+                    }}
                     className={cn(
                       'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium',
                       fieldErrors.category && 'border-red-500 focus-visible:ring-red-200'
@@ -600,7 +615,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   />
                   <button
                     type="button"
-                    onClick={() => setIsCategoryOpen((prev) => !prev)}
+                    tabIndex={-1}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen((prev) => !prev)
+                    }}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-1 cursor-pointer"
                     aria-label="Toggle category options"
                   >
@@ -608,36 +628,59 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   </button>
 
                   {isCategoryOpen && (
-                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-stroke/40 rounded-xl shadow-xl max-h-48 overflow-y-auto p-1.5">
+                    <div
+                      onMouseDown={(e) => e.preventDefault()}
+                      className="absolute z-50 left-0 right-0 bottom-full mb-1.5 bg-white border border-stroke/40 rounded-xl shadow-xl max-h-52 overflow-y-auto p-1.5"
+                    >
                       <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
                         <span>Specific Categories</span>
+                        {isCategoryTyping && category.trim() && (
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
+                          </span>
+                        )}
                       </div>
                       <div className="space-y-0.5">
-                        {filteredCategoryOptions.map((opt) => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => {
-                              setCategory(opt)
-                              setIsCategoryOpen(false)
-                              if (opt.trim().toLowerCase() === 'petty cash') {
-                                setPaymentMethod('Petty Cash')
-                              }
-                              if (fieldErrors.category) {
-                                setFieldErrors((prev) => ({ ...prev, category: undefined }))
-                              }
-                            }}
-                            className={cn(
-                              'w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between transition-colors cursor-pointer',
-                              category === opt
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'hover:bg-slate-100 text-focus'
-                            )}
-                          >
-                            <span>{opt}</span>
-                            {category === opt && <Check className="w-3.5 h-3.5" />}
-                          </button>
-                        ))}
+                        {filteredCategoryOptions.length > 0 ? (
+                          filteredCategoryOptions.map((opt) => (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                setCategory(opt)
+                                setIsCategoryTyping(false)
+                                setIsCategoryOpen(false)
+                                if (opt.trim().toLowerCase() === 'petty cash') {
+                                  setPaymentMethod('Petty Cash')
+                                }
+                                if (fieldErrors.category) {
+                                  setFieldErrors((prev) => ({ ...prev, category: undefined }))
+                                }
+                              }}
+                              className={cn(
+                                'w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between transition-colors cursor-pointer',
+                                category.toLowerCase() === opt.toLowerCase()
+                                  ? 'bg-primary/10 text-primary font-semibold'
+                                  : 'hover:bg-slate-100 text-focus'
+                              )}
+                            >
+                              <span>{opt}</span>
+                              {category.toLowerCase() === opt.toLowerCase() && <Check className="w-3.5 h-3.5" />}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-left">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-focus break-all">"{category.trim()}"</span>
+                              <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-200/80 px-1.5 py-0.5 rounded">
+                                Custom
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-fg mt-0.5">
+                              Will be saved as a new category.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

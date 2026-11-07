@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
@@ -8,7 +9,9 @@ import {
   AlertCircle,
   Building2,
   CheckCircle2,
+  ChevronDown,
   Loader2,
+  MoreVertical,
   RotateCcw,
   Landmark,
   X,
@@ -165,11 +168,93 @@ interface AddTransactionSheetPageProps {
   initialType?: 'Sales' | 'Expense'
 }
 
+interface PortalDropdownPosition {
+  top: number
+  left: number
+  width: number
+  maxHeight: number
+  openUpward: boolean
+}
+
+function useComboboxPortalPosition(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  dropdownRef: React.RefObject<HTMLDivElement | null>,
+  isOpen: boolean,
+  onClose: () => void,
+  minWidth: number
+): PortalDropdownPosition | null {
+  const [pos, setPos] = React.useState<PortalDropdownPosition | null>(null)
+
+  const updatePosition = React.useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+
+    // Close if input scrolled completely out of visible area
+    if (rect.bottom < 48 || rect.top > window.innerHeight - 24) {
+      onClose()
+      return
+    }
+
+    const spaceBelow = window.innerHeight - rect.bottom - 12
+    const spaceAbove = rect.top - 12
+    const openUpward = spaceBelow < 220 && spaceAbove > spaceBelow
+    const availableSpace = openUpward ? spaceAbove : spaceBelow
+    const maxHeight = Math.min(240, Math.max(120, availableSpace - 44))
+    const width = Math.min(
+      Math.max(rect.width, minWidth),
+      window.innerWidth - 16
+    )
+    const left = Math.min(
+      Math.max(8, rect.left),
+      Math.max(8, window.innerWidth - width - 8)
+    )
+
+    setPos({
+      top: openUpward ? rect.top - 4 : rect.bottom + 4,
+      left,
+      width,
+      maxHeight,
+      openUpward,
+    })
+  }, [containerRef, minWidth, onClose])
+
+  React.useLayoutEffect(() => {
+    if (!isOpen) {
+      setPos(null)
+      return
+    }
+
+    updatePosition()
+
+    const handleScroll = (e: Event) => {
+      if (
+        dropdownRef.current &&
+        e.target instanceof Node &&
+        dropdownRef.current.contains(e.target)
+      ) {
+        return
+      }
+      updatePosition()
+    }
+
+    window.addEventListener('scroll', handleScroll, true)
+    window.addEventListener('resize', updatePosition)
+    return () => {
+      window.removeEventListener('scroll', handleScroll, true)
+      window.removeEventListener('resize', updatePosition)
+    }
+  }, [isOpen, updatePosition, dropdownRef])
+
+  return pos
+}
+
 interface ParticularsComboboxProps {
   value: string
   onChange: (val: string) => void
   onSelect: (val: string) => void
   savedParticulars: CompanyParticular[]
+  suggestions: CompanyParticular[]
   onSaveToList: (text: string) => Promise<void>
   onDeleteFromList: (id: number) => Promise<void>
   onKeyDown: (e: React.KeyboardEvent) => void
@@ -185,6 +270,7 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
   onChange,
   onSelect,
   savedParticulars,
+  suggestions,
   onSaveToList,
   onDeleteFromList,
   onKeyDown,
@@ -195,47 +281,75 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
   hasError,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
+  const [isTypingFilter, setIsTypingFilter] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const internalInputRef = React.useRef<HTMLInputElement | null>(null)
+
+  const setMergedInputRef = React.useCallback(
+    (el: HTMLInputElement | null) => {
+      internalInputRef.current = el
+      inputRef?.(el)
+    },
+    [inputRef]
+  )
+
+  const closeMenu = React.useCallback(() => {
+    setIsOpen(false)
+    setIsTypingFilter(false)
+    setHighlightedIndex(-1)
+  }, [])
+
+  const pos = useComboboxPortalPosition(
+    containerRef,
+    dropdownRef,
+    isOpen,
+    closeMenu,
+    260
+  )
 
   const trimmedValue = value.trim()
 
   const filtered = React.useMemo(() => {
-    if (!trimmedValue) return savedParticulars
-    return savedParticulars.filter((p) =>
+    if (!isTypingFilter || !trimmedValue) return suggestions
+    return suggestions.filter((p) =>
       p.name.toLowerCase().includes(trimmedValue.toLowerCase())
     )
-  }, [savedParticulars, trimmedValue])
+  }, [suggestions, trimmedValue, isTypingFilter])
 
-  const hasExactMatch = React.useMemo(() => {
+  const hasPersistedMatch = React.useMemo(() => {
     if (!trimmedValue) return false
     return savedParticulars.some(
       (p) => p.name.trim().toLowerCase() === trimmedValue.toLowerCase()
     )
   }, [savedParticulars, trimmedValue])
 
-  const canSaveToList = trimmedValue.length > 0 && !hasExactMatch
+  const canSaveToList = trimmedValue.length > 0 && !hasPersistedMatch
   const totalOptions = (canSaveToList ? 1 : 0) + filtered.length
 
   React.useEffect(() => {
+    if (!isOpen) return
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
       if (
         containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        !containerRef.current.contains(target) &&
+        (!dropdownRef.current || !dropdownRef.current.contains(target))
       ) {
-        setIsOpen(false)
-        setHighlightedIndex(-1)
+        closeMenu()
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+  }, [isOpen, closeMenu])
 
   const handleKeyDownInternal = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       if (!isOpen) {
+        setIsTypingFilter(false)
         setIsOpen(true)
-        setHighlightedIndex(0)
+        setHighlightedIndex(totalOptions > 0 ? 0 : -1)
         e.preventDefault()
         return
       }
@@ -246,6 +360,7 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
       }
     } else if (e.key === 'ArrowUp') {
       if (!isOpen) {
+        setIsTypingFilter(false)
         setIsOpen(true)
         setHighlightedIndex(Math.max(0, totalOptions - 1))
         e.preventDefault()
@@ -271,28 +386,31 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
             onSelect(trimmedValue || value)
           }
         }
+        closeMenu()
+        return
       } else if (isOpen && filtered.length > 0) {
         onSelect(filtered[0].name)
+        closeMenu()
+        return
       } else if (canSaveToList) {
         onSaveToList(trimmedValue)
         onSelect(trimmedValue)
+        closeMenu()
+        return
       } else {
         onSelect(trimmedValue || value)
+        closeMenu()
+        return
       }
-      setIsOpen(false)
-      setHighlightedIndex(-1)
-      return
     } else if (e.key === 'Escape') {
       if (isOpen) {
         e.preventDefault()
         e.stopPropagation()
-        setIsOpen(false)
-        setHighlightedIndex(-1)
+        closeMenu()
         return
       }
     } else if (e.key === 'Tab') {
-      setIsOpen(false)
-      setHighlightedIndex(-1)
+      closeMenu()
     }
 
     onKeyDown(e)
@@ -302,7 +420,7 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
     <div ref={containerRef} className="relative w-full">
       <div className="relative w-full flex items-center">
         <input
-          ref={inputRef}
+          ref={setMergedInputRef}
           type="text"
           placeholder={placeholder || 'Type or select a particular...'}
           value={value}
@@ -310,19 +428,23 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
             setHighlightedIndex(-1)
           }}
           onClick={() => {
-            setIsOpen(true)
-            setHighlightedIndex(-1)
+            if (!isOpen) {
+              setIsTypingFilter(false)
+              setIsOpen(true)
+              setHighlightedIndex(-1)
+            }
           }}
           onChange={(e) => {
             onChange(e.target.value)
+            setIsTypingFilter(true)
             if (!isOpen) setIsOpen(true)
             setHighlightedIndex(-1)
           }}
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
           className={cn(
-            'w-full h-9 pl-2 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
-            canSaveToList ? 'pr-16' : 'pr-2',
+            'w-full h-9 pl-2.5 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
+            canSaveToList ? 'pr-20' : 'pr-7',
             hasError
               ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
               : isPartial
@@ -330,108 +452,158 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
               : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
           )}
         />
-        {canSaveToList && (
-          <button
-            type="button"
-            title={`Save "${trimmedValue}" to company list`}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onSaveToList(trimmedValue)
-              onSelect(trimmedValue)
-              setIsOpen(false)
-            }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-6 px-2 rounded-md bg-[#960C01] hover:bg-[#800a01] text-white text-[10px] font-bold shadow-2xs flex items-center gap-0.5 z-10 transition-colors cursor-pointer shrink-0"
-          >
-            <Plus className="w-3 h-3" />
-            <span>Save</span>
-          </button>
-        )}
-      </div>
-
-      {isOpen && (
-        <div className="absolute left-0 top-full mt-1 w-full min-w-[250px] max-w-sm bg-white rounded-xl border border-stroke/40 shadow-xl z-50 overflow-hidden py-1 animate-in fade-in-50 duration-150">
-          {/* Option 0: Save to my list (pinned at top so user immediately has the option) */}
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10">
           {canSaveToList && (
-            <div
-              className={cn(
-                'px-3 py-2 text-xs font-semibold text-[#960C01] bg-red-50/60 hover:bg-red-100/80 border-b border-red-100 flex items-center justify-between cursor-pointer transition-colors',
-                highlightedIndex === 0 && 'bg-red-200/80 font-bold'
-              )}
-              onMouseDown={(e) => {
-                e.preventDefault()
+            <button
+              type="button"
+              title={`Save "${trimmedValue}" to company list`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation()
                 onSaveToList(trimmedValue)
                 onSelect(trimmedValue)
-                setIsOpen(false)
-                setHighlightedIndex(-1)
+                closeMenu()
               }}
+              className="h-6 px-1.5 rounded-md bg-[#960C01] hover:bg-[#800a01] text-white text-[10px] font-bold shadow-2xs flex items-center gap-0.5 transition-colors cursor-pointer shrink-0"
             >
-              <div className="flex items-center gap-1.5 truncate">
-                <Plus className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">
-                  + Save &ldquo;{trimmedValue}&rdquo; to my list
+              <Plus className="w-3 h-3" />
+              <span>Save</span>
+            </button>
+          )}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Toggle particulars list"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isOpen) {
+                closeMenu()
+              } else {
+                setIsTypingFilter(false)
+                setIsOpen(true)
+                setHighlightedIndex(-1)
+                internalInputRef.current?.focus({ preventScroll: true })
+              }
+            }}
+            className="h-6 w-6 rounded-md text-slate-400 hover:text-focus hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+          >
+            <ChevronDown
+              className={cn(
+                'w-3.5 h-3.5 transition-transform duration-150',
+                isOpen && 'rotate-180'
+              )}
+            />
+          </button>
+        </div>
+      </div>
+
+      {isOpen &&
+        pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              top: `${pos.top}px`,
+              left: `${pos.left}px`,
+              width: `${pos.width}px`,
+              transform: pos.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            className="fixed bg-white rounded-xl border border-stroke/40 shadow-2xl z-[99999] overflow-hidden py-1 animate-in fade-in-50 duration-150"
+          >
+            {canSaveToList && (
+              <div
+                className={cn(
+                  'px-3 py-2 text-xs font-semibold text-[#960C01] bg-red-50/60 hover:bg-red-100/80 border-b border-red-100 flex items-center justify-between cursor-pointer transition-colors',
+                  highlightedIndex === 0 && 'bg-red-200/80 font-bold'
+                )}
+                onClick={() => {
+                  onSaveToList(trimmedValue)
+                  onSelect(trimmedValue)
+                  closeMenu()
+                }}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    + Save &ldquo;{trimmedValue}&rdquo; to my list
+                  </span>
+                </div>
+                <span className="text-[10px] bg-[#960C01] text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2 shrink-0">
+                  New
                 </span>
               </div>
-              <span className="text-[10px] bg-[#960C01] text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2 shrink-0">
-                New
-              </span>
-            </div>
-          )}
+            )}
 
-          {filtered.length === 0 && !canSaveToList ? (
-            <div className="px-3 py-3 text-xs text-muted-fg italic text-center">
-              No saved particulars yet. Type one, then choose &ldquo;Save to my
-              list&rdquo;.
-            </div>
-          ) : (
-            <div className="max-h-56 overflow-y-auto">
-              {filtered.map((item, idx) => {
-                const actualIndex = canSaveToList ? idx + 1 : idx
-                return (
-                  <div
-                    key={item.id}
-                    className={cn(
-                      'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer group hover:bg-slate-100 transition-colors',
-                      highlightedIndex === actualIndex && 'bg-slate-100 font-medium'
-                    )}
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      onSelect(item.name)
-                      setIsOpen(false)
-                      setHighlightedIndex(-1)
-                    }}
-                  >
-                    <span className="truncate flex-1">{item.name}</span>
-                    {typeof item.id === 'number' && item.id > 0 && (
-                      <button
-                        type="button"
-                        aria-label={`Remove ${item.name} from saved list`}
-                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity ml-2 shrink-0 cursor-pointer"
-                        title="Remove from saved list"
-                        onMouseDown={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          onDeleteFromList(item.id as number)
-                        }}
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
+            {filtered.length === 0 && !canSaveToList ? (
+              <div className="px-3 py-3 text-xs text-muted-fg italic text-center">
+                No saved particulars yet. Type one, then choose &ldquo;Save to my
+                list&rdquo;.
+              </div>
+            ) : (
+              <div
+                style={{ maxHeight: `${pos.maxHeight}px` }}
+                className="overflow-y-auto"
+              >
+                {filtered.map((item, idx) => {
+                  const actualIndex = canSaveToList ? idx + 1 : idx
+                  const isSelected =
+                    trimmedValue.length > 0 &&
+                    item.name.trim().toLowerCase() === trimmedValue.toLowerCase()
+                  return (
+                    <div
+                      key={`${item.id}-${item.name}`}
+                      className={cn(
+                        'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer group hover:bg-slate-100 transition-colors gap-2',
+                        (highlightedIndex === actualIndex || isSelected) &&
+                          'bg-slate-50 font-medium',
+                        highlightedIndex === actualIndex && 'bg-slate-100'
+                      )}
+                      onClick={() => {
+                        onSelect(item.name)
+                        closeMenu()
+                      }}
+                    >
+                      <span className="truncate flex-1">{item.name}</span>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {isSelected && (
+                          <Check className="w-3.5 h-3.5 text-[#960C01] shrink-0" />
+                        )}
+                        {typeof item.id === 'number' && item.id > 0 && (
+                          <button
+                            type="button"
+                            aria-label={`Remove ${item.name} from saved list`}
+                            className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            title="Remove from saved list"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onDeleteFromList(item.id as number)
+                            }}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
 
 interface CategoryComboboxProps {
   value: string
+  defaultCategory: string
   onChange: (val: string) => void
   onSelect: (val: string) => void
+  persistedCategories: string[]
   categories: string[]
   onSaveCategory: (name: string) => Promise<void>
   onKeyDown: (e: React.KeyboardEvent) => void
@@ -443,8 +615,10 @@ interface CategoryComboboxProps {
 
 const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
   value,
+  defaultCategory,
   onChange,
   onSelect,
+  persistedCategories,
   categories,
   onSaveCategory,
   onKeyDown,
@@ -454,47 +628,75 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
   hasError,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
+  const [isTypingFilter, setIsTypingFilter] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const internalInputRef = React.useRef<HTMLInputElement | null>(null)
+
+  const setMergedInputRef = React.useCallback(
+    (el: HTMLInputElement | null) => {
+      internalInputRef.current = el
+      inputRef?.(el)
+    },
+    [inputRef]
+  )
+
+  const closeMenu = React.useCallback(() => {
+    setIsOpen(false)
+    setIsTypingFilter(false)
+    setHighlightedIndex(-1)
+  }, [])
+
+  const pos = useComboboxPortalPosition(
+    containerRef,
+    dropdownRef,
+    isOpen,
+    closeMenu,
+    210
+  )
 
   const trimmedValue = value.trim()
 
   const filtered = React.useMemo(() => {
-    if (!trimmedValue) return categories
+    if (!isTypingFilter || !trimmedValue) return categories
     return categories.filter((c) =>
       c.toLowerCase().includes(trimmedValue.toLowerCase())
     )
-  }, [categories, trimmedValue])
+  }, [categories, trimmedValue, isTypingFilter])
 
-  const hasExactMatch = React.useMemo(() => {
+  const hasPersistedMatch = React.useMemo(() => {
     if (!trimmedValue) return false
-    return categories.some(
+    return persistedCategories.some(
       (c) => c.trim().toLowerCase() === trimmedValue.toLowerCase()
     )
-  }, [categories, trimmedValue])
+  }, [persistedCategories, trimmedValue])
 
-  const canSaveToList = trimmedValue.length > 0 && !hasExactMatch
+  const canSaveToList = trimmedValue.length > 0 && !hasPersistedMatch
   const totalOptions = (canSaveToList ? 1 : 0) + filtered.length
 
   React.useEffect(() => {
+    if (!isOpen) return
     const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
       if (
         containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        !containerRef.current.contains(target) &&
+        (!dropdownRef.current || !dropdownRef.current.contains(target))
       ) {
-        setIsOpen(false)
-        setHighlightedIndex(-1)
+        closeMenu()
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
+  }, [isOpen, closeMenu])
 
   const handleKeyDownInternal = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       if (!isOpen) {
+        setIsTypingFilter(false)
         setIsOpen(true)
-        setHighlightedIndex(0)
+        setHighlightedIndex(totalOptions > 0 ? 0 : -1)
         e.preventDefault()
         return
       }
@@ -505,6 +707,7 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
       }
     } else if (e.key === 'ArrowUp') {
       if (!isOpen) {
+        setIsTypingFilter(false)
         setIsOpen(true)
         setHighlightedIndex(Math.max(0, totalOptions - 1))
         e.preventDefault()
@@ -539,21 +742,19 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
         } else {
           onSelect(trimmedValue || value)
         }
-        setIsOpen(false)
-        setHighlightedIndex(-1)
+        closeMenu()
         return
       }
+      closeMenu()
     } else if (e.key === 'Escape') {
       if (isOpen) {
         e.preventDefault()
         e.stopPropagation()
-        setIsOpen(false)
-        setHighlightedIndex(-1)
+        closeMenu()
         return
       }
     } else if (e.key === 'Tab') {
-      setIsOpen(false)
-      setHighlightedIndex(-1)
+      closeMenu()
     }
 
     onKeyDown(e)
@@ -563,101 +764,170 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
     <div ref={containerRef} className="relative w-full">
       <div className="relative w-full flex items-center">
         <input
-          ref={inputRef}
+          ref={setMergedInputRef}
           type="text"
           placeholder={placeholder || 'Select or type category...'}
           value={value}
-          onFocus={() => {
+          onFocus={(e) => {
+            setIsTypingFilter(false)
             setIsOpen(true)
             setHighlightedIndex(-1)
+            const target = e.currentTarget
+            requestAnimationFrame(() => {
+              try {
+                target.select()
+              } catch {
+                // ignore
+              }
+            })
+          }}
+          onClick={() => {
+            if (!isOpen) {
+              setIsTypingFilter(false)
+              setIsOpen(true)
+              setHighlightedIndex(-1)
+            }
+          }}
+          onBlur={() => {
+            if (!value.trim() && defaultCategory) {
+              onChange(defaultCategory)
+            }
           }}
           onChange={(e) => {
             onChange(e.target.value)
+            setIsTypingFilter(true)
             if (!isOpen) setIsOpen(true)
             setHighlightedIndex(-1)
           }}
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
           className={cn(
-            'w-full h-9 pl-2 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border truncate',
-            canSaveToList ? 'pr-14' : 'pr-2',
+            'w-full h-9 pl-2.5 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border truncate',
+            canSaveToList ? 'pr-18' : 'pr-7',
             hasError
               ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
               : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
           )}
         />
-        {canSaveToList && (
-          <button
-            type="button"
-            title={`Add "${trimmedValue}" to categories`}
-            onMouseDown={(e) => {
-              e.preventDefault()
-              e.stopPropagation()
-              onSaveCategory(trimmedValue)
-              onSelect(trimmedValue)
-              setIsOpen(false)
-            }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-6 px-1.5 rounded-md bg-[#960C01] hover:bg-[#800a01] text-white text-[10px] font-bold shadow-2xs flex items-center gap-0.5 z-10 transition-colors cursor-pointer shrink-0"
-          >
-            <Plus className="w-3 h-3" />
-            <span>Add</span>
-          </button>
-        )}
-      </div>
-
-      {isOpen && (
-        <div className="absolute left-0 top-full mt-1 w-full min-w-[200px] max-w-xs bg-white rounded-xl border border-stroke/40 shadow-xl z-50 overflow-hidden py-1 animate-in fade-in-50 duration-150">
-          {/* Option 0: Add to categories pinned at top */}
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10">
           {canSaveToList && (
-            <div
-              className={cn(
-                'px-3 py-2 text-xs font-semibold text-[#960C01] bg-red-50/60 hover:bg-red-100/80 border-b border-red-100 flex items-center justify-between cursor-pointer transition-colors',
-                highlightedIndex === 0 && 'bg-red-200/80 font-bold'
-              )}
-              onMouseDown={(e) => {
-                e.preventDefault()
+            <button
+              type="button"
+              title={`Add "${trimmedValue}" to categories`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                e.stopPropagation()
                 onSaveCategory(trimmedValue)
                 onSelect(trimmedValue)
-                setIsOpen(false)
-                setHighlightedIndex(-1)
+                closeMenu()
               }}
+              className="h-6 px-1.5 rounded-md bg-[#960C01] hover:bg-[#800a01] text-white text-[10px] font-bold shadow-2xs flex items-center gap-0.5 transition-colors cursor-pointer shrink-0"
             >
-              <div className="flex items-center gap-1.5 truncate">
-                <Plus className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">
-                  + Add &ldquo;{trimmedValue}&rdquo;
+              <Plus className="w-3 h-3" />
+              <span>Add</span>
+            </button>
+          )}
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-label="Toggle category list"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.stopPropagation()
+              if (isOpen) {
+                closeMenu()
+              } else {
+                setIsTypingFilter(false)
+                setIsOpen(true)
+                setHighlightedIndex(-1)
+                internalInputRef.current?.focus({ preventScroll: true })
+              }
+            }}
+            className="h-6 w-6 rounded-md text-slate-400 hover:text-focus hover:bg-slate-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+          >
+            <ChevronDown
+              className={cn(
+                'w-3.5 h-3.5 transition-transform duration-150',
+                isOpen && 'rotate-180'
+              )}
+            />
+          </button>
+        </div>
+      </div>
+
+      {isOpen &&
+        pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              top: `${pos.top}px`,
+              left: `${pos.left}px`,
+              width: `${pos.width}px`,
+              transform: pos.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            className="fixed bg-white rounded-xl border border-stroke/40 shadow-2xl z-[99999] overflow-hidden py-1 animate-in fade-in-50 duration-150"
+          >
+            {canSaveToList && (
+              <div
+                className={cn(
+                  'px-3 py-2 text-xs font-semibold text-[#960C01] bg-red-50/60 hover:bg-red-100/80 border-b border-red-100 flex items-center justify-between cursor-pointer transition-colors',
+                  highlightedIndex === 0 && 'bg-red-200/80 font-bold'
+                )}
+                onClick={() => {
+                  onSaveCategory(trimmedValue)
+                  onSelect(trimmedValue)
+                  closeMenu()
+                }}
+              >
+                <div className="flex items-center gap-1.5 truncate">
+                  <Plus className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    + Add &ldquo;{trimmedValue}&rdquo;
+                  </span>
+                </div>
+                <span className="text-[10px] bg-[#960C01] text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2 shrink-0">
+                  New
                 </span>
               </div>
-              <span className="text-[10px] bg-[#960C01] text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-2 shrink-0">
-                New
-              </span>
-            </div>
-          )}
+            )}
 
-          <div className="max-h-56 overflow-y-auto">
-            {filtered.map((cat, idx) => {
-              const actualIndex = canSaveToList ? idx + 1 : idx
-              return (
-                <div
-                  key={cat}
-                  className={cn(
-                    'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer hover:bg-slate-100 transition-colors',
-                    highlightedIndex === actualIndex && 'bg-slate-100 font-medium'
-                  )}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    onSelect(cat)
-                    setIsOpen(false)
-                    setHighlightedIndex(-1)
-                  }}
-                >
-                  <span className="truncate flex-1">{cat}</span>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      )}
+            <div
+              style={{ maxHeight: `${pos.maxHeight}px` }}
+              className="overflow-y-auto"
+            >
+              {filtered.map((cat, idx) => {
+                const actualIndex = canSaveToList ? idx + 1 : idx
+                const isSelected =
+                  trimmedValue.length > 0 &&
+                  cat.trim().toLowerCase() === trimmedValue.toLowerCase()
+                return (
+                  <div
+                    key={cat}
+                    className={cn(
+                      'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer hover:bg-slate-100 transition-colors gap-2',
+                      (highlightedIndex === actualIndex || isSelected) &&
+                        'bg-slate-50 font-medium',
+                      highlightedIndex === actualIndex && 'bg-slate-100'
+                    )}
+                    onClick={() => {
+                      onSelect(cat)
+                      closeMenu()
+                    }}
+                  >
+                    <span className="truncate flex-1">{cat}</span>
+                    {isSelected && (
+                      <Check className="w-3.5 h-3.5 text-[#960C01] shrink-0" />
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
@@ -936,29 +1206,33 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
-  // Categories list
-  const [categories, setCategories] = React.useState<string[]>([])
+  // Categories list (initialized immediately with defaults, then merged with custom DB categories)
+  const [categories, setCategories] = React.useState<string[]>(() =>
+    isSales ? [...SALES_CATEGORY_LIST] : [...DEFAULT_EXPENSE_CATEGORIES]
+  )
 
   React.useEffect(() => {
-    if (isSales) {
-      setCategories(SALES_CATEGORY_LIST)
-      return
-    }
+    const baseCategories = isSales
+      ? [...SALES_CATEGORY_LIST]
+      : [...DEFAULT_EXPENSE_CATEGORIES]
+    setCategories(baseCategories)
 
     let mounted = true
-    expenseService.getCategories().then((cats) => {
-      if (mounted) {
+    expenseService
+      .getCategories()
+      .then((cats) => {
+        if (!mounted) return
         const fetchedNames = (cats || [])
           .map((c) => c.name?.trim())
           .filter(Boolean)
           .filter((name) => !DEPRECATED_OLD_CATEGORIES.has(name.toLowerCase()))
 
-        const combined = Array.from(
-          new Set([...DEFAULT_EXPENSE_CATEGORIES, ...fetchedNames])
-        )
+        const combined = Array.from(new Set([...baseCategories, ...fetchedNames]))
         setCategories(combined)
-      }
-    })
+      })
+      .catch(() => {
+        // Keep base categories on fetch error
+      })
     return () => {
       mounted = false
     }
@@ -1014,41 +1288,72 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return [...base, ...customNames]
   }, [isSales, companyCustomPaymentMethods])
 
-  // Dynamically merge saved particulars from database + any particulars currently typed in any row
-  const allAvailableParticulars = React.useMemo(() => {
-    const list: CompanyParticular[] = [...savedParticulars]
-    const seen = new Set(savedParticulars.map((p) => p.name.trim().toLowerCase()))
+  // Build per-row particular suggestions without echoing the current row's live typing
+  const getRowParticularSuggestions = React.useCallback(
+    (currentRowIdx: number, currentRow: SpreadsheetRow): CompanyParticular[] => {
+      const compName = isAuditor ? assignedCompany : selectedCompany
+      const list: CompanyParticular[] = [...savedParticulars]
+      const seen = new Set(
+        savedParticulars.map((p) => p.name.trim().toLowerCase())
+      )
 
-    rows.forEach((r, idx) => {
-      const trimmed = r.particulars.trim()
-      if (trimmed && !seen.has(trimmed.toLowerCase())) {
-        seen.add(trimmed.toLowerCase())
-        list.push({
-          id: -1 * (idx + 1),
-          name: trimmed,
-          company_name: isAuditor ? assignedCompany : selectedCompany,
+      // Include Petty Cash preset particulars when Expense uses Petty Cash
+      if (
+        !isSales &&
+        (currentRow.category === 'Petty Cash' ||
+          currentRow.paymentMethod === 'Petty Cash')
+      ) {
+        PREDEFINED_PETTY_CASH_PARTICULARS.forEach((preset, pIdx) => {
+          const lower = preset.toLowerCase()
+          if (!seen.has(lower)) {
+            seen.add(lower)
+            list.push({
+              id: -1000 - pIdx,
+              name: preset,
+              company_name: compName,
+            })
+          }
         })
       }
-    })
 
-    return list
-  }, [savedParticulars, rows, isAuditor, assignedCompany, selectedCompany])
+      // Include particulars already entered in OTHER rows as quick suggestions
+      rows.forEach((r, idx) => {
+        if (idx === currentRowIdx) return
+        const trimmed = r.particulars.trim()
+        if (trimmed && !seen.has(trimmed.toLowerCase())) {
+          seen.add(trimmed.toLowerCase())
+          list.push({
+            id: -1 * (idx + 1),
+            name: trimmed,
+            company_name: compName,
+          })
+        }
+      })
 
-  // Dynamically merge categories with any category currently typed in any row
-  const allAvailableCategories = React.useMemo(() => {
-    const list = [...categories]
-    const seen = new Set(categories.map((c) => c.trim().toLowerCase()))
+      return list
+    },
+    [savedParticulars, isSales, rows, isAuditor, assignedCompany, selectedCompany]
+  )
 
-    rows.forEach((r) => {
-      const trimmed = r.category?.trim()
-      if (trimmed && !seen.has(trimmed.toLowerCase())) {
-        seen.add(trimmed.toLowerCase())
-        list.push(trimmed)
-      }
-    })
+  // Build per-row categories without echoing the current row's live typing
+  const getRowCategories = React.useCallback(
+    (currentRowIdx: number): string[] => {
+      const list = [...categories]
+      const seen = new Set(categories.map((c) => c.trim().toLowerCase()))
 
-    return list
-  }, [categories, rows])
+      rows.forEach((r, idx) => {
+        if (idx === currentRowIdx) return
+        const trimmed = r.category?.trim()
+        if (trimmed && !seen.has(trimmed.toLowerCase())) {
+          seen.add(trimmed.toLowerCase())
+          list.push(trimmed)
+        }
+      })
+
+      return list
+    },
+    [categories, rows]
+  )
 
   // Pre-fill when editing
   React.useEffect(() => {
@@ -1211,10 +1516,22 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     [key: string]: HTMLInputElement | HTMLSelectElement | null
   }>({})
 
+  const sheetTableContainerRef = React.useRef<HTMLDivElement | null>(null)
+
   const focusCell = (rowIdx: number, colIdx: number) => {
     const el = cellRefs.current[`${rowIdx}-${colIdx}`]
     if (el) {
-      el.focus()
+      el.focus({ preventScroll: true })
+      const container = sheetTableContainerRef.current
+      if (container) {
+        const elRect = el.getBoundingClientRect()
+        const containerRect = container.getBoundingClientRect()
+        if (elRect.bottom > containerRect.bottom - 8) {
+          container.scrollTop += elRect.bottom - containerRect.bottom + 12
+        } else if (elRect.top < containerRect.top + 48) {
+          container.scrollTop -= containerRect.top + 48 - elRect.top
+        }
+      }
       if (el instanceof HTMLInputElement && el.type !== 'date') {
         try {
           el.select()
@@ -1225,9 +1542,42 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
+  // 3-dots Row Action Menu state
+  const [openActionRowId, setOpenActionRowId] = React.useState<string | null>(
+    null
+  )
+  const [actionMenuPos, setActionMenuPos] = React.useState<{
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
+
+  const closeActionMenu = React.useCallback(() => {
+    setOpenActionRowId(null)
+    setActionMenuPos(null)
+  }, [])
+
+  React.useEffect(() => {
+    if (!openActionRowId) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeActionMenu()
+    }
+    window.addEventListener('click', closeActionMenu)
+    window.addEventListener('scroll', closeActionMenu, true)
+    window.addEventListener('resize', closeActionMenu)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', closeActionMenu)
+      window.removeEventListener('scroll', closeActionMenu, true)
+      window.removeEventListener('resize', closeActionMenu)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openActionRowId, closeActionMenu])
+
   // Row operations
   const handleAddRow = () => {
     const prevRow = rows[rows.length - 1]
+    const nextIdx = rows.length
     const newId = `row-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
     setRows((prev) => [
       ...prev,
@@ -1245,7 +1595,31 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       },
     ])
     setTimeout(() => {
-      focusCell(rows.length, 1)
+      focusCell(nextIdx, 1)
+    }, 40)
+  }
+
+  const handleInsertRowBelow = (index: number) => {
+    const baseRow = rows[index]
+    const newId = `row-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
+    const inserted: SpreadsheetRow = {
+      id: newId,
+      date: baseRow?.date || todayIso,
+      particulars: '',
+      category: baseRow?.category || defaultCategory,
+      paymentMethod: baseRow?.paymentMethod || 'Cash',
+      chequeNo: '',
+      unitPrice: '',
+      quantity: 1,
+      status: 'Paid',
+    }
+    setRows((prev) => {
+      const copy = [...prev]
+      copy.splice(index + 1, 0, inserted)
+      return copy
+    })
+    setTimeout(() => {
+      focusCell(index + 1, 1)
     }, 40)
   }
 
@@ -2542,11 +2916,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               </div>
             )}
 
-            {/* Table with fixed layout, balanced min-height, and colgroup to permanently lock column positions */}
-            <Table
-              containerClassName="relative min-h-[340px] max-h-[70vh] overflow-auto"
-              className="w-full border-collapse table-fixed min-w-[1388px]"
+            {/* Table with fixed height & colgroup so adding rows never shifts layout */}
+            <div
+              ref={sheetTableContainerRef}
+              className="h-[480px] sm:h-[540px] overflow-auto relative bg-white"
             >
+              <Table
+                containerClassName="overflow-visible"
+                className="w-full border-collapse table-fixed min-w-[1388px]"
+              >
                 <colgroup>
                   <col style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }} />
                   <col style={{ width: '145px', minWidth: '145px', maxWidth: '145px' }} />
@@ -2558,7 +2936,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                   <col style={{ width: '110px', minWidth: '110px', maxWidth: '110px' }} />
                   <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
-                  <col style={{ width: '85px', minWidth: '85px', maxWidth: '85px' }} />
+                  <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                 </colgroup>
                 <TableHeader className="bg-slate-50/95 border-b border-slate-200/80 sticky top-0 z-20">
                   <TableRow className="hover:bg-transparent">
@@ -2571,7 +2949,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     <TableHead className="w-[250px] max-w-[250px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       PARTICULARS <span className="text-red-500">*</span>
                     </TableHead>
-                    <TableHead className="w-[160px] max-w-[160px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead className="w-[175px] max-w-[175px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       CATEGORY
                     </TableHead>
                     <TableHead className="w-[155px] max-w-[155px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
@@ -2592,7 +2970,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     <TableHead className="w-[125px] max-w-[125px] text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       TOTAL (₱)
                     </TableHead>
-                    <TableHead className="w-[85px] max-w-[85px] text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3">
+                    <TableHead className="w-[70px] max-w-[70px] text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3">
                       ACTIONS
                     </TableHead>
                   </TableRow>
@@ -2663,11 +3041,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }
                             onSelect={(val) => {
                               handleRowChange(row.id, 'particulars', val)
-                              setTimeout(() => {
-                                focusCell(index, 2)
-                              }, 30)
                             }}
-                            savedParticulars={allAvailableParticulars}
+                            savedParticulars={savedParticulars}
+                            suggestions={getRowParticularSuggestions(index, row)}
                             onSaveToList={handleSaveParticularToList}
                             onDeleteFromList={handleDeleteParticularFromList}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 1)}
@@ -2678,12 +3054,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Category Combobox */}
-                        <TableCell className="w-[160px] max-w-[160px] border-r border-slate-200/60 p-1 px-2 relative box-border">
+                        <TableCell className="w-[175px] max-w-[175px] border-r border-slate-200/60 p-1 px-2 relative box-border">
                           <CategoryCombobox
                             inputRef={(el) => {
                               cellRefs.current[`${index}-2`] = el
                             }}
                             value={row.category}
+                            defaultCategory={defaultCategory}
                             onChange={(val) =>
                               handleRowChange(row.id, 'category', val)
                             }
@@ -2693,7 +3070,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 focusCell(index, 5)
                               }, 30)
                             }}
-                            categories={allAvailableCategories}
+                            persistedCategories={categories}
+                            categories={getRowCategories(index)}
                             onSaveCategory={handleSaveCategory}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 2)}
                             onPaste={(e) => handlePaste(e, index, 2)}
@@ -2945,29 +3323,42 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                           </span>
                         </TableCell>
 
-                        {/* Actions */}
-                        <TableCell className="w-[85px] max-w-[85px] text-center p-1 box-border">
-                          <div className="flex items-center justify-center gap-1">
+                        {/* Actions (3-dots menu) */}
+                        <TableCell className="w-[70px] max-w-[70px] text-center p-1 box-border">
+                          <div className="flex items-center justify-center">
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDuplicateRow(index)}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                              title="Duplicate row"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (openActionRowId === row.id) {
+                                  closeActionMenu()
+                                  return
+                                }
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const openUpward =
+                                  rect.bottom + 150 > window.innerHeight
+                                setActionMenuPos({
+                                  top: openUpward
+                                    ? rect.top - 6
+                                    : rect.bottom + 6,
+                                  right: Math.max(
+                                    12,
+                                    window.innerWidth - rect.right
+                                  ),
+                                  openUpward,
+                                })
+                                setOpenActionRowId(row.id)
+                              }}
+                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                              title="Row actions"
+                              aria-label={`Actions for row ${index + 1}`}
+                              aria-haspopup="true"
+                              aria-expanded={openActionRowId === row.id}
                             >
-                              <Copy className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleRemoveRow(row.id)}
-                              disabled={rows.length <= 1 && row.isEmpty}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-30 cursor-pointer"
-                              title="Delete row"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <MoreVertical className="w-4 h-4" />
                             </Button>
                           </div>
                         </TableCell>
@@ -2976,6 +3367,75 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   })}
                 </TableBody>
               </Table>
+            </div>
+
+            {/* 3-Dots Row Action Portal Menu */}
+            {openActionRowId &&
+              actionMenuPos &&
+              typeof document !== 'undefined' &&
+              (() => {
+                const activeIdx = calculatedRows.findIndex(
+                  (r) => r.id === openActionRowId
+                )
+                const activeRow =
+                  activeIdx >= 0 ? calculatedRows[activeIdx] : null
+                if (!activeRow) return null
+                const isDeleteDisabled = rows.length <= 1 && activeRow.isEmpty
+
+                return createPortal(
+                  <div
+                    className="fixed w-44 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+                    style={{
+                      top: `${actionMenuPos.top}px`,
+                      right: `${actionMenuPos.right}px`,
+                      transform: actionMenuPos.openUpward
+                        ? 'translateY(-100%)'
+                        : 'none',
+                    }}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeActionMenu()
+                        handleDuplicateRow(activeIdx)
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                      <span>Duplicate Row</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeActionMenu()
+                        handleInsertRowBelow(activeIdx)
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                      <span>Insert Row Below</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isDeleteDisabled}
+                      onClick={() => {
+                        if (isDeleteDisabled) return
+                        closeActionMenu()
+                        handleRemoveRow(activeRow.id)
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-40 disabled:pointer-events-none transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>Delete Row</span>
+                    </button>
+                  </div>,
+                  document.body
+                )
+              })()}
 
             {/* Bottom Add Row Bar */}
             <div className="p-3 bg-slate-50/70 border-t border-slate-200/60 flex items-center justify-between">

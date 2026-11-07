@@ -67,6 +67,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
+  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
   // Food Utang / Payment Option states
   const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
@@ -92,10 +93,15 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     let mounted = true
     expenseService.getCategories().then((cats) => {
       if (mounted && cats && cats.length > 0) {
-        const names = Array.from(new Set([...cats.map((c) => c.name), ...DEFAULT_SALES_CATEGORIES]))
+        const names = Array.from(
+          new Set([
+            ...DEFAULT_SALES_CATEGORIES,
+            ...cats.map((c) => c.name?.trim()).filter(Boolean),
+          ])
+        )
         setCategoryOptions(names)
       }
-    })
+    }).catch(() => {})
     return () => {
       mounted = false
     }
@@ -121,12 +127,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
   }, [open, assignedCompany])
 
-  // Dynamic filter for category suggestions
+  // Dynamic filter for category suggestions (show full list until user types)
   const filteredCategoryOptions = React.useMemo(() => {
+    if (!isCategoryTyping) return categoryOptions
     const q = category.trim().toLowerCase()
     if (!q) return categoryOptions
     return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions])
+  }, [category, categoryOptions, isCategoryTyping])
 
   // Close category dropdown on click outside
   React.useEffect(() => {
@@ -136,6 +143,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         !categoryContainerRef.current.contains(e.target as Node)
       ) {
         setIsCategoryOpen(false)
+        setIsCategoryTyping(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -151,6 +159,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setAmount('')
       setPaymentMethod('Cash')
       setCategory(DEFAULT_SALES_CATEGORIES[0])
+      setIsCategoryOpen(false)
+      setIsCategoryTyping(false)
       setPaymentOption('Paid in full')
       setCustomerType('External')
       setCustomerName('')
@@ -566,12 +576,23 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   value={category}
                   onChange={(e) => {
                     setCategory(e.target.value)
+                    setIsCategoryTyping(true)
                     setIsCategoryOpen(true)
                     if (fieldErrors.category) {
                       setFieldErrors((prev) => ({ ...prev, category: undefined }))
                     }
                   }}
-                  onFocus={() => setIsCategoryOpen(true)}
+                  onFocus={(e) => {
+                    setIsCategoryTyping(false)
+                    setIsCategoryOpen(true)
+                    e.currentTarget.select()
+                  }}
+                  onClick={() => {
+                    if (!isCategoryOpen) {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen(true)
+                    }
+                  }}
                   placeholder="Select or type category…"
                   className={cn(
                     'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium bg-white',
@@ -581,7 +602,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 <button
                   type="button"
                   tabIndex={-1}
-                  onClick={() => setIsCategoryOpen((prev) => !prev)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setIsCategoryTyping(false)
+                    setIsCategoryOpen((prev) => !prev)
+                  }}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5 rounded cursor-pointer transition-colors"
                   aria-label="Toggle category list"
                 >
@@ -590,10 +615,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
 
                 {/* Suggestions dropdown with dynamic matching or custom input indication */}
                 {isCategoryOpen && (
-                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100">
+                  <div
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="absolute left-0 right-0 bottom-full mb-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100"
+                  >
                     <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
                       <span>Specific Categories</span>
-                      {category.trim() && (
+                      {isCategoryTyping && category.trim() && (
                         <span className="text-[10px] text-slate-400 font-normal">
                           {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
                         </span>
@@ -607,6 +635,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                             type="button"
                             onClick={() => {
                               setCategory(opt)
+                              setIsCategoryTyping(false)
                               setIsCategoryOpen(false)
                               if (fieldErrors.category) {
                                 setFieldErrors((prev) => ({ ...prev, category: undefined }))

@@ -32,15 +32,7 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
                 else parsed.netloc.replace(":5432", ":6543")
             )
             db_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
-        # Use a real client-side connection pool instead of NullPool.
-        # Opening a connection to the remote Supabase pooler costs ~1-3s
-        # (TCP + TLS + auth), so NullPool (a fresh connection per operation)
-        # made every request pay that cost several times over, stacking up to
-        # ~20s per API call. Reusing pooled connections keeps the query itself
-        # (~0.3s) as the dominant cost. psycopg2 does not use server-side
-        # prepared statements by default, so it is compatible with Supabase's
-        # transaction-mode pooler (port 6543). pool_pre_ping discards stale
-        # connections the pooler may have dropped; pool_recycle caps lifetime.
+
         engine = create_engine(
             db_url,
             pool_pre_ping=True,
@@ -168,6 +160,35 @@ def init_db():
             if "transaction_type" not in cp_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE company_particulars ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'Sales'"))
+
+        if "tenant_leases" in table_names:
+            tl_cols = {col["name"] for col in inspector.get_columns("tenant_leases")}
+            if "audit_status" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_remarks TEXT"))
+
+        if "tenant_lease_payments" in table_names:
+            try:
+                with engine.begin() as conn:
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(text("ALTER TABLE tenant_lease_payments ALTER COLUMN status TYPE VARCHAR(20)"))
+            except Exception:
+                pass
+
+        if "company" in table_names:
+            c_cols = {col["name"] for col in inspector.get_columns("company")}
+            if "petty_cash" not in c_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE company ADD COLUMN petty_cash NUMERIC(15, 2) DEFAULT 0.00"))
     except Exception:
         pass
 
@@ -207,12 +228,6 @@ def init_db():
         daemon=True,
     )
     sync_thread.start()
-    sync_thread.join(timeout=10)
-    if sync_thread.is_alive():
-        logger.warning(
-            "Supabase company sync did not finish within 10s; continuing startup "
-            "without it. Companies will sync on a later run or via the API."
-        )
 
 # Dependency to get a database session for FastAPI endpoints
 def get_db() -> Generator:
