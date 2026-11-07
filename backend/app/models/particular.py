@@ -10,5 +10,6 @@ class CompanyParticular(Base):
     company_id = Column(Integer, ForeignKey("company.company_id", ondelete="CASCADE"), nullable=True, index=True)
     company_name = Column(String(100), nullable=True, index=True)
     name = Column(String(255), nullable=False)
+    transaction_type = Column(String(20), nullable=True, default="Sales", index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

@@ -162,6 +162,12 @@ def init_db():
             if "audit_remarks" not in b_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_remarks TEXT"))
+
+        if "company_particulars" in table_names:
+            cp_cols = {col["name"] for col in inspector.get_columns("company_particulars")}
+            if "transaction_type" not in cp_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE company_particulars ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'Sales'"))
     except Exception:
         pass
 

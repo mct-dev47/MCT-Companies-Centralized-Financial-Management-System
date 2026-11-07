@@ -586,8 +586,35 @@ export const SalesPage: React.FC = () => {
   }, [utangSalesList])
 
   const combinedSales = React.useMemo(() => {
-    return [...mappedUtangSales, ...sales]
-  }, [mappedUtangSales, sales])
+    const enrichedSales = sales.map((s) => {
+      const numId = Number(s.id)
+      const linkedList = !Number.isNaN(numId) ? receivablesBySaleId.get(numId) : undefined
+      const linked = linkedList && linkedList.length > 0 ? linkedList[0] : undefined
+      if (!linked) return s
+      return {
+        ...s,
+        customer_name: linked.customer_name,
+        customer_type:
+          linked.customer_type === 'Internal' ? 'Staff' : linked.customer_type,
+        amount_paid: linked.amount_paid,
+        balance: linked.balance,
+        payment_status: linked.payment_status,
+        status:
+          linked.payment_status === 'Unpaid'
+            ? 'Unpaid'
+            : linked.payment_status === 'Partial'
+              ? 'Pending'
+              : s.status,
+      } as SalesItem & {
+        customer_name?: string
+        customer_type?: string
+        amount_paid?: number
+        balance?: number
+        payment_status?: string
+      }
+    })
+    return [...mappedUtangSales, ...enrichedSales]
+  }, [mappedUtangSales, sales, receivablesBySaleId])
 
   // 1. Base filtered sales (independent of Deposit / Sales Record tab so KPIs above stay constant)
   const baseFilteredSales = React.useMemo(() => {

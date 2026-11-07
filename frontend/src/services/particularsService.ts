@@ -3,6 +3,7 @@ export interface CompanyParticular {
   name: string
   company_name?: string
   company_id?: number
+  transaction_type?: string
   created_at?: string
 }
 
@@ -17,16 +18,27 @@ class ParticularsService {
     return token ? { Authorization: `Bearer ${token}` } : {}
   }
 
-  async getParticulars(companyName?: string): Promise<CompanyParticular[]> {
-    const key = (companyName || '').trim().toLowerCase()
+  private buildKey(companyName?: string, transactionType?: string): string {
+    const comp = (companyName || '').trim().toLowerCase()
+    const tx = (transactionType || 'Sales').trim().toLowerCase()
+    return `${comp}::${tx}`
+  }
+
+  async getParticulars(
+    companyName?: string,
+    transactionType: string = 'Sales'
+  ): Promise<CompanyParticular[]> {
+    const key = this.buildKey(companyName, transactionType)
     if (this.cache.has(key)) {
       return this.cache.get(key) || []
     }
 
     try {
-      const url = companyName
-        ? `/api/v1/particulars?company_name=${encodeURIComponent(companyName)}`
-        : '/api/v1/particulars'
+      const params = new URLSearchParams()
+      if (companyName) params.append('company_name', companyName)
+      if (transactionType) params.append('transaction_type', transactionType)
+      const query = params.toString() ? `?${params.toString()}` : ''
+      const url = `/api/v1/particulars${query}`
 
       const res = await fetch(url, {
         method: 'GET',
@@ -48,9 +60,13 @@ class ParticularsService {
     return this.cache.get(key) || []
   }
 
-  async addParticular(companyName: string, name: string): Promise<CompanyParticular> {
+  async addParticular(
+    companyName: string,
+    name: string,
+    transactionType: string = 'Sales'
+  ): Promise<CompanyParticular> {
     const trimmedName = name.trim()
-    const key = (companyName || '').trim().toLowerCase()
+    const key = this.buildKey(companyName, transactionType)
 
     try {
       const res = await fetch('/api/v1/particulars', {
@@ -62,6 +78,7 @@ class ParticularsService {
         body: JSON.stringify({
           company_name: companyName,
           name: trimmedName,
+          transaction_type: transactionType,
         }),
       })
 
@@ -69,7 +86,10 @@ class ParticularsService {
         const created: CompanyParticular = await res.json()
         const current = this.cache.get(key) || []
         if (!current.some((p) => p.name.toLowerCase() === trimmedName.toLowerCase())) {
-          this.cache.set(key, [...current, created].sort((a, b) => a.name.localeCompare(b.name)))
+          this.cache.set(
+            key,
+            [...current, created].sort((a, b) => a.name.localeCompare(b.name))
+          )
         }
         return created
       }
@@ -82,17 +102,25 @@ class ParticularsService {
       id: Date.now(),
       name: trimmedName,
       company_name: companyName,
+      transaction_type: transactionType,
       created_at: new Date().toISOString(),
     }
     const current = this.cache.get(key) || []
     if (!current.some((p) => p.name.toLowerCase() === trimmedName.toLowerCase())) {
-      this.cache.set(key, [...current, fallbackItem].sort((a, b) => a.name.localeCompare(b.name)))
+      this.cache.set(
+        key,
+        [...current, fallbackItem].sort((a, b) => a.name.localeCompare(b.name))
+      )
     }
     return fallbackItem
   }
 
-  async deleteParticular(id: number, companyName?: string): Promise<void> {
-    const key = (companyName || '').trim().toLowerCase()
+  async deleteParticular(
+    id: number,
+    companyName?: string,
+    transactionType?: string
+  ): Promise<void> {
+    const key = this.buildKey(companyName, transactionType)
     try {
       await fetch(`/api/v1/particulars/${id}`, {
         method: 'DELETE',
@@ -112,9 +140,12 @@ class ParticularsService {
     )
   }
 
-  invalidateCache(companyName?: string) {
-    if (companyName) {
-      this.cache.delete(companyName.trim().toLowerCase())
+  invalidateCache(companyName?: string, transactionType?: string) {
+    if (companyName && transactionType) {
+      this.cache.delete(this.buildKey(companyName, transactionType))
+    } else if (companyName) {
+      this.cache.delete(this.buildKey(companyName, 'Sales'))
+      this.cache.delete(this.buildKey(companyName, 'Expense'))
     } else {
       this.cache.clear()
     }
@@ -122,4 +153,3 @@ class ParticularsService {
 }
 
 export const particularsService = new ParticularsService()
-

@@ -7,6 +7,7 @@ class CompanyParticularBase(BaseModel):
     name: str
     company_name: Optional[str] = None
     company_id: Optional[int] = None
+    transaction_type: Optional[str] = "Sales"
 
 
 class CompanyParticularCreate(CompanyParticularBase):
@@ -20,5 +21,6 @@ class CompanyParticularOut(BaseModel):
     name: str
     company_name: Optional[str] = None
     company_id: Optional[int] = None
+    transaction_type: Optional[str] = "Sales"
     created_at: Optional[datetime] = None
 

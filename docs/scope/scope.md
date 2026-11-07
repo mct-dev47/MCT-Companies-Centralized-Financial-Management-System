@@ -14,6 +14,8 @@
 | Company Deletion Cascade Cleanup and Typed Name Confirmation | in-progress | [0033](../specs/0033-company-deletion-cascade-and-typed-confirmation.md) |
 | Daily Grouped Sales and Expenses with Transaction Drilldown | in-progress | [0034](../specs/0034-daily-grouped-sales-and-expenses-with-transaction-drilldown/index.md) |
 | Transaction Sheet Validation, Company Payment Methods with Service Fees, and Supervisor View Cleanups | in-progress | [0035](../specs/0035-sales-validation-gcash-fee-supervisor-cleanups.md) |
+| Transaction Sheet Particulars Scoping, Default Rendered Fee, Humanized Validation, and Keyboard Flow | in-progress | [0036](../specs/0036-transaction-particulars-scope-and-keyboard-flow.md) |
+| Transaction Sheet Fee Zero Handling, Debtor Pre fill on Edit, Deposit Subtab Filtering, and Clean Particulars Start | completed | [0037](../specs/0037-sales-expense-add-and-records-refinements.md) |
 
 ---
 
@@ -178,5 +180,38 @@
   - [x] Milestone 8: Accordion toggle button text updated to Show / Hide (AC-7)
 - [ ] Verify it: /check verify 0035
 - [ ] Test it: /test 0035
+
+### Transaction Sheet Particulars Scoping, Default Rendered Fee, Humanized Validation, and Keyboard Flow
+**Status**: in-progress
+**Spec**: [0036](../specs/0036-transaction-particulars-scope-and-keyboard-flow.md)
+**Intent**: Separate saved company particulars and category suggestions by transaction type (Sales vs Expense), default expense rows to Rendered Fee, humanize missing field validation warnings, and sequence keyboard Enter to select and advance without premature row creation.
+**Done when**: Particulars saved in Sales do not appear in Expense, categories added in Sales do not modify Expense categories, new expense rows default to Rendered Fee, missing field validation speaks in plain human sentences with red cell outlines, pressing Enter in Particulars selects the item and focuses Category, and pressing Enter in Category selects it and advances to Price before a subsequent Enter creates a new row.
+
+- [x] Design it (spec): [0036](../specs/0036-transaction-particulars-scope-and-keyboard-flow.md)
+- [x] Build it: /develop 0036
+  - [x] Milestone 1: Database model, schema, and API query updates for `transaction_type` on particulars (AC-1)
+  - [x] Milestone 2: Frontend particulars service transaction type scoping and cache partitioning (AC-1, AC-2)
+  - [x] Milestone 3: Reorder expense categories constant so Rendered Fee is the default (AC-3)
+  - [x] Milestone 4: Humanized row validation error text for particulars, category, and price (AC-4)
+  - [x] Milestone 5: Refined Enter key navigation across Particulars, Category, and Row insertion (AC-5, AC-6)
+- [ ] Verify it: /check verify 0036
+- [ ] Test it: /test 0036
+
+### Transaction Sheet Fee Zero Handling, Debtor Pre fill on Edit, Deposit Subtab Filtering, and Clean Particulars Start
+**Status**: in-progress
+**Spec**: [0037](../specs/0037-sales-expense-add-and-records-refinements.md)
+**Intent**: Handle service fee zero entry cleanly without leading zeroes, load and persist debtor names and types when editing unpaid transactions, keep unpaid transactions visible in All Transactions views while filtering in Deposit/Withdraw subtabs, and clear test particulars for clean new user starts.
+**Done when**: Fee inputs allow typing without stubborn leading zeroes while allowing zero default, editing an unpaid sale pre fills the debtor name and type from the database and updates the receivable, All Transactions under Sales Record and Expense Record displays all payment statuses, and new users see an empty particulars dropdown.
+
+- [x] Design it (spec): [0037](../specs/0037-sales-expense-add-and-records-refinements.md)
+- [x] Build it: /develop 0037 (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Fee input zero handling and typing replacement (AC-1)
+  - [x] Milestone 2: Debtor pre fill and persistence on unpaid edit (AC-2, AC-3)
+  - [x] Milestone 3: Debtor enrichment and tab cash separation on SalesPage and ExpensePage (AC-4, AC-5)
+  - [x] Milestone 4: Clean company particulars test data and empty state (AC-6)
+- [ ] Verify it: /check verify 0037
+- [ ] Test it: /test 0037
+
+
 
 

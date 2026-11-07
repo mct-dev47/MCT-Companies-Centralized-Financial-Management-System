@@ -105,8 +105,8 @@ const SALES_PAYMENT_METHODS = DEFAULT_SALES_PAYMENT_METHODS
 const EXPENSE_PAYMENT_METHODS = DEFAULT_EXPENSE_PAYMENT_METHODS
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
-  'Petty Cash',
   'Rendered Fee',
+  'Petty Cash',
   'BBMP Foundation',
   'HDMF',
   'Philhealth',
@@ -257,9 +257,9 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
         return
       }
     } else if (e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
       if (isOpen && highlightedIndex >= 0) {
-        e.preventDefault()
-        e.stopPropagation()
         if (canSaveToList && highlightedIndex === 0) {
           onSaveToList(trimmedValue)
           onSelect(trimmedValue)
@@ -267,21 +267,21 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           const itemIdx = canSaveToList ? highlightedIndex - 1 : highlightedIndex
           if (itemIdx >= 0 && itemIdx < filtered.length) {
             onSelect(filtered[itemIdx].name)
+          } else {
+            onSelect(trimmedValue || value)
           }
         }
-        setIsOpen(false)
-        setHighlightedIndex(-1)
-        return
+      } else if (isOpen && filtered.length > 0) {
+        onSelect(filtered[0].name)
       } else if (canSaveToList) {
-        // Quick Enter when typing saves to list immediately
-        e.preventDefault()
-        e.stopPropagation()
         onSaveToList(trimmedValue)
         onSelect(trimmedValue)
-        setIsOpen(false)
-        setHighlightedIndex(-1)
-        return
+      } else {
+        onSelect(trimmedValue || value)
       }
+      setIsOpen(false)
+      setHighlightedIndex(-1)
+      return
     } else if (e.key === 'Escape') {
       if (isOpen) {
         e.preventDefault()
@@ -516,26 +516,29 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
         return
       }
     } else if (e.key === 'Enter') {
-      if (isOpen && highlightedIndex >= 0) {
+      if (isOpen) {
         e.preventDefault()
         e.stopPropagation()
-        if (canSaveToList && highlightedIndex === 0) {
+        if (highlightedIndex >= 0) {
+          if (canSaveToList && highlightedIndex === 0) {
+            onSaveCategory(trimmedValue)
+            onSelect(trimmedValue)
+          } else {
+            const itemIdx = canSaveToList ? highlightedIndex - 1 : highlightedIndex
+            if (itemIdx >= 0 && itemIdx < filtered.length) {
+              onSelect(filtered[itemIdx])
+            } else {
+              onSelect(trimmedValue || value)
+            }
+          }
+        } else if (filtered.length > 0) {
+          onSelect(filtered[0])
+        } else if (canSaveToList) {
           onSaveCategory(trimmedValue)
           onSelect(trimmedValue)
         } else {
-          const itemIdx = canSaveToList ? highlightedIndex - 1 : highlightedIndex
-          if (itemIdx >= 0 && itemIdx < filtered.length) {
-            onSelect(filtered[itemIdx])
-          }
+          onSelect(trimmedValue || value)
         }
-        setIsOpen(false)
-        setHighlightedIndex(-1)
-        return
-      } else if (canSaveToList) {
-        e.preventDefault()
-        e.stopPropagation()
-        onSaveCategory(trimmedValue)
-        onSelect(trimmedValue)
         setIsOpen(false)
         setHighlightedIndex(-1)
         return
@@ -819,7 +822,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const comp = isAuditor ? assignedCompany : selectedCompany
     if (!comp) return
 
-    particularsService.getParticulars(comp).then((data) => {
+    const txType = isSales ? 'Sales' : 'Expense'
+    particularsService.getParticulars(comp, txType).then((data) => {
       if (isMounted) {
         setSavedParticulars(data)
       }
@@ -827,18 +831,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return () => {
       isMounted = false
     }
-  }, [isAuditor, assignedCompany, selectedCompany])
+  }, [isAuditor, assignedCompany, selectedCompany, isSales])
 
   const handleSaveParticularToList = async (name: string) => {
     const comp = isAuditor ? assignedCompany : selectedCompany
     const trimmed = name.trim()
     if (!comp || !trimmed) return
 
+    const txType = isSales ? 'Sales' : 'Expense'
     const tempId = Date.now()
     const optimistic: CompanyParticular = {
       id: tempId,
       name: trimmed,
       company_name: comp,
+      transaction_type: txType,
     }
 
     setSavedParticulars((prev) => {
@@ -849,7 +855,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     })
 
     try {
-      const created = await particularsService.addParticular(comp, trimmed)
+      const created = await particularsService.addParticular(comp, trimmed, txType)
       setSavedParticulars((prev) =>
         prev
           .map((p) => (p.id === tempId ? created : p))
@@ -862,8 +868,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   const handleDeleteParticularFromList = async (id: number) => {
     const comp = isAuditor ? assignedCompany : selectedCompany
+    const txType = isSales ? 'Sales' : 'Expense'
     setSavedParticulars((prev) => prev.filter((p) => p.id !== id))
-    await particularsService.deleteParticular(id, comp)
+    await particularsService.deleteParticular(id, comp, txType)
   }
 
   // Company Custom Payment Methods (per company)
@@ -968,10 +975,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return [...prev, trimmed]
     })
 
-    try {
-      await expenseService.createCategory(trimmed)
-    } catch (err) {
-      console.warn('Failed to save category to backend:', err)
+    if (!isSales) {
+      try {
+        await expenseService.createCategory(trimmed)
+      } catch (err) {
+        console.warn('Failed to save category to backend:', err)
+      }
     }
   }
 
@@ -1136,6 +1145,48 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           },
         ])
       }
+    }
+
+    // Pre-fill debtor name and customer type if editing an unpaid sale
+    const saleIdNum = Number(editItem.id)
+    const recIdFromUtang =
+      typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
+        ? Number(editItem.id.replace('utang-', ''))
+        : !Number.isNaN(saleIdNum)
+          ? saleIdNum
+          : undefined
+
+    const linkedRec = !Number.isNaN(saleIdNum)
+      ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
+      : recIdFromUtang
+        ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
+        : undefined
+
+    const debtorName =
+      editItem.customer_name ||
+      linkedRec?.customer_name ||
+      ''
+    const rawType = editItem.customer_type || linkedRec?.customer_type
+    const debtorType: CustomerType =
+      rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+
+    if (debtorName) {
+      const initialRowId =
+        editItem.items && editItem.items.length > 0 && editItem.items[0].id
+          ? editItem.items[0].id
+          : 'row-1'
+      setUnpaidAssignments([
+        {
+          rowId: initialRowId,
+          saleLineIndex: 0,
+          particulars: editItem.particulars || '',
+          quantity: 1,
+          unitPrice: fallbackTotal,
+          total: fallbackTotal,
+          customerType: debtorType,
+          customerName: debtorName,
+        },
+      ])
     }
   }, [editItem])
 
@@ -1371,29 +1422,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
     if (e.key === 'Enter') {
       e.preventDefault()
-      if (rowIdx === rows.length - 1) {
-        const prevRow = rows[rows.length - 1]
-        const newId = `row-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`
-        setRows((prev) => [
-          ...prev,
-          {
-            id: newId,
-            date: prevRow?.date || todayIso,
-            particulars: '',
-            category: prevRow?.category || defaultCategory,
-            paymentMethod: prevRow?.paymentMethod || 'Cash',
-            chequeNo: '',
-            unitPrice: '',
-            quantity: 1,
-            status: 'Paid',
-          },
-        ])
-        setTimeout(() => {
-          focusCell(rowIdx + 1, colIdx)
-        }, 40)
-      } else {
-        focusCell(rowIdx + 1, colIdx)
+      if (colIdx === 1) {
+        focusCell(rowIdx, 2)
+        return
       }
+      handleAddRow()
       return
     }
 
@@ -1690,18 +1723,43 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       unpaidRows.length > 0 &&
       currentStep === 'encode'
     ) {
-      setUnpaidAssignments(
-        unpaidRows.map((it, lineIdx) => ({
+      const saleIdNum = editItem ? Number(editItem.id) : NaN
+      const recIdFromUtang =
+        editItem && typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
+          ? Number(editItem.id.replace('utang-', ''))
+          : !Number.isNaN(saleIdNum)
+            ? saleIdNum
+            : undefined
+
+      const linkedRec = !Number.isNaN(saleIdNum)
+        ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
+        : recIdFromUtang
+          ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
+          : undefined
+
+      const defaultDebtorName =
+        editItem?.customer_name || linkedRec?.customer_name || ''
+      const rawType = editItem?.customer_type || linkedRec?.customer_type
+      const defaultDebtorType: CustomerType =
+        rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+
+      const mappedAssignments: UnpaidAssignmentRow[] = unpaidRows.map((it, lineIdx) => {
+        const existing = unpaidAssignments.find(
+          (u) => u.rowId === it.id || (lineIdx === 0 && u.customerName)
+        )
+        return {
           rowId: it.id,
           saleLineIndex: lineIdx,
           particulars: it.particulars.trim(),
           quantity: it.numericQty,
           unitPrice: it.numericPrice,
           total: it.rowTotal,
-          customerType: 'External',
-          customerName: '',
-        }))
-      )
+          customerType: existing?.customerType || defaultDebtorType,
+          customerName: existing?.customerName || (lineIdx === 0 ? defaultDebtorName : ''),
+        }
+      })
+
+      setUnpaidAssignments(mappedAssignments)
       setCurrentStep('assign_unpaid')
       window.scrollTo({ top: 0, behavior: 'smooth' })
       return
@@ -1758,6 +1816,69 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             updatedBy: authorName,
             updatedAt: nowIso,
           })
+
+          // Synchronize receivables for unpaid / paid edit
+          const saleIdNum = Number(editItem.id)
+          const recIdFromUtang =
+            typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
+              ? Number(editItem.id.replace('utang-', ''))
+              : !Number.isNaN(saleIdNum)
+                ? saleIdNum
+                : undefined
+
+          const existingRec = !Number.isNaN(saleIdNum)
+            ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
+            : recIdFromUtang
+              ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
+              : undefined
+
+          const targetRecId = existingRec ? Number(existingRec.id) : recIdFromUtang
+
+          const firstAssignment =
+            unpaidAssignments.find((u) => u.rowId === first.id) ||
+            unpaidAssignments[0]
+
+          if (first.status === 'Unpaid' && firstAssignment && firstAssignment.customerName.trim()) {
+            const resolvedType: CustomerType =
+              firstAssignment.customerType === 'Staff' ? 'Staff' : 'External'
+            const apiCustomerType = resolvedType === 'Staff' ? 'Internal' : 'External'
+
+            if (targetRecId) {
+              await receivablesService.updateReceivable(targetRecId, {
+                customer_name: firstAssignment.customerName.trim(),
+                customer_type: apiCustomerType,
+                items_summary: first.particulars.trim(),
+                total_amount: firstAmount,
+                transaction_date: firstDate,
+                payment_status: 'Unpaid',
+              })
+            } else {
+              await receivablesService.createReceivable({
+                customer_name: firstAssignment.customerName.trim(),
+                customer_type: apiCustomerType,
+                items_summary: first.particulars.trim(),
+                total_amount: firstAmount,
+                amount_paid: 0,
+                payment_option: 'Pay Later',
+                payment_method:
+                  first.paymentMethod === 'GCash'
+                    ? 'GCash'
+                    : first.paymentMethod === 'Bank Transfer'
+                      ? 'Bank Transfer'
+                      : 'Cash',
+                notes: first.chequeNo.trim()
+                  ? `Ref: ${first.chequeNo.trim()}`
+                  : undefined,
+                company_name: companyToUse,
+                sale_id: !Number.isNaN(saleIdNum) ? saleIdNum : undefined,
+                date: firstDate,
+              })
+            }
+          } else if (first.status === 'Paid' && targetRecId) {
+            await receivablesService.updateReceivable(targetRecId, {
+              payment_status: 'Paid',
+            })
+          }
         } else {
           await expenseService.updateExpense(editItem.id, {
             company: companyToUse,
@@ -1955,12 +2076,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             />
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-focus tracking-tight">
-                Assign Unpaid Entries (Receivables)
+                {isEditMode
+                  ? 'Edit Unpaid Debtor (Receivables)'
+                  : 'Assign Unpaid Entries (Receivables)'}
               </h1>
               <p className="text-xs sm:text-sm text-muted-fg font-normal mt-1">
-                The following items were marked as <strong>Unpaid</strong>.
-                Specify who owes each item to automatically register them in
-                the Receivables ledger.
+                {isEditMode
+                  ? 'The following items are marked as Unpaid. You can update who owes each item or keep the existing debtor.'
+                  : 'The following items were marked as Unpaid. Specify who owes each item to automatically register them in the Receivables ledger.'}
               </p>
             </div>
           </div>
@@ -2073,6 +2196,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       <TableCell className="p-1.5 px-3">
                         <input
                           type="text"
+                          list={`debtors-list-${idx}`}
                           aria-label={`Customer or staff name for row ${idx + 1}`}
                           value={row.customerName}
                           onChange={(e) => {
@@ -2107,6 +2231,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               : 'border-stroke/60 bg-white'
                           )}
                         />
+                        <datalist id={`debtors-list-${idx}`}>
+                          {knownDebtors
+                            .filter((p) => p.type === row.customerType)
+                            .map((p) => (
+                              <option key={p.name} value={p.name} />
+                            ))}
+                        </datalist>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -2158,12 +2289,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 {isSubmitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Saving and Registering Receivables…</span>
+                    <span>
+                      {isEditMode
+                        ? 'Updating Sales & Receivables…'
+                        : 'Saving and Registering Receivables…'}
+                    </span>
                   </>
                 ) : (
                   <>
                     <Check className="w-4 h-4" />
-                    <span>Confirm & Complete Sales Record</span>
+                    <span>
+                      {isEditMode
+                        ? 'Update & Complete Sales Record'
+                        : 'Confirm & Complete Sales Record'}
+                    </span>
                   </>
                 )}
               </Button>
@@ -2383,16 +2522,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     Please correct the following row errors before submitting:
                   </p>
                   <ul className="list-disc list-inside space-y-0.5 text-rose-800">
-                    {rowValidationErrors.map((err) => {
-                      const missing: string[] = []
-                      if (err.missingParticulars) missing.push('Particulars')
-                      if (err.missingCategory) missing.push('Category')
-                      if (err.missingPrice) missing.push('Price (> 0)')
-                      return (
-                        <li key={err.rowId}>
-                          <span className="font-semibold">Row {err.rowIndex}:</span> Missing {missing.join(', ')}
-                        </li>
-                      )
+                    {rowValidationErrors.flatMap((err) => {
+                      const items: string[] = []
+                      if (err.missingParticulars) {
+                        items.push(`Row ${err.rowIndex}: The particulars couldn't be empty`)
+                      }
+                      if (err.missingCategory) {
+                        items.push(`Row ${err.rowIndex}: The category couldn't be empty`)
+                      }
+                      if (err.missingPrice) {
+                        items.push(`Row ${err.rowIndex}: The price couldn't be empty`)
+                      }
+                      return items.map((msg, i) => (
+                        <li key={`${err.rowId}-${i}`}>{msg}</li>
+                      ))
                     })}
                   </ul>
                 </div>
@@ -2547,7 +2690,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             onSelect={(val) => {
                               handleRowChange(row.id, 'category', val)
                               setTimeout(() => {
-                                focusCell(index, 3)
+                                focusCell(index, 5)
                               }, 30)
                             }}
                             categories={allAvailableCategories}
@@ -2618,19 +2761,28 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 step="0.01"
                                 placeholder="0"
                                 value={
-                                  row.serviceFee !== undefined
-                                    ? row.serviceFee
-                                    : 0
+                                  row.serviceFee === 0 ||
+                                  row.serviceFee === '' ||
+                                  row.serviceFee === undefined
+                                    ? ''
+                                    : row.serviceFee
                                 }
+                                onFocus={(e) => {
+                                  e.target.select()
+                                }}
                                 onChange={(e) => {
-                                  const val =
-                                    e.target.value === ''
-                                      ? ''
-                                      : parseFloat(e.target.value)
+                                  const raw = e.target.value
+                                  if (raw === '') {
+                                    handleRowChange(row.id, 'serviceFee', '')
+                                    return
+                                  }
+                                  // Strip leading zeros followed by another digit (e.g. "05" -> "5")
+                                  const stripped = raw.replace(/^0+(?=\d)/, '')
+                                  const val = parseFloat(stripped)
                                   handleRowChange(
                                     row.id,
                                     'serviceFee',
-                                    isNaN(val as number) ? '' : val
+                                    isNaN(val) ? '' : val
                                   )
                                 }}
                                 className="w-full text-xs font-mono font-medium text-focus bg-transparent focus:outline-none"
@@ -2753,6 +2905,28 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             <option value="Unpaid">Unpaid</option>
                             <option value="Pending">Pending</option>
                           </select>
+                          {row.status === 'Unpaid' && isSales && (() => {
+                            const assign =
+                              unpaidAssignments.find((u) => u.rowId === row.id) ||
+                              (index === 0 ? unpaidAssignments[0] : undefined)
+                            const debtorName = assign?.customerName?.trim()
+                            return (
+                              <div
+                                className="mt-1 flex items-center justify-between text-[10px] text-rose-700 bg-rose-50/90 border border-rose-200 rounded px-1.5 py-0.5 truncate"
+                                title={
+                                  debtorName
+                                    ? `Assigned to: ${debtorName} (${assign?.customerType || 'External'})`
+                                    : 'Click Save to assign debtor'
+                                }
+                              >
+                                <span className="truncate font-semibold">
+                                  {debtorName
+                                    ? `${debtorName} (${assign?.customerType === 'Staff' ? 'Staff' : 'Ext'})`
+                                    : 'No Debtor'}
+                                </span>
+                              </div>
+                            )
+                          })()}
                         </TableCell>
 
                         {/* Total Price */}
@@ -2936,9 +3110,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <>
                     <Check className="w-4 h-4" />
                     <span>
-                      {isEditMode
-                        ? `Update ${transactionType}`
-                        : `Save ${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`}
+                      {isSales && unpaidTotal > 0
+                        ? isEditMode
+                          ? 'Next: Review / Edit Debtor'
+                          : 'Next: Assign Unpaid'
+                        : isEditMode
+                          ? `Update ${transactionType}`
+                          : `Save ${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`}
                     </span>
                   </>
                 )}
