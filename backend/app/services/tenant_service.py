@@ -119,7 +119,9 @@ class SqlStore:
 
     def _lease_row(self, lease: TenantLease) -> Dict[str, Any]:
         row = _model_to_dict(lease, LEASE_COLUMNS)
-        row["payments"] = [_model_to_dict(p, PAYMENT_COLUMNS) for p in lease.payments]
+        pays = [_model_to_dict(p, PAYMENT_COLUMNS) for p in lease.payments]
+        pays.sort(key=lambda p: (str(p.get("payment_date")), p.get("payment_id") or 0), reverse=True)
+        row["payments"] = pays
         return row
 
     def list_leases(self, company_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
@@ -199,6 +201,8 @@ class SqlStore:
         self.db.add(pay)
         try:
             self.db.commit()
+            if hasattr(self.db, "expire_all"):
+                self.db.expire_all()
         except Exception:
             self.db.rollback()
             raise
@@ -213,6 +217,8 @@ class SqlStore:
             setattr(pay, key, _to_date(value) if key == "payment_date" else value)
         try:
             self.db.commit()
+            if hasattr(self.db, "expire_all"):
+                self.db.expire_all()
         except Exception:
             self.db.rollback()
             raise
@@ -222,6 +228,8 @@ class SqlStore:
         if pay is not None:
             self.db.delete(pay)
             self.db.commit()
+            if hasattr(self.db, "expire_all"):
+                self.db.expire_all()
 
 
 class SupabaseStore:
@@ -719,6 +727,8 @@ class TenantService:
         }
 
     def _after_payment_change(self, lease: Dict[str, Any]) -> Dict[str, Any]:
+        if hasattr(self.db, "expire_all"):
+            self.db.expire_all()
         reset = self._audit_reset(lease)
         if reset:
             self._run("update_lease", lease["lease_id"], reset)

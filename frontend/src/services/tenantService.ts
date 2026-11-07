@@ -18,7 +18,7 @@ export interface DailyRentRecord {
   method: string // Cash | GCash | Bank Transfer | Cheque | N/A
   referenceNo?: string
   notes?: string
-  status?: 'Paid' | 'Missed'
+  status?: 'Paid' | 'Missed' | 'Partially Paid'
   missedReason?: string
   timestamp: string
   /** Starting period (1 based) of a payment on a repeating lease. Extra money flows forward from it. */
@@ -159,8 +159,8 @@ export function mapLease(b: any): TenantLease {
         amount: Number(p.amount || 0),
         method: p.method || 'N/A',
         referenceNo: p.reference_no || undefined,
-        notes: p.notes || undefined,
-        status: p.status === 'Missed' ? 'Missed' : 'Paid',
+        notes: p.notes || (p as any).remarks || undefined,
+        status: p.status === 'Missed' ? 'Missed' : p.status === 'Partially Paid' ? 'Partially Paid' : 'Paid',
         missedReason: p.missed_reason || undefined,
         timestamp: p.created_at || `${String(p.payment_date).slice(0, 10)}T00:00:00Z`,
         periodIndex: p.period_index ?? undefined,

@@ -583,6 +583,84 @@ class LendingServiceGateway {
   }
 
   /**
+   * Update an existing payment remittance via backend service.
+   */
+  async updatePayment(
+    paymentId: string | number,
+    payload: {
+      paymentDate: string
+      targetInstallmentDate?: string
+      cycleIndex?: number
+      amount: number
+      penaltyAmount?: number
+      method?: string
+      referenceNo?: string
+      notes?: string
+    }
+  ): Promise<LendingFacility> {
+    const numId = typeof paymentId === 'number' ? paymentId : parseInt(String(paymentId).replace(/\D/g, ''), 10)
+    try {
+      const res = await fetch(`/api/v1/lending/payments/${numId}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          payment_date: payload.paymentDate,
+          cycle_due_date: payload.targetInstallmentDate || null,
+          cycle_index: payload.cycleIndex ?? null,
+          amount: payload.amount,
+          penalty_amount: payload.penaltyAmount ?? 0,
+          method: payload.method,
+          reference_no: payload.referenceNo || '',
+          notes: payload.notes || '',
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        throw new Error(
+          formatUserFriendlyErrorMessage(err || { status: res.status }, 'Failed to update payment remittance.')
+        )
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
+      }
+      return await res.json()
+    } catch (err: any) {
+      console.error('LendingServiceGateway.updatePayment failed:', err)
+      throw new Error(formatUserFriendlyErrorMessage(err, 'Failed to update payment remittance.'))
+    }
+  }
+
+  /**
+   * Delete an existing payment remittance via backend service.
+   */
+  async deletePayment(paymentId: string | number): Promise<LendingFacility> {
+    const numId = typeof paymentId === 'number' ? paymentId : parseInt(String(paymentId).replace(/\D/g, ''), 10)
+    try {
+      const res = await fetch(`/api/v1/lending/payments/${numId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        throw new Error(
+          formatUserFriendlyErrorMessage(err || { status: res.status }, 'Failed to delete payment remittance.')
+        )
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('mct:notifications-updated'))
+      }
+      return await res.json()
+    } catch (err: any) {
+      console.error('LendingServiceGateway.deletePayment failed:', err)
+      throw new Error(formatUserFriendlyErrorMessage(err, 'Failed to delete payment remittance.'))
+    }
+  }
+
+  /**
    * Retrieve all lending transactions from the database with optional borrower filter.
    */
   async getTransactions(borrowerId?: number | string): Promise<LendingTransactionRecord[]> {

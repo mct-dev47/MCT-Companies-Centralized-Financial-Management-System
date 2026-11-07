@@ -26,6 +26,7 @@ from app.schemas.lending import (
     BorrowerDeleteResponse,
     BorrowerOut,
     LendingPaymentCreateRequest,
+    LendingPaymentUpdateRequest,
     LendingTransactionCreateRequest,
     LendingTransactionOut,
     LendingLedgerResponse,
@@ -291,4 +292,42 @@ def record_payment(
         recorded_by=recorded_by,
         cycle_due_date_val=payload.cycle_due_date,
         cycle_index_val=payload.cycle_index,
+    )
+
+
+@router.patch(
+    "/payments/{transaction_id}",
+    response_model=BorrowerOut,
+    summary="Update a lending payment remittance",
+)
+def update_payment(
+    transaction_id: int,
+    payload: LendingPaymentUpdateRequest,
+    user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    _enforce_lending_access(user)
+    return LendingService.update_payment(
+        db=db,
+        transaction_id=transaction_id,
+        payload=payload.model_dump(exclude_unset=True),
+        user=user,
+    )
+
+
+@router.delete(
+    "/payments/{transaction_id}",
+    response_model=BorrowerOut,
+    summary="Delete a lending payment remittance",
+)
+def delete_payment(
+    transaction_id: int,
+    user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    _enforce_lending_access(user)
+    return LendingService.delete_payment(
+        db=db,
+        transaction_id=transaction_id,
+        user=user,
     )

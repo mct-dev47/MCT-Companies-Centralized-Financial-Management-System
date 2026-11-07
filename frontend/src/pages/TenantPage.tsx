@@ -117,8 +117,8 @@ const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 const ITEMS_PER_PAGE = 10
-const SCHEDULE_ITEMS_PER_PAGE = 10
-const HISTORY_ITEMS_PER_PAGE = 5
+const SCHEDULE_ITEMS_PER_PAGE = 13
+const HISTORY_ITEMS_PER_PAGE = 13
 
 const PERIOD_STATUS_STYLES: Record<PeriodStatus, string> = {
   Paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -284,7 +284,6 @@ export const TenantPage: React.FC = () => {
   const [isSubmittingAdd, setIsSubmittingAdd] = React.useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = React.useState(false)
   const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
-  const [isSubmittingRecord, setIsSubmittingRecord] = React.useState(false)
   const [isSubmittingDelete, setIsSubmittingDelete] = React.useState(false)
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
@@ -325,6 +324,7 @@ export const TenantPage: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = React.useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = React.useState(false)
   const [isUpdatePaymentModalOpen, setIsUpdatePaymentModalOpen] = React.useState(false)
+  const [isDeletingRecord, setIsDeletingRecord] = React.useState(false)
 
   // Active target tenant
   const [activeTenant, setActiveTenant] = React.useState<TenantLease | null>(null)
@@ -354,28 +354,7 @@ export const TenantPage: React.FC = () => {
   const [historyPage, setHistoryPage] = React.useState(1)
 
   // Edit and remove recorded payments (spec 0016)
-  type RecordForm = {
-    date: string
-    amount: string
-    method: string
-    referenceNo: string
-    notes: string
-    periodIndex: number
-    status: 'Paid' | 'Missed'
-    missedReason: string
-  }
   const [editingRecord, setEditingRecord] = React.useState<DailyRentRecord | null>(null)
-  const [recordForm, setRecordForm] = React.useState<RecordForm>({
-    date: '',
-    amount: '',
-    method: 'Cash',
-    referenceNo: '',
-    notes: '',
-    periodIndex: 1,
-    status: 'Paid',
-    missedReason: 'Stall closed for the day',
-  })
-  const [recordError, setRecordError] = React.useState('')
   // What the remove confirmation is about: one payment record, or all payments that started at a period
   const [removeTarget, setRemoveTarget] = React.useState<
     | { kind: 'record'; record: DailyRentRecord }
@@ -628,6 +607,7 @@ export const TenantPage: React.FC = () => {
     setPaymentError('')
     setMenuOpenTenantId(null)
     setMenuPosition(null)
+    setEditingRecord(null)
     setIsUpdatePaymentModalOpen(true)
   }
 
@@ -937,7 +917,7 @@ export const TenantPage: React.FC = () => {
           amount: amt,
           method: paymentMethod,
           referenceNo: paymentRef.trim() || undefined,
-          notes: paymentNotes.trim() || 'Rent payment',
+          notes: paymentNotes.trim() || undefined,
           status: isPartial ? 'Partially Paid' : 'Paid',
           periodIndex: period.index,
         }
@@ -957,7 +937,7 @@ export const TenantPage: React.FC = () => {
         amount: amt,
         method: paymentMethod,
         referenceNo: paymentRef.trim() || undefined,
-        notes: paymentNotes.trim() || 'Daily rent remittance',
+        notes: paymentNotes.trim() || undefined,
         status: 'Paid',
       }
     } else {
@@ -1002,94 +982,12 @@ export const TenantPage: React.FC = () => {
 
   const handleOpenEditRecord = (record: DailyRentRecord) => {
     setEditingRecord(record)
-    setRecordForm({
-      date: record.date,
-      amount: record.status === 'Missed' ? '' : String(record.amount || ''),
-      method: record.method && record.method !== 'N/A' ? record.method : 'Cash',
-      referenceNo: record.referenceNo && record.referenceNo !== 'MISSED' ? record.referenceNo : '',
-      notes: record.status === 'Missed' && (record.notes || '').startsWith('Unpaid:') ? '' : record.notes || '',
-      periodIndex: record.periodIndex || 1,
-      status: record.status === 'Missed' ? 'Missed' : 'Paid',
-      missedReason: record.missedReason || 'Stall closed for the day',
-    })
-    setRecordError('')
-  }
-
-  const handleSubmitEditRecord = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isSubmittingRecord) return
-    if (!activeTenant || !editingRecord) return
-    const lease = activeTenant
-    const repeating = isRepeating(lease)
-    // Missed marks exist on leases that do not repeat and on Daily leases only
-    const canMarkMissed = !repeating || lease.repeat === 'Daily'
-    const isMissed = recordForm.status === 'Missed' && canMarkMissed
-
-    if (!recordForm.date) {
-      setRecordError('Date is required.')
-      return
-    }
-    let amount = 0
-    if (!isMissed) {
-      amount = round2(parseFloat(recordForm.amount))
-      if (isNaN(amount) || amount <= 0) {
-        setRecordError('Payment amount must be greater than 0.')
-        return
-      }
-    }
-    if (repeating) {
-      const count = getLeaseFinancials(lease, todayStr).periodCount
-      if (recordForm.periodIndex < 1 || recordForm.periodIndex > count) {
-        setRecordError('Pick a period that is on this lease.')
-        return
-      }
-    }
-
-    const input: PaymentInput = {
-      date: recordForm.date,
-      amount,
-      method: isMissed ? 'N/A' : recordForm.method,
-      referenceNo: isMissed ? 'MISSED' : recordForm.referenceNo.trim() || undefined,
-      notes: recordForm.notes.trim() || (isMissed ? `Unpaid: ${recordForm.missedReason}` : 'Rent payment'),
-      status: isMissed ? 'Missed' : 'Paid',
-      missedReason: isMissed ? recordForm.missedReason : undefined,
-      periodIndex: repeating ? recordForm.periodIndex : undefined,
-    }
-
-    // Quick check before asking the server: refuse a change that would put more money on the lease than it owes
-    const next: DailyRentRecord = { ...editingRecord, date: input.date, amount, status: input.status, periodIndex: input.periodIndex }
-    const payments = lease.dailyPayments.map((r) => (r.id === editingRecord.id ? next : r))
-    if (repeating) {
-      const fin = getLeaseFinancials({ ...lease, dailyPayments: payments }, todayStr)
-      if (round2(sumRecordedPayments(payments) - fin.amountPaid) > 0.005) {
-        setRecordError(
-          `This change puts more money on the lease than it owes. The most it can take is ${formatPHP(fin.totalDue)} in total.`
-        )
-        return
-      }
-    } else {
-      const newPaid = round2(lease.amountPaid + moneyOf(payments) - moneyOf(lease.dailyPayments))
-      if (newPaid > lease.totalAmountPayable + 0.005) {
-        setRecordError(
-          `This change puts more money on the lease than it owes. The most it can take is ${formatPHP(lease.totalAmountPayable)} in total.`
-        )
-        return
-      }
-    }
-
-    try {
-      let updated = await tenantService.updatePayment(lease.id, editingRecord.id, input)
-      updated = await syncStatus(updated)
-      applyLease(updated)
-    } catch (err) {
-      setRecordError(messageOf(err))
-      return
-    }
-    setEditingRecord(null)
+    setIsUpdatePaymentModalOpen(true)
   }
 
   const handleConfirmRemove = async () => {
-    if (!activeTenant || !removeTarget) return
+    if (!activeTenant || !removeTarget || isDeletingRecord) return
+    setIsDeletingRecord(true)
     const ids =
       removeTarget.kind === 'record' ? [removeTarget.record.id] : removeTarget.records.map((r) => r.id)
     try {
@@ -1099,10 +997,14 @@ export const TenantPage: React.FC = () => {
       }
       updated = await syncStatus(updated)
       applyLease(updated)
+      await loadTenants(true)
+      showToast('Payment removed successfully.')
     } catch (err) {
       setActionError(messageOf(err))
       // Show what the server really has after a partly finished removal
       void loadTenants(true)
+    } finally {
+      setIsDeletingRecord(false)
     }
     setRemoveTarget(null)
     setLedgerPage(1)
@@ -1281,9 +1183,9 @@ export const TenantPage: React.FC = () => {
   const renderDetailsPage = () => {
     if (!activeTenant) return null
 
-    const LEDGER_ITEMS_PER_PAGE = 8
-    const SCHEDULE_ITEMS_PER_PAGE = 8
-    const HISTORY_ITEMS_PER_PAGE = 8
+    const LEDGER_ITEMS_PER_PAGE = 13
+    const SCHEDULE_ITEMS_PER_PAGE = 13
+    const HISTORY_ITEMS_PER_PAGE = 13
 
     const fin = getFinancials(activeTenant)
     const repeatingLease = isRepeating(activeTenant) && fin.periodCount > 0
@@ -1378,12 +1280,31 @@ export const TenantPage: React.FC = () => {
       return true
     })
 
-    // Filter repeating history records
+    // Filter repeating history records (newest on top)
     const historyRecords = (activeTenant.dailyPayments || [])
       .slice()
       .sort((a, b) => {
+        const periodA = a.periodIndex ? fin.periods.find((p) => p.index === a.periodIndex) : undefined
+        const periodB = b.periodIndex ? fin.periods.find((p) => p.index === b.periodIndex) : undefined
+        const instA = periodA ? periodA.dueDate : (a.date || '')
+        const instB = periodB ? periodB.dueDate : (b.date || '')
+
+        // 1. Installment date descending (newest installment first)
+        const byInstallment = (instB || '').localeCompare(instA || '')
+        if (byInstallment !== 0) return byInstallment
+
+        // 2. Payment date (cash received date) descending (newest payment date first)
         const byDate = (b.date || '').localeCompare(a.date || '')
-        return byDate !== 0 ? byDate : (b.timestamp || '').localeCompare(a.timestamp || '')
+        if (byDate !== 0) return byDate
+
+        // 3. Timestamp descending (newest transaction time first)
+        const byTimestamp = (b.timestamp || '').localeCompare(a.timestamp || '')
+        if (byTimestamp !== 0) return byTimestamp
+
+        // 4. Numeric ID descending (highest / newest transaction ID first)
+        const idA = Number(a.id) || 0
+        const idB = Number(b.id) || 0
+        return idB - idA
       })
       .filter((rec) => {
         if (detailSearchQuery.trim()) {
@@ -1894,11 +1815,6 @@ export const TenantPage: React.FC = () => {
                               >
                                 <td className="py-2.5 px-3.5 font-mono text-focus whitespace-nowrap font-medium">
                                   {installmentDate}
-                                  {matchedPeriod && (
-                                    <span className="text-[10px] text-muted-fg ml-1.5 font-sans">
-                                      ({matchedPeriod.label})
-                                    </span>
-                                  )}
                                 </td>
                                 <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap font-medium">
                                   {rec.date}
@@ -1914,8 +1830,7 @@ export const TenantPage: React.FC = () => {
                                       <span>Partially Paid</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#960C01]">
-                                      <Check className="w-3 h-3 text-[#960C01]" />
+                                    <span className="inline-flex items-center text-xs font-bold text-[#960C01]">
                                       <span>Paid</span>
                                     </span>
                                   )}
@@ -1930,11 +1845,20 @@ export const TenantPage: React.FC = () => {
                                   {rec.method || 'Cash'}
                                 </td>
                                 <td className="py-2.5 px-3.5 font-mono text-muted-fg whitespace-nowrap">
-                                  {rec.referenceNo || '—'}
+                                  {rec.referenceNo || '-'}
                                 </td>
-                                <td className="py-2.5 px-3.5 text-muted-fg whitespace-normal break-words max-w-[320px] text-xs leading-relaxed" title={rec.notes || '—'}>
-                                  {rec.notes || '—'}
-                                </td>
+                                {(() => {
+                                  const displayRemarks = (rec.notes || (rec as any).remarks || '').trim() || '-'
+
+                                  return (
+                                    <td
+                                      className="py-2.5 px-3.5 text-muted-fg whitespace-normal break-words max-w-[320px] text-xs leading-relaxed"
+                                      title={displayRemarks !== '-' ? displayRemarks : undefined}
+                                    >
+                                      {displayRemarks}
+                                    </td>
+                                  )
+                                })()}
                                 {(() => {
                                   const rawCreatedBy = rec.createdByName
                                   const resolvedFullName = rawCreatedBy ? formatRealName(rawCreatedBy) : ''
@@ -3403,13 +3327,38 @@ export const TenantPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 4: Record Payment (Shared with FilCap Lending) */}
+      {/* MODAL 4: Record / Edit Payment (Shared with FilCap Lending) */}
       {activeTenant && (() => {
         const tenantFin = getLeaseFinancials(activeTenant, todayStr)
+        const editInitialData = editingRecord
+          ? {
+              id: editingRecord.id,
+              paymentDate: editingRecord.date,
+              targetInstallmentDate: (() => {
+                const matchedPeriod = editingRecord.periodIndex
+                  ? tenantFin.periods.find((per) => per.index === editingRecord.periodIndex)
+                  : undefined
+                return matchedPeriod ? matchedPeriod.dueDate : editingRecord.date
+              })(),
+              cycleIndex: editingRecord.periodIndex,
+              amount: editingRecord.amount,
+              method: editingRecord.method && editingRecord.method !== 'N/A' ? editingRecord.method : 'Cash',
+              referenceNo: editingRecord.referenceNo && editingRecord.referenceNo !== 'MISSED' ? editingRecord.referenceNo : '',
+              notes: editingRecord.notes || (editingRecord as any).remarks || '',
+              status: editingRecord.status,
+            }
+          : null
+
         return (
           <SharedPaymentModal
             open={isUpdatePaymentModalOpen}
-            onOpenChange={setIsUpdatePaymentModalOpen}
+            onOpenChange={(isOpen) => {
+              setIsUpdatePaymentModalOpen(isOpen)
+              if (!isOpen) {
+                setEditingRecord(null)
+              }
+            }}
+            editInitialData={editInitialData}
             isAudit={isAudit}
             entityName={activeTenant.tenantName}
             entitySubtitle={activeTenant.unitName}
@@ -3476,15 +3425,22 @@ export const TenantPage: React.FC = () => {
                 amount: subData.amount,
                 method: subData.method,
                 referenceNo: subData.referenceNo.trim() || undefined,
-                notes: subData.notes.trim() || 'Rent remittance',
+                notes: subData.notes.trim() || undefined,
                 status: subData.status || 'Paid',
                 periodIndex,
               }
 
-              let updated = await tenantService.addPayment(activeTenant.id, input)
+              let updated: TenantLease
+              if (editingRecord) {
+                updated = await tenantService.updatePayment(activeTenant.id, editingRecord.id, input)
+                showToast('Payment remittance updated successfully.')
+              } else {
+                updated = await tenantService.addPayment(activeTenant.id, input)
+                showToast('Payment remittance recorded successfully.')
+              }
               updated = await syncStatus(updated)
               applyLease(updated)
-              showToast('Payment remittance recorded successfully.')
+              setEditingRecord(null)
             }}
           />
         )
@@ -3612,182 +3568,6 @@ export const TenantPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 5: Edit a recorded payment (spec 0016) */}
-      <Dialog open={!!editingRecord} onOpenChange={(open) => { if (!open) setEditingRecord(null) }}>
-        <DialogContent className="sm:max-w-[560px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[88vh] overflow-y-auto">
-          <DialogHeader className="text-left">
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Pencil className="h-4 w-4 text-focus" />
-              <span>Edit Payment</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Change this payment for <strong className="text-focus">{activeTenant?.tenantName}</strong>. The amounts,
-              balance and period status are recalculated from the payments.
-            </DialogDescription>
-          </DialogHeader>
-
-          {activeTenant && editingRecord && (() => {
-            const repeating = isRepeating(activeTenant)
-            const canMarkMissed = !repeating || activeTenant.repeat === 'Daily'
-            const isMissed = recordForm.status === 'Missed' && canMarkMissed
-            const editPeriods = repeating ? getFinancials(activeTenant).periods : []
-            return (
-              <form onSubmit={handleSubmitEditRecord} className="space-y-3.5 mt-2">
-                {recordError && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-                    <span>{recordError}</span>
-                  </div>
-                )}
-
-                {canMarkMissed && (
-                  <div className="inline-flex items-center p-1 rounded-full bg-slate-100 border border-stroke/40 shadow-2xs">
-                    {(['Paid', 'Missed'] as const).map((opt) => (
-                      <button
-                        key={opt}
-                        type="button"
-                        onClick={() => {
-                          setRecordError('')
-                          setRecordForm({ ...recordForm, status: opt })
-                        }}
-                        className={cn(
-                          'px-4 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
-                          recordForm.status === opt ? 'bg-[#960C01] text-white shadow-xs' : 'text-muted-fg hover:text-focus'
-                        )}
-                      >
-                        {opt === 'Paid' ? 'Paid' : 'Unpaid (Missed)'}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {repeating && (
-                  <div className="space-y-1">
-                    <label htmlFor="edit-payment-period" className="text-xs font-semibold text-focus block">
-                      {isMissed ? 'Day' : 'Pay Starting From'} <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      id="edit-payment-period"
-                      value={recordForm.periodIndex}
-                      onChange={(e) => setRecordForm({ ...recordForm, periodIndex: Number(e.target.value) })}
-                      className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                    >
-                      {editPeriods.map((p) => (
-                        <option key={p.index} value={p.index}>
-                          {p.label} · due {p.dueDate}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label htmlFor="edit-payment-date" className="text-xs font-semibold text-focus block">
-                      {isMissed ? 'Date Marked' : 'Payment Date'} <span className="text-red-500">*</span>
-                    </label>
-                    <Input
-                      id="edit-payment-date"
-                      type="date"
-                      value={recordForm.date}
-                      onChange={(e) => setRecordForm({ ...recordForm, date: e.target.value })}
-                      className="h-10 text-xs sm:text-sm rounded-xl"
-                    />
-                  </div>
-
-                  {!isMissed && (
-                    <div className="space-y-1">
-                      <label htmlFor="edit-payment-amount" className="text-xs font-semibold text-focus block">
-                        Amount (₱) <span className="text-red-500">*</span>
-                      </label>
-                      <Input
-                        id="edit-payment-amount"
-                        type="number"
-                        min="0.01"
-                        step="any"
-                        value={recordForm.amount}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        onChange={(e) => setRecordForm({ ...recordForm, amount: e.target.value })}
-                        className="h-10 text-xs sm:text-sm rounded-xl font-semibold"
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {isMissed ? (
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-focus block">Reason</label>
-                    <Input
-                      value={recordForm.missedReason}
-                      onChange={(e) => setRecordForm({ ...recordForm, missedReason: e.target.value })}
-                      className="h-10 text-xs sm:text-sm rounded-xl"
-                    />
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-focus block">Payment Method</label>
-                      <select
-                        value={recordForm.method}
-                        onChange={(e) => setRecordForm({ ...recordForm, method: e.target.value })}
-                        className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                      >
-                        <option value="Cash">Cash</option>
-                        <option value="GCash">GCash</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                        <option value="Cheque">Cheque</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-focus block">Receipt / Ref No.</label>
-                      <Input
-                        value={recordForm.referenceNo}
-                        onChange={(e) => setRecordForm({ ...recordForm, referenceNo: e.target.value })}
-                        className="h-10 text-xs sm:text-sm rounded-xl font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-focus block">Remarks / Notes</label>
-                  <textarea
-                    rows={2}
-                    value={recordForm.notes}
-                    onChange={(e) => setRecordForm({ ...recordForm, notes: e.target.value })}
-                    className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none"
-                  />
-                </div>
-
-                {activeTenant.auditStatus && (activeTenant.auditStatus === 'Verified' || activeTenant.auditStatus === 'Flagged') && (
-                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-                    This lease is marked {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Flagged'}. Saving a change
-                    sets it back to pending audit.
-                  </p>
-                )}
-
-                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setEditingRecord(null)}
-                    className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer shadow-xs"
-                  >
-                    Save Changes
-                  </Button>
-                </div>
-              </form>
-            )
-          })()}
-        </DialogContent>
-      </Dialog>
-
       {/* MODAL 6: Confirm removing a payment, or marking a period unpaid (spec 0016) */}
       <Dialog open={!!removeTarget} onOpenChange={(open) => { if (!open) setRemoveTarget(null) }}>
         <DialogContent className="sm:max-w-[520px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
@@ -3830,6 +3610,7 @@ export const TenantPage: React.FC = () => {
             <Button
               type="button"
               variant="outline"
+              disabled={isDeletingRecord}
               onClick={() => setRemoveTarget(null)}
               className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
             >
@@ -3837,10 +3618,18 @@ export const TenantPage: React.FC = () => {
             </Button>
             <Button
               type="button"
+              disabled={isDeletingRecord}
               onClick={handleConfirmRemove}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs"
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs flex items-center gap-2"
             >
-              {removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}
+              {isDeletingRecord ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <span>{removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}</span>
+              )}
             </Button>
           </div>
         </DialogContent>
