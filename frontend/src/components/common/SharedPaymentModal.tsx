@@ -52,6 +52,18 @@ export interface PaymentSubmissionData {
   status: 'Paid' | 'Partially Paid'
 }
 
+export interface EditPaymentInitialData {
+  id?: string
+  paymentDate: string
+  targetInstallmentDate?: string
+  cycleIndex?: number
+  amount: number
+  method?: string
+  referenceNo?: string
+  notes?: string
+  status?: string
+}
+
 export interface CompletedPaymentReceiptData {
   entityName: string
   referenceNumber?: string
@@ -88,6 +100,9 @@ export interface SharedPaymentModalProps {
   existingPayments: PaymentRecordItem[]
   monthlyProgress?: MonthlyProgressItem[]
   onSubmitPayment: (data: PaymentSubmissionData) => Promise<void>
+  editInitialData?: EditPaymentInitialData | null
+  title?: string
+  description?: string
 }
 
 export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
@@ -108,9 +123,27 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   existingPayments,
   monthlyProgress,
   onSubmitPayment,
+  editInitialData = null,
+  title,
+  description,
 }) => {
   const isDaily = paymentFrequency === 'Daily' || !paymentFrequency
   const isMonthly = paymentFrequency === 'Monthly'
+  const isEditMode = Boolean(editInitialData)
+
+  const effectiveExistingPayments = React.useMemo(() => {
+    if (editInitialData?.id) {
+      return existingPayments.filter((p) => String(p.id) !== String(editInitialData.id))
+    }
+    return existingPayments
+  }, [existingPayments, editInitialData?.id])
+
+  const effectiveRemainingBalance = React.useMemo(() => {
+    if (isEditMode) {
+      return Math.round((remainingBalance + (editInitialData?.amount || 0)) * 100) / 100
+    }
+    return remainingBalance
+  }, [remainingBalance, isEditMode, editInitialData?.amount])
 
   const [paymentCalendarMonth, setPaymentCalendarMonth] = React.useState<Date>(new Date())
   const [paymentForm, setPaymentForm] = React.useState({
@@ -138,6 +171,26 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     }
 
     const todayStr = formatToYYYYMMDD(new Date())
+
+    if (editInitialData) {
+      const initTargetDate =
+        editInitialData.targetInstallmentDate || editInitialData.paymentDate || todayStr
+      setPaymentForm({
+        paymentAmount: String(editInitialData.amount ?? ''),
+        paymentDate: editInitialData.paymentDate || todayStr,
+        targetInstallmentDate: initTargetDate,
+        cycleIndex: editInitialData.cycleIndex,
+        method: editInitialData.method || 'Cash',
+        referenceNo: editInitialData.referenceNo || '',
+        notes: editInitialData.notes || '',
+        penaltyAmount: '0',
+      })
+      const initialCalDate = new Date(initTargetDate)
+      setPaymentCalendarMonth(!isNaN(initialCalDate.getTime()) ? initialCalDate : new Date())
+      setPaymentError(null)
+      return
+    }
+
     let initialDate = todayStr
     let initialCycleIndex: number | undefined = undefined
 
@@ -149,10 +202,10 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       }
     } else if (isDaily) {
       const lockedDates = new Set<string>()
-      existingPayments.forEach((p) => {
+      effectiveExistingPayments.forEach((p) => {
         const dt = p.cycle_due_date || p.cycleDueDate || p.date
         if (!dt) return
-        const sum = existingPayments
+        const sum = effectiveExistingPayments
           .filter((x) => (x.cycle_due_date || x.cycleDueDate || x.date) === dt)
           .reduce((acc, curr) => acc + (curr.amount || 0), 0)
         if (sum >= dailyTarget - 0.005 && dailyTarget > 0) {
@@ -192,14 +245,14 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     if (isMonthly && monthlyProgress && monthlyProgress.length > 0) {
       const activeM = monthlyProgress.find((m) => m.remaining > 0.005) || monthlyProgress[0]
       if (activeM) {
-        initialRemainingDue = Math.min(remainingBalance, activeM.remaining)
+        initialRemainingDue = Math.min(effectiveRemainingBalance, activeM.remaining)
       }
     } else if (isDaily) {
-      const paidOnInitial = existingPayments
+      const paidOnInitial = effectiveExistingPayments
         .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === initialDate)
         .reduce((sum, p) => sum + (p.amount || 0), 0)
       initialRemainingDue = Math.min(
-        remainingBalance,
+        effectiveRemainingBalance,
         Math.max(0, Math.round((dailyTarget - paidOnInitial) * 100) / 100)
       )
     }
@@ -217,7 +270,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     const initialCalDate = new Date(initialDate)
     setPaymentCalendarMonth(!isNaN(initialCalDate.getTime()) ? initialCalDate : new Date())
     setPaymentError(null)
-  }, [open, isDaily, isMonthly, contractDate, firstDueDate, leaseEndDate, dueDate, dailyTarget, existingPayments, monthlyProgress])
+  }, [open, isDaily, isMonthly, contractDate, firstDueDate, leaseEndDate, dueDate, dailyTarget, effectiveExistingPayments, effectiveRemainingBalance, monthlyProgress, editInitialData])
 
   // Calculations
   const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
@@ -234,7 +287,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   const rawPenaltyNum = parseFloat(paymentForm.penaltyAmount)
   const isPenaltyNegative = !isNaN(rawPenaltyNum) && rawPenaltyNum < 0
   const userPenaltyNum = Math.max(0, rawPenaltyNum || 0)
-  const maxAllowed = remainingBalance
+  const maxAllowed = effectiveRemainingBalance
   const currentPaymentNum = parseFloat(paymentForm.paymentAmount)
   const isAmountValid =
     !isNaN(currentPaymentNum) &&
@@ -242,12 +295,12 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     currentPaymentNum <= maxAllowed &&
     !isPenaltyNegative
 
-  const alreadyPaidOnSelectedDate = existingPayments
+  const alreadyPaidOnSelectedDate = effectiveExistingPayments
     .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === targetInstallmentDate)
     .reduce((sum, p) => sum + (p.amount || 0), 0)
 
   let periodRemainingDue = Math.min(
-    remainingBalance,
+    effectiveRemainingBalance,
     Math.max(0, Math.round((dailyTarget - alreadyPaidOnSelectedDate) * 100) / 100)
   )
 
@@ -259,7 +312,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
           m.dueDate === targetInstallmentDate
       ) || monthlyProgress[0]
     if (selectedMonth) {
-      periodRemainingDue = Math.min(remainingBalance, selectedMonth.remaining)
+      periodRemainingDue = Math.min(effectiveRemainingBalance, selectedMonth.remaining)
     }
   }
 
@@ -345,7 +398,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
 
     const remainingBalanceAfter = Math.max(
       0,
-      Math.round((remainingBalance - currentPaymentNum) * 100) / 100
+      Math.round((effectiveRemainingBalance - currentPaymentNum) * 100) / 100
     )
     const periodRemainingAfter = Math.max(
       0,
@@ -415,11 +468,16 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
               <Coins className="h-5 w-5 text-emerald-600" />
-              <span>Record Payment</span>
+              <span>{title || (isEditMode ? 'Edit Payment' : 'Record Payment')}</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-fg">
-              Record payment remittance for <strong className="text-focus">{entityName}</strong>
-              {entitySubtitle ? ` (${entitySubtitle})` : ` (${paymentFrequency} Schedule)`}.
+              {description || (
+                <>
+                  {isEditMode ? 'Update payment remittance for ' : 'Record payment remittance for '}
+                  <strong className="text-focus">{entityName}</strong>
+                  {entitySubtitle ? ` (${entitySubtitle})` : ` (${paymentFrequency} Schedule)`}.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
 
@@ -471,7 +529,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                             onClick={() => {
                               if (!isFullyPaid) {
                                 setPaymentError(null)
-                                const remMonth = Math.min(remainingBalance, m.remaining)
+                                const remMonth = Math.min(effectiveRemainingBalance, m.remaining)
                                 setPaymentForm({
                                   ...paymentForm,
                                   targetInstallmentDate: m.dueDate,
@@ -595,7 +653,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                         const totalDays = new Date(calYear, calMonth + 1, 0).getDate()
 
                         const paidByDateMap = new Map<string, number>()
-                        existingPayments.forEach((p) => {
+                        effectiveExistingPayments.forEach((p) => {
                           const dt = p.cycle_due_date || p.cycleDueDate || p.date
                           if (!dt) return
                           paidByDateMap.set(dt, (paidByDateMap.get(dt) || 0) + (p.amount || 0))
@@ -635,7 +693,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                                     if (!isDisabled) {
                                       setPaymentError(null)
                                       const remDate = Math.min(
-                                        remainingBalance,
+                                        effectiveRemainingBalance,
                                         Math.max(0, Math.round((dailyTarget - paidOnDate) * 100) / 100)
                                       )
                                       setPaymentForm({
@@ -1004,10 +1062,12 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
           <DialogHeader>
             <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
               <Coins className="h-5 w-5 text-[#960C01]" />
-              <span>Confirm Payment Transaction</span>
+              <span>{isEditMode ? 'Confirm Updated Payment Transaction' : 'Confirm Payment Transaction'}</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-fg mt-1">
-              Please review the payment details below before recording this transaction.
+              {isEditMode
+                ? 'Please review the updated payment details below before saving this transaction.'
+                : 'Please review the payment details below before recording this transaction.'}
             </DialogDescription>
           </DialogHeader>
 
@@ -1141,7 +1201,9 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   onClick={handleConfirmPayment}
                   className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
                 >
-                  {isSubmitting ? 'Recording...' : 'Confirm & Record Payment'}
+                  {isSubmitting
+                    ? (isEditMode ? 'Updating...' : 'Recording...')
+                    : (isEditMode ? 'Confirm & Update Payment' : 'Confirm & Record Payment')}
                 </Button>
               </div>
             </div>
@@ -1166,10 +1228,10 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   <Check className="w-6 h-6" />
                 </div>
                 <DialogTitle className="text-lg font-bold text-focus">
-                  Payment Recorded Successfully
+                  {isEditMode ? 'Payment Updated Successfully' : 'Payment Recorded Successfully'}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-fg mt-1">
-                  Payment transaction for <strong className="text-focus">{completedReceipt.entityName}</strong> has been saved.
+                  Payment transaction for <strong className="text-focus">{completedReceipt.entityName}</strong> has been {isEditMode ? 'updated.' : 'saved.'}
                 </DialogDescription>
               </div>
 

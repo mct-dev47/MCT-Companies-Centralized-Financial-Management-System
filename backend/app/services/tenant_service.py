@@ -119,7 +119,9 @@ class SqlStore:
 
     def _lease_row(self, lease: TenantLease) -> Dict[str, Any]:
         row = _model_to_dict(lease, LEASE_COLUMNS)
-        row["payments"] = [_model_to_dict(p, PAYMENT_COLUMNS) for p in lease.payments]
+        pays = [_model_to_dict(p, PAYMENT_COLUMNS) for p in lease.payments]
+        pays.sort(key=lambda p: (str(p.get("payment_date")), p.get("payment_id") or 0), reverse=True)
+        row["payments"] = pays
         return row
 
     def list_leases(self, company_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
