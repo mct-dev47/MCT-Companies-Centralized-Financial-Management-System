@@ -1666,6 +1666,10 @@ class LendingService:
                 notes=(notes or "").strip(),
                 recorded_by=recorded_by,
             )
+            if db.bind and db.bind.dialect.name == "sqlite":
+                from sqlalchemy import func
+                max_t_id = db.query(func.max(LendingTransaction.transaction_id)).scalar() or 0
+                new_tx.transaction_id = max_t_id + 1
             db.add(new_tx)
 
             # If now settled on this cycle date, mark any earlier partial transactions as Completed
@@ -1849,6 +1853,7 @@ class LendingService:
             if "notes" in payload:
                 rep.notes = payload["notes"] or "-"
             db.commit()
+            db.expire_all()
             system_cache.invalidate_tag("notifications")
             return cls.get_borrower(db=db, borrower_id=loan.loan_id)
 
@@ -1939,6 +1944,7 @@ class LendingService:
             t.status = "Completed" if is_settled else "Partially Paid"
 
         db.commit()
+        db.expire_all()
         system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower.borrower_id)
 
@@ -1958,6 +1964,7 @@ class LendingService:
             loan_id = rep.loan_id
             db.delete(rep)
             db.commit()
+            db.expire_all()
             system_cache.invalidate_tag("notifications")
             return cls.get_borrower(db=db, borrower_id=loan_id)
 
@@ -2018,6 +2025,7 @@ class LendingService:
             t.status = "Completed" if is_settled else "Partially Paid"
 
         db.commit()
+        db.expire_all()
         system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower.borrower_id)
 

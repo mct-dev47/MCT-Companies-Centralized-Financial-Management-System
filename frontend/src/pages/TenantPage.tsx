@@ -324,6 +324,7 @@ export const TenantPage: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = React.useState(false)
   const [isDeleteModalOpen, setIsDeleteModalOpen] = React.useState(false)
   const [isUpdatePaymentModalOpen, setIsUpdatePaymentModalOpen] = React.useState(false)
+  const [isDeletingRecord, setIsDeletingRecord] = React.useState(false)
 
   // Active target tenant
   const [activeTenant, setActiveTenant] = React.useState<TenantLease | null>(null)
@@ -985,7 +986,8 @@ export const TenantPage: React.FC = () => {
   }
 
   const handleConfirmRemove = async () => {
-    if (!activeTenant || !removeTarget) return
+    if (!activeTenant || !removeTarget || isDeletingRecord) return
+    setIsDeletingRecord(true)
     const ids =
       removeTarget.kind === 'record' ? [removeTarget.record.id] : removeTarget.records.map((r) => r.id)
     try {
@@ -995,10 +997,14 @@ export const TenantPage: React.FC = () => {
       }
       updated = await syncStatus(updated)
       applyLease(updated)
+      await loadTenants(true)
+      showToast('Payment removed successfully.')
     } catch (err) {
       setActionError(messageOf(err))
       // Show what the server really has after a partly finished removal
       void loadTenants(true)
+    } finally {
+      setIsDeletingRecord(false)
     }
     setRemoveTarget(null)
     setLedgerPage(1)
@@ -3604,6 +3610,7 @@ export const TenantPage: React.FC = () => {
             <Button
               type="button"
               variant="outline"
+              disabled={isDeletingRecord}
               onClick={() => setRemoveTarget(null)}
               className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
             >
@@ -3611,10 +3618,18 @@ export const TenantPage: React.FC = () => {
             </Button>
             <Button
               type="button"
+              disabled={isDeletingRecord}
               onClick={handleConfirmRemove}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs"
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs flex items-center gap-2"
             >
-              {removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}
+              {isDeletingRecord ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <span>{removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}</span>
+              )}
             </Button>
           </div>
         </DialogContent>

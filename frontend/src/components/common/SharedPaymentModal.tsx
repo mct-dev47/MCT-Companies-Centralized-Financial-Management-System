@@ -145,6 +145,39 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     return remainingBalance
   }, [remainingBalance, isEditMode, editInitialData?.amount])
 
+  const effectiveMonthlyProgress = React.useMemo(() => {
+    if (!monthlyProgress) return undefined
+    if (!isEditMode || !editInitialData) return monthlyProgress
+
+    return monthlyProgress.map((m) => {
+      const isEditingThisMonth =
+        (typeof editInitialData.cycleIndex === 'number' && m.monthIndex === editInitialData.cycleIndex) ||
+        (editInitialData.targetInstallmentDate && m.dueDate === editInitialData.targetInstallmentDate)
+
+      if (!isEditingThisMonth) return m
+
+      const revertedPaid = Math.max(0, Math.round((m.paid - (editInitialData.amount || 0)) * 100) / 100)
+      const revertedRemaining = Math.max(0, Math.round((m.target - revertedPaid) * 100) / 100)
+      const isRevertedPaid = revertedRemaining <= 0.005
+
+      let status = m.status
+      if (isRevertedPaid) {
+        status = 'Paid'
+      } else if (revertedPaid > 0) {
+        status = 'Partially Paid'
+      } else {
+        status = m.isOverdue ? 'Overdue' : 'Due'
+      }
+
+      return {
+        ...m,
+        paid: revertedPaid,
+        remaining: revertedRemaining,
+        status,
+      }
+    })
+  }, [monthlyProgress, isEditMode, editInitialData])
+
   const [paymentCalendarMonth, setPaymentCalendarMonth] = React.useState<Date>(new Date())
   const [paymentForm, setPaymentForm] = React.useState({
     paymentAmount: '',
@@ -194,8 +227,8 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     let initialDate = todayStr
     let initialCycleIndex: number | undefined = undefined
 
-    if (isMonthly && monthlyProgress && monthlyProgress.length > 0) {
-      const activeM = monthlyProgress.find((m) => m.remaining > 0.005) || monthlyProgress[0]
+    if (isMonthly && effectiveMonthlyProgress && effectiveMonthlyProgress.length > 0) {
+      const activeM = effectiveMonthlyProgress.find((m) => m.remaining > 0.005) || effectiveMonthlyProgress[0]
       if (activeM) {
         initialDate = activeM.dueDate
         initialCycleIndex = activeM.monthIndex
@@ -242,8 +275,8 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     }
 
     let initialRemainingDue = 0
-    if (isMonthly && monthlyProgress && monthlyProgress.length > 0) {
-      const activeM = monthlyProgress.find((m) => m.remaining > 0.005) || monthlyProgress[0]
+    if (isMonthly && effectiveMonthlyProgress && effectiveMonthlyProgress.length > 0) {
+      const activeM = effectiveMonthlyProgress.find((m) => m.remaining > 0.005) || effectiveMonthlyProgress[0]
       if (activeM) {
         initialRemainingDue = Math.min(effectiveRemainingBalance, activeM.remaining)
       }
@@ -270,7 +303,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     const initialCalDate = new Date(initialDate)
     setPaymentCalendarMonth(!isNaN(initialCalDate.getTime()) ? initialCalDate : new Date())
     setPaymentError(null)
-  }, [open, isDaily, isMonthly, contractDate, firstDueDate, leaseEndDate, dueDate, dailyTarget, effectiveExistingPayments, effectiveRemainingBalance, monthlyProgress, editInitialData])
+  }, [open, isDaily, isMonthly, contractDate, firstDueDate, leaseEndDate, dueDate, dailyTarget, effectiveExistingPayments, effectiveRemainingBalance, effectiveMonthlyProgress, editInitialData])
 
   // Calculations
   const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
@@ -304,13 +337,14 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     Math.max(0, Math.round((dailyTarget - alreadyPaidOnSelectedDate) * 100) / 100)
   )
 
-  if (isMonthly && monthlyProgress) {
+  if (isMonthly && (effectiveMonthlyProgress || monthlyProgress)) {
+    const progList = effectiveMonthlyProgress || monthlyProgress || []
     const selectedMonth =
-      monthlyProgress.find(
+      progList.find(
         (m) =>
           (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
           m.dueDate === targetInstallmentDate
-      ) || monthlyProgress[0]
+      ) || progList[0]
     if (selectedMonth) {
       periodRemainingDue = Math.min(effectiveRemainingBalance, selectedMonth.remaining)
     }
@@ -357,25 +391,57 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       return
     }
 
-    if (isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005 && dailyTarget > 0) {
-      setPaymentError(
-        `Installment date ${targetInstallmentDate} is already fully paid and locked. You cannot duplicate payments for a settled date.`
-      )
-      return
-    }
+    const isSameInstallmentAsEditing =
+      isEditMode &&
+      editInitialData &&
+      ((typeof editInitialData.cycleIndex === 'number' && paymentForm.cycleIndex === editInitialData.cycleIndex) ||
+        (editInitialData.targetInstallmentDate && targetInstallmentDate === editInitialData.targetInstallmentDate))
 
-    if (isMonthly && monthlyProgress) {
-      const selectedMonth =
-        monthlyProgress.find(
+    if (!isSameInstallmentAsEditing) {
+      if (isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005 && dailyTarget > 0) {
+        setPaymentError(
+          `Installment date ${targetInstallmentDate} is already fully paid and locked. You cannot duplicate payments for a settled date.`
+        )
+        return
+      }
+
+      if (isMonthly && (effectiveMonthlyProgress || monthlyProgress)) {
+        const progList = effectiveMonthlyProgress || monthlyProgress || []
+        const selectedMonth =
+          progList.find(
+            (m) =>
+              (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
+              m.dueDate === targetInstallmentDate
+          )
+        if (selectedMonth && selectedMonth.remaining <= 0.005) {
+          setPaymentError(
+            `Installment month ${selectedMonth.monthIndex} (${selectedMonth.dueDate}) is already fully paid and locked. You cannot duplicate payments for a settled month.`
+          )
+          return
+        }
+      }
+    } else {
+      // User is editing on the original installment date
+      if (isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005 && dailyTarget > 0) {
+        setPaymentError(
+          `Installment date ${targetInstallmentDate} is already fully settled by other transactions.`
+        )
+        return
+      }
+
+      if (isMonthly && (effectiveMonthlyProgress || monthlyProgress)) {
+        const progList = effectiveMonthlyProgress || monthlyProgress || []
+        const selectedMonth = progList.find(
           (m) =>
             (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
             m.dueDate === targetInstallmentDate
         )
-      if (selectedMonth && selectedMonth.remaining <= 0.005) {
-        setPaymentError(
-          `Installment month ${selectedMonth.monthIndex} (${selectedMonth.dueDate}) is already fully paid and locked. You cannot duplicate payments for a settled month.`
-        )
-        return
+        if (selectedMonth && selectedMonth.remaining <= 0.005) {
+          setPaymentError(
+            `Installment month ${selectedMonth.monthIndex} (${selectedMonth.dueDate}) is already fully settled by other transactions.`
+          )
+          return
+        }
       }
     }
 
@@ -503,7 +569,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
               {/* Left Column: Interactive Calendar Date Picker for Daily, or Month Selector for Monthly */}
               <div className="space-y-1.5">
-                {isMonthly && monthlyProgress ? (
+                {(isMonthly && (effectiveMonthlyProgress || monthlyProgress)) ? (
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-semibold text-focus">
@@ -515,11 +581,16 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                     </div>
 
                     <div className="border border-stroke/60 rounded-xl p-3 bg-white space-y-2 max-h-[300px] overflow-y-auto">
-                      {monthlyProgress.map((m) => {
+                      {(effectiveMonthlyProgress || monthlyProgress)!.map((m) => {
                         const isSelected =
                           paymentForm.cycleIndex === m.monthIndex ||
                           (!paymentForm.cycleIndex && targetInstallmentDate === m.dueDate)
-                        const isFullyPaid = m.status === 'Paid' || m.remaining <= 0.005
+                        const isCurrentEditMonth =
+                          isEditMode &&
+                          editInitialData &&
+                          ((typeof editInitialData.cycleIndex === 'number' && m.monthIndex === editInitialData.cycleIndex) ||
+                           (editInitialData.targetInstallmentDate && m.dueDate === editInitialData.targetInstallmentDate))
+                        const isFullyPaid = (m.status === 'Paid' || m.remaining <= 0.005) && !isCurrentEditMonth
 
                         return (
                           <button
@@ -678,11 +749,16 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                               const isBefore = startBorrowed ? dateStr < startBorrowed : false
                               const isAfter = endBorrowed ? dateStr > endBorrowed : false
                               const paidOnDate = paidByDateMap.get(dateStr) || 0
-                              const isPaid = paidOnDate >= dailyTarget - 0.005 && dailyTarget > 0
+                              const isCurrentEditDate =
+                                isEditMode &&
+                                editInitialData &&
+                                (editInitialData.targetInstallmentDate === dateStr ||
+                                 editInitialData.paymentDate === dateStr)
+                              const isPaid = (paidOnDate >= dailyTarget - 0.005 && dailyTarget > 0) && !isCurrentEditDate
                               const isPartial = !isPaid && paidOnDate > 0
                               const isMissed = !isBefore && !isAfter && !isPaid && dateStr < todayStr
                               const isSelected = targetInstallmentDate === dateStr
-                              const isDisabled = isBefore || isAfter || isPaid
+                              const isDisabled = isBefore || isAfter || (isPaid && !isCurrentEditDate)
 
                               return (
                                 <button
