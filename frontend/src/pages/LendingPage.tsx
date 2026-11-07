@@ -27,7 +27,8 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
-import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
+import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
+import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -70,37 +71,7 @@ type PeriodType = (typeof PERIOD_OPTIONS)[number]
 const COMPANY_NAME = 'FilCap Prime Holdings Corp.'
 
 const ITEMS_PER_PAGE = 10 // Total no. of borrowers in table view
-const HISTORY_ITEMS_PER_PAGE = 9 // Total no. of payment records in payment history table
-
-interface PendingPaymentData {
-  facilityId: string
-  borrowerName: string
-  loanId: string | number
-  paymentDate: string
-  targetInstallmentDate?: string
-  cycleDueDate?: string
-  cycleIndex?: number
-  isLate?: boolean
-  daysLate?: number
-  penaltyPortion?: number
-  amount: number
-  method: string
-  referenceNo: string
-  notes: string
-  paymentStatus: 'Paid' | 'Partially Paid'
-  monthIndex?: number
-  periodLabel?: string
-  targetDue: number
-  alreadyPaidForPeriod: number
-  periodRemainingAfter: number
-  remainingBalanceBefore: number
-  remainingBalanceAfter: number
-}
-
-interface CompletedPaymentReceipt extends PendingPaymentData {
-  transactionId: string
-  timestamp: string
-}
+const HISTORY_ITEMS_PER_PAGE = 13 // Total no. of payment records in payment history table (fills all allocated space)
 
 const formatAuditTimestamp = (dateVal?: string | null, isoVal?: string | null): string => {
   if (dateVal && dateVal !== '-' && dateVal !== '—') {
@@ -246,15 +217,15 @@ export const LendingPage: React.FC = () => {
 
   // View mode and modals state
   const [viewMode, setViewMode] = React.useState<'list' | 'details'>('list')
-  const [paymentCalendarMonth, setPaymentCalendarMonth] = React.useState<Date>(() => new Date())
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
   const [isEditModalOpen, setIsEditModalOpen] = React.useState(false)
   const [isDailyPaymentModalOpen, setIsDailyPaymentModalOpen] = React.useState(false)
+  const [editingPayment, setEditingPayment] = React.useState<DailyPaymentRecord | null>(null)
+  const [paymentToDelete, setPaymentToDelete] = React.useState<DailyPaymentRecord | null>(null)
+  const [isDeletePaymentModalOpen, setIsDeletePaymentModalOpen] = React.useState(false)
+  const [isDeletingPayment, setIsDeletingPayment] = React.useState(false)
+  const [deletePaymentError, setDeletePaymentError] = React.useState<string | null>(null)
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = React.useState(false)
-  const [isPaymentConfirmModalOpen, setIsPaymentConfirmModalOpen] = React.useState(false)
-  const [isPaymentSuccessModalOpen, setIsPaymentSuccessModalOpen] = React.useState(false)
-  const [pendingPayment, setPendingPayment] = React.useState<PendingPaymentData | null>(null)
-  const [completedReceipt, setCompletedReceipt] = React.useState<CompletedPaymentReceipt | null>(null)
   const [paymentError, setPaymentError] = React.useState<string | null>(null)
   const [addModalError, setAddModalError] = React.useState<string | null>(null)
   const [editModalError, setEditModalError] = React.useState<string | null>(null)
@@ -351,25 +322,7 @@ export const LendingPage: React.FC = () => {
   const [historySearchQuery, setHistorySearchQuery] = React.useState('')
   const [historyCurrentPage, setHistoryCurrentPage] = React.useState(1)
 
-  // Form state for Update Payment Modal
-  const [paymentForm, setPaymentForm] = React.useState<{
-    paymentAmount: string
-    paymentDate: string
-    targetInstallmentDate: string
-    method: string
-    referenceNo: string
-    notes: string
-    cycleIndex?: number
-    penaltyAmount: string
-  }>({
-    paymentAmount: '',
-    paymentDate: formatToYYYYMMDD(new Date()),
-    targetInstallmentDate: formatToYYYYMMDD(new Date()),
-    method: 'Cash',
-    referenceNo: '',
-    notes: '',
-    penaltyAmount: '0',
-  })
+
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -814,348 +767,41 @@ export const LendingPage: React.FC = () => {
     if (e) e.stopPropagation()
     if (isAudit) return
     setActiveFacility(facility)
+    setEditingPayment(null)
     setPaymentError(null)
-
-    // Compute smart initial date: for Daily, pick the first date not yet fully paid (or today if not fully paid)
-    let initialDate = formatToYYYYMMDD(new Date())
-    if ((!facility.paymentFrequency || facility.paymentFrequency === 'Daily') && facility.dailyPayments) {
-      const dailyTarget = getFacilityDailyTarget(facility)
-      const paidByDate = new Map<string, number>()
-      const lockedDates = new Set<string>()
-      facility.dailyPayments.forEach((p) => {
-        if (!p.date) return
-        paidByDate.set(p.date, (paidByDate.get(p.date) || 0) + (p.amount || 0))
-      })
-      paidByDate.forEach((amt, dt) => {
-        if (amt >= dailyTarget - 0.005) {
-          lockedDates.add(dt)
-        }
-      })
-
-      if (lockedDates.has(initialDate)) {
-        const start = new Date(facility.dateBorrowed)
-        const today = new Date(initialDate)
-        let foundUnpaid: string | null = null
-        if (!isNaN(start.getTime())) {
-          const cur = new Date(start)
-          while (cur <= today) {
-            const d = formatToYYYYMMDD(cur)
-            if (!lockedDates.has(d)) {
-              foundUnpaid = d
-              break
-            }
-            cur.setDate(cur.getDate() + 1)
-          }
-        }
-        if (foundUnpaid) {
-          initialDate = foundUnpaid
-        } else {
-          const tomorrow = new Date(today)
-          tomorrow.setDate(tomorrow.getDate() + 1)
-          initialDate = formatToYYYYMMDD(tomorrow)
-        }
-      }
-    }
-
-    let initialCycleIndex: number | undefined = undefined
-    if (facility.paymentFrequency === 'Monthly') {
-      const progress = getMonthlyProgress(facility)
-      if (progress.activeMonth) {
-        initialDate = progress.activeMonth.dueDate
-        initialCycleIndex = progress.activeMonth.monthIndex
-      }
-    }
-
-    const todayFormatted = formatToYYYYMMDD(new Date())
-    setPaymentForm({
-      paymentAmount: '',
-      paymentDate: todayFormatted,
-      targetInstallmentDate: initialDate,
-      cycleIndex: initialCycleIndex,
-      method: 'Cash',
-      referenceNo: '',
-      notes: '',
-      penaltyAmount: '0',
-    })
-    setPaymentCalendarMonth(new Date())
     setIsDailyPaymentModalOpen(true)
   }
   const handleOpenDailyPaymentModal = handleOpenPaymentModal
 
-  // Validate payment form and open Confirmation Modal
-  const handleRecordDailyPayment = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isAudit || !activeFacility) return
+  const handleOpenEditPayment = (payment: DailyPaymentRecord) => {
+    if (isAudit) return
+    setEditingPayment(payment)
     setPaymentError(null)
-
-    const freq = activeFacility.paymentFrequency || 'Daily'
-    const isDaily = freq === 'Daily'
-    const isMonthly = freq === 'Monthly'
-    const dailyTarget = getFacilityDailyTarget(activeFacility)
-    const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
-    const cashReceivedDate = paymentForm.paymentDate
-
-    const alreadyPaidOnDate = (activeFacility.dailyPayments || [])
-      .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === targetInstallmentDate)
-      .reduce((sum, p) => sum + (p.amount || 0), 0)
-
-    if (isDaily && alreadyPaidOnDate >= dailyTarget - 0.005) {
-      setPaymentError(
-        `Installment date ${targetInstallmentDate} is already fully paid and locked. You cannot add or duplicate payments for a settled date.`
-      )
-      return
-    }
-
-    const paymentNum = parseFloat(paymentForm.paymentAmount)
-    if (isNaN(paymentNum) || paymentNum < 1) {
-      setPaymentError('Payment Amount cannot be lower than  ₱1.00.')
-      return
-    }
-
-    if (!paymentForm.method || !paymentForm.method.trim()) {
-      setPaymentError('Payment Method is required.')
-      return
-    }
-
-    if ((paymentForm.notes || '').length > 50) {
-      setPaymentError('Remarks cannot exceed 50 characters.')
-      return
-    }
-
-    const rawPenalty = parseFloat(paymentForm.penaltyAmount)
-    if (!isNaN(rawPenalty) && rawPenalty < 0) {
-      setPaymentError('Late payment charges can be ₱0.00 but can never be a negative value.')
-      return
-    }
-
-    if (paymentNum > activeFacility.remainingBalance) {
-      setPaymentError(
-        `Payment amount (${formatPHP(paymentNum)}) cannot exceed the remaining balance of ${formatPHP(activeFacility.remainingBalance)}.`
-      )
-      return
-    }
-
-    let resolvedMonthIndex: number | undefined = undefined
-    let resolvedPeriodLabel: string | undefined = undefined
-    let targetDue = dailyTarget
-    let alreadyPaidForPeriod = alreadyPaidOnDate
-    let periodRemainingBefore = Math.min(
-      activeFacility.remainingBalance,
-      Math.max(0, Math.round((dailyTarget - alreadyPaidOnDate) * 100) / 100)
-    )
-
-    if (isMonthly) {
-      const progress = getMonthlyProgress(activeFacility)
-      const targetMonth = progress.months.find(
-        (m) =>
-          (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
-          m.dueDate === targetInstallmentDate
-      ) || progress.activeMonth
-      resolvedMonthIndex = targetMonth.monthIndex
-      resolvedPeriodLabel = `Month ${targetMonth.monthIndex}`
-      targetDue = targetMonth.target
-      alreadyPaidForPeriod = targetMonth.paid
-      periodRemainingBefore = Math.min(activeFacility.remainingBalance, targetMonth.remaining)
-
-      if (paymentNum > targetMonth.remaining + 0.005) {
-        setPaymentError(
-          `For Month ${targetMonth.monthIndex}, the maximum due is ${formatPHP(targetMonth.remaining)}.`
-        )
-        return
-      }
-    } else if (!isDaily) {
-      const nextInst = getNextInstallmentInfo(activeFacility)
-      if (nextInst) {
-        resolvedPeriodLabel = nextInst.periodLabel
-        targetDue = nextInst.target
-        periodRemainingBefore = Math.min(activeFacility.remainingBalance, nextInst.remaining)
-      }
-    }
-
-    // Determine late status and user-specified penalty charges
-    const isLate = Boolean(targetInstallmentDate && cashReceivedDate > targetInstallmentDate)
-    let daysLate = 0
-    if (isLate && targetInstallmentDate && cashReceivedDate) {
-      const d1 = new Date(cashReceivedDate)
-      const d2 = new Date(targetInstallmentDate)
-      daysLate = Math.max(1, Math.round((d1.getTime() - d2.getTime()) / (1000 * 60 * 60 * 24)))
-    }
-    // User directly inputs penalty charge (or 0 if waived)
-    const enteredPenalty = Math.max(0, parseFloat(paymentForm.penaltyAmount) || 0)
-    const penaltyPortion = isLate ? enteredPenalty : enteredPenalty
-
-    // Penalty is not included in the deduction of total payable.
-    // Only the loan repayment amount (paymentNum) deducts from remaining loan balance.
-    const remainingBalanceAfter = Math.max(
-      0,
-      Math.round((activeFacility.remainingBalance - paymentNum) * 100) / 100
-    )
-    const periodRemainingAfter = Math.max(
-      0,
-      Math.round((periodRemainingBefore - paymentNum) * 100) / 100
-    )
-
-    // Determine whether this payment settles the installment period or is Partially Paid
-    const isPartiallyPaid = periodRemainingAfter > 0.005 && remainingBalanceAfter > 0.005
-    const paymentStatus: 'Paid' | 'Partially Paid' = isPartiallyPaid ? 'Partially Paid' : 'Paid'
-
-    setPendingPayment({
-      facilityId: activeFacility.id,
-      borrowerName: activeFacility.borrowerName,
-      loanId: activeFacility.loanId,
-      paymentDate: cashReceivedDate,
-      targetInstallmentDate,
-      cycleDueDate: targetInstallmentDate,
-      cycleIndex: paymentForm.cycleIndex,
-      isLate,
-      daysLate,
-      penaltyPortion,
-      amount: paymentNum,
-      method: paymentForm.method,
-      referenceNo: paymentForm.referenceNo.trim(),
-      notes: paymentForm.notes.trim(),
-      paymentStatus,
-      monthIndex: resolvedMonthIndex,
-      periodLabel: resolvedPeriodLabel,
-      targetDue,
-      alreadyPaidForPeriod,
-      periodRemainingAfter,
-      remainingBalanceBefore: activeFacility.remainingBalance,
-      remainingBalanceAfter,
-    })
-    setIsPaymentConfirmModalOpen(true)
+    setIsDailyPaymentModalOpen(true)
   }
 
-  // Execute confirmed payment transaction and open Success Modal
-  const handleConfirmRecordPayment = async () => {
-    if (isAudit || !activeFacility || !pendingPayment) return
-    setIsSubmittingPayment(true)
-    setPaymentError(null)
+  const handleOpenDeletePayment = (payment: DailyPaymentRecord) => {
+    if (isAudit) return
+    setPaymentToDelete(payment)
+    setDeletePaymentError(null)
+    setIsDeletePaymentModalOpen(true)
+  }
 
+  const handleConfirmDeletePayment = async () => {
+    if (!activeFacility || !paymentToDelete) return
+    setIsDeletingPayment(true)
+    setDeletePaymentError(null)
     try {
-      const backendRes = await lendingService.recordPayment({
-        borrower_id: activeFacility.borrower_id || activeFacility.borrowerId,
-        facilityId: activeFacility.id,
-        paymentDate: pendingPayment.paymentDate,
-        cycleDueDate: pendingPayment.cycleDueDate,
-        cycleIndex: pendingPayment.cycleIndex,
-        amount: pendingPayment.amount,
-        penaltyAmount: pendingPayment.penaltyPortion,
-        method: pendingPayment.method,
-        referenceNo: pendingPayment.referenceNo,
-        notes: pendingPayment.notes,
-        recorded_by: user?.fullName || undefined,
-      })
-      if (!backendRes.success) {
-        setPaymentError(
-          formatUserFriendlyErrorMessage(backendRes.message, 'Unable to record payment remittance. Please try again.')
-        )
-        setIsPaymentConfirmModalOpen(false)
-        setIsSubmittingPayment(false)
-        return
-      }
-
-      const assessedPenalty = pendingPayment.penaltyPortion || 0
-      // Penalty is NOT deducted from total payable; contractual total payable stays unchanged.
-      const updatedAmountPaid = Math.round((activeFacility.amountPaid + pendingPayment.amount) * 100) / 100
-      const updatedTotalPenalties = Math.round(((activeFacility.totalPenalties || 0) + assessedPenalty) * 100) / 100
-      const updatedRemainingBalance = Math.max(
-        0,
-        Math.round((activeFacility.remainingBalance - pendingPayment.amount) * 100) / 100
-      )
-      const updatedStatus: LendingFacility['status'] =
-        updatedRemainingBalance <= 0
-          ? 'Completed'
-          : activeFacility.status === 'Completed'
-          ? 'Active'
-          : activeFacility.status
-
-      const timestampIso = new Date().toISOString()
-      const backendTx = backendRes?.transaction
-      const txRef = backendTx?.transaction_ref_no || backendTx?.transactionRefNo || `TX-${Date.now()}`
-      const txId = backendTx?.transaction_id ? String(backendTx.transaction_id) : `dp-${Date.now()}`
-      const isDaily = !activeFacility.paymentFrequency || activeFacility.paymentFrequency === 'Daily'
-
-      const newPaymentRecord: DailyPaymentRecord = {
-        id: txId,
-        transactionRefNo: txRef,
-        transaction_ref_no: txRef,
-        date: pendingPayment.paymentDate,
-        payment_date: pendingPayment.paymentDate,
-        cycle_due_date: pendingPayment.cycleDueDate,
-        cycleDueDate: pendingPayment.cycleDueDate,
-        cycle_index: pendingPayment.cycleIndex,
-        cycleIndex: pendingPayment.cycleIndex,
-        is_late: pendingPayment.isLate,
-        isLate: pendingPayment.isLate,
-        days_late: pendingPayment.daysLate,
-        daysLate: pendingPayment.daysLate,
-        penalty_portion: pendingPayment.penaltyPortion,
-        penalty: pendingPayment.penaltyPortion,
-        amount: pendingPayment.amount,
-        target: pendingPayment.targetDue,
-        method: pendingPayment.method,
-        referenceNo: pendingPayment.referenceNo,
-        notes: pendingPayment.notes,
-        status: pendingPayment.paymentStatus,
-        recorded_by: backendTx?.recorded_by || backendTx?.recordedBy || user?.fullName || undefined,
-        recordedBy: backendTx?.recorded_by || backendTx?.recordedBy || user?.fullName || undefined,
-        monthIndex: pendingPayment.monthIndex,
-        periodLabel: pendingPayment.periodLabel,
-        timestamp: timestampIso,
-        isLocked: pendingPayment.paymentStatus === 'Paid',
-      }
-
-      // If this payment completes a previously partially-paid date/period, update prior partial records on that date/period to Paid & locked
-      const existingUpdated = (activeFacility.dailyPayments || []).map((prev) => {
-        if (pendingPayment.paymentStatus === 'Paid') {
-          const prevCycleDue = prev.cycle_due_date || prev.cycleDueDate
-          const isSameTargetDue = Boolean(prevCycleDue && pendingPayment.cycleDueDate && prevCycleDue === pendingPayment.cycleDueDate)
-          const isSameMonthIdx = Boolean(pendingPayment.monthIndex && prev.monthIndex === pendingPayment.monthIndex)
-          const isSameDailyDate = isDaily && prev.date === pendingPayment.paymentDate
-
-          if ((isSameTargetDue || isSameMonthIdx || isSameDailyDate) && (prev.status === 'Partial' || prev.status === 'Partially Paid')) {
-            return { ...prev, status: 'Paid' as const, isLocked: true }
-          }
-        }
-        return prev
-      })
-
-      const updatedFacility: LendingFacility = {
-        ...activeFacility,
-        amountPaid: updatedAmountPaid,
-        totalPenalties: updatedTotalPenalties,
-        remainingBalance: updatedRemainingBalance,
-        status: updatedStatus,
-        dailyPayments: [newPaymentRecord, ...existingUpdated],
-      }
-
+      const updated = await lendingService.deletePayment(paymentToDelete.id)
+      setActiveFacility(updated)
+      setFacilities((prev) => prev.map((f) => (f.id === updated.id ? updated : f)))
       await fetchFacilities()
-      const borrowerDbId = activeFacility.borrower_id || activeFacility.borrowerId || activeFacility.id
-      try {
-        const fresh = await lendingService.getBorrower(borrowerDbId)
-        if (fresh) {
-          setActiveFacility(fresh)
-        }
-      } catch (e) {}
-
-      setCompletedReceipt({
-        ...pendingPayment,
-        transactionId: txRef,
-        timestamp: timestampIso,
-      })
-      setIsPaymentConfirmModalOpen(false)
-      setIsDailyPaymentModalOpen(false)
-      setPendingPayment(null)
-      setIsPaymentSuccessModalOpen(true)
+      setIsDeletePaymentModalOpen(false)
+      setPaymentToDelete(null)
     } catch (err: any) {
-      console.error('handleConfirmRecordPayment failed:', err)
-      setPaymentError(
-        formatUserFriendlyErrorMessage(err, 'Unable to complete payment transaction. Please try again.')
-      )
-      setIsPaymentConfirmModalOpen(false)
+      setDeletePaymentError(err.message || 'Failed to delete payment remittance.')
     } finally {
-      setIsSubmittingPayment(false)
+      setIsDeletingPayment(false)
     }
   }
 
@@ -1213,15 +859,30 @@ export const LendingPage: React.FC = () => {
 
   // Filtered payment records for Lending Details View (Payment Log of the borrower)
   // Shows actual paid/partially-paid transactions made by the user
+  // Sorted newest first: target installment date desc, payment date desc, timestamp desc, id desc
   const filteredHistoryPayments = React.useMemo(() => {
     if (!activeFacility) return []
     const baseList = activeFacility.dailyPayments || []
     const paidList = baseList.filter(
       (p) => p.status !== 'Pending' && p.status !== 'Scheduled' && p.status !== 'Missed'
     )
+    const sortedList = [...paidList].sort((a, b) => {
+      const aTarget = String(a.cycle_due_date || a.cycleDueDate || a.date || a.payment_date || '').split('T')[0]
+      const bTarget = String(b.cycle_due_date || b.cycleDueDate || b.date || b.payment_date || '').split('T')[0]
+      if (aTarget !== bTarget) return bTarget.localeCompare(aTarget)
+      const aPay = String(a.date || a.payment_date || '').split('T')[0]
+      const bPay = String(b.date || b.payment_date || '').split('T')[0]
+      if (aPay !== bPay) return bPay.localeCompare(aPay)
+      const aTime = a.timestamp || ''
+      const bTime = b.timestamp || ''
+      if (aTime !== bTime) return bTime.localeCompare(aTime)
+      const aId = Number(String(a.id).replace(/\D/g, '')) || 0
+      const bId = Number(String(b.id).replace(/\D/g, '')) || 0
+      return bId - aId
+    })
     const query = historySearchQuery.trim().toLowerCase()
-    if (!query) return paidList
-    return paidList.filter((p) => {
+    if (!query) return sortedList
+    return sortedList.filter((p) => {
       const dateMatch = (p.date || '').toLowerCase().includes(query)
       const installmentDateMatch = (p.cycle_due_date || p.cycleDueDate || '').toLowerCase().includes(query)
       const notesMatch = (p.notes || '').toLowerCase().includes(query)
@@ -1687,12 +1348,15 @@ export const LendingPage: React.FC = () => {
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Created By</th>
+                          {!isAudit && (
+                            <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
+                          )}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {paginatedHistoryPayments.length === 0 ? (
                           <tr>
-                            <td colSpan={8} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={!isAudit ? 9 : 8} className="py-12 text-center text-muted-fg text-xs">
                               <div className="flex flex-col items-center justify-center">
                                 <Coins className="w-6 h-6 text-muted-fg/40 mb-2" />
                                 <p className="font-semibold text-focus">
@@ -1726,14 +1390,8 @@ export const LendingPage: React.FC = () => {
                                     <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-700">
                                       <span>Partially Paid</span>
                                     </span>
-                                  ) : (p.is_late || p.isLate || (p.status && p.status.includes('Late'))) ? (
-                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-[#960C01]">
-                                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                                      <span>Paid</span>
-                                    </span>
                                   ) : (
-                                    <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600">
-                                      <Check className="w-3 h-3 text-emerald-600" />
+                                    <span className="inline-flex items-center text-xs font-bold text-[#960C01]">
                                       <span>Paid</span>
                                     </span>
                                   )}
@@ -1780,6 +1438,20 @@ export const LendingPage: React.FC = () => {
                                     </td>
                                   )
                                 })()}
+                                {!isAudit && (
+                                  <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                                    <div className="inline-flex items-center justify-center">
+                                      <RowActionsMenu
+                                        canEdit
+                                        canDelete
+                                        onEdit={() => handleOpenEditPayment(p)}
+                                        onDelete={() => handleOpenDeletePayment(p)}
+                                        editLabel="Edit Payment"
+                                        deleteLabel="Delete Payment"
+                                      />
+                                    </div>
+                                  </td>
+                                )}
                               </tr>
                             )
                           })
@@ -2700,925 +2372,190 @@ export const LendingPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* 5. Modal: Update Payment ("Update" Action Button) */}
-      <Dialog open={isDailyPaymentModalOpen} onOpenChange={setIsDailyPaymentModalOpen}>
-        <DialogContent className="sm:max-w-[860px] md:max-w-[920px] max-h-[88vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-emerald-600" />
-              <span>Record Payment</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Record payment remittance for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong> ({activeFacility?.paymentFrequency || 'Daily'} Schedule).
-            </DialogDescription>
-          </DialogHeader>
+      {/* 5. Shared Record / Edit Payment Modal */}
+      {activeFacility && (() => {
+        const isDaily = !activeFacility.paymentFrequency || activeFacility.paymentFrequency === 'Daily'
+        const dailyTarget = getFacilityDailyTarget(activeFacility)
 
-          {activeFacility && (() => {
-            const freq = activeFacility.paymentFrequency || 'Daily'
-            const isDaily = freq === 'Daily'
-            const isMonthly = freq === 'Monthly'
-            const dailyTarget = getFacilityDailyTarget(activeFacility)
-            const targetInstallmentDate = paymentForm.targetInstallmentDate || paymentForm.paymentDate
-            const cashReceivedDate = paymentForm.paymentDate
-            const isLatePayment = Boolean(targetInstallmentDate && cashReceivedDate > targetInstallmentDate)
-
-            let calculatedDaysLate = 0
-            if (isLatePayment && targetInstallmentDate && cashReceivedDate) {
-              const d1 = new Date(cashReceivedDate)
-              const d2 = new Date(targetInstallmentDate)
-              calculatedDaysLate = Math.max(1, Math.round((d1.getTime() - d2.getTime()) / (1000 * 60 * 60 * 24)))
+        const editInitialData: EditPaymentInitialData | null = editingPayment
+          ? {
+              id: String(editingPayment.id),
+              paymentDate: editingPayment.date || editingPayment.payment_date || '',
+              targetInstallmentDate:
+                editingPayment.cycle_due_date ||
+                editingPayment.cycleDueDate ||
+                editingPayment.date ||
+                editingPayment.payment_date ||
+                '',
+              cycleIndex: editingPayment.cycle_index ?? editingPayment.cycleIndex,
+              amount: editingPayment.amount,
+              method: editingPayment.method || 'Cash',
+              referenceNo:
+                editingPayment.referenceNo && editingPayment.referenceNo !== '-'
+                  ? editingPayment.referenceNo
+                  : '',
+              notes:
+                editingPayment.notes && editingPayment.notes !== '-'
+                  ? editingPayment.notes
+                  : '',
+              status: editingPayment.status,
             }
+          : null
 
-            const rawPenaltyNum = parseFloat(paymentForm.penaltyAmount)
-            const isPenaltyNegative = !isNaN(rawPenaltyNum) && rawPenaltyNum < 0
-            const userPenaltyNum = Math.max(0, rawPenaltyNum || 0)
-            // Penalty is not included in the deduction of total payable.
-            // Max allowed for repayment amount is strictly the remaining loan balance.
-            const maxAllowed = activeFacility.remainingBalance
-            const currentPaymentNum = parseFloat(paymentForm.paymentAmount)
-            const isAmountValid =
-              !isNaN(currentPaymentNum) &&
-              currentPaymentNum >= 1 &&
-              currentPaymentNum <= maxAllowed &&
-              !isPenaltyNegative
-
-            const alreadyPaidOnSelectedDate = (activeFacility.dailyPayments || [])
-              .filter((p) => (p.cycle_due_date || p.cycleDueDate || p.date) === targetInstallmentDate)
-              .reduce((sum, p) => sum + (p.amount || 0), 0)
-
-            const isDateAlreadySettled =
-              isDaily && alreadyPaidOnSelectedDate >= dailyTarget - 0.005
-
-            let periodRemainingDue = Math.min(
-              activeFacility.remainingBalance,
-              Math.max(0, Math.round((dailyTarget - alreadyPaidOnSelectedDate) * 100) / 100)
-            )
-
-            if (isMonthly) {
-              const progress = getMonthlyProgress(activeFacility)
-              const selectedMonth = progress.months.find(
-                (m) =>
-                  (paymentForm.cycleIndex && m.monthIndex === paymentForm.cycleIndex) ||
-                  m.dueDate === targetInstallmentDate
-              ) || progress.activeMonth
-              periodRemainingDue = Math.min(activeFacility.remainingBalance, selectedMonth.remaining)
-            } else if (!isDaily) {
-              const nextInst = getNextInstallmentInfo(activeFacility)
-              if (nextInst) {
-                periodRemainingDue = Math.min(activeFacility.remainingBalance, nextInst.remaining)
+        return (
+          <SharedPaymentModal
+            open={isDailyPaymentModalOpen}
+            onOpenChange={(isOpen) => {
+              setIsDailyPaymentModalOpen(isOpen)
+              if (!isOpen) {
+                setEditingPayment(null)
               }
+            }}
+            editInitialData={editInitialData}
+            isAudit={isAudit}
+            entityName={activeFacility.borrowerName}
+            entitySubtitle={
+              activeFacility.borrower_ref_no ||
+              activeFacility.borrowerRefNo ||
+              activeFacility.loanRefNo ||
+              `LN-${activeFacility.id}`
             }
+            accountTypeLabel="Loan"
+            referenceNumber={activeFacility.borrower_ref_no || activeFacility.borrowerRefNo || `LN-${activeFacility.id}`}
+            paymentFrequency={activeFacility.paymentFrequency || 'Daily'}
+            dailyTarget={dailyTarget}
+            remainingBalance={activeFacility.remainingBalance}
+            contractDate={activeFacility.dateBorrowed}
+            firstDueDate={activeFacility.dateBorrowed}
+            dueDate={activeFacility.dueDate}
+            existingPayments={(activeFacility.dailyPayments || []).map((p) => ({
+              id: p.id,
+              date: p.date || p.payment_date,
+              amount: p.amount,
+              cycleDueDate: p.cycle_due_date || p.cycleDueDate || p.date,
+              status: p.status,
+            }))}
+            monthlyProgress={
+              activeFacility.paymentFrequency === 'Monthly'
+                ? getMonthlyProgress(activeFacility).months.map((m) => ({
+                    monthIndex: m.monthIndex,
+                    dueDate: m.dueDate,
+                    target: m.target,
+                    paid: m.paid,
+                    remaining: m.remaining,
+                    status: m.status,
+                    isOverdue: m.isOverdue,
+                  }))
+                : undefined
+            }
+            onSubmitPayment={async (subData) => {
+              if (editingPayment) {
+                const updated = await lendingService.updatePayment(editingPayment.id, {
+                  paymentDate: subData.paymentDate,
+                  targetInstallmentDate: subData.targetInstallmentDate,
+                  cycleIndex: subData.cycleIndex,
+                  amount: subData.amount,
+                  penaltyAmount: subData.penaltyAmount,
+                  method: subData.method,
+                  referenceNo: subData.referenceNo,
+                  notes: subData.notes,
+                })
+                setActiveFacility(updated)
+                setFacilities((prev) => prev.map((f) => (f.id === updated.id ? updated : f)))
+              } else {
+                const backendRes = await lendingService.recordPayment({
+                  borrower_id: activeFacility.borrower_id || activeFacility.borrowerId,
+                  facilityId: activeFacility.id,
+                  paymentDate: subData.paymentDate,
+                  cycleDueDate: subData.targetInstallmentDate,
+                  cycleIndex: subData.cycleIndex,
+                  amount: subData.amount,
+                  penaltyAmount: subData.penaltyAmount,
+                  method: subData.method,
+                  referenceNo: subData.referenceNo,
+                  notes: subData.notes,
+                  recorded_by: user?.fullName || undefined,
+                })
+                if (!backendRes.success) {
+                  throw new Error(backendRes.message || 'Unable to record payment remittance.')
+                }
+                const borrowerDbId = activeFacility.borrower_id || activeFacility.borrowerId || activeFacility.id
+                try {
+                  const fresh = await lendingService.getBorrower(borrowerDbId)
+                  if (fresh) {
+                    setActiveFacility(fresh)
+                    setFacilities((prev) => prev.map((f) => (f.id === fresh.id ? fresh : f)))
+                  }
+                } catch (e) {}
+              }
+              await fetchFacilities()
+            }}
+          />
+        )
+      })()}
 
-            const willBePartiallyPaid =
-              isAmountValid &&
-              currentPaymentNum < periodRemainingDue - 0.005 &&
-              maxAllowed - currentPaymentNum > 0.005
-
-            return (
-              <form onSubmit={handleRecordDailyPayment} className="space-y-5 mt-2">
-                {/* Inline Error Banner */}
-                {paymentError && (
-                  <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01]">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-[#960C01] mt-0.5" />
-                      <span>{paymentError}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentError(null)}
-                      className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
-                    >
-                      &times;
-                    </button>
-                  </div>
-                )}
-
-                {/* Two-Column Layout: Left = Calendar, Right = Payment Fields */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
-                  {/* Left Column: Interactive Calendar Date Picker for Daily, or Month Selector for Monthly */}
-                  <div className="space-y-1.5">
-                    {isMonthly ? (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-focus">
-                            Installment Month <span className="text-[#960C01]">*</span>
-                          </label>
-                          <span className="text-[11px] font-mono font-bold text-focus">
-                            {targetInstallmentDate ? `Target: ${targetInstallmentDate}` : 'Please select month'}
-                          </span>
-                        </div>
-
-                        <div className="border border-stroke/60 rounded-xl p-3 bg-white space-y-2 max-h-[300px] overflow-y-auto">
-                          {(() => {
-                            const progress = getMonthlyProgress(activeFacility)
-                            return progress.months.map((m) => {
-                              const isSelected =
-                                paymentForm.cycleIndex === m.monthIndex ||
-                                (!paymentForm.cycleIndex && targetInstallmentDate === m.dueDate)
-                              const isFullyPaid = m.status === 'Paid' || m.remaining <= 0.005
-
-                              return (
-                                <button
-                                  key={`month-select-${m.monthIndex}`}
-                                  type="button"
-                                  disabled={isFullyPaid}
-                                  onClick={() => {
-                                    if (!isFullyPaid) {
-                                      setPaymentError(null)
-                                      setPaymentForm({
-                                        ...paymentForm,
-                                        targetInstallmentDate: m.dueDate,
-                                        cycleIndex: m.monthIndex,
-                                      })
-                                    }
-                                  }}
-                                  className={cn(
-                                    'w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between',
-                                    isSelected && 'border-[#960C01] bg-[#960C01]/5 ring-1 ring-[#960C01]',
-                                    !isSelected && isFullyPaid && 'border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed',
-                                    !isSelected && !isFullyPaid && 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/80 cursor-pointer'
-                                  )}
-                                >
-                                  <div className="space-y-0.5">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-xs font-bold text-focus">
-                                        Month {m.monthIndex}
-                                      </span>
-                                      <span className="text-[10px] font-mono text-muted-fg">
-                                        Due: {m.dueDate}
-                                      </span>
-                                    </div>
-                                    <div className="text-[11px] text-muted-fg">
-                                      Target: <span className="font-semibold text-focus">{formatPHP(m.target)}</span>
-                                      {m.paid > 0 && (
-                                        <> • Paid: <span className="font-semibold text-emerald-600">{formatPHP(m.paid)}</span></>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div>
-                                    {isFullyPaid ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                        <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                        Paid
-                                      </span>
-                                    ) : m.status === 'Partially Paid' ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                        Partial ({formatPHP(m.remaining)} due)
-                                      </span>
-                                    ) : m.isOverdue ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                        <AlertCircle className="w-2.5 h-2.5 text-[#960C01]" />
-                                        Overdue
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                                        Due {formatPHP(m.remaining)}
-                                      </span>
-                                    )}
-                                  </div>
-                                </button>
-                              )
-                            })
-                          })()}
-                        </div>
-
-                        <p className="text-[10.5px] text-muted-fg leading-tight">
-                          Select the monthly installment cycle you are recording cash payment for.
-                        </p>
-                      </div>
-                    ) : (
-                      /* Daily Calendar Date Picker */
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-focus">
-                            Installment Date <span className="text-[#960C01]">*</span>
-                          </label>
-                          <span className="text-[11px] font-mono font-bold text-focus">
-                            {targetInstallmentDate ? `Target: ${targetInstallmentDate}` : 'Please select date'}
-                          </span>
-                        </div>
-
-                        <div className="border border-stroke/60 rounded-xl p-3.5 bg-white space-y-2.5">
-                          {/* Month Header & Controls */}
-                          <div className="flex items-center justify-between px-1">
-                            <span className="text-xs font-bold text-focus">
-                              {paymentCalendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const prev = new Date(paymentCalendarMonth)
-                                  prev.setMonth(prev.getMonth() - 1)
-                                  setPaymentCalendarMonth(prev)
-                                }}
-                                className="p-1 rounded-md hover:bg-slate-100 text-muted-fg hover:text-focus cursor-pointer"
-                                aria-label="Previous month"
-                              >
-                                <ChevronLeft className="h-4 w-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const next = new Date(paymentCalendarMonth)
-                                  next.setMonth(next.getMonth() + 1)
-                                  setPaymentCalendarMonth(next)
-                                }}
-                                className="p-1 rounded-md hover:bg-slate-100 text-muted-fg hover:text-focus cursor-pointer"
-                                aria-label="Next month"
-                              >
-                                <ChevronRight className="h-4 w-4" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Weekday labels */}
-                          <div className="grid grid-cols-7 gap-1 text-center text-[10.5px] font-bold text-muted-fg uppercase py-1 border-b border-slate-100">
-                            <span>Su</span>
-                            <span>Mo</span>
-                            <span>Tu</span>
-                            <span>We</span>
-                            <span>Th</span>
-                            <span>Fr</span>
-                            <span>Sa</span>
-                          </div>
-
-                          {/* Days Grid */}
-                          {(() => {
-                            const calYear = paymentCalendarMonth.getFullYear()
-                            const calMonth = paymentCalendarMonth.getMonth()
-                            const firstDay = new Date(calYear, calMonth, 1).getDay()
-                            const totalDays = new Date(calYear, calMonth + 1, 0).getDate()
-
-                            const paidByDateMap = new Map<string, number>()
-                            ;(activeFacility.dailyPayments || []).forEach((p) => {
-                              const dt = p.cycle_due_date || p.cycleDueDate || p.date
-                              if (!dt) return
-                              paidByDateMap.set(dt, (paidByDateMap.get(dt) || 0) + (p.amount || 0))
-                            })
-
-                            const startBorrowed = activeFacility.dateBorrowed || ''
-                            const todayStr = formatToYYYYMMDD(new Date())
-
-                            return (
-                              <div className="grid grid-cols-7 gap-1 text-center">
-                                {Array.from({ length: firstDay }).map((_, i) => (
-                                  <div key={`cal-empty-${i}`} className="h-9" />
-                                ))}
-
-                                {Array.from({ length: totalDays }).map((_, i) => {
-                                  const d = i + 1
-                                  const dStr = String(d).padStart(2, '0')
-                                  const mStr = String(calMonth + 1).padStart(2, '0')
-                                  const dateStr = `${calYear}-${mStr}-${dStr}`
-
-                                  const isBefore = startBorrowed ? dateStr < startBorrowed : false
-                                  const paidOnDate = paidByDateMap.get(dateStr) || 0
-                                  const isPaid = paidOnDate >= dailyTarget - 0.005 && dailyTarget > 0
-                                  const isPartial = !isPaid && paidOnDate > 0
-                                  const isMissed = !isBefore && !isPaid && dateStr < todayStr
-                                  const isSelected = targetInstallmentDate === dateStr
-                                  const isDisabled = isBefore || isPaid
-
-                                  return (
-                                    <button
-                                      key={dateStr}
-                                      type="button"
-                                      disabled={isDisabled}
-                                      onClick={() => {
-                                        if (!isDisabled) {
-                                          setPaymentError(null)
-                                          setPaymentForm({
-                                            ...paymentForm,
-                                            targetInstallmentDate: dateStr,
-                                          })
-                                        }
-                                      }}
-                                      className={cn(
-                                        'h-9 rounded-lg text-xs font-medium flex flex-col items-center justify-center relative transition-all',
-                                        isSelected &&
-                                          'bg-[#960C01] text-white font-bold shadow-xs ring-2 ring-[#960C01]/30 z-10',
-                                        !isSelected &&
-                                          isPaid &&
-                                          'bg-emerald-50 text-emerald-700 border border-emerald-200/80 cursor-not-allowed opacity-90',
-                                        !isSelected &&
-                                          isPartial &&
-                                          'bg-amber-50 text-amber-800 border border-amber-300 cursor-pointer font-semibold',
-                                        !isSelected &&
-                                          isMissed &&
-                                          'bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/30 cursor-pointer font-bold hover:bg-[#960C01]/20',
-                                        !isSelected &&
-                                          isBefore &&
-                                          'text-slate-300 cursor-not-allowed bg-slate-50/50',
-                                        !isSelected &&
-                                          !isPaid &&
-                                          !isPartial &&
-                                          !isMissed &&
-                                          !isBefore &&
-                                          'hover:bg-slate-100 text-focus cursor-pointer hover:font-bold border border-transparent'
-                                      )}
-                                      title={
-                                        isPaid
-                                          ? `${dateStr}: Fully Paid & Locked (Cannot select)`
-                                          : isBefore
-                                          ? `${dateStr}: Prior to loan date`
-                                          : isMissed
-                                          ? `${dateStr}: Missed installment (Due ${dateStr}) — Click to settle`
-                                          : isPartial
-                                          ? `${dateStr}: Partially Paid (${formatPHP(paidOnDate)} of ${formatPHP(dailyTarget)}) — Select to pay remaining ${formatPHP(Math.max(0, dailyTarget - paidOnDate))}`
-                                          : `Select ${dateStr}`
-                                      }
-                                    >
-                                      <span>{d}</span>
-                                      {isPaid && <Check className="h-2.5 w-2.5 text-emerald-600 -mt-0.5" />}
-                                      {isPartial && !isSelected && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 absolute bottom-1" />
-                                      )}
-                                      {isMissed && !isSelected && (
-                                        <span className="w-1.5 h-1.5 rounded-full bg-[#960C01] absolute bottom-1" />
-                                      )}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            )
-                          })()}
-
-                          {/* Calendar Legend */}
-                          <div className="flex flex-wrap items-center justify-between text-[10px] text-muted-fg pt-2 border-t border-slate-100 gap-1.5">
-                            <div className="flex items-center gap-2.5">
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Paid
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-[#960C01] inline-block" /> Selected
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Partial
-                              </span>
-                              <span className="flex items-center gap-1 font-medium">
-                                <span className="w-2 h-2 rounded-full bg-[#960C01] inline-block" /> Missed
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Late Status Information / Breakdown */}
-                    {isLatePayment ? (
-                      <div className="p-3 bg-amber-50/90 border border-amber-200 rounded-xl space-y-1.5 text-xs text-amber-900">
-                        <div className="flex items-center justify-between font-bold text-amber-800">
-                          <span className="flex items-center gap-1.5">
-                            <AlertCircle className="w-4 h-4 text-amber-600" />
-                            Overdue Installment
-                          </span>
-                          <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
-                            {calculatedDaysLate} Day{calculatedDaysLate > 1 ? 's' : ''} Late
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-amber-700">
-                          Scheduled due date was <strong>{targetInstallmentDate}</strong>. Input any late penalty charges in the field on the right.
-                        </div>
-                        <div className="pt-1.5 border-t border-amber-200/80 flex items-center justify-between font-bold text-xs text-focus">
-                          <span>Installment Due:</span>
-                          <span className="text-emerald-700 text-sm font-mono">{formatPHP(periodRemainingDue)}</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="p-2.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
-                        <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span className="text-[11px]">Installment is on-time. No late penalty required.</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Right Column: Payment Amount, Payment Method, Receipt No., Remarks/Notes */}
-                  <div className="space-y-3.5">
-                    {/* Date Cash Received Input */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-focus">
-                          Date Cash Received <span className="text-[#960C01]">*</span>
-                        </label>
-                        <span className="text-[11px] font-medium">
-                          {isLatePayment ? (
-                            <span className="text-[#960C01] font-bold flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                              {calculatedDaysLate} Day{calculatedDaysLate > 1 ? 's' : ''} Late
-                            </span>
-                          ) : (
-                            <span className="text-emerald-600 font-semibold flex items-center gap-1">
-                              <Check className="w-3 h-3" />
-                              On Time (0 penalty)
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <Input
-                        type="date"
-                        required
-                        value={paymentForm.paymentDate}
-                        onChange={(e) => {
-                          setPaymentError(null)
-                          setPaymentForm({ ...paymentForm, paymentDate: e.target.value })
-                        }}
-                        className="h-10 text-xs sm:text-sm rounded-xl font-medium"
-                      />
-                      <p className="text-[10px] text-muted-fg mt-1">
-                        Enter actual cash collection date. If paid on time in the field, this removes late penalties.
-                      </p>
-                    </div>
-
-                    {/* Payment Amount Input */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-focus">
-                          Payment Amount (₱) <span className="text-[#960C01]">*</span>
-                        </label>
-                        <span className="text-[11px] text-muted-fg font-medium">
-                          Target: {formatPHP(periodRemainingDue)}
-                        </span>
-                      </div>
-                      <Input
-                        required
-                        type="number"
-                        min="1"
-                        max={maxAllowed}
-                        step="any"
-                        value={paymentForm.paymentAmount}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        onKeyDown={(e) => {
-                          if (e.key === '-' || e.key === 'Subtract') {
-                            e.preventDefault()
-                          }
-                        }}
-                        onChange={(e) => {
-                          setPaymentError(null)
-                          const val = e.target.value
-                          if (val.includes('-')) return
-                          setPaymentForm({ ...paymentForm, paymentAmount: val })
-                        }}
-                        placeholder="Enter repayment amount"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      {paymentForm.paymentAmount && !isAmountValid && (
-                        <p className="text-[11px] text-[#960C01] mt-1">
-                          {currentPaymentNum < 1
-                            ? 'Payment amount cannot be lower than ₱1.00.'
-                            : currentPaymentNum > maxAllowed
-                            ? `Payment amount cannot exceed ${formatPHP(maxAllowed)}.`
-                            : isPenaltyNegative
-                            ? 'Late payment charges cannot be a negative value.'
-                            : 'Please enter a valid amount.'}
-                        </p>
-                      )}
-                    </div>
-
-                     {/* Late Payment Charges Input */}
-                    {isLatePayment && (
-                      <div className="p-3 bg-[#960C01]/5 border border-[#960C01]/20 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-semibold text-[#960C01] flex items-center gap-1">
-                            <AlertCircle className="w-3.5 h-3.5 text-[#960C01]" />
-                            Late Payment Charges (₱)
-                          </label>
-                        </div>
-                        <Input
-                          type="number"
-                          min="0"
-                          step="any"
-                          value={paymentForm.penaltyAmount}
-                          onWheel={(e) => e.currentTarget.blur()}
-                          onKeyDown={(e) => {
-                            if (e.key === '-' || e.key === 'Subtract') {
-                              e.preventDefault()
-                            }
-                          }}
-                          onChange={(e) => {
-                            setPaymentError(null)
-                            const val = e.target.value
-                            if (val.includes('-')) return
-                            const num = parseFloat(val)
-                            if (!isNaN(num) && num < 0) return
-                            setPaymentForm({ ...paymentForm, penaltyAmount: val })
-                          }}
-                          placeholder="0.00"
-                          className="h-9 text-xs sm:text-sm rounded-lg font-semibold bg-white border-[#960C01]/30 focus:border-[#960C01] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                        {isPenaltyNegative && (
-                          <p className="text-[11px] text-[#960C01] font-medium mt-1">
-                            Late payment charges can be ₱0.00 but can never be a negative value.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                      {isAmountValid && (
-                        <div className="mt-2 space-y-1.5">
-                          {userPenaltyNum > 0 && (
-                            <div className="p-2.5 rounded-xl border border-slate-200/90 bg-slate-50 text-xs space-y-1">
-                              <div className="flex justify-between items-center text-muted-fg text-[11px]">
-                                <span>Repayment (reduces loan):</span>
-                                <span className="font-mono font-semibold text-focus">{formatPHP(currentPaymentNum)}</span>
-                              </div>
-                              <div className="flex justify-between items-center text-[#960C01] text-[11px]">
-                                <span>Late Payment Charge (fee):</span>
-                                <span className="font-mono font-semibold">+{formatPHP(userPenaltyNum)}</span>
-                              </div>
-                              <div className="pt-1 border-t border-slate-200 flex justify-between items-center font-bold text-focus">
-                                <span>Total Cash to Collect:</span>
-                                <span className="font-mono text-emerald-700 text-sm">
-                                  {formatPHP(currentPaymentNum + userPenaltyNum)}
-                                </span>
-                              </div>
-                            </div>
-                          )}
-                          <div className="flex items-center justify-between px-3 py-2 rounded-xl border text-xs bg-slate-50/80 border-slate-200/80">
-                            <span className="text-muted-fg font-medium">Transaction Status Tag:</span>
-                            {willBePartiallyPaid ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                                Partially Paid ({formatPHP(Math.max(0, periodRemainingDue - currentPaymentNum))} short of target)
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                <Check className="w-3 h-3 text-emerald-600" />
-                                <span>Paid</span>
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                    {/* Payment Method */}
-                    <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Payment Method <span className="text-[#960C01]">*</span>
-                      </label>
-                      <select
-                        required
-                        value={paymentForm.method}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, method: e.target.value })
-                        }
-                        className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                      >
-                        <option value="Cash">Cash</option>
-                        <option value="GCash">GCash</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                        <option value="Cheque">Cheque</option>
-                      </select>
-                    </div>
-
-                    {/* Receipt / Ref No. (no default value) */}
-                    <div>
-                      <label className="text-xs font-semibold text-focus block mb-1">
-                        Receipt / Ref No.
-                      </label>
-                      <Input
-                        value={paymentForm.referenceNo}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, referenceNo: e.target.value })
-                        }
-                        placeholder="e.g. OR-88201"
-                        className="h-10 text-xs sm:text-sm rounded-xl font-mono"
-                      />
-                    </div>
-
-                    {/* Remarks / Notes (max 50 chars with live counter) */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-semibold text-focus">
-                          Remarks / Notes
-                        </label>
-                        <span
-                          className={cn(
-                            'text-[11px] font-mono',
-                            (paymentForm.notes?.length || 0) >= 50
-                              ? 'text-[#960C01] font-semibold'
-                              : 'text-muted-fg'
-                          )}
-                        >
-                          {paymentForm.notes?.length || 0}/50
-                        </span>
-                      </div>
-                      <textarea
-                        rows={3}
-                        maxLength={50}
-                        value={paymentForm.notes}
-                        onChange={(e) =>
-                          setPaymentForm({ ...paymentForm, notes: e.target.value.slice(0, 50) })
-                        }
-                        placeholder="Enter payment remarks or notes (max 50 chars)..."
-                        className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setIsDailyPaymentModalOpen(false)}
-                    className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={!isAmountValid || isDateAlreadySettled || !paymentForm.paymentDate}
-                    className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
-                  >
-                    Review & Confirm Payment
-                  </Button>
-                </div>
-              </form>
-            )
-          })()}
-        </DialogContent>
-      </Dialog>
-
-      {/* 5B. Modal: Payment Confirmation Modal */}
-      <Dialog open={isPaymentConfirmModalOpen} onOpenChange={setIsPaymentConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+      {/* 5B. Modal: Delete Payment Confirmation */}
+      <Dialog open={isDeletePaymentModalOpen} onOpenChange={setIsDeletePaymentModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6 shadow-2xl">
           <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-[#960C01]" />
-              <span>Confirm Payment Transaction</span>
+            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-[#960C01]" />
+              <span>Delete Payment</span>
             </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Please review the payment details below before recording this transaction.
+            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
+              Are you sure you want to delete the payment remittance of{' '}
+              <strong className="text-focus">{paymentToDelete ? formatPHP(paymentToDelete.amount) : ''}</strong>{' '}
+              recorded on{' '}
+              <strong className="text-focus">{paymentToDelete?.date || paymentToDelete?.payment_date || '-'}</strong>?
+              This action will recalculate the borrower balance and cannot be undone.
             </DialogDescription>
           </DialogHeader>
 
-          {pendingPayment && (
-            <div className="space-y-4 mt-2">
-              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Borrower:</span>
-                  <span className="font-bold text-focus text-right">{pendingPayment.borrowerName}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Installment Due Date:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingPayment.targetInstallmentDate || pendingPayment.paymentDate}
-                    {pendingPayment.periodLabel ? ` (${pendingPayment.periodLabel})` : ''}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Date Cash Received:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingPayment.paymentDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Timeliness:</span>
-                  {pendingPayment.isLate ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                      <span>{pendingPayment.daysLate} Days Late</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>On Time (0 penalty)</span>
-                    </span>
-                  )}
-                </div>
-                {Boolean(pendingPayment.penaltyPortion) ? (
-                  <div className="flex justify-between items-center text-[#960C01]">
-                    <span className="font-medium">Late Payment Charges (Fee):</span>
-                    <span className="font-bold">+{formatPHP(pendingPayment.penaltyPortion || 0)}</span>
-                  </div>
-                ) : pendingPayment.isLate ? (
-                  <div className="flex justify-between items-center text-muted-fg">
-                    <span>Late Payment Charges:</span>
-                    <span className="font-semibold text-emerald-600">Waived (₱0.00)</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-focus">Installment Payment:</span>
-                  <span className="font-semibold text-emerald-600 text-xs">
-                    {formatPHP(pendingPayment.amount)}
-                  </span>
-                </div>
-                {Boolean(pendingPayment.penaltyPortion) && (
-                  <div className="flex justify-between items-center bg-amber-50/80 p-2 rounded-lg border border-amber-200/80 font-bold">
-                    <span className="text-focus text-[11px]">Total Cash to Collect:</span>
-                    <span className="text-amber-800 text-sm font-mono">
-                      {formatPHP(pendingPayment.amount + (pendingPayment.penaltyPortion || 0))}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Status Tag:</span>
-                  {pendingPayment.paymentStatus === 'Partially Paid' ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Partially Paid
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>Paid</span>
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Method:</span>
-                  <span className="font-semibold text-focus">{pendingPayment.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Receipt / Ref No.:</span>
-                  <span className="font-mono text-focus">{pendingPayment.referenceNo || '—'}</span>
-                </div>
-                {pendingPayment.notes && (
-                  <div className="flex justify-between items-start gap-3">
-                    <span className="text-muted-fg shrink-0">Remarks:</span>
-                    <span className="text-focus text-right">{pendingPayment.notes}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="text-muted-fg">Remaining Loan Balance After:</span>
-                  <span className="font-bold text-amber-600">
-                    {formatPHP(pendingPayment.remainingBalanceAfter)}
-                  </span>
-                </div>
+          {deletePaymentError && (
+            <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01] mt-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-[#960C01] mt-0.5" />
+                <span>{deletePaymentError}</span>
               </div>
+              <button
+                type="button"
+                onClick={() => setDeletePaymentError(null)}
+                className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
+              >
+                &times;
+              </button>
+            </div>
+          )}
 
-              {pendingPayment.paymentStatus === 'Partially Paid' && (
-                <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1">
-                  <div className="font-bold text-amber-800 flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Partial Payment Notice</span>
-                  </div>
-                  <p className="text-[11px] text-amber-700 leading-relaxed">
-                    This payment is less than the installment due. It will be tagged as{' '}
-                    <strong>Partially Paid</strong> (not Paid), and the remaining{' '}
-                    <strong>{formatPHP(pendingPayment.periodRemainingAfter)}</strong> for this period will remain open for settlement.
-                  </p>
-                </div>
+          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100 mt-3">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isDeletingPayment}
+              onClick={() => {
+                setIsDeletePaymentModalOpen(false)
+                setPaymentToDelete(null)
+              }}
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isDeletingPayment}
+              onClick={handleConfirmDeletePayment}
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer shadow-xs disabled:opacity-60 flex items-center gap-2"
+            >
+              {isDeletingPayment ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span>Deleting...</span>
+                </>
+              ) : (
+                <span>Delete Payment</span>
               )}
-
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isSubmittingPayment}
-                  onClick={() => setIsPaymentConfirmModalOpen(false)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Back to Edit
-                </Button>
-                <Button
-                  type="button"
-                  disabled={isSubmittingPayment}
-                  onClick={handleConfirmRecordPayment}
-                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
-                >
-                  {isSubmittingPayment ? 'Recording...' : 'Confirm & Record Payment'}
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 5C. Modal: Payment Success Modal */}
-      <Dialog open={isPaymentSuccessModalOpen} onOpenChange={setIsPaymentSuccessModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          {completedReceipt && (
-            <div className="space-y-4">
-              <div className="flex flex-col items-center text-center pt-1">
-                <div
-                  className={cn(
-                    'w-12 h-12 rounded-full flex items-center justify-center mb-3 border',
-                    completedReceipt.paymentStatus === 'Partially Paid'
-                      ? 'bg-amber-50 border-amber-200 text-amber-600'
-                      : 'bg-emerald-50 border-emerald-200 text-emerald-600'
-                  )}
-                >
-                  <Check className="w-6 h-6" />
-                </div>
-                <DialogTitle className="text-lg font-bold text-focus">
-                  Payment Recorded Successfully
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-1">
-                  Payment transaction for <strong className="text-focus">{completedReceipt.borrowerName}</strong> has been saved.
-                </DialogDescription>
-              </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Transaction Status:</span>
-                  {completedReceipt.paymentStatus === 'Partially Paid' ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Partially Paid
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Lock className="w-2.5 h-2.5 text-emerald-600" />
-                      <span>Paid</span>
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Amount Paid:</span>
-                  <span className="font-extrabold text-emerald-600 text-sm">
-                    {formatPHP(completedReceipt.amount)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Installment Due Date:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {completedReceipt.targetInstallmentDate || completedReceipt.paymentDate}
-                    {completedReceipt.periodLabel ? ` (${completedReceipt.periodLabel})` : ''}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Date Cash Received:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {completedReceipt.paymentDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Timeliness:</span>
-                  {completedReceipt.isLate ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                      <span>{completedReceipt.daysLate} Days Late</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>On Time</span>
-                    </span>
-                  )}
-                </div>
-                {Boolean(completedReceipt.penaltyPortion) ? (
-                  <div className="flex justify-between items-center text-[#960C01]">
-                    <span className="font-medium">Late Payment Charges (Fee):</span>
-                    <span className="font-bold">+{formatPHP(completedReceipt.penaltyPortion || 0)}</span>
-                  </div>
-                ) : completedReceipt.isLate ? (
-                  <div className="flex justify-between items-center text-muted-fg">
-                    <span>Late Payment Charges:</span>
-                    <span className="font-semibold text-emerald-600">Waived (₱0.00)</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="font-semibold text-focus">Repayment Amount:</span>
-                  <span className="font-extrabold text-emerald-600 font-mono">
-                    {formatPHP(completedReceipt.amount)}
-                  </span>
-                </div>
-                {Boolean(completedReceipt.penaltyPortion) && (
-                  <div className="flex justify-between items-center bg-amber-50/80 p-2 rounded-lg border border-amber-200/80 font-bold">
-                    <span className="text-focus text-[11px]">Total Cash Collected:</span>
-                    <span className="text-amber-800 text-sm font-mono">
-                      {formatPHP(completedReceipt.amount + (completedReceipt.penaltyPortion || 0))}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Method:</span>
-                  <span className="font-semibold text-focus">{completedReceipt.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Receipt / Ref No.:</span>
-                  <span className="font-mono text-focus">{completedReceipt.referenceNo || '—'}</span>
-                </div>
-                {completedReceipt.paymentStatus === 'Partially Paid' && (
-                  <div className="flex justify-between items-center text-amber-700 border-t border-slate-200/70 pt-2">
-                    <span className="font-medium">Remaining Installment Due:</span>
-                    <span className="font-bold">{formatPHP(completedReceipt.periodRemainingAfter)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="text-muted-fg">Updated Loan Balance:</span>
-                  <span className="font-bold text-amber-600">
-                    {formatPHP(completedReceipt.remainingBalanceAfter)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end pt-2">
-                <Button
-                  type="button"
-                  onClick={() => {
-                    setIsPaymentSuccessModalOpen(false)
-                    setCompletedReceipt(null)
-                  }}
-                  className="w-full h-10 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
-                >
-                  Done
-                </Button>
-              </div>
-            </div>
-          )}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
