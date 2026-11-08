@@ -253,6 +253,13 @@ export const employeeService = {
     )
   },
 
+  async getCompany(id: string): Promise<Company> {
+    const response = await fetch(`/api/v1/companies/${id}`, {
+      headers: getAuthHeaders(),
+    })
+    return await mapApiResponse(response, mapCompany)
+  },
+
   async getAuthorizedCompanies(): Promise<AuthorizedCompany[]> {
     try {
       const response = await fetch('/api/v1/companies/authorized', {

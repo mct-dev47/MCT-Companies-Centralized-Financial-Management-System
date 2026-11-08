@@ -40,7 +40,7 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
             max_overflow=10,
             pool_recycle=1800,
             pool_timeout=30,
-            connect_args={"connect_timeout": 5},
+            connect_args={"connect_timeout": 30},
         )
         with engine.connect() as _probe:
             pass
@@ -63,6 +63,7 @@ def init_db():
     import app.models.staff_credit
     import app.models.bills
     import app.models.petty_cash
+    import app.models.intercompany_transfer
     import app.models.bank
     import app.models.lending
     import app.models.security
@@ -203,6 +204,58 @@ def init_db():
             if "petty_cash" not in c_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE company ADD COLUMN petty_cash NUMERIC(15, 2) DEFAULT 0.00"))
+
+        if "petty_cash_topups" in table_names:
+            pct_cols = {col["name"] for col in inspector.get_columns("petty_cash_topups")}
+            with engine.begin() as conn:
+                if "total_expenses" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN total_expenses NUMERIC(15, 2)"))
+                if "company_funded_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN company_funded_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "employee_out_of_pocket" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN employee_out_of_pocket NUMERIC(15, 2) DEFAULT 0.00"))
+                if "reserved_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reserved_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "amount_reimbursed" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN amount_reimbursed NUMERIC(15, 2) DEFAULT 0.00"))
+                if "existing_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN existing_expense_id INTEGER"))
+                if "petty_cash_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN petty_cash_expense_id INTEGER"))
+                if "reimbursement_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursement_expense_id INTEGER"))
+                if "payment_method_option" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN payment_method_option VARCHAR(50)"))
+                if "destination_bank_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN destination_bank_id VARCHAR(100)"))
+                if "intercompany_transfer_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN intercompany_transfer_id INTEGER"))
+                if "reimbursed_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_at TIMESTAMP WITH TIME ZONE"))
+                if "reimbursed_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_by VARCHAR(150)"))
+                if "transfer_received_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_at TIMESTAMP WITH TIME ZONE"))
+                if "transfer_received_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_by VARCHAR(150)"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL"))
+                except Exception:
+                    pass
+
+        if "expenses" in table_names:
+            exp_cols = {col["name"] for col in inspector.get_columns("expenses")}
+            with engine.begin() as conn:
+                if "linked_topup_id" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -210,29 +263,42 @@ def init_db():
 
     def _sync_companies_from_supabase():
         try:
-            db = SessionLocal()
-            try:
-                if db.query(Company).count() == 0:
-                    from app.db.supabase import get_supabase_admin_client
-                    client = get_supabase_admin_client()
-                    supa_companies = client.table("company").select("*").execute().data
-                    if supa_companies:
-                        for sc in supa_companies:
+            from decimal import Decimal
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            supa_companies = client.table("company").select("*").execute().data
+            if supa_companies:
+                db = SessionLocal()
+                try:
+                    for sc in supa_companies:
+                        cid = sc.get("company_id")
+                        if not cid:
+                            continue
+                        existing = db.query(Company).filter(Company.company_id == cid).first()
+                        p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
+                        s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
+                        if existing:
+                            existing.company_name = sc.get("company_name") or existing.company_name
+                            existing.location = sc.get("location") or existing.location
+                            existing.contact_number = sc.get("contact_number")
+                            existing.phone = sc.get("phone")
+                            existing.starting_balance = s_bal
+                            existing.petty_cash = p_cash
+                            existing.logo_url = sc.get("logo_url")
+                        else:
                             db.add(Company(
-                                company_id=sc.get("company_id"),
+                                company_id=cid,
                                 company_name=sc.get("company_name"),
                                 location=sc.get("location"),
-                                contact_person=sc.get("contact_person"),
                                 contact_number=sc.get("contact_number"),
                                 phone=sc.get("phone"),
-                                email=sc.get("email"),
-                                starting_balance=sc.get("starting_balance", 0.0),
-                                current_balance=sc.get("current_balance", 0.0),
+                                starting_balance=s_bal,
+                                petty_cash=p_cash,
                                 logo_url=sc.get("logo_url"),
                             ))
-                        db.commit()
-            finally:
-                db.close()
+                    db.commit()
+                finally:
+                    db.close()
         except Exception as e:
             logger.warning(f"Could not sync companies on init: {e}")
 
