@@ -102,8 +102,8 @@ class PettyCashService:
                 query = query.ilike("payment_method", "%petty cash%")
 
             rows = query.execute().data or []
-            # Exclude any sample or seeded rows
-            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-") and not (r.get("reference_no") or "").upper().startswith("REIMB-")]
+            # Exclude any sample or seeded rows, reimbursement rows, and PC-EXP rows (logged via unified topup entries)
+            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-") and not (r.get("reference_no") or "").upper().startswith("REIMB-") and not (r.get("reference_no") or "").upper().startswith("PC-EXP-")]
 
             return [
                 {
@@ -132,7 +132,10 @@ class PettyCashService:
             )
             if company_id:
                 query = query.filter(Expense.company_id == company_id)
-            query = query.filter((~Expense.reference_no.like("SEED-%") & ~Expense.reference_no.like("REIMB-%")) | (Expense.reference_no == None))
+            query = query.filter(
+                (~Expense.reference_no.like("SEED-%") & ~Expense.reference_no.like("REIMB-%") & ~Expense.reference_no.like("PC-EXP-%"))
+                | (Expense.reference_no == None)
+            )
             return [
                 {
                     "expense_id": exp.expense_id,
@@ -334,41 +337,26 @@ class PettyCashService:
             funding = self._resolve_funding(t, banks, comp_map, name_to_id)
             funding_bank = funding["bank"] if funding else None
             req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
-            is_reimbursement = req_type == "reimbursement"
+            is_reimbursement = req_type in ["reimbursement", "replenishment"]
 
-            amt_in = ZERO
-            amt_out = ZERO
-            if is_approved:
-                if is_reimbursement:
-                    amt_out = ZERO if t.total_expenses is not None else amt
-                else:
-                    amt_in = amt
-
-            default_desc = (
-                "Petty cash reimbursement" if is_reimbursement
-                else ("Top-up from sales" if is_approved else "Petty cash replenishment request")
+            dest_bank_name = (
+                self.db.query(BankAccount).filter(BankAccount.id == t.destination_bank_id).first().bank_name
+                if t.destination_bank_id
+                else None
             )
 
-            entries.append({
+            common_data = {
                 "funding_bank_id": funding_bank.id if funding_bank else None,
                 "funding_bank_name": funding_bank.bank_name if funding_bank else None,
                 "funding_account_name": funding_bank.account_name if funding_bank else None,
                 "funding_company_name": funding["company_name"] if funding else None,
                 "is_own_account": bool(funding and funding["is_own_account"]),
-                "entry_id": f"topup-{t.topup_id}",
-                "entry_type": ("expense" if is_reimbursement else "topup") if is_approved else "request",
                 "record_id": t.topup_id,
                 "company_id": t.company_id,
                 "company_name": comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown"),
                 "entry_date": t.topup_date,
-                "description": t.description or default_desc,
-                "category": getattr(t, "category", None) or ("Reimbursement" if is_reimbursement else None),
                 "reference_no": t.reference_no,
-                "amount_requested": amt,
-                "amount_in": amt_in,
-                "amount_out": amt_out,
                 "status": status_val,
-                "request_type": req_type,
                 "paid_by": getattr(t, "paid_by", None),
                 "receipt_url": getattr(t, "receipt_url", None),
                 "attachments": getattr(t, "attachments", None),
@@ -386,7 +374,7 @@ class PettyCashService:
                 "existing_expense_id": t.existing_expense_id,
                 "payment_method_option": t.payment_method_option,
                 "destination_bank_id": t.destination_bank_id,
-                "destination_bank_name": (self.db.query(BankAccount).filter(BankAccount.id == t.destination_bank_id).first().bank_name) if t.destination_bank_id else None,
+                "destination_bank_name": dest_bank_name,
                 "intercompany_transfer_id": t.intercompany_transfer_id,
                 "transfer_status": t.intercompany_transfer.transfer_status if t.intercompany_transfer else None,
                 "settlement_status": t.intercompany_transfer.settlement_status if t.intercompany_transfer else None,
@@ -394,7 +382,58 @@ class PettyCashService:
                 "reimbursed_by": t.reimbursed_by,
                 "transfer_received_at": t.transfer_received_at,
                 "transfer_received_by": t.transfer_received_by,
-            })
+            }
+
+            if is_reimbursement:
+                pc_funded = _to_decimal(t.company_funded_amount or 0)
+                out_of_pocket = _to_decimal(t.employee_out_of_pocket if t.employee_out_of_pocket is not None else t.amount)
+                is_settled_or_reimbursed = status_val.lower() in ["approved", "reimbursed", "settled"]
+
+                added_any = False
+
+                # 1. Petty cash disbursement row (if float was paid from company petty cash and not pre-recorded)
+                if pc_funded > ZERO and not t.existing_expense_id:
+                    entries.append({
+                        **common_data,
+                        "entry_id": f"topup-{t.topup_id}-pc",
+                        "entry_type": "expense" if is_settled_or_reimbursed else "request",
+                        "description": f"[Petty Cash] {t.description}" if t.description else "Company petty cash disbursement",
+                        "category": getattr(t, "category", None) or "Petty Cash",
+                        "amount_requested": pc_funded,
+                        "amount_in": ZERO,
+                        "amount_out": pc_funded if is_settled_or_reimbursed else ZERO,
+                        "request_type": "replenishment_disbursement",
+                    })
+                    added_any = True
+
+                # 2. Replenishment reimbursement row (if employee paid out of pocket)
+                reimb_amt = out_of_pocket if t.total_expenses is not None else amt
+                if reimb_amt > ZERO or (not added_any and pc_funded <= ZERO):
+                    entries.append({
+                        **common_data,
+                        "entry_id": f"topup-{t.topup_id}-reimb",
+                        "entry_type": "request",
+                        "description": f"[Replenishment] {t.description}" if t.description else "Petty cash replenishment request",
+                        "category": getattr(t, "category", None) or "Reimbursement",
+                        "amount_requested": reimb_amt,
+                        "amount_in": ZERO,
+                        "amount_out": ZERO,
+                        "request_type": "reimbursement",
+                    })
+            else:
+                amt_in = amt if is_approved else ZERO
+                default_desc = "Top-up from sales" if is_approved else "Petty cash replenishment request"
+                entries.append({
+                    **common_data,
+                    "entry_id": f"topup-{t.topup_id}",
+                    "entry_type": "topup" if is_approved else "request",
+                    "description": t.description or default_desc,
+                    "category": getattr(t, "category", None),
+                    "amount_requested": amt,
+                    "amount_in": amt_in,
+                    "amount_out": ZERO,
+                    "request_type": req_type,
+                })
 
         for e in expenses:
             if not e["expense_date"]:

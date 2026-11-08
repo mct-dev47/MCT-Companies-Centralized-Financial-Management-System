@@ -3,6 +3,7 @@ from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, Response, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import (
@@ -22,6 +23,8 @@ from app.schemas.petty_cash import (
     FinalizeSettlementIn,
     IntercompanySettleIn,
     IntercompanyTransferOut,
+    PettyCashCategoryCreate,
+    PettyCashCategoryOut,
     PettyCashEndorseIn,
     PettyCashLedgerEntry,
     PettyCashMovementOut,
@@ -34,6 +37,7 @@ from app.schemas.petty_cash import (
     TransferCancelIn,
     TransferReversalConfirmIn,
 )
+from app.models.petty_cash import PettyCashCategory
 from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
 
@@ -486,3 +490,76 @@ async def upload_receipt(
         "mime_type": final_mime,
         "content_type": final_mime
     }
+
+
+@router.get("/categories", response_model=List[PettyCashCategoryOut], summary="List configurable categories for a company")
+def list_categories(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    service = PettyCashService(db)
+    cid = company_id if isinstance(company_id, int) else None
+    cname = company_name if isinstance(company_name, str) else None
+    company = service.resolve_company(cid, cname)
+    check_company_access(current_user, company.company_id)
+    return (
+        db.query(PettyCashCategory)
+        .filter(PettyCashCategory.company_id == company.company_id)
+        .order_by(PettyCashCategory.name.asc())
+        .all()
+    )
+
+
+@router.post("/categories", response_model=PettyCashCategoryOut, status_code=status.HTTP_201_CREATED, summary="Create category for a company")
+def create_category(
+    payload: PettyCashCategoryCreate,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    service = PettyCashService(db)
+    company = service.resolve_company(payload.company_id, payload.company_name)
+    check_company_access(current_user, company.company_id)
+    cat_name = payload.name.strip()
+    if not cat_name:
+        raise HTTPException(status_code=422, detail="Category name cannot be empty.")
+
+    existing = (
+        db.query(PettyCashCategory)
+        .filter(
+            PettyCashCategory.company_id == company.company_id,
+            func.lower(PettyCashCategory.name) == cat_name.lower(),
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Category '{cat_name}' already exists for {company.company_name}."
+        )
+
+    new_cat = PettyCashCategory(
+        company_id=company.company_id,
+        name=cat_name,
+    )
+    db.add(new_cat)
+    db.commit()
+    db.refresh(new_cat)
+    return new_cat
+
+
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a category for a company")
+def delete_category(
+    category_id: int,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    cat = db.query(PettyCashCategory).filter(PettyCashCategory.category_id == category_id).first()
+    if not cat:
+        raise HTTPException(status_code=404, detail="Category not found.")
+    check_company_access(current_user, cat.company_id)
+    db.delete(cat)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+

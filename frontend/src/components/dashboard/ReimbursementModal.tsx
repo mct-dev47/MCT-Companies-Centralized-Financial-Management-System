@@ -32,8 +32,7 @@ import { formatRealName } from '@/utils/formatRealName'
 import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
 import { loanService } from '@/services/loanService'
-import { expenseService } from '@/services/expenseService'
-import { pettyCashService, type PettyCashLedgerEntry } from '@/services/pettyCashService'
+import { pettyCashService, type PettyCashLedgerEntry, type PettyCashCategory } from '@/services/pettyCashService'
 import { particularsService, type CompanyParticular } from '@/services/particularsService'
 import { cn } from '@/lib/utils'
 
@@ -64,18 +63,6 @@ export interface UploadedFileItem {
   error?: string
 }
 
-const DEFAULT_REIMBURSEMENT_CATEGORIES = [
-  'Office Supplies',
-  'Travel & Transportation',
-  'Meals & Entertainment',
-  'Hotel Supplies',
-  'Utilities',
-  'Repairs & Maintenance',
-  'Revolving Funds',
-  'Petty Cash',
-  'Miscellaneous',
-]
-
 const todayIso = () => formatToYYYYMMDD(new Date())
 
 function formatFileSize(bytes: number): string {
@@ -103,16 +90,26 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   const [expenseDate, setExpenseDate] = React.useState(todayIso)
   const [requestingCompany, setRequestingCompany] = React.useState(company)
   const [paidBy, setPaidBy] = React.useState('')
-  const [category, setCategory] = React.useState(DEFAULT_REIMBURSEMENT_CATEGORIES[0])
+  const [category, setCategory] = React.useState('')
   const [remarks, setRemarks] = React.useState('')
+
+  // Company-Scoped Configurable Categories
+  const [companyCategories, setCompanyCategories] = React.useState<PettyCashCategory[]>([])
+  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+  const [isAddingCategory, setIsAddingCategory] = React.useState(false)
+  const [isCategoryManaging, setIsCategoryManaging] = React.useState(false)
+  const [newCategoryName, setNewCategoryName] = React.useState('')
+  const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+  const [categoryError, setCategoryError] = React.useState('')
 
   // Expense Lines
   const [lines, setLines] = React.useState<ReimbursementLineItem[]>([
     { id: '1', particulars: '', amount: '' },
   ])
 
-  // Funding Breakdown (Spec 0038)
+  // Funding Breakdown (Bi-directional)
   const [companyFundedAmount, setCompanyFundedAmount] = React.useState('0')
+  const [employeeOutOfPocketAmount, setEmployeeOutOfPocketAmount] = React.useState('0')
   const [isPreRecorded, setIsPreRecorded] = React.useState(false)
   const [existingExpenseId, setExistingExpenseId] = React.useState('')
 
@@ -135,27 +132,16 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   const [activeHighlightIndex, setActiveHighlightIndex] = React.useState(-1)
   const comboboxContainerRef = React.useRef<HTMLDivElement | null>(null)
 
-  // Companies & Categories Data
+  // Companies Data
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
-  const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_REIMBURSEMENT_CATEGORIES)
 
-  // Load companies & categories
+  // Load companies
   React.useEffect(() => {
     let mounted = true
-    if (open) {
-      if (companies.length === 0) {
-        loanService.getCompanies().then((comps) => {
-          if (mounted && comps && comps.length > 0) {
-            setDbCompanies(comps.map((c) => c.company_name).filter(Boolean))
-          }
-        }).catch(() => {})
-      }
-
-      expenseService.getCategories().then((cats) => {
-        if (mounted && cats && cats.length > 0) {
-          const names = cats.map((c: any) => (typeof c === 'string' ? c : c.name)).filter(Boolean)
-          const merged = Array.from(new Set([...names, ...DEFAULT_REIMBURSEMENT_CATEGORIES]))
-          setCategoryOptions(merged)
+    if (open && companies.length === 0) {
+      loanService.getCompanies().then((comps) => {
+        if (mounted && comps && comps.length > 0) {
+          setDbCompanies(comps.map((c) => c.company_name).filter(Boolean))
         }
       }).catch(() => {})
     }
@@ -163,6 +149,76 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       mounted = false
     }
   }, [open, companies.length])
+
+  // Load categories for selected company
+  const loadCategories = React.useCallback(async (comp: string) => {
+    if (!comp || comp === 'All Companies') return
+    setIsLoadingCategories(true)
+    try {
+      const list = await pettyCashService.getCompanyCategories(comp)
+      setCompanyCategories(list)
+      setCategory((prev) => {
+        if (prev && list.some((c) => c.name.toLowerCase() === prev.toLowerCase())) return prev
+        return list.length > 0 ? list[0].name : ''
+      })
+    } catch (err) {
+      console.warn('Failed to load categories for', comp, err)
+      setCompanyCategories([])
+      setCategory('')
+    } finally {
+      setIsLoadingCategories(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (open && requestingCompany) {
+      loadCategories(requestingCompany)
+    }
+  }, [open, requestingCompany, loadCategories])
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) {
+      setCategoryError('Category name cannot be empty.')
+      return
+    }
+    setIsSubmittingCategory(true)
+    setCategoryError('')
+    try {
+      const created = await pettyCashService.createCompanyCategory(requestingCompany, trimmed)
+      const updated = [...companyCategories, created].sort((a, b) => a.name.localeCompare(b.name))
+      setCompanyCategories(updated)
+      setCategory(created.name)
+      setNewCategoryName('')
+      setIsAddingCategory(false)
+      notifySuccess(`Category "${created.name}" created for ${requestingCompany}.`)
+      if (fieldErrors.category) {
+        setFieldErrors((prev) => {
+          const next = { ...prev }
+          delete next.category
+          return next
+        })
+      }
+    } catch (err: any) {
+      setCategoryError(formatUserFriendlyErrorMessage(err, 'Failed to create category.'))
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleDeleteCategory = async (catId: number, catName: string) => {
+    try {
+      await pettyCashService.deleteCompanyCategory(catId)
+      const updated = companyCategories.filter((c) => c.category_id !== catId)
+      setCompanyCategories(updated)
+      if (category.toLowerCase() === catName.toLowerCase()) {
+        setCategory(updated.length > 0 ? updated[0].name : '')
+      }
+      notifySuccess(`Category "${catName}" removed.`)
+    } catch (err: any) {
+      setCategoryError(formatUserFriendlyErrorMessage(err, 'Failed to delete category.'))
+    }
+  }
 
   // Load saved particulars for current company
   React.useEffect(() => {
@@ -187,10 +243,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setRequestingCompany(initialComp)
       setExpenseDate(todayIso())
       setPaidBy(formatRealName(user?.fullName || user?.name || user?.email || ''))
-      setCategory(DEFAULT_REIMBURSEMENT_CATEGORIES[0])
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
       setCompanyFundedAmount('0')
+      setEmployeeOutOfPocketAmount('0')
       setIsPreRecorded(false)
       setExistingExpenseId('')
       setAttachments([])
@@ -199,6 +255,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setIsSubmitting(false)
       setIsDiscardModalOpen(false)
       setActiveComboboxId(null)
+      setIsAddingCategory(false)
+      setIsCategoryManaging(false)
+      setNewCategoryName('')
+      setCategoryError('')
     }
   }, [open, company, user])
 
@@ -220,10 +280,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const hasRemarks = Boolean(remarks.trim())
     const hasFunding =
       (companyFundedAmount !== '0' && companyFundedAmount !== '') ||
+      (employeeOutOfPocketAmount !== '0' && employeeOutOfPocketAmount !== '') ||
       isPreRecorded ||
       Boolean(existingExpenseId)
     return hasLineContent || hasAttachments || hasRemarks || hasFunding
-  }, [lines, attachments, remarks, companyFundedAmount, isPreRecorded, existingExpenseId])
+  }, [lines, attachments, remarks, companyFundedAmount, employeeOutOfPocketAmount, isPreRecorded, existingExpenseId])
 
   // Safe Close Handler: prompts discard if dirty
   const handleRequestClose = () => {
@@ -252,14 +313,23 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     }, 0)
   }, [lines])
 
+  // Auto-sync employeeOutOfPocketAmount whenever grandTotal changes
+  React.useEffect(() => {
+    const cVal = parseFloat(companyFundedAmount) || 0
+    const clampedC = Math.min(grandTotal, Math.max(0, cVal))
+    const oVal = Math.max(0, Math.round((grandTotal - clampedC) * 100) / 100)
+    setEmployeeOutOfPocketAmount(String(oVal))
+  }, [grandTotal])
+
   const companyFundedNum = React.useMemo(() => {
     const n = parseFloat(companyFundedAmount)
     return isNaN(n) ? 0 : n
   }, [companyFundedAmount])
 
   const employeeOutOfPocket = React.useMemo(() => {
-    return Math.max(0, Math.round((grandTotal - companyFundedNum) * 100) / 100)
-  }, [grandTotal, companyFundedNum])
+    const n = parseFloat(employeeOutOfPocketAmount)
+    return isNaN(n) ? 0 : n
+  }, [employeeOutOfPocketAmount])
 
   // Line Item Handlers
   const handleLineChange = (id: string, field: 'particulars' | 'amount', value: string) => {
@@ -519,8 +589,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       errors.paidBy = 'Please enter employee name.'
     }
 
-    if (!category.trim()) {
-      errors.category = 'Please select a category.'
+    if (!category.trim() || companyCategories.length === 0) {
+      errors.category = 'Please add and select a category for this company.'
     }
 
     // Lines validation
@@ -561,11 +631,23 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const roundedTotal = Math.round(totalAmount * 100) / 100
     const parsedCompanyFunded = parseFloat(companyFundedAmount)
     const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
+    const parsedOutOfPocket = parseFloat(employeeOutOfPocketAmount)
+    const validOutOfPocket = isNaN(parsedOutOfPocket) ? 0 : parsedOutOfPocket
 
     if (validCompanyFunded < 0) {
       errors.companyFunded = 'Company petty cash amount cannot be negative.'
     } else if (validCompanyFunded > roundedTotal) {
       errors.companyFunded = 'Company petty cash portion cannot exceed total expenses.'
+    }
+
+    if (validOutOfPocket < 0) {
+      errors.companyFunded = 'Reimbursement amount cannot be negative.'
+    } else if (validOutOfPocket > roundedTotal) {
+      errors.companyFunded = 'Reimbursement amount cannot exceed total expenses.'
+    }
+
+    if (Math.round((validCompanyFunded + validOutOfPocket) * 100) / 100 !== roundedTotal) {
+      errors.companyFunded = `Company petty cash (₱${validCompanyFunded.toFixed(2)}) + Reimbursement (₱${validOutOfPocket.toFixed(2)}) must equal Total (₱${roundedTotal.toFixed(2)}).`
     }
 
     let parsedExpenseId: number | null = null
@@ -605,7 +687,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         }))
 
       const combinedDescription = validLines.map((l) => l.particulars).join(', ')
-      const netOutOfPocket = Math.max(0, Math.round((roundedTotal - validCompanyFunded) * 100) / 100)
+      const netOutOfPocket = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
       const primaryReceiptUrl = uploadedAttachments[0]?.file_url || null
       const attachmentsJson = uploadedAttachments.length > 0 ? JSON.stringify(uploadedAttachments) : null
       const targetStatus = isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval'
@@ -631,7 +713,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         existing_expense_id: parsedExpenseId,
       })
 
-      notifySuccess('Reimbursement request submitted successfully.')
+      notifySuccess('Replenishment request submitted successfully.')
 
       const newEntry: PettyCashLedgerEntry = {
         id: `pc-${Date.now()}`,
@@ -661,7 +743,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       onSuccess?.(newEntry)
       onOpenChange(false)
     } catch (err: any) {
-      setGeneralError(formatUserFriendlyErrorMessage(err, 'Failed to submit reimbursement request.'))
+      setGeneralError(formatUserFriendlyErrorMessage(err, 'Failed to submit replenishment request.'))
     } finally {
       setIsSubmitting(false)
     }
@@ -687,10 +769,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
           {/* 1. Header */}
           <DialogHeader className="text-left pb-3.5 border-b border-stroke/20 pr-8">
             <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-              Reimbursement Request
+              Replenishment Request
             </DialogTitle>
             <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-              For expenses you paid with your own money.
+              For expenses paid from company petty cash and out-of-pocket replenishment.
             </DialogDescription>
           </DialogHeader>
 
@@ -803,35 +885,145 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 )}
               </div>
 
-              {/* Row 2, Right: Category */}
+              {/* Row 2, Right: Category (Configurable per company) */}
               <div className="space-y-1">
-                <Label htmlFor="reimbursement-category" className="text-xs font-semibold text-focus">
-                  Category <span className="text-red-500">*</span>
-                </Label>
-                <select
-                  id="reimbursement-category"
-                  value={category}
-                  onChange={(e) => {
-                    setCategory(e.target.value)
-                    if (fieldErrors.category) {
-                      setFieldErrors((prev) => {
-                        const n = { ...prev }
-                        delete n.category
-                        return n
-                      })
-                    }
-                  }}
-                  className={cn(
-                    'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
-                    fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                  )}
-                >
-                  {categoryOptions.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="reimbursement-category" className="text-xs font-semibold text-focus">
+                    Category <span className="text-red-500">*</span>
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    {companyCategories.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setIsCategoryManaging((prev) => !prev)}
+                        className="text-[11px] font-semibold text-muted-fg hover:text-focus transition-colors cursor-pointer"
+                      >
+                        {isCategoryManaging ? 'Done' : 'Manage'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingCategory((prev) => !prev)
+                        setCategoryError('')
+                        setNewCategoryName('')
+                      }}
+                      className="text-[11px] font-bold text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{isAddingCategory ? 'Cancel' : 'Add Category'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline Add Category Input */}
+                {isAddingCategory && (
+                  <div className="p-2.5 rounded-xl border border-primary/30 bg-primary/5 space-y-2 animate-in fade-in-50 duration-150">
+                    <div className="text-[11px] font-bold text-focus">
+                      New Category for <span className="text-primary">{requestingCompany}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="text"
+                        placeholder="e.g. Office Supplies, Fuel..."
+                        value={newCategoryName}
+                        onChange={(e) => {
+                          setNewCategoryName(e.target.value)
+                          if (categoryError) setCategoryError('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            handleCreateCategory()
+                          }
+                        }}
+                        className="h-8 rounded-lg text-xs bg-white border-stroke/50 flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingCategory || !newCategoryName.trim()}
+                        onClick={handleCreateCategory}
+                        className="h-8 px-3 rounded-lg text-xs font-semibold bg-primary hover:bg-primary/90 text-white cursor-pointer"
+                      >
+                        {isSubmittingCategory ? 'Saving...' : 'Save'}
+                      </Button>
+                    </div>
+                    {categoryError && (
+                      <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Manage / Delete Existing Categories List */}
+                {isCategoryManaging && companyCategories.length > 0 && (
+                  <div className="p-2 rounded-xl border border-stroke/40 bg-slate-50 space-y-1 max-h-36 overflow-y-auto">
+                    <div className="text-[11px] font-semibold text-muted-fg px-1 pb-1 border-b border-stroke/20">
+                      Manage {requestingCompany} Categories
+                    </div>
+                    {companyCategories.map((cat) => (
+                      <div
+                        key={cat.category_id}
+                        className="flex items-center justify-between px-2 py-1 rounded-lg text-xs bg-white border border-stroke/20 hover:bg-slate-100"
+                      >
+                        <span className="font-medium text-focus truncate">{cat.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCategory(cat.category_id, cat.name)}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer transition-colors"
+                          title={`Delete ${cat.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Category Dropdown or Empty Warning */}
+                {isLoadingCategories ? (
+                  <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 flex items-center text-xs text-muted-fg">
+                    <RotateCw className="w-3.5 h-3.5 animate-spin mr-2" />
+                    <span>Loading categories for {requestingCompany}…</span>
+                  </div>
+                ) : companyCategories.length === 0 ? (
+                  <div className="p-3 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-900 space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-xs font-bold">
+                      <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                      <span>No categories for {requestingCompany} yet</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800 leading-snug">
+                      Please click <strong>"+ Add Category"</strong> above to create at least one category before submitting.
+                    </p>
+                  </div>
+                ) : (
+                  <select
+                    id="reimbursement-category"
+                    value={category}
+                    onChange={(e) => {
+                      setCategory(e.target.value)
+                      if (fieldErrors.category) {
+                        setFieldErrors((prev) => {
+                          const n = { ...prev }
+                          delete n.category
+                          return n
+                        })
+                      }
+                    }}
+                    className={cn(
+                      'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
+                      fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                    )}
+                  >
+                    <option value="" disabled>Select a category…</option>
+                    {companyCategories.map((cat) => (
+                      <option key={cat.category_id} value={cat.name}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
                 {fieldErrors.category && (
                   <p className="text-[11px] text-red-600 font-medium">{fieldErrors.category}</p>
                 )}
@@ -1018,7 +1210,12 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     placeholder="0.00"
                     value={companyFundedAmount}
                     onChange={(e) => {
-                      setCompanyFundedAmount(e.target.value)
+                      const val = e.target.value
+                      setCompanyFundedAmount(val)
+                      const parsedC = parseFloat(val)
+                      const validC = isNaN(parsedC) ? 0 : parsedC
+                      const compO = Math.max(0, Math.round((grandTotal - validC) * 100) / 100)
+                      setEmployeeOutOfPocketAmount(String(compO))
                       if (fieldErrors.companyFunded) {
                         setFieldErrors((prev) => {
                           const n = { ...prev }
@@ -1036,28 +1233,42 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
                   )}
                   <p className="text-[10.5px] text-muted-fg">
-                    Enter ₱0.00 if you paid entirely out of pocket.
+                    Enter ₱0.00 if paid entirely out of pocket.
                   </p>
                 </div>
 
-                {/* Employee Out of Pocket (O = E - C) */}
+                {/* Employee Out of Pocket / Reimbursement (R) */}
                 <div className="space-y-1">
-                  <Label className="text-xs font-semibold text-focus">
-                    Reimbursement claim (out of pocket)
+                  <Label htmlFor="employee-out-of-pocket" className="text-xs font-semibold text-focus">
+                    Reimbursement claim (out of pocket) (₱)
                   </Label>
-                  <div
+                  <Input
+                    id="employee-out-of-pocket"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={employeeOutOfPocketAmount}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      setEmployeeOutOfPocketAmount(val)
+                      const parsedO = parseFloat(val)
+                      const validO = isNaN(parsedO) ? 0 : parsedO
+                      const compC = Math.max(0, Math.round((grandTotal - validO) * 100) / 100)
+                      setCompanyFundedAmount(String(compC))
+                      if (fieldErrors.companyFunded) {
+                        setFieldErrors((prev) => {
+                          const n = { ...prev }
+                          delete n.companyFunded
+                          return n
+                        })
+                      }
+                    }}
                     className={cn(
-                      'h-10 px-3 rounded-xl border flex items-center justify-between font-bold text-xs tabular-nums shadow-2xs',
-                      employeeOutOfPocket > 0
-                        ? 'bg-emerald-50/60 border-emerald-300 text-emerald-800'
-                        : 'bg-slate-100 border-stroke/40 text-focus'
+                      'h-10 rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs tabular-nums',
+                      fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                     )}
-                  >
-                    <span>{formatPHP(employeeOutOfPocket)}</span>
-                    <span className="text-[10.5px] font-medium text-muted-fg">
-                      {grandTotal > 0 ? `(₱${grandTotal.toFixed(2)} − ₱${companyFundedNum.toFixed(2)})` : ''}
-                    </span>
-                  </div>
+                  />
                   <p className="text-[10.5px] text-muted-fg">
                     Net amount to be disbursed to employee.
                   </p>
@@ -1292,7 +1503,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       <span>Submitting…</span>
                     </>
                   ) : (
-                    <span>Submit Reimbursement</span>
+                    <span>Submit Replenishment</span>
                   )}
                 </Button>
               </div>

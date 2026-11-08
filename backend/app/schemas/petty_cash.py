@@ -269,3 +269,19 @@ class PettyCashLedgerEntry(BaseModel):
     reimbursed_by: Optional[str] = None
     transfer_received_at: Optional[datetime] = None
     transfer_received_by: Optional[str] = None
+
+
+class PettyCashCategoryCreate(BaseModel):
+    company_id: Optional[int] = None
+    company_name: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class PettyCashCategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    category_id: int
+    company_id: int
+    name: str
+    created_at: Optional[datetime] = None
+

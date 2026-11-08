@@ -23,10 +23,17 @@ export interface PettyCashSummary {
   isLow: boolean
 }
 
+export interface PettyCashCategory {
+  category_id: number
+  company_id: number
+  name: string
+  created_at?: string
+}
+
 export interface PettyCashLedgerEntry {
   id: string
   type: 'topup' | 'expense' | 'request'
-  requestType?: 'topup' | 'reimbursement' | string
+  requestType?: 'topup' | 'reimbursement' | 'replenishment_disbursement' | string
   paidBy?: string | null
   receiptUrl?: string | null
   attachments?: string | null
@@ -390,6 +397,31 @@ export const pettyCashService = {
     const response = await fetch(`/api/v1/petty-cash/ledger${query}`, { headers: backendHeaders() })
     if (!response.ok) throw await getBackendError(response)
     return ((await response.json()) as BackendLedgerEntry[]).map(mapLedgerEntry)
+  },
+
+  async getCompanyCategories(companyName?: string): Promise<PettyCashCategory[]> {
+    const query = buildQuery({ company_name: companyName && companyName !== 'All Companies' ? companyName : undefined })
+    const response = await fetch(`/api/v1/petty-cash/categories${query}`, { headers: backendHeaders() })
+    if (!response.ok) throw await getBackendError(response)
+    return (await response.json()) as PettyCashCategory[]
+  },
+
+  async createCompanyCategory(companyName: string, name: string): Promise<PettyCashCategory> {
+    const response = await fetch('/api/v1/petty-cash/categories', {
+      method: 'POST',
+      headers: backendHeaders(),
+      body: JSON.stringify({ company_name: companyName, name }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    return (await response.json()) as PettyCashCategory
+  },
+
+  async deleteCompanyCategory(categoryId: number): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/categories/${categoryId}`, {
+      method: 'DELETE',
+      headers: backendHeaders(),
+    })
+    if (!response.ok) throw await getBackendError(response)
   },
 
   /**

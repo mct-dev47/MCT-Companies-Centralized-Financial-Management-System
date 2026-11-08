@@ -487,11 +487,11 @@ export const PettyCashPage: React.FC = () => {
         if (statusFilter === 'Expense' && item.type !== 'expense') return false
       }
 
-      // 2b. Type Filter (All / Top-up / Reimbursement)
+      // 2b. Type Filter (All / Top-up / Replenishment)
       if (typeFilter !== 'All') {
         const reqType = (item.requestType || (item.type === 'expense' ? 'expense' : 'topup')).toLowerCase()
         if (typeFilter === 'Top-up' && (reqType !== 'topup' || item.type === 'expense')) return false
-        if (typeFilter === 'Reimbursement' && reqType !== 'reimbursement') return false
+        if (typeFilter === 'Reimbursement' && reqType !== 'reimbursement' && reqType !== 'replenishment' && reqType !== 'replenishment_disbursement') return false
       }
 
       // 3. Search Query Filter
@@ -921,7 +921,7 @@ export const PettyCashPage: React.FC = () => {
                           <Receipt className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Reimbursement Request</div>
+                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Replenishment</div>
                           <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
                             Get paid back for expenses you paid out of your own pocket.
                           </div>
@@ -937,7 +937,7 @@ export const PettyCashPage: React.FC = () => {
                   className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
                 >
                   <Receipt className="h-4 w-4 shrink-0" />
-                  <span>Submit Reimbursement</span>
+                  <span>Request Replenishment</span>
                 </Button>
               )
             )}
@@ -978,7 +978,7 @@ export const PettyCashPage: React.FC = () => {
                     ? 'All'
                     : typeFilter === 'Top-up'
                     ? 'Petty Cash Request'
-                    : 'Reimbursement'}
+                    : 'Replenishment'}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -993,7 +993,7 @@ export const PettyCashPage: React.FC = () => {
                   {[
                     { id: 'All', label: 'All' },
                     { id: 'Top-up', label: 'Petty Cash Request' },
-                    { id: 'Reimbursement', label: 'Reimbursement' },
+                    { id: 'Reimbursement', label: 'Replenishment' },
                   ].map((tp) => (
                     <button
                       key={tp.id}
@@ -1337,10 +1337,15 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 2b. Type Indicator */}
                       <TableCell className="px-3 py-3.5 text-center">
-                        {entry.requestType === 'reimbursement' ? (
+                        {entry.requestType === 'replenishment_disbursement' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300 whitespace-nowrap">
+                            <Wallet className="w-3 h-3 text-slate-600 shrink-0" />
+                            <span>Petty Cash Disbursement</span>
+                          </span>
+                        ) : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
                             <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Reimbursement</span>
+                            <span>Replenishment</span>
                           </span>
                         ) : entry.type === 'expense' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
@@ -1356,7 +1361,7 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 3. Particulars & Category (Remarks shown in modal per specification) */}
                       <TableCell className="px-3 py-3.5">
-                        {entry.requestType === 'reimbursement' && entry.paidBy && (
+                        {(entry.requestType === 'reimbursement' || entry.requestType === 'replenishment_disbursement' || entry.requestType === 'replenishment') && entry.paidBy && (
                           <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
                             <User className="w-3 h-3 text-slate-400 shrink-0" />
                             <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
@@ -1645,13 +1650,13 @@ export const PettyCashPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* If Reimbursement: Show Paid By, Line Items, and Receipt Proof */}
-              {targetEntry.requestType === 'reimbursement' && (
+              {/* If Reimbursement / Replenishment: Show Paid By, Line Items, and Receipt Proof */}
+              {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') && (
                 <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/60 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
                       <Receipt className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Reimbursement Details</span>
+                      <span>Replenishment Details</span>
                     </span>
                     <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-100 text-amber-800">
                       Paid By: {targetEntry.paidBy || 'Employee'}
@@ -1883,7 +1888,7 @@ export const PettyCashPage: React.FC = () => {
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-focus">
-                        {targetEntry.requestType === 'reimbursement' ? 'Reimbursement filed by' : 'Requested by'}{' '}
+                        {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') ? 'Replenishment filed by' : 'Requested by'}{' '}
                         <span className="text-primary font-bold">
                           {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
                         </span>
@@ -1893,7 +1898,7 @@ export const PettyCashPage: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-[11px] text-muted-fg mt-0.5">
-                      {targetEntry.requestType === 'reimbursement'
+                      {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment')
                         ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
                         : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
                     </p>
@@ -2063,7 +2068,7 @@ export const PettyCashPage: React.FC = () => {
                 )}
 
                 {/* Finance Team Actions: Lifecycle execution for reimbursements */}
-                {canExecuteFinancialActions && targetEntry.requestType === 'reimbursement' && (
+                {canExecuteFinancialActions && (targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') && (
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Zero Excess Claim in Approved status: Finalize Settlement */}
                     {targetEntry.status === 'Approved' &&
@@ -2767,7 +2772,7 @@ export const PettyCashPage: React.FC = () => {
                   <span>Delete Top-Up Request</span>
                 </button>
               </>
-            ) : canExecuteFinancialActions && activeMenuPetty.requestType === 'reimbursement' ? (
+            ) : canExecuteFinancialActions && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement' || activeMenuPetty.requestType === 'replenishment') ? (
               <>
                 {/* Zero excess claim */}
                 {activeMenuPetty.status === 'Approved' &&

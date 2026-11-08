@@ -94,6 +94,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0038_petty_cash_excess_reimbursements")
             logger.info("Migration 0038_petty_cash_excess_reimbursements applied successfully.")
 
+    # 5. Check if 0039 is applied
+    result_0039 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0039_petty_cash_categories'")
+    ).first()
+
+    if not result_0039:
+        script_0039 = MIGRATIONS_DIR / "0039_petty_cash_categories.postgres.sql"
+        if script_0039.exists():
+            with open(script_0039, "r", encoding="utf-8") as f:
+                sql_0039 = f.read()
+            clean_0039 = sql_0039.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0039))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0039_petty_cash_categories')"))
+            applied.append("0039_petty_cash_categories")
+            logger.info("Migration 0039_petty_cash_categories applied successfully.")
+
     conn.commit()
     return applied
 
@@ -228,6 +244,27 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0038_petty_cash_excess_reimbursements")
         logger.info("SQLite migration 0038_petty_cash_excess_reimbursements applied successfully.")
+
+    # 5. Check if 0039 is applied
+    result_0039 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0039_petty_cash_categories'")
+    ).first()
+
+    if not result_0039:
+        script_0039 = MIGRATIONS_DIR / "0039_petty_cash_categories.sqlite.sql"
+        if script_0039.exists():
+            with open(script_0039, "r", encoding="utf-8") as f:
+                for statement in f.read().split(";"):
+                    lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                    clean_stmt = "\n".join(lines).strip()
+                    if clean_stmt and "schema_migrations" not in clean_stmt:
+                        conn.execute(text(clean_stmt))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0039_petty_cash_categories')")
+        )
+        applied.append("0039_petty_cash_categories")
+        logger.info("SQLite migration 0039_petty_cash_categories applied successfully.")
 
     conn.commit()
     return applied

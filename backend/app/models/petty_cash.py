@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
@@ -76,3 +76,26 @@ class PettyCashWallet(Base):
     balance = Column(Numeric(15, 2), nullable=True, default=0)
     low_balance_threshold = Column(Numeric(15, 2), nullable=False, default=1000)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class PettyCashCategory(Base):
+    """Company-specific petty cash category configured by users."""
+
+    __tablename__ = "petty_cash_categories"
+
+    category_id = Column(Integer, primary_key=True, autoincrement=True, index=True)
+    company_id = Column(
+        Integer,
+        ForeignKey("company.company_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(100), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "name", name="uq_petty_cash_categories_company_name"),
+    )
+
+    company = relationship("Company", backref="petty_cash_categories")
+
