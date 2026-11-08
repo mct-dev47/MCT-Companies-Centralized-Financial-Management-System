@@ -10,6 +10,8 @@ class SaleBase(BaseModel):
     cheque_no: Optional[str] = None
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Amount must be at least 1.00 (cannot be 0 or less than 1)")
     particulars: Optional[str] = Field(None, description="Particulars / description")
+    payment_status: Optional[str] = Field("Paid", description="Payment status: Paid, Pending, Unpaid")
+    deposit_status: Optional[str] = Field(None, description="Deposit status: Deposited, Not Deposited")
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -67,12 +69,54 @@ class SaleCreate(SaleBase):
         if chq and chq.strip():
             self.cheque_no = chq.strip()
 
+        # Payment status normalization & validation
+        raw_ps = (self.payment_status or "Paid").strip()
+        ps_lower = raw_ps.lower()
+        if ps_lower == "paid":
+            self.payment_status = "Paid"
+        elif ps_lower == "pending":
+            self.payment_status = "Pending"
+        elif ps_lower == "unpaid":
+            self.payment_status = "Unpaid"
+        else:
+            raise ValueError("Payment status must be 'Paid', 'Pending', or 'Unpaid'.")
+
+        # Deposit status default logic (AC-1)
+        raw_ds = (self.deposit_status or "").strip()
+        if not raw_ds:
+            if self.payment_status == "Paid":
+                self.deposit_status = "Deposited"
+            else:
+                self.deposit_status = "Not Deposited"
+        else:
+            ds_lower = raw_ds.lower()
+            if ds_lower in ("deposited", "deposit"):
+                self.deposit_status = "Deposited"
+            elif ds_lower in ("not deposited", "not_deposited", "notdeposited"):
+                self.deposit_status = "Not Deposited"
+            else:
+                raise ValueError("Deposit status must be either 'Deposited' or 'Not Deposited'.")
+
+        # Business validation matrix (AC-2, AC-3, AC-4)
+        if self.payment_status == "Unpaid" and self.deposit_status == "Deposited":
+            raise ValueError("Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.")
+
+        if self.payment_status == "Pending" and self.deposit_status == "Deposited":
+            pm = (self.payment_method or "").strip().lower()
+            has_chq = bool(self.cheque_no and self.cheque_no.strip())
+            if pm != "cheque" or not has_chq:
+                raise ValueError(
+                    "Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+
         return self
 
 class SaleUpdate(BaseModel):
     category_id: Optional[int] = None
     category: Optional[str] = None
     payment_method: Optional[str] = None
+    payment_status: Optional[str] = None
+    deposit_status: Optional[str] = None
     transaction_date: Optional[date] = None
     cheque_no: Optional[str] = None
     chequeNo: Optional[str] = None
@@ -115,7 +159,52 @@ class SaleUpdate(BaseModel):
             self.particulars = parts.strip()
         if self.category is not None and not self.category.strip():
             raise ValueError("Category cannot be blank.")
+
+        if self.payment_status is not None:
+            raw_ps = self.payment_status.strip().lower()
+            if raw_ps == "paid":
+                self.payment_status = "Paid"
+            elif raw_ps == "pending":
+                self.payment_status = "Pending"
+            elif raw_ps == "unpaid":
+                self.payment_status = "Unpaid"
+            else:
+                raise ValueError("Payment status must be 'Paid', 'Pending', or 'Unpaid'.")
+
+        if self.deposit_status is not None:
+            raw_ds = self.deposit_status.strip().lower()
+            if raw_ds in ("deposited", "deposit"):
+                self.deposit_status = "Deposited"
+            elif raw_ds in ("not deposited", "not_deposited", "notdeposited"):
+                self.deposit_status = "Not Deposited"
+            else:
+                raise ValueError("Deposit status must be either 'Deposited' or 'Not Deposited'.")
+
+        if self.payment_status == "Unpaid" and self.deposit_status == "Deposited":
+            raise ValueError("Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.")
+
+        if self.payment_status == "Pending" and self.deposit_status == "Deposited":
+            pm = (self.payment_method or "").strip().lower()
+            chq = (self.cheque_no or self.chequeNo or "").strip()
+            if pm != "cheque" or not chq:
+                raise ValueError(
+                    "Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+
         return self
+
+class DepositStatusUpdate(BaseModel):
+    deposit_status: str
+
+    @field_validator("deposit_status")
+    @classmethod
+    def validate_deposit_status_value(cls, v: str) -> str:
+        raw = (v or "").strip().lower()
+        if raw in ("deposited", "deposit"):
+            return "Deposited"
+        elif raw in ("not deposited", "not_deposited", "notdeposited"):
+            return "Not Deposited"
+        raise ValueError("Deposit status must be either 'Deposited' or 'Not Deposited'.")
 
 class SaleOut(BaseModel):
     sales_id: int
@@ -124,6 +213,8 @@ class SaleOut(BaseModel):
     category_id: Optional[int] = None
     category_name: Optional[str] = None
     payment_method: Optional[str] = None
+    payment_status: str = "Paid"
+    deposit_status: str = "Not Deposited"
     transaction_date: date
     cheque_no: Optional[str] = None
     amount: Decimal

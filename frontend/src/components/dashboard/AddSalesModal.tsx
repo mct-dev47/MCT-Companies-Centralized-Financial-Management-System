@@ -237,7 +237,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
       }
 
-      const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Partial' : 'Unpaid'
+      const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Pending' : 'Unpaid'
 
       const payload: NewSalesInput = {
         date: date.trim() || getTodayIso(),
@@ -248,6 +248,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         paymentMethod: paymentMethod,
         company: assignedCompany,
         status: effectiveStatus as any,
+        depositStatus: effectiveStatus === 'Paid' && paymentMethod !== 'GCash' ? 'Deposited' : 'Not Deposited',
+        deposit_status: effectiveStatus === 'Paid' && paymentMethod !== 'GCash' ? 'Deposited' : 'Not Deposited',
       }
       const created = await salesService.addSale(payload)
 
