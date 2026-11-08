@@ -19,6 +19,7 @@
 | Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
 | Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
+| Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
 
 ---
 
@@ -260,3 +261,19 @@
   - [x] Milestone 5: Tenant Details dedicated Audit Review card matching FilCap Lending (AC-1)
 - [ ] Verify it: /check verify tenant-audit-review
 - [ ] Test it: /test tenant-audit-review
+
+### Petty Cash Excess Reimbursements and Intercompany Funding
+**Status**: in-progress
+**Spec**: [0038](../specs/0038-petty-cash-excess-reimbursements.md)
+**Intent**: Support employee reimbursements when business expenses exceed company petty cash, distinguishing pre-recorded expenses from unrecorded spending, reserving float under wallet row locks, preventing duplicate expense recognition, and enabling cross-company bank funding with direct payment or bank transfer first options and real financial reversals.
+**Done when**: Reimbursement claims accurately capture the breakdown of company petty cash and employee out-of-pocket expenses; unrecorded spending reserves petty cash under wallet locks while pre-recorded expenses avoid duplicate deductions; zero-excess and positive-excess claims finalize idempotently at the execution phase; regular employees cannot initiate top-ups; cross-company funding supports Direct Payment (Method A) and Transfer First (Method B) with real financial reversal on cancellation; and intercompany liabilities remain tracked until explicit repayment is executed.
+
+- [x] Design it (spec): [0038](../specs/0038-petty-cash-excess-reimbursements.md)
+- [x] Build it: /develop petty-cash-excess-reimbursements (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Engine-specific database migrations for PostgreSQL and SQLite with partial unique indexes and Pydantic schemas (AC-1, AC-3, AC-9, AC-10, AC-11, AC-13)
+  - [x] Milestone 2: Petty cash reservation hold logic and pre-recorded expense validation under wallet locks (AC-1, AC-2, AC-3)
+  - [x] Milestone 3: Endorsement bank selection, zero-excess settlement finalization, and execution endpoints with idempotency protection (AC-4, AC-6, AC-7, AC-8, AC-9, AC-14, AC-15)
+  - [x] Milestone 4: Two-phase transfer cancellation with real financial reversal and intercompany repayment settlement (AC-10, AC-11, AC-12, AC-13)
+  - [x] Milestone 5: Frontend reimbursement modal breakdown, employee top-up restriction, and ledger action controls (AC-1, AC-5, AC-7, AC-10)
+- [x] Verify it: /check verify petty-cash-excess-reimbursements
+- [ ] Test it: /test petty-cash-excess-reimbursements

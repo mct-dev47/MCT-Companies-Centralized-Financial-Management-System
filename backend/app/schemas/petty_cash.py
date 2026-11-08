@@ -9,7 +9,7 @@ class PettyCashTopUpCreate(BaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
     company_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    amount: Decimal = Field(..., ge=1, decimal_places=2)
+    amount: Decimal = Field(..., ge=0, decimal_places=2)
     topup_date: date
     reference_no: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = None
@@ -24,6 +24,10 @@ class PettyCashTopUpCreate(BaseModel):
     attachments: Optional[str] = None
     items: Optional[str] = None
     category: Optional[str] = None
+    total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
+    company_funded_amount: Optional[Decimal] = Field(Decimal("0.00"), decimal_places=2)
+    employee_out_of_pocket: Optional[Decimal] = Field(Decimal("0.00"), decimal_places=2)
+    existing_expense_id: Optional[int] = None
 
     @model_validator(mode="after")
     def validate_fields(self):
@@ -31,17 +35,37 @@ class PettyCashTopUpCreate(BaseModel):
             raise ValueError("Company identifier (company_id or company name) is required.")
         if self.topup_date > date.today():
             raise ValueError("Top-up date cannot be in the future.")
+
+        req_type = (self.request_type or "topup").lower()
+        if req_type == "reimbursement":
+            if self.total_expenses is not None:
+                if self.total_expenses <= Decimal("0.00"):
+                    raise ValueError("Total business expenses must be greater than zero.")
+                c_amount = self.company_funded_amount or Decimal("0.00")
+                if c_amount < Decimal("0.00"):
+                    raise ValueError("Company funded amount cannot be negative.")
+                if c_amount > self.total_expenses:
+                    raise ValueError("Company funded amount cannot exceed total expenses.")
+                self.employee_out_of_pocket = self.total_expenses - c_amount
+                self.amount = self.employee_out_of_pocket
+        else:
+            if self.amount < Decimal("1.00"):
+                raise ValueError("Top-up amount must be at least 1.00.")
         return self
 
 
 class PettyCashTopUpUpdate(BaseModel):
-    amount: Optional[Decimal] = Field(None, ge=1, decimal_places=2)
+    amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     description: Optional[str] = None
     paid_by: Optional[str] = None
     receipt_url: Optional[str] = None
     attachments: Optional[str] = None
     items: Optional[str] = None
     category: Optional[str] = None
+    total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
+    company_funded_amount: Optional[Decimal] = Field(None, decimal_places=2)
+    employee_out_of_pocket: Optional[Decimal] = Field(None, decimal_places=2)
+    existing_expense_id: Optional[int] = None
 
 
 class PettyCashTopUpOut(BaseModel):
@@ -70,6 +94,25 @@ class PettyCashTopUpOut(BaseModel):
     reviewed_at: Optional[datetime] = None
     created_by: Optional[int] = None
     created_at: Optional[datetime] = None
+    total_expenses: Optional[Decimal] = None
+    company_funded_amount: Optional[Decimal] = Decimal("0.00")
+    employee_out_of_pocket: Optional[Decimal] = Decimal("0.00")
+    reserved_amount: Optional[Decimal] = Decimal("0.00")
+    amount_reimbursed: Decimal = Decimal("0.00")
+    existing_expense_id: Optional[int] = None
+    petty_cash_expense_id: Optional[int] = None
+    reimbursement_expense_id: Optional[int] = None
+    payment_method_option: Optional[str] = None
+    destination_bank_id: Optional[str] = None
+    intercompany_transfer_id: Optional[int] = None
+    reimbursed_at: Optional[datetime] = None
+    reimbursed_by: Optional[str] = None
+    transfer_received_at: Optional[datetime] = None
+    transfer_received_by: Optional[str] = None
+    destination_bank_name: Optional[str] = None
+    funding_bank_name: Optional[str] = None
+    transfer_status: Optional[str] = None
+    settlement_status: Optional[str] = None
 
 
 class PettyCashEndorseIn(BaseModel):
@@ -78,6 +121,62 @@ class PettyCashEndorseIn(BaseModel):
     bank_account_id: Optional[str] = Field(
         None, description="Funding bank account chosen by Finance; required when action is 'endorse' (spec 0012)."
     )
+    payment_method_option: Optional[Literal["direct", "transfer_first"]] = Field(
+        None, description="Required for cross company bank funding: direct or transfer_first."
+    )
+    destination_bank_id: Optional[str] = Field(
+        None, description="Destination bank account of requesting company; required for transfer_first."
+    )
+
+
+class FinalizeSettlementIn(BaseModel):
+    notes: Optional[str] = None
+
+
+class TransferCancelIn(BaseModel):
+    reason: str = Field(..., min_length=1, description="Reason for cancelling the in-transit transfer.")
+
+
+class TransferReversalConfirmIn(BaseModel):
+    verification_notes: Optional[str] = None
+
+
+class IntercompanySettleIn(BaseModel):
+    source_bank_id: str = Field(..., min_length=1, description="Company A repayment bank account")
+    destination_bank_id: str = Field(..., min_length=1, description="Company B receiving bank account")
+    notes: Optional[str] = None
+
+
+class IntercompanyTransferOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    transfer_id: int
+    source_company_id: int
+    destination_company_id: int
+    source_bank_id: str
+    destination_bank_id: Optional[str] = None
+    source_bank_tx_id: Optional[str] = None
+    destination_bank_tx_id: Optional[str] = None
+    reversal_bank_tx_id: Optional[str] = None
+    repayment_source_bank_tx_id: Optional[str] = None
+    repayment_destination_bank_tx_id: Optional[str] = None
+    linked_topup_id: Optional[int] = None
+    amount: Decimal
+    transfer_type: str
+    reference_no: str
+    transfer_status: str
+    settlement_status: str
+    initiated_by: str
+    initiated_at: datetime
+    received_by: Optional[str] = None
+    received_at: Optional[datetime] = None
+    settled_at: Optional[datetime] = None
+    repaid_by: Optional[str] = None
+    notes: Optional[str] = None
+    source_company_name: Optional[str] = None
+    destination_company_name: Optional[str] = None
+    source_bank_name: Optional[str] = None
+    destination_bank_name: Optional[str] = None
 
 
 class PettyCashReviewIn(BaseModel):
@@ -156,3 +255,17 @@ class PettyCashLedgerEntry(BaseModel):
     funding_account_name: Optional[str] = None
     funding_company_name: Optional[str] = None
     is_own_account: bool = False
+    total_expenses: Optional[Decimal] = None
+    company_funded_amount: Optional[Decimal] = Decimal("0.00")
+    employee_out_of_pocket: Optional[Decimal] = Decimal("0.00")
+    existing_expense_id: Optional[int] = None
+    payment_method_option: Optional[str] = None
+    destination_bank_id: Optional[str] = None
+    destination_bank_name: Optional[str] = None
+    intercompany_transfer_id: Optional[int] = None
+    transfer_status: Optional[str] = None
+    settlement_status: Optional[str] = None
+    reimbursed_at: Optional[datetime] = None
+    reimbursed_by: Optional[str] = None
+    transfer_received_at: Optional[datetime] = None
+    transfer_received_by: Optional[str] = None

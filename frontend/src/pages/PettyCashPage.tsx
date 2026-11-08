@@ -27,6 +27,7 @@ import {
   Receipt,
   User,
   History,
+  RotateCw,
 } from 'lucide-react'
 import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
 import { formatRealName } from '@/utils/formatRealName'
@@ -121,9 +122,11 @@ export const PettyCashPage: React.FC = () => {
   const isSupervisor = userRole === 'supervisor'
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
+  const canRequestTopUp = ['admin', 'superadmin', 'finance', 'supervisor'].includes(userRole)
   const isCompanyScoped = isStrictlyCompanyScoped
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
+  const canExecuteFinancialActions = (isFinance || isAdmin) && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -221,7 +224,15 @@ export const PettyCashPage: React.FC = () => {
   // Spec 0012: funding bank Finance chooses when endorsing a petty cash request.
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
   const [selectedFundingBankId, setSelectedFundingBankId] = React.useState('')
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState<'direct' | 'transfer_first'>('direct')
+  const [selectedDestinationBankId, setSelectedDestinationBankId] = React.useState('')
   const [approvalFeedback, setApprovalFeedback] = React.useState<string | null>(null)
+
+  // Spec 0038: Transfer cancellation and execution state
+  const [cancelModalEntry, setCancelModalEntry] = React.useState<PettyCashTransaction | null>(null)
+  const [cancelReason, setCancelReason] = React.useState('')
+  const [isSubmittingAction, setIsSubmittingAction] = React.useState(false)
+  const [actionError, setActionError] = React.useState('')
 
   // Row Actions Menu State
   const [openMenuPettyId, setOpenMenuPettyId] = React.useState<string | null>(null)
@@ -548,8 +559,12 @@ export const PettyCashPage: React.FC = () => {
         isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
       )
       setSelectedFundingBankId(ownAccount ? ownAccount.id : '')
+      setSelectedPaymentMethod('direct')
+      setSelectedDestinationBankId('')
     } else {
       setSelectedFundingBankId('')
+      setSelectedPaymentMethod('direct')
+      setSelectedDestinationBankId('')
     }
     setIsReviewConfirmModalOpen(true)
   }
@@ -564,11 +579,20 @@ export const PettyCashPage: React.FC = () => {
       return
     }
 
-    // Spec 0012: Finance must choose a funding bank before endorsing top-ups.
-    const isReimbursement = (targetEntry.requestType || '').toLowerCase() === 'reimbursement'
-    if (reviewAction === 'endorse' && !isReimbursement && !selectedFundingBankId) {
+    // Spec 0012: Finance must choose a funding bank before endorsing.
+    if (reviewAction === 'endorse' && !selectedFundingBankId) {
       setReviewError('Please choose a funding bank account before endorsing.')
       return
+    }
+
+    const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
+    const isCrossCompanyBank = selectedBank && !isCompanyMatch(selectedBank.companyName || '', targetEntry.companyName || '')
+
+    if (reviewAction === 'endorse' && isCrossCompanyBank) {
+      if (selectedPaymentMethod === 'transfer_first' && !selectedDestinationBankId) {
+        setReviewError(`Please choose a destination bank account belonging to ${targetEntry.companyName}.`)
+        return
+      }
     }
 
     setIsSubmittingReview(true)
@@ -581,6 +605,8 @@ export const PettyCashPage: React.FC = () => {
           reviewAction,
           reviewRemark.trim(),
           reviewAction === 'endorse' ? selectedFundingBankId : undefined,
+          reviewAction === 'endorse' && isCrossCompanyBank ? selectedPaymentMethod : undefined,
+          reviewAction === 'endorse' && isCrossCompanyBank && selectedPaymentMethod === 'transfer_first' ? selectedDestinationBankId : undefined,
         )
       } else {
         await pettyCashService.reviewTopUp(targetEntry.recordId, reviewAction, reviewRemark.trim())
@@ -605,6 +631,110 @@ export const PettyCashPage: React.FC = () => {
       notifyError(err, 'Failed to submit decision.')
     } finally {
       setIsSubmittingReview(false)
+    }
+  }
+
+  // Spec 0038: Financial Execution Actions
+  const handleFinalizeSettlement = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.finalizeSettlement(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Zero excess settlement finalized successfully. Float was settled without bank deduction.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to finalize settlement.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleReimburse = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.reimburse(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Employee reimbursement disbursed and recorded in expenses successfully.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to disburse reimbursement.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleInitiateTransfer = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.initiateTransfer(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Cross company bank transfer initiated successfully. Funds are in transit.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to initiate transfer.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmTransfer = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.confirmTransfer(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer receipt confirmed. Funds deposited to requesting company bank account.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to confirm transfer receipt.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmReversal = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.confirmReversal(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer reversal confirmed. Funds restored to funding company bank account.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to confirm reversal.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmCancelTransfer = async () => {
+    if (!cancelModalEntry) return
+    if (!cancelReason.trim()) {
+      setActionError('A cancellation reason is required.')
+      return
+    }
+    try {
+      setIsSubmittingAction(true)
+      setActionError('')
+      await pettyCashService.cancelTransfer(cancelModalEntry.recordId, cancelReason.trim())
+      setCancelModalEntry(null)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer cancelled. Status is now Return Pending until reversal is verified.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      setActionError(formatUserFriendlyErrorMessage(err, 'Failed to cancel transfer.'))
+    } finally {
+      setIsSubmittingAction(false)
     }
   }
 
@@ -742,63 +872,74 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
-            {/* Request Petty Cash Dropdown Button (Hidden for Audit) */}
+            {/* Request Petty Cash Dropdown Button (Role-gated: AC-5) */}
             {!isAudit && !isOwner && (
-              <div ref={requestDropdownRef} className="relative inline-block">
+              canRequestTopUp ? (
+                <div ref={requestDropdownRef} className="relative inline-block">
+                  <Button
+                    type="button"
+                    onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
+                    className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                    aria-haspopup="true"
+                    aria-expanded={isRequestDropdownOpen}
+                  >
+                    <Plus className="h-4 w-4 shrink-0" />
+                    <span>Request Petty Cash</span>
+                    <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
+                  </Button>
+
+                  {isRequestDropdownOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsRequestDropdownOpen(false)
+                          setIsTopUpModalOpen(true)
+                        }}
+                        className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-[#960C01] group-hover:text-white transition-colors">
+                          <Wallet className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-focus group-hover:text-[#960C01] transition-colors">Top-up Request</div>
+                          <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                            Ask for more petty cash funds when your current balance is short.
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsRequestDropdownOpen(false)
+                          setIsReimbursementModalOpen(true)
+                        }}
+                        className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group border-t border-stroke/20 mt-1"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                          <Receipt className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Reimbursement Request</div>
+                          <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                            Get paid back for expenses you paid out of your own pocket.
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
                 <Button
                   type="button"
-                  onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
+                  onClick={() => setIsReimbursementModalOpen(true)}
                   className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
-                  aria-haspopup="true"
-                  aria-expanded={isRequestDropdownOpen}
                 >
-                  <Plus className="h-4 w-4 shrink-0" />
-                  <span>Request Petty Cash</span>
-                  <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
+                  <Receipt className="h-4 w-4 shrink-0" />
+                  <span>Submit Reimbursement</span>
                 </Button>
-
-                {isRequestDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsRequestDropdownOpen(false)
-                        setIsTopUpModalOpen(true)
-                      }}
-                      className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-[#960C01] group-hover:text-white transition-colors">
-                        <Wallet className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-focus group-hover:text-[#960C01] transition-colors">Top-up Request</div>
-                        <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
-                          Ask for more petty cash funds when your current balance is short.
-                        </div>
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsRequestDropdownOpen(false)
-                        setIsReimbursementModalOpen(true)
-                      }}
-                      className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group border-t border-stroke/20 mt-1"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
-                        <Receipt className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Reimbursement Request</div>
-                        <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
-                          Get paid back for expenses you paid out of your own pocket.
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                )}
-              </div>
+              )
             )}
           </div>
         </div>
@@ -1306,6 +1447,31 @@ export const PettyCashPage: React.FC = () => {
                             <XCircle className="w-3 h-3" />
                             <span>Disapproved (Audit)</span>
                           </span>
+                        ) : entry.status === 'Transfer In Transit' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                            <Clock className="w-3 h-3 shrink-0" />
+                            <span>Transfer In Transit</span>
+                          </span>
+                        ) : entry.status === 'Return Pending' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>Return Pending</span>
+                          </span>
+                        ) : entry.status === 'Transfer Received' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-700 border border-teal-500/20 whitespace-nowrap">
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Transfer Received</span>
+                          </span>
+                        ) : entry.status === 'Settled' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            <Check className="w-3 h-3 shrink-0" />
+                            <span>Settled</span>
+                          </span>
+                        ) : entry.status === 'Reimbursed' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Reimbursed</span>
+                          </span>
                         ) : entry.type === 'expense' ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-50 text-slate-700 border border-slate-200 whitespace-nowrap">
                             <ArrowUpRight className="w-3 h-3" />
@@ -1524,6 +1690,62 @@ export const PettyCashPage: React.FC = () => {
                       return null
                     }
                   })()}
+
+                  {/* Spec 0038: Reimbursement Funding Breakdown Card */}
+                  {targetEntry.totalExpenses !== undefined && targetEntry.totalExpenses !== null && (
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-stroke/30 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-muted-fg uppercase tracking-wider block">
+                          Funding Breakdown
+                        </span>
+                        {targetEntry.employeeOutOfPocket === 0 && (
+                          <span className="text-[10.5px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            Zero excess claim
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                        <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                          <span className="text-[10.5px] text-muted-fg block">Total Expenses (E)</span>
+                          <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.totalExpenses)}</span>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                          <span className="text-[10.5px] text-muted-fg block">Company Cash Paid (C)</span>
+                          <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.companyFundedAmount || 0)}</span>
+                          {targetEntry.existingExpenseId && (
+                            <span className="text-[10px] text-muted-fg block truncate" title={`Expense #${targetEntry.existingExpenseId}`}>
+                              Pre recorded #{targetEntry.existingExpenseId}
+                            </span>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-200">
+                          <span className="text-[10.5px] text-emerald-800 block">Out of Pocket (O)</span>
+                          <span className="font-bold text-emerald-900 text-sm">{formatPHP(targetEntry.employeeOutOfPocket ?? targetEntry.amountRequested)}</span>
+                        </div>
+                      </div>
+
+                      {targetEntry.paymentMethodOption && (
+                        <div className="pt-2 border-t border-stroke/20 flex items-center justify-between text-xs">
+                          <span className="text-muted-fg">Payment Method:</span>
+                          <span className="font-semibold text-focus">
+                            {targetEntry.paymentMethodOption === 'transfer_first'
+                              ? `Method B: Transfer First${targetEntry.destinationBankName ? ` (${targetEntry.destinationBankName})` : ''}`
+                              : 'Method A: Direct Payment to Employee'}
+                          </span>
+                        </div>
+                      )}
+
+                      {targetEntry.transferStatus && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-fg">Transfer Status:</span>
+                          <span className="font-semibold text-focus capitalize">
+                            {targetEntry.transferStatus.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Receipt Attachments Section */}
                   {(() => {
@@ -1839,6 +2061,113 @@ export const PettyCashPage: React.FC = () => {
                     </Button>
                   </div>
                 )}
+
+                {/* Finance Team Actions: Lifecycle execution for reimbursements */}
+                {canExecuteFinancialActions && targetEntry.requestType === 'reimbursement' && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Zero Excess Claim in Approved status: Finalize Settlement */}
+                    {targetEntry.status === 'Approved' &&
+                      ((targetEntry.employeeOutOfPocket !== undefined && targetEntry.employeeOutOfPocket === 0) ||
+                       (targetEntry.amountRequested === 0 && (targetEntry.totalExpenses || 0) > 0)) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleFinalizeSettlement(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Finalize Settlement</span>
+                      </Button>
+                    )}
+
+                    {/* Own Bank or Method A Claim in Approved status: Reimburse */}
+                    {targetEntry.status === 'Approved' &&
+                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      targetEntry.paymentMethodOption !== 'transfer_first' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleReimburse(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Disburse Reimbursement</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Approved status: Initiate Transfer */}
+                    {targetEntry.status === 'Approved' &&
+                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      targetEntry.paymentMethodOption === 'transfer_first' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleInitiateTransfer(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                        <span>Initiate Bank Transfer</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Transfer In Transit status: Confirm Receipt or Cancel Transfer */}
+                    {targetEntry.status === 'Transfer In Transit' && (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={isSubmittingAction}
+                          onClick={() => setCancelModalEntry(targetEntry)}
+                          className="h-9 px-3 text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Cancel Transfer</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={isSubmittingAction}
+                          onClick={() => handleConfirmTransfer(targetEntry.recordId)}
+                          className="h-9 px-4 text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Confirm Transfer Received</span>
+                        </Button>
+                      </>
+                    )}
+
+                    {/* Method B Claim in Return Pending status: Confirm Reversal */}
+                    {targetEntry.status === 'Return Pending' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleConfirmReversal(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Confirm Reversal & Return</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Transfer Received status: Disburse Reimbursement */}
+                    {targetEntry.status === 'Transfer Received' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleReimburse(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Disburse Reimbursement</span>
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1912,47 +2241,143 @@ export const PettyCashPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Funding Bank Picker (Finance endorsement only, spec 0012) */}
+            {/* Funding Bank Picker (Finance endorsement only, spec 0012 & 0038) */}
             {reviewAction === 'endorse' && (
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-focus block">
-                  Funding Bank Account <span className="text-red-500">* (Required)</span>
-                </Label>
-                <div className="relative">
-                  <select
-                    value={selectedFundingBankId}
-                    onChange={(e) => {
-                      setSelectedFundingBankId(e.target.value)
-                      if (reviewError) setReviewError('')
-                    }}
-                    className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                    required
-                  >
-                    <option value="" disabled>
-                      Choose the bank that funds this top-up...
-                    </option>
-                    {bankAccounts.map((acc) => {
-                      const isOwn = isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
-                      return (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} · {acc.accountName} ({acc.companyName})
-                          {isOwn ? ' — own account, no deduction' : ''}
-                        </option>
-                      )
-                    })}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-focus block">
+                    Funding Bank Account <span className="text-red-500">* (Required)</span>
+                  </Label>
+                  <div className="relative">
+                    <select
+                      value={selectedFundingBankId}
+                      onChange={(e) => {
+                        setSelectedFundingBankId(e.target.value)
+                        if (reviewError) setReviewError('')
+                      }}
+                      className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
+                      required
+                    >
+                      <option value="" disabled>
+                        Choose the bank that funds this request...
+                      </option>
+                      {bankAccounts.map((acc) => {
+                        const isOwn = isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
+                        return (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.bankName} ({acc.accountName}) [{acc.companyName}]
+                            {isOwn ? ' (own account)' : ' (affiliate)'}
+                          </option>
+                        )
+                      })}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                  </div>
+                  {bankAccounts.length === 0 && (
+                    <p className="text-[11px] text-amber-700 font-medium">
+                      No bank accounts found. Add a bank account before endorsing.
+                    </p>
+                  )}
                 </div>
-                {bankAccounts.length === 0 && (
-                  <p className="text-[11px] text-amber-700 font-medium">
-                    No bank accounts found. Add a bank account before endorsing.
-                  </p>
-                )}
-                <p className="text-[11px] text-muted-fg">
-                  Pick the requesting company's own account to fund it without any bank deduction.
-                  Pick a different company's account and the amount is withdrawn from it and
-                  deposited into {targetEntry?.companyName}'s bank on approval.
-                </p>
+
+                {/* Affiliate Bank Funding Method (Spec 0038 AC-6, AC-7) */}
+                {(() => {
+                  const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
+                  const isCrossCompany = selectedBank && !isCompanyMatch(selectedBank.companyName || '', targetEntry?.companyName || '')
+                  if (!isCrossCompany) return null
+
+                  return (
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3 animate-in fade-in-50">
+                      <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                        <span>Affiliate Bank Funding Method</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-snug">
+                        You selected an affiliate bank belonging to <strong>{selectedBank.companyName}</strong>. Select how funds will be disbursed:
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label
+                          className={cn(
+                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
+                            selectedPaymentMethod === 'direct'
+                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
+                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="fundingPaymentMethod"
+                              checked={selectedPaymentMethod === 'direct'}
+                              onChange={() => setSelectedPaymentMethod('direct')}
+                              className="text-primary focus:ring-primary cursor-pointer"
+                            />
+                            <span className="font-bold text-focus">Method A: Direct Payment</span>
+                          </div>
+                          <span className="text-[10.5px] text-muted-fg mt-1">
+                            Disbursed directly from affiliate bank to employee. Creates intercompany payable immediately.
+                          </span>
+                        </label>
+
+                        <label
+                          className={cn(
+                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
+                            selectedPaymentMethod === 'transfer_first'
+                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
+                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="fundingPaymentMethod"
+                              checked={selectedPaymentMethod === 'transfer_first'}
+                              onChange={() => setSelectedPaymentMethod('transfer_first')}
+                              className="text-primary focus:ring-primary cursor-pointer"
+                            />
+                            <span className="font-bold text-focus">Method B: Transfer First</span>
+                          </div>
+                          <span className="text-[10.5px] text-muted-fg mt-1">
+                            Transfers funds from affiliate to {targetEntry?.companyName}'s bank first before reimbursing employee.
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* Destination Bank if Method B */}
+                      {selectedPaymentMethod === 'transfer_first' && (
+                        <div className="space-y-1.5 pt-1">
+                          <Label className="text-xs font-semibold text-focus block">
+                            Destination Bank Account ({targetEntry?.companyName}) <span className="text-red-500">* (Required)</span>
+                          </Label>
+                          <div className="relative">
+                            <select
+                              value={selectedDestinationBankId}
+                              onChange={(e) => {
+                                setSelectedDestinationBankId(e.target.value)
+                                if (reviewError) setReviewError('')
+                              }}
+                              className="w-full h-10 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
+                              required
+                            >
+                              <option value="" disabled>
+                                Select {targetEntry?.companyName}'s receiving bank...
+                              </option>
+                              {bankAccounts
+                                .filter((acc) => isCompanyMatch(acc.companyName || '', targetEntry?.companyName || ''))
+                                .map((acc) => (
+                                  <option key={acc.id} value={acc.id}>
+                                    {acc.bankName} ({acc.accountName})
+                                  </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -2199,6 +2624,68 @@ export const PettyCashPage: React.FC = () => {
         }}
       />
 
+      {/* Cancel Transfer Confirmation Modal (Spec 0038) */}
+      <Dialog open={Boolean(cancelModalEntry)} onOpenChange={(open) => !open && setCancelModalEntry(null)}>
+        <DialogContent className="sm:max-w-[520px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg font-bold text-rose-700 flex items-center gap-2">
+              <XCircle className="w-5 h-5 text-rose-600" />
+              <span>Cancel In Transit Transfer</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg">
+              Cancelling marks the transfer as Return Pending. Bank balances will not be restored until reversal is verified.
+            </DialogDescription>
+          </DialogHeader>
+
+          {actionError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+              {actionError}
+            </div>
+          )}
+
+          <div className="space-y-3 pt-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="cancel-reason" className="text-xs font-semibold text-focus">
+                Reason for cancellation <span className="text-red-500">* (Required)</span>
+              </Label>
+              <textarea
+                id="cancel-reason"
+                rows={3}
+                value={cancelReason}
+                onChange={(e) => {
+                  setCancelReason(e.target.value)
+                  if (actionError) setActionError('')
+                }}
+                placeholder="Enter justification or reason for stopping this bank transfer..."
+                className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus placeholder:text-muted-fg resize-none"
+                required
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCancelModalEntry(null)}
+                className="h-9 px-3 text-xs"
+              >
+                Keep Transfer
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmittingAction || !cancelReason.trim()}
+                onClick={handleConfirmCancelTransfer}
+                className="h-9 px-4 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+              >
+                {isSubmittingAction ? 'Cancelling…' : 'Confirm Cancellation'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Row Action Portal Menu */}
       {openMenuPettyId && menuPosition && activeMenuPetty && typeof document !== 'undefined' &&
         createPortal(
@@ -2208,7 +2695,7 @@ export const PettyCashPage: React.FC = () => {
               right: `${menuPosition.right}px`,
               transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
             }}
-            className="fixed z-[99999] w-48 rounded-xl bg-white border border-slate-200 shadow-2xl p-1.5 animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed z-[99999] w-52 rounded-xl bg-white border border-slate-200 shadow-2xl p-1.5 animate-in fade-in-50 zoom-in-95 duration-150"
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
@@ -2279,6 +2766,124 @@ export const PettyCashPage: React.FC = () => {
                   <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                   <span>Delete Top-Up Request</span>
                 </button>
+              </>
+            ) : canExecuteFinancialActions && activeMenuPetty.requestType === 'reimbursement' ? (
+              <>
+                {/* Zero excess claim */}
+                {activeMenuPetty.status === 'Approved' &&
+                  ((activeMenuPetty.employeeOutOfPocket !== undefined && activeMenuPetty.employeeOutOfPocket === 0) ||
+                   (activeMenuPetty.amountRequested === 0 && (activeMenuPetty.totalExpenses || 0) > 0)) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleFinalizeSettlement(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Finalize Settlement</span>
+                  </button>
+                )}
+
+                {/* Own Bank or Method A */}
+                {activeMenuPetty.status === 'Approved' &&
+                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  activeMenuPetty.paymentMethodOption !== 'transfer_first' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleReimburse(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Disburse Reimbursement</span>
+                  </button>
+                )}
+
+                {/* Method B: Initiate Transfer */}
+                {activeMenuPetty.status === 'Approved' &&
+                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  activeMenuPetty.paymentMethodOption === 'transfer_first' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleInitiateTransfer(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-blue-700 hover:bg-blue-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>Initiate Transfer</span>
+                  </button>
+                )}
+
+                {/* Transfer In Transit */}
+                {activeMenuPetty.status === 'Transfer In Transit' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuPetty
+                        setOpenMenuPettyId(null)
+                        setCancelModalEntry(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>Cancel Transfer</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = activeMenuPetty.recordId
+                        setOpenMenuPettyId(null)
+                        handleConfirmTransfer(id)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-teal-700 hover:bg-teal-50 transition-colors text-left cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                      <span>Confirm Received</span>
+                    </button>
+                  </>
+                )}
+
+                {/* Return Pending */}
+                {activeMenuPetty.status === 'Return Pending' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleConfirmReversal(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <RotateCw className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>Confirm Reversal</span>
+                  </button>
+                )}
+
+                {/* Transfer Received */}
+                {activeMenuPetty.status === 'Transfer Received' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleReimburse(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Disburse Reimbursement</span>
+                  </button>
+                )}
               </>
             ) : null}
           </div>,

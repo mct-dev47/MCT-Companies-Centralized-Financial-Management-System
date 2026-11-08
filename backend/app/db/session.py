@@ -63,6 +63,7 @@ def init_db():
     import app.models.staff_credit
     import app.models.bills
     import app.models.petty_cash
+    import app.models.intercompany_transfer
     import app.models.bank
     import app.models.lending
     import app.models.security
@@ -189,6 +190,58 @@ def init_db():
             if "petty_cash" not in c_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE company ADD COLUMN petty_cash NUMERIC(15, 2) DEFAULT 0.00"))
+
+        if "petty_cash_topups" in table_names:
+            pct_cols = {col["name"] for col in inspector.get_columns("petty_cash_topups")}
+            with engine.begin() as conn:
+                if "total_expenses" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN total_expenses NUMERIC(15, 2)"))
+                if "company_funded_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN company_funded_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "employee_out_of_pocket" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN employee_out_of_pocket NUMERIC(15, 2) DEFAULT 0.00"))
+                if "reserved_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reserved_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "amount_reimbursed" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN amount_reimbursed NUMERIC(15, 2) DEFAULT 0.00"))
+                if "existing_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN existing_expense_id INTEGER"))
+                if "petty_cash_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN petty_cash_expense_id INTEGER"))
+                if "reimbursement_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursement_expense_id INTEGER"))
+                if "payment_method_option" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN payment_method_option VARCHAR(50)"))
+                if "destination_bank_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN destination_bank_id VARCHAR(100)"))
+                if "intercompany_transfer_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN intercompany_transfer_id INTEGER"))
+                if "reimbursed_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_at TIMESTAMP WITH TIME ZONE"))
+                if "reimbursed_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_by VARCHAR(150)"))
+                if "transfer_received_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_at TIMESTAMP WITH TIME ZONE"))
+                if "transfer_received_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_by VARCHAR(150)"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL"))
+                except Exception:
+                    pass
+
+        if "expenses" in table_names:
+            exp_cols = {col["name"] for col in inspector.get_columns("expenses")}
+            with engine.begin() as conn:
+                if "linked_topup_id" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
+                except Exception:
+                    pass
     except Exception:
         pass
 

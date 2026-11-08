@@ -111,6 +111,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     { id: '1', particulars: '', amount: '' },
   ])
 
+  // Funding Breakdown (Spec 0038)
+  const [companyFundedAmount, setCompanyFundedAmount] = React.useState('0')
+  const [isPreRecorded, setIsPreRecorded] = React.useState(false)
+  const [existingExpenseId, setExistingExpenseId] = React.useState('')
+
   // Receipt Files
   const [attachments, setAttachments] = React.useState<UploadedFileItem[]>([])
   const [isDragging, setIsDragging] = React.useState(false)
@@ -185,6 +190,9 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setCategory(DEFAULT_REIMBURSEMENT_CATEGORIES[0])
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
+      setCompanyFundedAmount('0')
+      setIsPreRecorded(false)
+      setExistingExpenseId('')
       setAttachments([])
       setGeneralError('')
       setFieldErrors({})
@@ -210,8 +218,12 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const hasLineContent = lines.some((l) => l.particulars.trim() || l.amount.trim())
     const hasAttachments = attachments.length > 0
     const hasRemarks = Boolean(remarks.trim())
-    return hasLineContent || hasAttachments || hasRemarks
-  }, [lines, attachments, remarks])
+    const hasFunding =
+      (companyFundedAmount !== '0' && companyFundedAmount !== '') ||
+      isPreRecorded ||
+      Boolean(existingExpenseId)
+    return hasLineContent || hasAttachments || hasRemarks || hasFunding
+  }, [lines, attachments, remarks, companyFundedAmount, isPreRecorded, existingExpenseId])
 
   // Safe Close Handler: prompts discard if dirty
   const handleRequestClose = () => {
@@ -239,6 +251,15 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       return acc + (!isNaN(val) && val > 0 ? val : 0)
     }, 0)
   }, [lines])
+
+  const companyFundedNum = React.useMemo(() => {
+    const n = parseFloat(companyFundedAmount)
+    return isNaN(n) ? 0 : n
+  }, [companyFundedAmount])
+
+  const employeeOutOfPocket = React.useMemo(() => {
+    return Math.max(0, Math.round((grandTotal - companyFundedNum) * 100) / 100)
+  }, [grandTotal, companyFundedNum])
 
   // Line Item Handlers
   const handleLineChange = (id: string, field: 'particulars' | 'amount', value: string) => {
@@ -536,6 +557,27 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       errors.lines = 'At least one line item with particulars and an amount > ₱0.00 is required.'
     }
 
+    const totalAmount = validLines.reduce((acc, l) => acc + l.amount, 0)
+    const roundedTotal = Math.round(totalAmount * 100) / 100
+    const parsedCompanyFunded = parseFloat(companyFundedAmount)
+    const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
+
+    if (validCompanyFunded < 0) {
+      errors.companyFunded = 'Company petty cash amount cannot be negative.'
+    } else if (validCompanyFunded > roundedTotal) {
+      errors.companyFunded = 'Company petty cash portion cannot exceed total expenses.'
+    }
+
+    let parsedExpenseId: number | null = null
+    if (isPreRecorded) {
+      const expIdNum = parseInt(existingExpenseId.trim(), 10)
+      if (!existingExpenseId.trim() || isNaN(expIdNum) || expIdNum <= 0) {
+        errors.existingExpenseId = 'Please enter a valid positive Expense ID.'
+      } else {
+        parsedExpenseId = expIdNum
+      }
+    }
+
     // Check if any file is still uploading
     const isFileUploading = attachments.some((att) => att.status === 'uploading')
     if (isFileUploading) {
@@ -563,7 +605,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         }))
 
       const combinedDescription = validLines.map((l) => l.particulars).join(', ')
-      const totalAmount = validLines.reduce((acc, l) => acc + l.amount, 0)
+      const netOutOfPocket = Math.max(0, Math.round((roundedTotal - validCompanyFunded) * 100) / 100)
       const primaryReceiptUrl = uploadedAttachments[0]?.file_url || null
       const attachmentsJson = uploadedAttachments.length > 0 ? JSON.stringify(uploadedAttachments) : null
       const targetStatus = isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval'
@@ -571,7 +613,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       await pettyCashService.createTopUp({
         company: requestingCompany,
         company_name: requestingCompany,
-        amount: Math.round(totalAmount * 100) / 100,
+        amount: netOutOfPocket,
         date: expenseDate,
         description: combinedDescription,
         status: targetStatus,
@@ -583,6 +625,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         category: category.trim(),
         finance_remark: remarks.trim() || undefined,
         endorsement_remark: remarks.trim() || undefined,
+        total_expenses: roundedTotal,
+        company_funded_amount: Math.round(validCompanyFunded * 100) / 100,
+        employee_out_of_pocket: netOutOfPocket,
+        existing_expense_id: parsedExpenseId,
       })
 
       notifySuccess('Reimbursement request submitted successfully.')
@@ -600,7 +646,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         receiptUrl: primaryReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
-        amountRequested: totalAmount,
+        amountRequested: netOutOfPocket,
+        totalExpenses: roundedTotal,
+        companyFundedAmount: Math.round(validCompanyFunded * 100) / 100,
+        employeeOutOfPocket: netOutOfPocket,
+        existingExpenseId: parsedExpenseId || undefined,
         amountIn: 0,
         amountOut: 0,
         runningBalance: currentBalance || 0,
@@ -938,6 +988,142 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               {fieldErrors.lines && (
                 <p className="text-[11px] text-red-600 font-medium px-1">{fieldErrors.lines}</p>
               )}
+            </div>
+
+            {/* Funding Breakdown (Spec 0038) */}
+            <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-bold text-focus flex items-center gap-1.5">
+                  <Building2 className="w-4 h-4 text-primary" />
+                  <span>Funding Breakdown</span>
+                </div>
+                {employeeOutOfPocket === 0 && grandTotal > 0 && (
+                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                    Zero excess claim (Float settlement only)
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Company Petty Cash Paid (C) */}
+                <div className="space-y-1">
+                  <Label htmlFor="company-funded-amount" className="text-xs font-semibold text-focus">
+                    Paid from company petty cash (₱)
+                  </Label>
+                  <Input
+                    id="company-funded-amount"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={companyFundedAmount}
+                    onChange={(e) => {
+                      setCompanyFundedAmount(e.target.value)
+                      if (fieldErrors.companyFunded) {
+                        setFieldErrors((prev) => {
+                          const n = { ...prev }
+                          delete n.companyFunded
+                          return n
+                        })
+                      }
+                    }}
+                    className={cn(
+                      'h-10 rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs tabular-nums',
+                      fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                    )}
+                  />
+                  {fieldErrors.companyFunded && (
+                    <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
+                  )}
+                  <p className="text-[10.5px] text-muted-fg">
+                    Enter ₱0.00 if you paid entirely out of pocket.
+                  </p>
+                </div>
+
+                {/* Employee Out of Pocket (O = E - C) */}
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-focus">
+                    Reimbursement claim (out of pocket)
+                  </Label>
+                  <div
+                    className={cn(
+                      'h-10 px-3 rounded-xl border flex items-center justify-between font-bold text-xs tabular-nums shadow-2xs',
+                      employeeOutOfPocket > 0
+                        ? 'bg-emerald-50/60 border-emerald-300 text-emerald-800'
+                        : 'bg-slate-100 border-stroke/40 text-focus'
+                    )}
+                  >
+                    <span>{formatPHP(employeeOutOfPocket)}</span>
+                    <span className="text-[10.5px] font-medium text-muted-fg">
+                      {grandTotal > 0 ? `(₱${grandTotal.toFixed(2)} − ₱${companyFundedNum.toFixed(2)})` : ''}
+                    </span>
+                  </div>
+                  <p className="text-[10.5px] text-muted-fg">
+                    Net amount to be disbursed to employee.
+                  </p>
+                </div>
+              </div>
+
+              {/* Pre-recorded expense checkbox */}
+              <div className="pt-2 border-t border-stroke/20 space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs font-medium text-focus">
+                  <input
+                    type="checkbox"
+                    checked={isPreRecorded}
+                    onChange={(e) => {
+                      setIsPreRecorded(e.target.checked)
+                      if (!e.target.checked) {
+                        setExistingExpenseId('')
+                        if (fieldErrors.existingExpenseId) {
+                          setFieldErrors((prev) => {
+                            const n = { ...prev }
+                            delete n.existingExpenseId
+                            return n
+                          })
+                        }
+                      }
+                    }}
+                    className="mt-0.5 rounded border-stroke/50 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
+                  />
+                  <div>
+                    <span className="font-semibold">Pre recorded in Expenses module</span>
+                    <p className="text-[11px] text-muted-fg font-normal">
+                      Check this if company cash was already recorded in expenses (prevents duplicate float deduction).
+                    </p>
+                  </div>
+                </label>
+
+                {isPreRecorded && (
+                  <div className="pl-6 space-y-1">
+                    <Label htmlFor="existing-expense-id" className="text-xs font-semibold text-focus">
+                      Existing expense ID <span className="text-red-500">*</span>
+                    </Label>
+                    <Input
+                      id="existing-expense-id"
+                      type="number"
+                      placeholder="e.g. 1024"
+                      value={existingExpenseId}
+                      onChange={(e) => {
+                        setExistingExpenseId(e.target.value)
+                        if (fieldErrors.existingExpenseId) {
+                          setFieldErrors((prev) => {
+                            const n = { ...prev }
+                            delete n.existingExpenseId
+                            return n
+                          })
+                        }
+                      }}
+                      className={cn(
+                        'h-9 max-w-xs rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs',
+                        fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                      )}
+                    />
+                    {fieldErrors.existingExpenseId && (
+                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.existingExpenseId}</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* 4. Receipt / Proof Upload (OPTIONAL) */}

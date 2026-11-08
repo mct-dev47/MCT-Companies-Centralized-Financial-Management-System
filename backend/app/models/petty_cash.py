@@ -27,6 +27,21 @@ class PettyCashTopUp(Base):
     status = Column(String(50), nullable=False, default="Pending Finance Endorsement")
     request_type = Column(String(50), nullable=False, default="topup", server_default="topup")
     paid_by = Column(String(150), nullable=True)
+    total_expenses = Column(Numeric(15, 2), nullable=True)
+    company_funded_amount = Column(Numeric(15, 2), nullable=True, default=0.00)
+    employee_out_of_pocket = Column(Numeric(15, 2), nullable=True, default=0.00)
+    reserved_amount = Column(Numeric(15, 2), nullable=True, default=0.00)
+    amount_reimbursed = Column(Numeric(15, 2), nullable=False, default=0.00)
+    existing_expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True)
+    petty_cash_expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True)
+    reimbursement_expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True)
+    payment_method_option = Column(String(50), nullable=True)
+    destination_bank_id = Column(String(100), ForeignKey("bank_accounts.id"), nullable=True)
+    intercompany_transfer_id = Column(Integer, ForeignKey("intercompany_transfers.transfer_id", ondelete="SET NULL"), nullable=True)
+    reimbursed_at = Column(DateTime(timezone=True), nullable=True)
+    reimbursed_by = Column(String(150), nullable=True)
+    transfer_received_at = Column(DateTime(timezone=True), nullable=True)
+    transfer_received_by = Column(String(150), nullable=True)
     receipt_url = Column(Text, nullable=True)
     attachments = Column(Text, nullable=True)
     items = Column(Text, nullable=True)
@@ -41,6 +56,8 @@ class PettyCashTopUp(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     company = relationship("Company", backref="petty_cash_topups")
+    destination_bank = relationship("BankAccount", foreign_keys=[destination_bank_id])
+    intercompany_transfer = relationship("IntercompanyTransfer", foreign_keys=[intercompany_transfer_id])
 
 
 class PettyCashWallet(Base):
