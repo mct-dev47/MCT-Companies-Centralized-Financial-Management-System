@@ -2,6 +2,7 @@ import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { websocketService } from './websocketService'
 import { receivablesService, type BackendReceivable } from './receivablesService'
+import { salesService } from './salesService'
 
 /**
  * In-memory & LocalStorage store for Food Sales Receivables (Utang Management).
@@ -498,8 +499,12 @@ class ReceivablesStore {
             bank_account_id,
             notes,
           })
-          .then(() => this.refreshFromBackend())
+          .then(() => {
+            salesService.invalidateCache()
+            return this.refreshFromBackend()
+          })
           .catch(() => {
+            salesService.invalidateCache()
             void this.refreshFromBackend()
           })
       }
@@ -552,8 +557,12 @@ class ReceivablesStore {
       if (method === 'Payroll Deduction') {
         receivablesService
           .settlePayroll(customer_name, company_id, notes)
-          .then(() => this.refreshFromBackend())
+          .then(() => {
+            salesService.invalidateCache()
+            return this.refreshFromBackend()
+          })
           .catch(() => {
+            salesService.invalidateCache()
             void this.refreshFromBackend()
           })
       } else if (backendPromises.length > 0) {
@@ -799,6 +808,7 @@ class ReceivablesStore {
           payment_method: params.payment_method,
           bank_account_id: params.bank_account_id,
         })
+        salesService.invalidateCache()
         await this.refreshFromBackend()
         return { success: true, message: 'Receivable updated successfully' }
       } catch (err: any) {

@@ -525,7 +525,7 @@ class ReceivablesService:
 
         if rec.balance <= Decimal("0.005") and final_total > Decimal("0.005"):
             rec.payment_status = "Paid"
-        elif final_paid > Decimal("0.005"):
+        elif final_paid > Decimal("0.005") or requested_status == "Partial":
             rec.payment_status = "Partial"
         else:
             rec.payment_status = "Unpaid"

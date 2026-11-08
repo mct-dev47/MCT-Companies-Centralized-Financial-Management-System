@@ -17,7 +17,7 @@ from app.services.bank_service import BankService
 
 logger = logging.getLogger(__name__)
 
-_KNOWN_STATUS_TAGS = {"paid", "unpaid", "pending", "on hold"}
+_KNOWN_STATUS_TAGS = {"paid", "unpaid", "pending", "on hold", "partial"}
 
 
 def _extract_status_tag(text: str) -> Tuple[str, Optional[str]]:

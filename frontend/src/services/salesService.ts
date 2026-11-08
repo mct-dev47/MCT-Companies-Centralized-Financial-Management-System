@@ -85,12 +85,19 @@ function mapBackendSaleToItem(b: any): SalesItem {
     chequeNo = parts[1].replace(/\]/g, '').trim()
   }
 
-  const parsedItems = parseParticulars(particulars, null, amt)
-  const derivedStatus = deriveRecordStatusFromParticulars(parsedItems, 'Paid')
+  const rawPaymentStatus = b.payment_status || 'Paid'
+  const fallbackStatus: 'Paid' | 'Pending' | 'Unpaid' =
+    rawPaymentStatus === 'Unpaid'
+      ? 'Unpaid'
+      : rawPaymentStatus === 'Pending' || rawPaymentStatus === 'Partial'
+        ? 'Pending'
+        : 'Paid'
 
-  const rawPaymentStatus = b.payment_status || (derivedStatus === 'Overdue' ? 'Unpaid' : derivedStatus)
+  const parsedItems = parseParticulars(particulars, null, amt)
+  const derivedStatus = deriveRecordStatusFromParticulars(parsedItems, fallbackStatus)
+
   const resolvedPaymentStatus: 'Paid' | 'Pending' | 'Unpaid' =
-    rawPaymentStatus === 'Unpaid' ? 'Unpaid' : rawPaymentStatus === 'Pending' ? 'Pending' : 'Paid'
+    derivedStatus === 'Unpaid' ? 'Unpaid' : derivedStatus === 'Pending' ? 'Pending' : fallbackStatus
 
   const resolvedDepositStatus: 'Deposited' | 'Not Deposited' =
     b.deposit_status === 'Deposited' || b.depositStatus === 'Deposited'
@@ -178,11 +185,13 @@ export const salesService = {
     return []
   },
 
-  async getSales(company?: string): Promise<SalesItem[]> {
+  async getSales(company?: string, forceRefresh = false): Promise<SalesItem[]> {
     const cacheKey = company || 'All Companies'
-    const cached = salesCache.get(cacheKey)
-    if (cached && Date.now() - cached.timestamp < SALES_CACHE_TTL) {
-      return cached.data
+    if (!forceRefresh) {
+      const cached = salesCache.get(cacheKey)
+      if (cached && Date.now() - cached.timestamp < SALES_CACHE_TTL) {
+        return cached.data
+      }
     }
 
     try {

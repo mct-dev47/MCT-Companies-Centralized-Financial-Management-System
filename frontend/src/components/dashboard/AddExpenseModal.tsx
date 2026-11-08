@@ -341,7 +341,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     <>
       {/* 1. Main Add Expense Modal */}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
+        <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -405,7 +405,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               </div>
 
               {/* 2. Cheque No (Optional) */}
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Cheque No. (Optional)
                 </Label>
@@ -413,6 +413,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   type="text"
                   placeholder="e.g. CHK-99201"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-10 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -422,7 +423,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             {isPettyCash ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {/* 3. Particulars (Manual text input) */}
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 min-w-0">
                   <Label className="text-xs font-semibold text-focus block">
                     Particulars <span className="text-red-500">*</span>
                   </Label>
@@ -430,6 +431,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     type="text"
                     placeholder="e.g. Taxi fare to bank, Bond paper A4..."
                     value={particulars}
+                    maxLength={255}
                     onChange={(e) => {
                       setParticulars(e.target.value)
                       if (fieldErrors.particulars) {
@@ -449,7 +451,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </div>
 
                 {/* Pre-defined Petty Cash Category dropdown: placed next to particulars, not on top */}
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 min-w-0">
                   <Label className="text-xs font-semibold text-focus block">
                     Petty Cash Category <span className="text-red-500">*</span>
                   </Label>
@@ -473,7 +475,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Particulars <span className="text-red-500">*</span>
                 </Label>
@@ -481,6 +483,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   type="text"
                   placeholder="e.g. Commercial Kitchen Gas & Utility Bill"
                   value={particulars}
+                  maxLength={255}
                   onChange={(e) => {
                     setParticulars(e.target.value)
                     if (fieldErrors.particulars) {

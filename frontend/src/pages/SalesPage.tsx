@@ -461,7 +461,7 @@ export const SalesPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true)
 
   // Load sales data. `silent` reloads without the loading skeleton (used by realtime updates).
-  const loadSales = React.useCallback(async (silent = false) => {
+  const loadSales = React.useCallback(async (silent = false, forceRefresh = false) => {
     if (!silent) setLoading(true)
     try {
       const targetCompany = isCompanyScoped
@@ -469,7 +469,7 @@ export const SalesPage: React.FC = () => {
         : selectedCompany === 'All Companies'
           ? undefined
           : selectedCompany
-      const data = await salesService.getSales(targetCompany)
+      const data = await salesService.getSales(targetCompany, forceRefresh)
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
@@ -490,7 +490,7 @@ export const SalesPage: React.FC = () => {
       if (timer) window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         salesService.invalidateCache()
-        void loadSales(true)
+        void loadSales(true, true)
         void refreshReceivablesFromBackend()
       }, 250)
     }
@@ -1663,7 +1663,9 @@ export const SalesPage: React.FC = () => {
                                             </span>
                                           </td>
                                           <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
-                                            {canAdd && sale.auditStatus !== 'Verified' ? (
+                                            {canAdd &&
+                                            sale.auditStatus !== 'Verified' &&
+                                            sale.payment_status === 'Paid' ? (
                                               <select
                                                 value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
                                                 onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
@@ -1679,8 +1681,13 @@ export const SalesPage: React.FC = () => {
                                               </select>
                                             ) : (
                                               <span
+                                                title={
+                                                  sale.payment_status === 'Unpaid' || sale.payment_status === 'Pending'
+                                                    ? 'Deposit status is read only for Unpaid or Pending transactions'
+                                                    : undefined
+                                                }
                                                 className={cn(
-                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase select-none',
                                                   (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
                                                     ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                                                     : 'bg-slate-100 text-slate-700 border-slate-300'
@@ -2017,7 +2024,9 @@ export const SalesPage: React.FC = () => {
                         className="w-[11%] px-3.5 py-3.5 text-xs text-center"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {canAdd && sale.auditStatus !== 'Verified' ? (
+                        {canAdd &&
+                        sale.auditStatus !== 'Verified' &&
+                        sale.payment_status === 'Paid' ? (
                           <select
                             value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
                             onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
@@ -2033,8 +2042,13 @@ export const SalesPage: React.FC = () => {
                           </select>
                         ) : (
                           <span
+                            title={
+                              sale.payment_status === 'Unpaid' || sale.payment_status === 'Pending'
+                                ? 'Deposit status is read only for Unpaid or Pending transactions'
+                                : undefined
+                            }
                             className={cn(
-                              'inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                              'inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase select-none',
                               (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
                                 ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
                                 : 'bg-slate-100 text-slate-700 border-slate-300'

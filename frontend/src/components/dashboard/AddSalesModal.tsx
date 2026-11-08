@@ -289,7 +289,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     <>
       {/* 1. Main Add Sales Modal */}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
+        <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -353,7 +353,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               </div>
 
               {/* 2. Cheque No (no icon in label) */}
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Cheque No. (Optional)
                 </Label>
@@ -361,6 +361,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   type="text"
                   placeholder="e.g. CHQ-8899"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-10 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -368,7 +369,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
             </div>
 
             {/* 3. Particulars (no 'Notes', no icon in label, required asterisk) */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold text-focus block">
                 Particulars <span className="text-red-500">*</span>
               </Label>
@@ -376,6 +377,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 type="text"
                 placeholder="e.g. Corporate Banquet Catering Deposit"
                 value={particulars}
+                maxLength={255}
                 onChange={(e) => {
                   setParticulars(e.target.value)
                   if (fieldErrors.particulars) {
@@ -509,6 +511,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                         type="text"
                         placeholder={customerType === 'Staff' ? 'e.g. Maria Santos (Kitchen)' : 'e.g. Mang Jose Mercado'}
                         value={customerName}
+                        maxLength={100}
                         onChange={(e) => {
                           setCustomerName(e.target.value)
                           if (fieldErrors.customerName) {

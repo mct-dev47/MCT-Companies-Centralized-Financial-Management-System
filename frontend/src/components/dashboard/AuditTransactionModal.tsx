@@ -833,7 +833,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     >
       <DialogContent
         className={cn(
-          'rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl transition-all duration-200 max-h-[85vh] overflow-y-auto',
+          'rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl transition-all duration-200 max-h-[85vh] overflow-y-auto overflow-x-hidden w-full max-w-[calc(100vw-2rem)]',
           isEditing ? 'sm:max-w-[640px]' : (hasMultipleParticulars ? 'sm:max-w-[740px]' : 'sm:max-w-[580px]')
         )}
       >
@@ -905,6 +905,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   type="text"
                   placeholder="e.g. CHQ-8892"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-9 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -920,6 +921,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 type="text"
                 placeholder={isExpense ? "e.g. Office Supplies" : isLoan ? "e.g. Loan Commitment" : "e.g. Catering Deposit"}
                 value={particulars}
+                maxLength={255}
                 onChange={(e) => {
                   setParticulars(e.target.value)
                   if (fieldErrors.particulars) {
@@ -947,6 +949,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   inputMode="decimal"
                   placeholder="1.00"
                   value={amount}
+                  maxLength={20}
                   onKeyDown={(e) => {
                     if (['-', '+', 'e', 'E'].includes(e.key)) {
                       e.preventDefault()
@@ -1162,17 +1165,17 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             {/* Key-Value Details */}
             <div className="space-y-1.5 text-xs">
               {/* Reference No */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Reference No:
                 </span>
-                <span className="font-mono text-xs font-semibold text-focus text-right">
+                <span className="font-mono text-xs font-semibold text-focus text-right break-all min-w-0">
                   {displayRefNo}
                 </span>
               </div>
 
               {/* 1. Date */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Transaction Date:
                 </span>
@@ -1182,11 +1185,11 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               </div>
 
               {/* 2. Cheque Number */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Cheque Number:
                 </span>
-                <span className="font-mono text-xs font-semibold text-focus text-right">
+                <span className="font-mono text-xs font-semibold text-focus text-right break-all min-w-0">
                   {displayChequeNo}
                 </span>
               </div>
@@ -1246,7 +1249,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                               <td className="py-2 px-2 text-center font-mono text-[11px] text-muted-fg">
                                 {idx + 1}
                               </td>
-                              <td className="py-2 px-2 font-medium text-focus break-words leading-tight" title={item.particulars}>
+                              <td className="py-2 px-2 font-medium text-focus break-words [overflow-wrap:anywhere] leading-tight" title={item.particulars}>
                                 {item.particulars}
                               </td>
                               {parsedParticularItems.some((it) => Boolean(it.status)) && (
@@ -1299,34 +1302,34 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-stroke/10">
+                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                   <span className="text-[11px] font-medium text-muted-fg shrink-0">
                     Particulars:
                   </span>
-                  <span className="text-xs font-medium text-focus text-right max-w-[280px]">
+                  <span className="text-xs font-medium text-focus text-right max-w-[280px] break-words [overflow-wrap:anywhere] min-w-0">
                     {displayParticulars}
                   </span>
                 </div>
               )}
 
               {/* Payment Method */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Payment Method:
                 </span>
-                <span className="text-xs font-semibold text-focus text-right">
+                <span className="text-xs font-semibold text-focus text-right break-words [overflow-wrap:anywhere] min-w-0">
                   {displayPaymentMethod}
                 </span>
               </div>
 
               {/* 4. Category (Expense only) */}
               {isExpense && (
-                <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+                <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Category:
                 </span>
                 <span
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold select-none"
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold select-none break-all max-w-[220px] truncate"
                   style={{
                     backgroundColor: `${categoryColor}15`,
                     color: categoryColor,
@@ -1334,26 +1337,26 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   }}
                 >
                   <span
-                    className="w-1.5 h-1.5 rounded-full"
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{ backgroundColor: categoryColor }}
                   />
-                  {displayCategory}
+                  <span className="truncate">{displayCategory}</span>
                 </span>
               </div>
               )}
 
               {/* 5. Company */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Company:
                 </span>
-                <span className="text-xs font-semibold text-focus text-right">
+                <span className="text-xs font-semibold text-focus text-right break-words [overflow-wrap:anywhere] min-w-0">
                   {displayCompany}
                 </span>
               </div>
 
               {/* 6. Payment Status */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Payment Status:
                 </span>
@@ -1486,7 +1489,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                           <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                           Auditor Remarks / Discrepancy Note:
                         </strong>
-                        <p className="leading-relaxed whitespace-pre-wrap">{displayAuditNotes}</p>
+                        <p className="leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{displayAuditNotes}</p>
                       </div>
                     ) : (
                       <p className="text-[11px] text-muted-fg mt-0.5">

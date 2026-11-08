@@ -268,13 +268,7 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
     }
 
     if (editPaymentStatus === 'Partial') {
-      if (editingSale.amount_paid <= 0) {
-        setActionError(
-          'To record a specific partial amount on an unpaid order, use the Pay button instead.'
-        )
-        return
-      }
-      if (numAmt <= editingSale.amount_paid) {
+      if (editingSale.amount_paid > 0 && numAmt <= editingSale.amount_paid) {
         setActionError(
           `For Partial status, total amount must exceed already paid remittances (${formatPHP(editingSale.amount_paid)}). Choose Paid or Unpaid instead.`
         )

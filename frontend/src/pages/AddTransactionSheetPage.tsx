@@ -444,8 +444,7 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
           className={cn(
-            'w-full h-9 pl-2.5 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
-            canSaveToList ? 'pr-20' : 'pr-7',
+            'w-full h-9 pl-2.5 pr-7 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
             hasError
               ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
               : isPartial
@@ -454,23 +453,6 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           )}
         />
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10">
-          {canSaveToList && (
-            <button
-              type="button"
-              title={`Save "${trimmedValue}" to company list`}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                e.stopPropagation()
-                onSaveToList(trimmedValue)
-                onSelect(trimmedValue)
-                closeMenu()
-              }}
-              className="h-6 px-1.5 rounded-md bg-[#960C01] hover:bg-[#800a01] text-white text-[10px] font-bold shadow-2xs flex items-center gap-0.5 transition-colors cursor-pointer shrink-0"
-            >
-              <Plus className="w-3 h-3" />
-              <span>Save</span>
-            </button>
-          )}
           <button
             type="button"
             tabIndex={-1}
@@ -3337,19 +3319,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               unpaidAssignments.find((u) => u.rowId === row.id) ||
                               (index === 0 ? unpaidAssignments[0] : undefined)
                             const debtorName = assign?.customerName?.trim()
+                            if (!debtorName) return null
                             return (
                               <div
                                 className="mt-1 flex items-center justify-between text-[10px] text-rose-700 bg-rose-50/90 border border-rose-200 rounded px-1.5 py-0.5 truncate"
-                                title={
-                                  debtorName
-                                    ? `Assigned to: ${debtorName} (${assign?.customerType || 'External'})`
-                                    : 'Click Save to assign debtor'
-                                }
+                                title={`Assigned to: ${debtorName} (${assign?.customerType || 'External'})`}
                               >
                                 <span className="truncate font-semibold">
-                                  {debtorName
-                                    ? `${debtorName} (${assign?.customerType === 'Staff' ? 'Staff' : 'Ext'})`
-                                    : 'No Debtor'}
+                                  {`${debtorName} (${assign?.customerType === 'Staff' ? 'Staff' : 'Ext'})`}
                                 </span>
                               </div>
                             )
@@ -3359,37 +3336,32 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         {/* Deposit Status (Sales only) */}
                         {isSales && (
                           <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-1.5 box-border">
-                            <select
-                              value={row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')}
-                              onChange={(e) => {
-                                const newDs = e.target.value as 'Deposited' | 'Not Deposited'
-                                if (newDs === 'Deposited') {
-                                  if (row.status === 'Unpaid') {
-                                    setErrorMessage('Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.')
-                                    return
-                                  }
-                                  if (row.status === 'Pending') {
-                                    const pm = (row.paymentMethod || '').trim().toLowerCase()
-                                    const hasChq = Boolean(row.chequeNo && row.chequeNo.trim())
-                                    if (pm !== 'cheque' || !hasChq) {
-                                      setErrorMessage('Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance.')
-                                      return
-                                    }
-                                  }
-                                }
-                                setErrorMessage(null)
-                                handleRowChange(row.id, 'depositStatus', newDs)
-                              }}
-                              className={cn(
-                                'w-full h-9 px-1.5 text-xs font-semibold rounded-lg border focus:outline-none focus:ring-1 transition-all cursor-pointer truncate box-border',
-                                (row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500'
-                                  : 'bg-slate-100 text-slate-700 border-slate-300 focus:border-slate-400 focus:ring-slate-400'
-                              )}
-                            >
-                              <option value="Deposited">Deposited</option>
-                              <option value="Not Deposited">Not Deposited</option>
-                            </select>
+                            {row.status === 'Unpaid' || row.status === 'Pending' ? (
+                              <div
+                                title="Deposit status is read only for Unpaid or Pending transactions"
+                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border bg-slate-100 text-slate-500 border-slate-200 flex items-center justify-center select-none truncate cursor-not-allowed"
+                              >
+                                Not Deposited
+                              </div>
+                            ) : (
+                              <select
+                                value={row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                onChange={(e) => {
+                                  const newDs = e.target.value as 'Deposited' | 'Not Deposited'
+                                  setErrorMessage(null)
+                                  handleRowChange(row.id, 'depositStatus', newDs)
+                                }}
+                                className={cn(
+                                  'w-full h-9 px-1.5 text-xs font-semibold rounded-lg border focus:outline-none focus:ring-1 transition-all cursor-pointer truncate box-border',
+                                  (row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500'
+                                    : 'bg-slate-100 text-slate-700 border-slate-300 focus:border-slate-400 focus:ring-slate-400'
+                                )}
+                              >
+                                <option value="Deposited">Deposited</option>
+                                <option value="Not Deposited">Not Deposited</option>
+                              </select>
+                            )}
                           </TableCell>
                         )}
 
