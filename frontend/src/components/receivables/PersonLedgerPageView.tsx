@@ -23,7 +23,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { RowActionsMenu } from '@/components/common/RowActionsMenu'
+import { BackButton, ConfirmModal, RowActionsMenu } from '@/components/common'
 import { formatPHP } from '@/lib/format'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
@@ -336,15 +336,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
     <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
       {/* Top navigation row */}
       <div className="flex items-center justify-between gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onBack}
-          className="h-10 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-stroke/60 bg-white text-focus hover:bg-surface flex items-center gap-2 cursor-pointer shadow-2xs self-start"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          <span>Back to Receivables</span>
-        </Button>
+        <BackButton onClick={onBack} label="Back to Receivables" />
       </div>
 
       {/* Account Header (Matching Tenant & FilCap Lending View Page exactly) */}
@@ -948,15 +940,21 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
       {/* Modal: Edit Receivable Order */}
       {editingSale && (
         <Dialog open={Boolean(editingSale)} onOpenChange={(o) => !o && setEditingSale(null)}>
-          <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-[#960C01]" />
-                <span>Edit Receivable Order #{editingSale.id}</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Update customer assignment, item summary, total amount, or payment status.
-              </DialogDescription>
+          <DialogContent className="sm:max-w-[520px] max-h-[90vh] overflow-y-auto p-6 sm:p-7 rounded-[24px] bg-white border border-stroke/50 shadow-modal">
+            <DialogHeader className="text-left space-y-1.5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                  <Edit2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-extrabold text-focus">
+                    Edit Receivable Order #{editingSale.id}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                    Update customer assignment, item summary, total amount, or payment status.
+                  </DialogDescription>
+                </div>
+              </div>
             </DialogHeader>
 
             <div className="space-y-3 pt-2 text-xs text-left">
@@ -967,7 +965,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                     type="text"
                     value={editCustomerName}
                     onChange={(e) => setEditCustomerName(e.target.value)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   />
                 </div>
 
@@ -978,7 +976,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                     onChange={(e) =>
                       setEditCustomerType(e.target.value === 'Staff' ? 'Staff' : 'External')
                     }
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   >
                     <option value="External">External</option>
                     <option value="Staff">Staff</option>
@@ -993,7 +991,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                     type="date"
                     value={editDate}
                     onChange={(e) => setEditDate(e.target.value)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   />
                 </div>
 
@@ -1002,7 +1000,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                   <select
                     value={editPaymentStatus}
                     onChange={(e) => setEditPaymentStatus(e.target.value as PaymentStatus)}
-                    className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white font-semibold focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white font-semibold focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   >
                     <option value="Unpaid">Unpaid</option>
                     <option value="Partial">Partial</option>
@@ -1019,7 +1017,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                   type="text"
                   value={editParticulars}
                   onChange={(e) => setEditParticulars(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
 
@@ -1031,7 +1029,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                   min="0.01"
                   value={editTotalAmount}
                   onChange={(e) => setEditTotalAmount(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01] font-mono font-semibold"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono font-semibold"
                 />
                 <span className="text-[10px] text-muted-fg block mt-1">
                   Amount currently remitted: {formatPHP(editingSale.amount_paid)}
@@ -1051,7 +1049,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                       <select
                         value={editPaymentMethod}
                         onChange={(e) => setEditPaymentMethod(e.target.value)}
-                        className="w-full h-9 px-2.5 rounded-lg border border-emerald-300 bg-white text-focus"
+                        className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
                       >
                         <option value="Cash">Cash</option>
                         <option value="GCash">GCash</option>
@@ -1066,7 +1064,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                       <select
                         value={editBankAccountId}
                         onChange={(e) => setEditBankAccountId(e.target.value)}
-                        className="w-full h-9 px-2.5 rounded-lg border border-emerald-300 bg-white text-focus"
+                        className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
                       >
                         <option value="">No bank deposit</option>
                         {editBankAccounts.map((b) => (
@@ -1086,28 +1084,27 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                   rows={2}
                   value={editNotes}
                   onChange={(e) => setEditNotes(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full px-3.5 py-2 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   placeholder="Optional adjustment notes"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 onClick={() => setEditingSale(null)}
                 disabled={isSavingEdit}
+                className="h-10 px-4 rounded-xl text-xs font-semibold"
               >
                 Cancel
               </Button>
               <Button
                 type="button"
-                size="sm"
                 onClick={handleSaveEditSale}
                 disabled={isSavingEdit}
-                className="bg-[#960C01] hover:bg-[#7d0a00] text-white"
+                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold"
               >
                 {isSavingEdit ? 'Saving...' : 'Save Changes'}
               </Button>
@@ -1117,86 +1114,30 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
       )}
 
       {/* Dialog: Confirm Delete Order */}
-      {confirmDeleteSaleId && (
-        <Dialog
-          open={Boolean(confirmDeleteSaleId)}
-          onOpenChange={(o) => !o && setConfirmDeleteSaleId(null)}
-        >
-          <DialogContent className="sm:max-w-[420px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-600" />
-                <span>Delete Receivable Order?</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Are you sure you want to delete order #{confirmDeleteSaleId}? This will remove the receivable entry and reverse any deposited remittances.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmDeleteSaleId(null)}
-                disabled={isDeletingSale}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleConfirmDeleteSale}
-                disabled={isDeletingSale}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {isDeletingSale ? 'Deleting...' : 'Confirm Delete'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+      <ConfirmModal
+        open={Boolean(confirmDeleteSaleId)}
+        onOpenChange={(o) => !o && setConfirmDeleteSaleId(null)}
+        title="Delete Receivable Order?"
+        description={`Are you sure you want to delete order #${confirmDeleteSaleId}? This will remove the receivable entry and reverse any deposited remittances.`}
+        confirmLabel="Confirm Delete"
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingSale}
+        onConfirm={handleConfirmDeleteSale}
+      />
 
       {/* Dialog: Confirm Reverse Payment */}
-      {confirmDeletePaymentId && (
-        <Dialog
-          open={Boolean(confirmDeletePaymentId)}
-          onOpenChange={(o) => !o && setConfirmDeletePaymentId(null)}
-        >
-          <DialogContent className="sm:max-w-[420px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-600" />
-                <span>Reverse Payment Remittance?</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Are you sure you want to reverse payment #{confirmDeletePaymentId}? The customer debt balance will increase and any linked bank deposit will be reversed.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmDeletePaymentId(null)}
-                disabled={isDeletingPayment}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleConfirmDeletePayment}
-                disabled={isDeletingPayment}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {isDeletingPayment ? 'Reversing...' : 'Confirm Reversal'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+      <ConfirmModal
+        open={Boolean(confirmDeletePaymentId)}
+        onOpenChange={(o) => !o && setConfirmDeletePaymentId(null)}
+        title="Reverse Payment Remittance?"
+        description={`Are you sure you want to reverse payment #${confirmDeletePaymentId}? The customer debt balance will increase and any linked bank deposit will be reversed.`}
+        confirmLabel="Confirm Reversal"
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingPayment}
+        onConfirm={handleConfirmDeletePayment}
+      />
     </div>
   )
 }

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { BackButton } from '@/components/common'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import {
@@ -158,15 +159,7 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
     <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
       {/* Top navigation row */}
       <div className="flex items-center justify-between gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onBack}
-          className="h-10 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-stroke/60 bg-white text-focus hover:bg-surface flex items-center gap-2 cursor-pointer shadow-2xs self-start"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          <span>Back to Loans</span>
-        </Button>
+        <BackButton onClick={onBack} label="Back to Loans" />
       </div>
 
       {/* Loan Facility Header (Matching Tenant & FilCap Lending exactly) */}

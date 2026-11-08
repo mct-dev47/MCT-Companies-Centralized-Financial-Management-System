@@ -341,13 +341,20 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           className="sm:max-w-[680px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl"
         >
           <div ref={topRef} />
-          <DialogHeader className="text-left sm:text-left space-y-1">
-            <DialogTitle className="text-xl sm:text-2xl font-bold text-focus">
-              Create User
-            </DialogTitle>
-            <DialogDescription className="text-sm text-muted-fg font-normal">
-              Register an employee and appoint them to a company
-            </DialogDescription>
+          <DialogHeader className="text-left sm:text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                <UserPlus className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
+                  Create User
+                </DialogTitle>
+                <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
+                  Register an employee and appoint them to a company
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {/* Validation Warning Alert Banner */}
@@ -780,9 +787,12 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
             <span>
               Are you sure you want to add{' '}
               <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
-              appointed to{' '}
-              as{' '}
-              <strong className="text-focus">{pendingValues?.role}</strong>?
+              {selectedCompanies.length > 0 ? (
+                <>
+                  appointed to <strong className="text-focus">{selectedCompanies.join(', ')}</strong>{' '}
+                </>
+              ) : null}
+              as <strong className="text-focus">{pendingValues?.role}</strong>?
             </span>
             {selectedCompanies.length > 0 && (
               <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">

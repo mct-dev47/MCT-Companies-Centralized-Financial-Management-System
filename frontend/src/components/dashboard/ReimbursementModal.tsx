@@ -636,12 +636,19 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         >
           {/* 1. Header */}
           <DialogHeader className="text-left pb-3.5 border-b border-stroke/20 pr-8">
-            <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-              Reimbursement Request
-            </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-              For expenses you paid with your own money.
-            </DialogDescription>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
+                  Reimbursement Request
+                </DialogTitle>
+                <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
+                  For expenses you paid with your own money.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {/* Form */}

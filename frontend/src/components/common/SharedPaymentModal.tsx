@@ -531,20 +531,26 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       {/* 1. Main Payment Input Modal */}
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[860px] md:max-w-[920px] max-h-[88vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-emerald-600" />
-              <span>{title || (isEditMode ? 'Edit Payment' : 'Record Payment')}</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              {description || (
-                <>
-                  {isEditMode ? 'Update payment remittance for ' : 'Record payment remittance for '}
-                  <strong className="text-focus">{entityName}</strong>
-                  {entitySubtitle ? ` (${entitySubtitle})` : ` (${paymentFrequency} Schedule)`}.
-                </>
-              )}
-            </DialogDescription>
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Coins className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  {title || (isEditMode ? 'Edit Payment' : 'Record Payment')}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  {description || (
+                    <>
+                      {isEditMode ? 'Update payment remittance for ' : 'Record payment remittance for '}
+                      <strong className="text-focus">{entityName}</strong>
+                      {entitySubtitle ? ` (${entitySubtitle})` : ` (${paymentFrequency} Schedule)`}.
+                    </>
+                  )}
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <form onSubmit={handleReviewPayment} className="space-y-5 mt-2">
@@ -1134,17 +1140,23 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
 
       {/* 2. Modal: Payment Confirmation Modal */}
       <Dialog open={isConfirmModalOpen} onOpenChange={setIsConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Coins className="h-5 w-5 text-[#960C01]" />
-              <span>{isEditMode ? 'Confirm Updated Payment Transaction' : 'Confirm Payment Transaction'}</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              {isEditMode
-                ? 'Please review the updated payment details below before saving this transaction.'
-                : 'Please review the payment details below before recording this transaction.'}
-            </DialogDescription>
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Coins className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  {isEditMode ? 'Confirm Updated Payment Transaction' : 'Confirm Payment Transaction'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  {isEditMode
+                    ? 'Please review the updated payment details below before saving this transaction.'
+                    : 'Please review the payment details below before recording this transaction.'}
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {pendingConfirm && (
@@ -1289,7 +1301,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
 
       {/* 3. Modal: Payment Success Modal / Receipt */}
       <Dialog open={isSuccessModalOpen} onOpenChange={setIsSuccessModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
           {completedReceipt && (
             <div className="space-y-4">
               <div className="flex flex-col items-center text-center pt-1">

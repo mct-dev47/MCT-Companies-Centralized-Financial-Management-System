@@ -1,4 +1,4 @@
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError, notifyWarning } from '@/utils/errorUtils'
 import * as React from 'react'
 
 import {
@@ -632,7 +632,7 @@ export const BankManagementPage: React.FC = () => {
 
     } catch (err: any) {
 
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to update bank account.'))
+      notifyError(err, 'Failed to update bank account.')
 
     } finally {
 
@@ -988,7 +988,7 @@ export const BankManagementPage: React.FC = () => {
 
     if (!chosenBankName) {
 
-      alert('Please enter a bank name.')
+      notifyWarning('Please enter a bank name.')
 
       return
 
@@ -1126,7 +1126,7 @@ export const BankManagementPage: React.FC = () => {
 
     } catch (err: any) {
 
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to create bank account.'))
+      notifyError(err, 'Failed to create bank account.')
 
     } finally {
 
@@ -1154,7 +1154,7 @@ export const BankManagementPage: React.FC = () => {
 
     if (isNaN(amountNum) || amountNum <= 0) {
 
-      alert('Please enter a valid deposit amount.')
+      notifyWarning('Please enter a valid deposit amount.')
 
       return
 
@@ -1202,7 +1202,7 @@ export const BankManagementPage: React.FC = () => {
 
     } catch (err: any) {
 
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to process deposit.'))
+      notifyError(err, 'Failed to process deposit.')
 
     } finally {
 
@@ -1222,7 +1222,7 @@ export const BankManagementPage: React.FC = () => {
 
     if (isNaN(amountNum) || amountNum <= 0) {
 
-      alert('Please enter a valid withdrawal amount.')
+      notifyWarning('Please enter a valid withdrawal amount.')
 
       return
 
@@ -1230,7 +1230,7 @@ export const BankManagementPage: React.FC = () => {
 
     if (amountNum > activeAccount.currentBalance) {
 
-      alert(`Withdrawal amount (₱${amountNum.toLocaleString()}) cannot exceed the available bank balance of ₱${activeAccount.currentBalance.toLocaleString()}.`)
+      notifyWarning(`Withdrawal amount (${formatPHP(amountNum)}) cannot exceed the available bank balance of ${formatPHP(activeAccount.currentBalance)}.`)
 
       return
 
@@ -1278,7 +1278,7 @@ export const BankManagementPage: React.FC = () => {
 
     } catch (err: any) {
 
-      alert(formatUserFriendlyErrorMessage(err, 'Failed to process withdrawal.'))
+      notifyError(err, 'Failed to process withdrawal.')
 
     } finally {
 
@@ -3342,6 +3342,7 @@ export const BankManagementPage: React.FC = () => {
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
 
               className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 cursor-pointer"
+              aria-label="Previous page"
 
             >
 
@@ -3362,6 +3363,7 @@ export const BankManagementPage: React.FC = () => {
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
 
               className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 cursor-pointer"
+              aria-label="Next page"
 
             >
 
@@ -3387,9 +3389,9 @@ export const BankManagementPage: React.FC = () => {
 
             <div className="flex items-center gap-3">
 
-              <div className="h-10 w-10 rounded-xl bg-[#0B0F2B] text-white flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-primary text-white flex items-center justify-center">
 
-                <Landmark className="h-5 w-5 text-amber-400" />
+                <Landmark className="h-5 w-5" />
 
               </div>
 
@@ -3977,7 +3979,7 @@ export const BankManagementPage: React.FC = () => {
 
                 disabled={isSubmittingDeposit}
 
-                className="h-10 px-5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white cursor-pointer flex items-center gap-2"
+                className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary hover:bg-primary-hover disabled:opacity-60 text-white cursor-pointer flex items-center gap-2"
 
               >
 
@@ -4225,9 +4227,9 @@ export const BankManagementPage: React.FC = () => {
 
             <div className="flex items-center gap-3">
 
-              <div className="h-10 w-10 rounded-xl bg-[#0B0F2B] text-white flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-primary text-white flex items-center justify-center">
 
-                <History className="h-5 w-5 text-amber-400" />
+                <History className="h-5 w-5" />
 
               </div>
 
@@ -4363,7 +4365,7 @@ export const BankManagementPage: React.FC = () => {
 
               onClick={() => setIsActivityLogOpen(false)}
 
-              className="h-9 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
 
             >
 
@@ -4387,7 +4389,7 @@ export const BankManagementPage: React.FC = () => {
 
             <div className="flex items-center gap-3">
 
-              <div className="h-10 w-10 rounded-xl bg-slate-100 text-focus flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-primary text-white flex items-center justify-center">
 
                 <Pencil className="h-5 w-5" />
 
@@ -4579,15 +4581,15 @@ export const BankManagementPage: React.FC = () => {
 
       <Dialog open={isCardDetailsModalOpen} onOpenChange={setIsCardDetailsModalOpen}>
 
-        <DialogContent className="sm:max-w-[720px] bg-white rounded-[28px] p-6 shadow-2xl overflow-hidden max-h-[85vh] overflow-y-auto [&>button.absolute]:hidden [&>button:has(svg.lucide-x)]:hidden [&>button[aria-label=Close]]:hidden">
+        <DialogContent hideCloseButton className="sm:max-w-[720px] bg-white rounded-[24px] p-6 shadow-modal overflow-hidden max-h-[85vh] overflow-y-auto">
 
           <DialogHeader className="space-y-1.5 pb-2 border-b border-slate-100">
 
             <div className="flex items-center gap-3">
 
-              <div className="h-10 w-10 rounded-xl bg-[#0B0F2B] text-white flex items-center justify-center">
+              <div className="h-10 w-10 rounded-xl bg-primary text-white flex items-center justify-center">
 
-                <Landmark className="h-5 w-5 text-amber-400" />
+                <Landmark className="h-5 w-5" />
 
               </div>
 

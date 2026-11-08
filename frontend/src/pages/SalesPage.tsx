@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -1807,13 +1808,13 @@ export const SalesPage: React.FC = () => {
                 <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   DEPOSIT STATUS
                 </TableHead>
-                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   {tableTab === 'Deposit' ? 'DEPOSITED' : 'DEPOSIT'}
                 </TableHead>
                 <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
                 </TableHead>
-                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
                 <TableHead className="w-[8%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -2046,7 +2047,7 @@ export const SalesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 5. Deposit */}
-                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-semibold text-left tabular-nums whitespace-nowrap text-emerald-600">
+                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-emerald-600">
                         {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
                       </TableCell>
 
@@ -2073,7 +2074,7 @@ export const SalesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 7. Net Amount */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-left tabular-nums whitespace-nowrap text-focus">
+                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
                       </TableCell>
 
@@ -2222,61 +2223,28 @@ export const SalesPage: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {!isAdmin && (
-        <Dialog
-          open={!!deleteConfirmSale}
+        <ConfirmModal
+          open={Boolean(deleteConfirmSale)}
           onOpenChange={(open) => !open && setDeleteConfirmSale(null)}
-        >
-          <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-            <DialogHeader>
-              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center mb-2">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <DialogTitle className="text-lg font-bold text-focus">
-                Delete Sale Record
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg mt-1">
-                Are you sure you want to delete this sale entry{' '}
-                <strong className="text-focus">
-                  {deleteConfirmSale?.particulars}
-                </strong>{' '}
-                ({deleteConfirmSale?.refNo}) for{' '}
-                <strong className="text-focus">
-                  {deleteConfirmSale?.deposit
-                    ? formatPHP(deleteConfirmSale.deposit)
-                    : ''}
-                </strong>
-                ? This action cannot be undone.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDeleteConfirmSale(null)}
-                disabled={isDeleting}
-                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                className="h-9 px-5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-              >
-                {isDeleting ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    Deleting…
-                  </>
-                ) : (
-                  'Delete'
-                )}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+          title="Delete Sale Record"
+          description={
+            <>
+              Are you sure you want to delete this sale entry{' '}
+              <strong className="text-focus">{deleteConfirmSale?.particulars}</strong> (
+              {deleteConfirmSale?.refNo}) for{' '}
+              <strong className="text-focus">
+                {deleteConfirmSale?.deposit ? formatPHP(deleteConfirmSale.deposit) : ''}
+              </strong>
+              ? This action cannot be undone.
+            </>
+          }
+          confirmLabel="Delete"
+          loadingLabel="Deleting…"
+          variant="destructive"
+          action="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDelete}
+        />
       )}
 
       {/* Transaction Details & Audit Modal */}

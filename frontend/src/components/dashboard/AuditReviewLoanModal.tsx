@@ -78,9 +78,9 @@ export const AuditReviewLoanModal: React.FC<AuditReviewLoanModalProps> = ({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[640px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl">
-        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-6">
+        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 shadow-xs">
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
