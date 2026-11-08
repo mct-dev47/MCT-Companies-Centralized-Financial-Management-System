@@ -27,6 +27,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { Button } from '@/components/ui/button'
@@ -53,7 +54,7 @@ import {
 import { useSession } from '@/hooks/useSession'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 import {
   type DailyPaymentRecord,
@@ -114,7 +115,7 @@ export const LendingPage: React.FC = () => {
       setIsAuditConfirmModalOpen(false)
     } catch (err: any) {
       console.error('Failed to save audit review:', err)
-      alert(err?.message || 'Failed to update audit review in database. Please try again.')
+      notifyError(err, 'Failed to update audit review in database. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -135,7 +136,7 @@ export const LendingPage: React.FC = () => {
       setDiscrepancyReason('')
     } catch (err: any) {
       console.error('Failed to flag discrepancy:', err)
-      alert(err?.message || 'Failed to update audit review in database. Please try again.')
+      notifyError(err, 'Failed to update audit review in database. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -963,15 +964,7 @@ export const LendingPage: React.FC = () => {
       <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setViewMode('list')}
-            className="h-10 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-stroke/60 bg-white text-focus hover:bg-surface flex items-center gap-2 cursor-pointer shadow-2xs self-start"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            <span>Back to Borrowers</span>
-          </Button>
+          <BackButton onClick={() => setViewMode('list')} label="Back to Borrowers" />
         </div>
 
         {/* Borrower & Facility Header (Without Background Container or Active Badge or Collection Progress) */}
@@ -2114,14 +2107,21 @@ export const LendingPage: React.FC = () => {
 
       {/* 4. Modal: New Lending Facility (Requirement 2) */}
       <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus">
-              New Borrower
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Enter the borrower and loan details to disburse a new credit agreement.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Plus className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  New Borrower
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter the borrower and loan details to disburse a new credit agreement.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <form onSubmit={handleCreateFacility} className="space-y-4 mt-3">
@@ -2495,81 +2495,63 @@ export const LendingPage: React.FC = () => {
       })()}
 
       {/* 5B. Modal: Delete Payment Confirmation */}
-      <Dialog open={isDeletePaymentModalOpen} onOpenChange={setIsDeletePaymentModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-[#960C01]" />
-              <span>Delete Payment</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
-              Are you sure you want to delete the payment remittance of{' '}
-              <strong className="text-focus">{paymentToDelete ? formatPHP(paymentToDelete.amount) : ''}</strong>{' '}
-              recorded on{' '}
-              <strong className="text-focus">{paymentToDelete?.date || paymentToDelete?.payment_date || '-'}</strong>?
-              This action will recalculate the borrower balance and cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {deletePaymentError && (
-            <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01] mt-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-[#960C01] mt-0.5" />
-                <span>{deletePaymentError}</span>
+      <ConfirmModal
+        open={isDeletePaymentModalOpen}
+        onOpenChange={(open) => {
+          setIsDeletePaymentModalOpen(open)
+          if (!open) setPaymentToDelete(null)
+        }}
+        title="Delete Payment"
+        description={
+          <>
+            Are you sure you want to delete the payment remittance of{' '}
+            <strong className="text-focus">{paymentToDelete ? formatPHP(paymentToDelete.amount) : ''}</strong>{' '}
+            recorded on{' '}
+            <strong className="text-focus">{paymentToDelete?.date || paymentToDelete?.payment_date || '-'}</strong>?
+            This action will recalculate the borrower balance and cannot be undone.
+            {deletePaymentError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2 text-xs text-rose-700 mt-2 text-left">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                  <span>{deletePaymentError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeletePaymentError(null)}
+                  className="text-rose-600 hover:text-rose-800 font-bold ml-1 text-sm leading-none"
+                >
+                  &times;
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setDeletePaymentError(null)}
-                className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
-              >
-                &times;
-              </button>
-            </div>
-          )}
-
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100 mt-3">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isDeletingPayment}
-              onClick={() => {
-                setIsDeletePaymentModalOpen(false)
-                setPaymentToDelete(null)
-              }}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isDeletingPayment}
-              onClick={handleConfirmDeletePayment}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer shadow-xs disabled:opacity-60 flex items-center gap-2"
-            >
-              {isDeletingPayment ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Deleting...</span>
-                </>
-              ) : (
-                <span>Delete Payment</span>
-              )}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+            )}
+          </>
+        }
+        confirmLabel="Delete Payment"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingPayment}
+        onConfirm={handleConfirmDeletePayment}
+      />
 
       {/* 6. Modal: Edit Borrower Details */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus">
-              Edit Borrower
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Update terms and loan records for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Pencil className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Edit Borrower
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Update terms and loan records for{' '}
+                  <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {activeFacility && (() => {
@@ -2829,80 +2811,60 @@ export const LendingPage: React.FC = () => {
       </Dialog>
 
       {/* 7. Modal: Delete Borrower Confirmation */}
-      <Dialog open={isDeleteConfirmOpen} onOpenChange={setIsDeleteConfirmOpen}>
-        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-[#960C01]" />
-              <span>Delete Borrower</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Are you sure you want to delete the record for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong>? This action will remove all recorded payment history and cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Inline Error Banner */}
-          {deleteModalError && (
-            <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01] mt-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-[#960C01] mt-0.5" />
-                <span>{deleteModalError}</span>
+      <ConfirmModal
+        open={isDeleteConfirmOpen}
+        onOpenChange={setIsDeleteConfirmOpen}
+        title="Delete Borrower"
+        description={
+          <>
+            Are you sure you want to delete the record for{' '}
+            <strong className="text-focus">{activeFacility?.borrowerName}</strong>? This action will remove all recorded payment history and cannot be undone.
+            {deleteModalError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2 text-xs text-rose-700 mt-2 text-left">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                  <span>{deleteModalError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDeleteModalError(null)}
+                  className="text-rose-600 hover:text-rose-800 font-bold ml-1 text-sm leading-none"
+                >
+                  &times;
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setDeleteModalError(null)}
-                className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
-              >
-                &times;
-              </button>
-            </div>
-          )}
+            )}
+          </>
+        }
+        confirmLabel="Delete Borrower"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingBorrower}
+        onConfirm={handleConfirmDelete}
+      />
 
-          <div className="flex items-center justify-end gap-2.5 pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isDeletingBorrower}
-              onClick={() => setIsDeleteConfirmOpen(false)}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isDeletingBorrower}
-              onClick={handleConfirmDelete}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer shadow-xs disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isDeletingBorrower ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Deleting...</span>
-                </>
-              ) : (
-                <span>Delete Borrower</span>
-              )}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
       {/* Modal: Mark as Audited Confirmation */}
       <Dialog open={isAuditConfirmModalOpen} onOpenChange={setIsAuditConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
-              <span>Confirm Audit Verification</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
-              Are you sure you want to mark the loan facility for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong> as audited? This will record
-              your verification and timestamp.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Confirm Audit Verification
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5 leading-relaxed">
+                  Are you sure you want to mark the loan facility for{' '}
+                  <strong className="text-focus">{activeFacility?.borrowerName}</strong> as audited?
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 mt-2">
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-stroke/30 mt-2">
             <Button
               type="button"
               variant="outline"
@@ -2936,32 +2898,38 @@ export const LendingPage: React.FC = () => {
 
       {/* Modal: Flag Discrepancy Reason */}
       <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-[#960C01] flex items-center gap-2">
-              <AlertCircle className="w-5 h-5 text-[#960C01]" />
-              <span>Flag Audit Discrepancy</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1.5 leading-relaxed">
-              Please specify the audit findings, discrepancies, or notes for{' '}
-              <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5 leading-relaxed">
+                  Please specify the audit findings, discrepancies, or notes for{' '}
+                  <strong className="text-focus">{activeFacility?.borrowerName}</strong>.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <div className="space-y-2 py-2">
             <label className="text-xs font-semibold text-focus block">
-              Discrepancy Reason / Findings <span className="text-[#960C01]">*</span>
+              Discrepancy Reason / Findings <span className="text-rose-600">*</span>
             </label>
             <textarea
               value={discrepancyReason}
               onChange={(e) => setDiscrepancyReason(e.target.value)}
               placeholder="Detail any payment discrepancies, unrecorded ledger items, or issues..."
-              className="w-full min-h-[120px] p-3 text-xs rounded-xl border border-slate-300 focus:border-red-500 focus:ring-1 focus:ring-red-500 bg-white text-focus placeholder:text-muted-fg/60 outline-none transition-colors resize-y"
+              className="w-full min-h-[120px] p-3 text-xs rounded-xl border border-stroke/50 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20 bg-white text-focus placeholder:text-muted-fg/60 outline-none transition-colors resize-y"
               autoFocus
             ></textarea>
           </div>
 
-          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-stroke/30">
             <Button
               type="button"
               variant="outline"
@@ -2978,7 +2946,7 @@ export const LendingPage: React.FC = () => {
               type="button"
               disabled={isSubmittingAudit || !discrepancyReason.trim()}
               onClick={handleConfirmDiscrepancy}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-1.5"
             >
               {isSubmittingAudit ? (
                 <>

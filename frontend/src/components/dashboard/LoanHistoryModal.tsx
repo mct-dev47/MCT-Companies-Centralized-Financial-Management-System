@@ -76,11 +76,11 @@ export const LoanHistoryModal: React.FC<LoanHistoryModalProps> = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="rounded-[24px] p-5 sm:p-6 bg-white border border-stroke/30 shadow-2xl sm:max-w-[680px] max-h-[85vh] overflow-y-auto">
         {/* Header */}
-        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-7">
+        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-[#0B0F2B] text-white flex items-center justify-center shrink-0 shadow-xs">
-                <History className="w-4 h-4 text-white" />
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                <History className="w-5 h-5 text-white" />
               </div>
               <div>
                 <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">

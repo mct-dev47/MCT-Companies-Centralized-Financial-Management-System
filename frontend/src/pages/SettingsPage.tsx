@@ -269,7 +269,7 @@ export const SettingsPage: React.FC = () => {
             variant="outline"
             onClick={handleDiscardChanges}
             disabled={saving || loading}
-            className="h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border"
+            className="h-10 sm:h-11 px-4 rounded-xl border border-stroke/60 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border"
           >
             <RotateCcw className="h-3.5 w-3.5 text-focus/70 shrink-0" />
             <span className="hidden sm:inline">Discard</span>
@@ -280,7 +280,7 @@ export const SettingsPage: React.FC = () => {
             type="button"
             onClick={() => void handleSaveChanges()}
             disabled={saving || loading}
-            className="h-10 sm:h-11 px-5 rounded-full bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+            className="h-10 sm:h-11 px-5 rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
           >
             {saving ? (
               <>

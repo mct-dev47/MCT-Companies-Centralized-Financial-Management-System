@@ -30,6 +30,7 @@ export interface ConfirmModalProps {
   cancelLabel?: string
   variant?: 'primary' | 'destructive' | 'default'
   actionType?: 'add' | 'edit' | 'delete' | 'warning' | 'submit' | 'default'
+  action?: 'add' | 'edit' | 'delete' | 'warning' | 'submit' | 'default'
   onConfirm: () => void | Promise<void>
   isLoading?: boolean
   loadingLabel?: string
@@ -55,6 +56,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   cancelLabel = 'Cancel',
   variant = 'primary',
   actionType = 'default',
+  action,
   onConfirm,
   isLoading = false,
   loadingLabel = 'Processing…',
@@ -67,15 +69,16 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   }
   const effectiveDescription = description ?? message ?? ''
 
+  const resolvedAction = action ?? actionType
   const effectiveAction =
-    actionType === 'default' && variant === 'destructive' ? 'delete' : actionType
+    resolvedAction === 'default' && variant === 'destructive' ? 'delete' : resolvedAction
 
   const getIcon = () => {
     switch (effectiveAction) {
       case 'delete':
         return (
-          <div className="h-14 w-14 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center text-primary shadow-xs">
-            <Trash2 className="h-7 w-7 text-primary" />
+          <div className="h-14 w-14 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shadow-xs">
+            <Trash2 className="h-7 w-7 text-rose-600" />
           </div>
         )
       case 'warning':
@@ -142,10 +145,10 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             )}
             <Button
               type="button"
-              variant={variant === 'destructive' ? 'destructive' : 'default'}
+              variant={variant === 'destructive' || effectiveAction === 'delete' ? 'destructive' : 'default'}
               disabled={isLoading || confirmDisabled}
               onClick={onConfirm}
-              className="w-full sm:flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-[#960C01]"
+              className="w-full sm:flex-1 h-11 rounded-xl text-sm font-semibold shadow-xs flex items-center justify-center gap-2 transition-all"
             >
               {isLoading ? (
                 <>

@@ -1,4 +1,4 @@
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { formatRealName } from '@/utils/formatRealName'
@@ -262,17 +263,13 @@ export const TenantPage: React.FC = () => {
   const [detailTab, setDetailTab] = React.useState<'schedule' | 'history'>('schedule')
   const [detailSearchQuery, setDetailSearchQuery] = React.useState('')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('All Periods')
-  const [toastMessage, setToastMessage] = React.useState<string | null>(null)
   const [isAuditConfirmModalOpen, setIsAuditConfirmModalOpen] = React.useState(false)
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
 
   const showToast = (msg: string) => {
-    setToastMessage(msg)
-    setTimeout(() => {
-      setToastMessage(null)
-    }, 4500)
+    notifySuccess(msg)
   }
 
   // Fallback if saved filter was Quarterly or Annually
@@ -1386,15 +1383,7 @@ export const TenantPage: React.FC = () => {
       <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setViewMode('list')}
-            className="h-10 px-4 rounded-xl font-semibold text-xs sm:text-sm border border-stroke/60 bg-white text-focus hover:bg-surface flex items-center gap-2 cursor-pointer shadow-2xs self-start"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            <span>Back to Tenants</span>
-          </Button>
+          <BackButton onClick={() => setViewMode('list')} label="Back to Tenants" />
         </div>
 
         {/* Tenant & Lease Header (Matching FilCap Lending exactly) */}
@@ -1830,7 +1819,7 @@ export const TenantPage: React.FC = () => {
                                       <span>Partially Paid</span>
                                     </span>
                                   ) : (
-                                    <span className="inline-flex items-center text-xs font-bold text-[#960C01]">
+                                    <span className="inline-flex items-center text-xs font-bold text-emerald-600">
                                       <span>Paid</span>
                                     </span>
                                   )}
@@ -2817,19 +2806,21 @@ export const TenantPage: React.FC = () => {
 
       {/* MODAL 1: New Tenant Lease (Matching system modal UI) */}
       <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-7">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#0B0F2B] text-white flex items-center justify-center shrink-0 shadow-xs">
-                <Store className="w-4 h-4 text-white" />
+        <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal max-h-[85vh] overflow-y-auto">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Store className="w-5 h-5 text-white" />
               </div>
-              <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">
-                New Tenant Lease Agreement
-              </DialogTitle>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  New Tenant Lease Agreement
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg font-normal mt-0.5">
+                  Register a new commercial stall or office space tenant for JK Property and Ventures.
+                </DialogDescription>
+              </div>
             </div>
-            <DialogDescription className="text-[11px] text-muted-fg font-normal mt-1">
-              Register a new commercial stall or office space tenant for JK Property and Ventures.
-            </DialogDescription>
           </DialogHeader>
 
           <form onSubmit={handleSubmitAdd} className="space-y-3.5 pt-3">
@@ -3050,19 +3041,21 @@ export const TenantPage: React.FC = () => {
 
       {/* MODAL 2: Edit Tenant Lease (Matching system modal UI) */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-7">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#0B0F2B] text-white flex items-center justify-center shrink-0 shadow-xs">
-                <Pencil className="w-4 h-4 text-white" />
+        <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal max-h-[85vh] overflow-y-auto">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Pencil className="w-5 h-5 text-white" />
               </div>
-              <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">
-                Edit Tenant Lease Agreement
-              </DialogTitle>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  Edit Tenant Lease Agreement
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg font-normal mt-0.5">
+                  Update lease details for {activeTenant?.tenantName} ({activeTenant?.tenantId}).
+                </DialogDescription>
+              </div>
             </div>
-            <DialogDescription className="text-[11px] text-muted-fg font-normal mt-1">
-              Update lease details for {activeTenant?.tenantName} ({activeTenant?.tenantId}).
-            </DialogDescription>
           </DialogHeader>
 
           {(() => {
@@ -3287,45 +3280,25 @@ export const TenantPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 3: Delete Confirmation Modal (Matching Sales / Expense pages) */}
-      <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
-        <DialogContent className="sm:max-w-[560px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="text-center sm:text-left">
-            <div className="w-10 h-10 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 mb-3 mx-auto sm:mx-0">
-              <Trash2 className="w-5 h-5" />
-            </div>
-            <DialogTitle className="text-lg font-bold text-focus">
-              Delete Tenant Lease
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Are you sure you want to delete the lease agreement for{' '}
-              <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.tenantId})?
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSubmittingDelete}
-              onClick={() => setIsDeleteModalOpen(false)}
-              className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 hover:bg-slate-50 text-focus cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isSubmittingDelete}
-              onClick={handleConfirmDelete}
-              className="h-9 px-5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-            >
-              {isSubmittingDelete && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
-              <span>{isSubmittingDelete ? 'Deleting...' : 'Delete Lease'}</span>
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* MODAL 3: Delete Confirmation Modal */}
+      <ConfirmModal
+        open={isDeleteModalOpen}
+        onOpenChange={setIsDeleteModalOpen}
+        title="Delete Tenant Lease"
+        description={
+          <>
+            Are you sure you want to delete the lease agreement for{' '}
+            <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.tenantId})?
+            This action cannot be undone.
+          </>
+        }
+        confirmLabel="Delete Lease"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isSubmittingDelete}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* MODAL 4: Record / Edit Payment (Shared with FilCap Lending) */}
       {activeTenant && (() => {
@@ -3448,16 +3421,22 @@ export const TenantPage: React.FC = () => {
 
       {/* Modal: Mark as Audited Confirmation */}
       <Dialog open={isAuditConfirmModalOpen} onOpenChange={setIsAuditConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              <span>Mark Lease as Audited</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Confirm that you have reviewed the lease terms, payments, and agreement for{' '}
-              <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.unitName}).
-            </DialogDescription>
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Mark Lease as Audited
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Confirm that you have reviewed the lease terms, payments, and agreement for{' '}
+                  <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.unitName}).
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-1">
@@ -3469,7 +3448,7 @@ export const TenantPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/30">
             <Button
               type="button"
               variant="outline"
@@ -3496,16 +3475,22 @@ export const TenantPage: React.FC = () => {
 
       {/* Modal: Flag Discrepancy with Reason */}
       <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-2xl p-6">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-rose-600" />
-              <span>Flag Audit Discrepancy</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              Please provide the reason or details of the discrepancy found on{' '}
-              <strong className="text-focus">{activeTenant?.tenantName}</strong>'s lease.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Please provide the reason or details of the discrepancy found on{' '}
+                  <strong className="text-focus">{activeTenant?.tenantName}</strong>'s lease.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           <form
@@ -3530,7 +3515,7 @@ export const TenantPage: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/30">
               <Button
                 type="button"
                 variant="outline"
@@ -3553,87 +3538,46 @@ export const TenantPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Toast Notification Banner */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-emerald-700 text-white shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200">
-          <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
-          <span className="text-xs sm:text-sm font-semibold">{toastMessage}</span>
-          <button
-            type="button"
-            onClick={() => setToastMessage(null)}
-            className="p-1 rounded-lg hover:bg-emerald-600/80 text-white ml-2 cursor-pointer"
-          >
-            &times;
-          </button>
-        </div>
-      )}
-
       {/* MODAL 6: Confirm removing a payment, or marking a period unpaid (spec 0016) */}
-      <Dialog open={!!removeTarget} onOpenChange={(open) => { if (!open) setRemoveTarget(null) }}>
-        <DialogContent className="sm:max-w-[520px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="text-left">
-            <div className="w-10 h-10 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600 mb-3">
-              <Trash2 className="w-5 h-5" />
-            </div>
-            <DialogTitle className="text-lg font-bold text-focus">
-              {removeTarget?.kind === 'period' ? `Mark ${removeTarget.period.label} as Unpaid` : 'Remove Payment'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg mt-1">
-              {removeTarget?.kind === 'period'
-                ? `This removes ${removeTarget.records.length === 1 ? 'the payment' : `${removeTarget.records.length} payments`} that started at ${removeTarget.period.label}. The money goes back to unpaid.`
-                : removeTarget
-                ? `This removes the ${removeTarget.record.status === 'Missed' ? 'missed day mark' : `${formatPHP(removeTarget.record.amount)} payment`} dated ${removeTarget.record.date}. ${removeTarget.record.status === 'Missed' ? '' : 'The money goes back to unpaid.'}`
-                : ''}
-            </DialogDescription>
-          </DialogHeader>
-
-          {removeTarget?.kind === 'period' && removeTarget.affected.length > 0 && (
-            <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5 text-xs" aria-live="polite">
-              <div className="font-bold text-focus">Periods that become less paid</div>
-              {removeTarget.affected.map((a) => (
-                <div key={a.label} className="flex justify-between items-center">
-                  <span className="text-focus">{a.label}</span>
-                  <span className="font-semibold text-rose-600">-{formatPHP(a.amount)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {activeTenant?.auditStatus && (activeTenant.auditStatus === 'Verified' || activeTenant.auditStatus === 'Flagged') && (
-            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-              This lease is marked {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Flagged'}. This change sets it
-              back to pending audit.
-            </p>
-          )}
-
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isDeletingRecord}
-              onClick={() => setRemoveTarget(null)}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isDeletingRecord}
-              onClick={handleConfirmRemove}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs flex items-center gap-2"
-            >
-              {isDeletingRecord ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>Deleting...</span>
-                </>
-              ) : (
-                <span>{removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}</span>
-              )}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <ConfirmModal
+        open={Boolean(removeTarget)}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null)
+        }}
+        title={removeTarget?.kind === 'period' ? `Mark ${removeTarget.period.label} as Unpaid` : 'Remove Payment'}
+        description={
+          <>
+            {removeTarget?.kind === 'period'
+              ? `This removes ${removeTarget.records.length === 1 ? 'the payment' : `${removeTarget.records.length} payments`} that started at ${removeTarget.period.label}. The money goes back to unpaid.`
+              : removeTarget
+              ? `This removes the ${removeTarget.record.status === 'Missed' ? 'missed day mark' : `${formatPHP(removeTarget.record.amount)} payment`} dated ${removeTarget.record.date}. ${removeTarget.record.status === 'Missed' ? '' : 'The money goes back to unpaid.'}`
+              : ''}
+            {removeTarget?.kind === 'period' && removeTarget.affected.length > 0 && (
+              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5 text-xs mt-3 text-left" aria-live="polite">
+                <div className="font-bold text-focus">Periods that become less paid</div>
+                {removeTarget.affected.map((a) => (
+                  <div key={a.label} className="flex justify-between items-center">
+                    <span className="text-focus">{a.label}</span>
+                    <span className="font-semibold text-rose-600">-{formatPHP(a.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {activeTenant?.auditStatus && (activeTenant.auditStatus === 'Verified' || activeTenant.auditStatus === 'Flagged') && (
+              <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mt-2 text-left">
+                This lease is marked {activeTenant.auditStatus === 'Verified' ? 'Audited' : 'Flagged'}. This change sets it
+                back to pending audit.
+              </p>
+            )}
+          </>
+        }
+        confirmLabel={removeTarget?.kind === 'period' ? 'Mark as Unpaid' : 'Remove Payment'}
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingRecord}
+        onConfirm={handleConfirmRemove}
+      />
     </div>
   )
 }

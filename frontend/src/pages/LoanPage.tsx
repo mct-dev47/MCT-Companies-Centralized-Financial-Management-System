@@ -1163,7 +1163,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={loanType === 'Borrower' ? 8 : 7} />
+                <TableSkeleton rows={6} columns={loanType === 'Borrower' ? 9 : 8} />
               ) : paginatedLoans.length === 0 ? (
                 <TableRow>
                   <TableCell

@@ -4,26 +4,27 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center whitespace-nowrap rounded-lg text-base font-semibold transition-all outline-none focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-xs sm:text-sm font-semibold transition-all outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-1 disabled:pointer-events-none disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer',
   {
     variants: {
       variant: {
         default:
-          'bg-[#960C01] text-white hover:bg-[#800a01] active:bg-[#700801] disabled:bg-[#960C01]/75 disabled:opacity-75',
-        destructive: 'bg-error text-white hover:brightness-95',
+          'bg-primary text-white hover:bg-primary-hover active:bg-primary-active shadow-xs disabled:bg-primary/75',
+        destructive:
+          'bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 shadow-xs',
         outline:
-          'border border-stroke/50 bg-background hover:bg-surface text-focus',
+          'border border-stroke/50 bg-background hover:bg-surface text-focus shadow-2xs',
         'outline-primary':
-          'border border-[#960C01] text-[#960C01] bg-background hover:bg-[#960C01]/5',
+          'border border-primary text-primary bg-background hover:bg-primary/5',
         secondary: 'bg-surface text-focus hover:bg-surface/80',
         ghost: 'hover:bg-surface text-focus',
-        link: 'text-[#960C01] underline-offset-4 hover:underline',
+        link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
-        default: 'h-12 px-6 py-3',
-        sm: 'h-10 rounded-lg px-4 text-sm',
-        lg: 'h-14 rounded-lg px-8 text-lg',
-        icon: 'h-12 w-12',
+        default: 'h-10 sm:h-11 px-4 sm:px-5 py-2.5 rounded-xl',
+        sm: 'h-9 rounded-xl px-3.5 text-xs',
+        lg: 'h-12 rounded-xl px-6 text-sm sm:text-base',
+        icon: 'h-9 w-9 rounded-xl p-0',
       },
     },
     defaultVariants: {

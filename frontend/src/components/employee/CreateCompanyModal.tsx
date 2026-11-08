@@ -170,13 +170,20 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent className="max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl sm:max-w-[780px] w-full">
-          <DialogHeader className="text-left sm:text-left space-y-1 pb-3 border-b border-stroke/15">
-            <DialogTitle className="text-xl sm:text-2xl font-bold text-focus">
-              Create Company
-            </DialogTitle>
-            <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal">
-              Add company to the group
-            </DialogDescription>
+          <DialogHeader className="text-left sm:text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Building2 className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
+                  Create Company
+                </DialogTitle>
+                <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
+                  Add company to the group
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {submitError && (

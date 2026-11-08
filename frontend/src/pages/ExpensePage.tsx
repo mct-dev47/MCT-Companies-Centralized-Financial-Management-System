@@ -28,6 +28,8 @@ import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
 import {
   Table,
   TableHeader,
@@ -1589,13 +1591,13 @@ export const ExpensePage: React.FC = () => {
                 <TableHead className="w-[21%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   WITHDRAWAL
                 </TableHead>
                 <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
                 <TableHead className="w-[8%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -1606,36 +1608,7 @@ export const ExpensePage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    {showCompanyColumn && (
-                      <TableCell className="px-3.5 py-4">
-                        <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
-                      </TableCell>
-                    )}
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-20 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-32 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4 text-center">
-                      <div className="h-6 w-14 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
               ) : paginatedExpenses.length === 0 ? (
                 <TableRow>
                   <TableCell
@@ -1784,7 +1757,7 @@ export const ExpensePage: React.FC = () => {
                       </TableCell>
 
                       {/* 5. Withdrawal */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-left tabular-nums whitespace-nowrap text-red-600">
+                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-red-600">
                         {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
                       </TableCell>
 
@@ -1807,7 +1780,7 @@ export const ExpensePage: React.FC = () => {
                       </TableCell>
 
                       {/* 7. Net Amount */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-left tabular-nums whitespace-nowrap text-focus">
+                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
                       </TableCell>
 
@@ -1955,66 +1928,42 @@ export const ExpensePage: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {!isAdmin && (
-        <Dialog
+        <ConfirmModal
           open={Boolean(deleteConfirmExpense)}
           onOpenChange={(open) => !open && setDeleteConfirmExpense(null)}
-        >
-          <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-            <DialogHeader>
-              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2 text-red-600">
-                <Trash2 className="w-5 h-5 text-red-600" />
-                <span>Confirm Deletion</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg mt-1 leading-relaxed">
-                Are you sure you want to delete this expense record? This action
-                will remove the record from the company ledger.
-              </DialogDescription>
-            </DialogHeader>
-
-            {deleteConfirmExpense && (
-              <div className="my-4 p-4 rounded-2xl bg-red-50/60 border border-red-200/60 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Particulars:</span>
-                  <span className="font-semibold text-focus truncate max-w-[200px]">
-                    {deleteConfirmExpense.particulars}
-                  </span>
+          title="Delete Expense Record"
+          description={
+            <>
+              Are you sure you want to delete this expense record? This action will remove the record from the company ledger.
+              {deleteConfirmExpense && (
+                <div className="mt-3 p-3.5 rounded-xl bg-rose-50/60 border border-rose-200/60 space-y-1.5 text-xs text-left">
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Particulars:</span>
+                    <span className="font-semibold text-focus truncate max-w-[200px]">
+                      {deleteConfirmExpense.particulars}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Withdrawal:</span>
+                    <span className="font-bold text-rose-600">
+                      {formatPHP(deleteConfirmExpense.withdrawal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Ref No:</span>
+                    <span className="font-mono text-focus">{deleteConfirmExpense.refNo}</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Withdrawal:</span>
-                  <span className="font-bold text-red-600">
-                    {formatPHP(deleteConfirmExpense.withdrawal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Ref No:</span>
-                  <span className="font-mono text-focus">
-                    {deleteConfirmExpense.refNo}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center justify-end gap-2.5">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDeleteConfirmExpense(null)}
-                disabled={isDeleting}
-                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                className="h-9 px-5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-              >
-                {isDeleting ? 'Deleting…' : 'Delete Record'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+              )}
+            </>
+          }
+          confirmLabel="Delete Record"
+          loadingLabel="Deleting…"
+          variant="destructive"
+          action="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDelete}
+        />
       )}
 
       {/* Transaction Details & Audit Modal */}
