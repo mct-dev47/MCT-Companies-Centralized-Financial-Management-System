@@ -40,7 +40,7 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
             max_overflow=10,
             pool_recycle=1800,
             pool_timeout=30,
-            connect_args={"connect_timeout": 5},
+            connect_args={"connect_timeout": 30},
         )
         with engine.connect() as _probe:
             pass
@@ -249,29 +249,42 @@ def init_db():
 
     def _sync_companies_from_supabase():
         try:
-            db = SessionLocal()
-            try:
-                if db.query(Company).count() == 0:
-                    from app.db.supabase import get_supabase_admin_client
-                    client = get_supabase_admin_client()
-                    supa_companies = client.table("company").select("*").execute().data
-                    if supa_companies:
-                        for sc in supa_companies:
+            from decimal import Decimal
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            supa_companies = client.table("company").select("*").execute().data
+            if supa_companies:
+                db = SessionLocal()
+                try:
+                    for sc in supa_companies:
+                        cid = sc.get("company_id")
+                        if not cid:
+                            continue
+                        existing = db.query(Company).filter(Company.company_id == cid).first()
+                        p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
+                        s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
+                        if existing:
+                            existing.company_name = sc.get("company_name") or existing.company_name
+                            existing.location = sc.get("location") or existing.location
+                            existing.contact_number = sc.get("contact_number")
+                            existing.phone = sc.get("phone")
+                            existing.starting_balance = s_bal
+                            existing.petty_cash = p_cash
+                            existing.logo_url = sc.get("logo_url")
+                        else:
                             db.add(Company(
-                                company_id=sc.get("company_id"),
+                                company_id=cid,
                                 company_name=sc.get("company_name"),
                                 location=sc.get("location"),
-                                contact_person=sc.get("contact_person"),
                                 contact_number=sc.get("contact_number"),
                                 phone=sc.get("phone"),
-                                email=sc.get("email"),
-                                starting_balance=sc.get("starting_balance", 0.0),
-                                current_balance=sc.get("current_balance", 0.0),
+                                starting_balance=s_bal,
+                                petty_cash=p_cash,
                                 logo_url=sc.get("logo_url"),
                             ))
-                        db.commit()
-            finally:
-                db.close()
+                    db.commit()
+                finally:
+                    db.close()
         except Exception as e:
             logger.warning(f"Could not sync companies on init: {e}")
 

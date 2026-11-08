@@ -120,26 +120,24 @@ export const EmployeePage: React.FC = () => {
     setIsViewCompanyOpen(true)
   }
 
-  const handleCompanyCreated = (newCompany: Company) => {
-    setCompanies((prev) => [newCompany, ...prev])
+  const handleCompanyCreated = async (newCompany: Company) => {
+    await loadData()
     const msg = `Company "${newCompany.name}" has been created successfully.`
     setSuccessBanner(msg)
     notifySuccess(msg)
   }
 
-  const handleCompanyUpdated = (updated: Company) => {
-    setCompanies((prev) =>
-      prev.map((c) => (c.id === updated.id ? updated : c))
-    )
+  const handleCompanyUpdated = async (updated: Company) => {
+    await loadData()
     setSelectedCompany(updated)
     const msg = `Company "${updated.name}" updated successfully.`
     setSuccessBanner(msg)
     notifySuccess(msg)
   }
 
-  const handleCompanyDeleted = (companyId: string) => {
+  const handleCompanyDeleted = async (companyId: string) => {
     const deletedName = companies.find((c) => c.id === companyId)?.name || 'Company'
-    setCompanies((prev) => prev.filter((c) => c.id !== companyId))
+    await loadData()
     const msg = `"${deletedName}" has been removed from companies.`
     setSuccessBanner(msg)
     notifySuccess(msg)
