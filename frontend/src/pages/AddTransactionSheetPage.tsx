@@ -80,6 +80,7 @@ export interface SpreadsheetRow {
   unitPrice: number | ''
   quantity: number | ''
   status: 'Paid' | 'Unpaid' | 'Pending'
+  depositStatus: 'Deposited' | 'Not Deposited'
 }
 
 export interface RowValidationError {
@@ -1275,6 +1276,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       unitPrice: '',
       quantity: 1,
       status: 'Paid',
+      depositStatus: 'Deposited',
     },
   ])
 
@@ -1401,6 +1403,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             it.status || editItem.status,
             'Paid'
           ) as 'Paid' | 'Unpaid' | 'Pending',
+          depositStatus: (editItem.depositStatus || editItem.deposit_status || ((it.status || editItem.status) === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
         }))
       )
     } else if (editItem.particulars) {
@@ -1430,6 +1433,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               p.status || editItem.status,
               'Paid'
             ) as 'Paid' | 'Unpaid' | 'Pending',
+            depositStatus: (editItem.depositStatus || editItem.deposit_status || ((p.status || editItem.status) === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
           }))
         )
       } else {
@@ -1447,6 +1451,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               editItem.status,
               'Paid'
             ) as 'Paid' | 'Unpaid' | 'Pending',
+            depositStatus: (editItem.depositStatus || editItem.deposit_status || (editItem.status === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
           },
         ])
       }
@@ -1592,6 +1597,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         unitPrice: '',
         quantity: 1,
         status: 'Paid',
+        depositStatus: 'Deposited',
       },
     ])
     setTimeout(() => {
@@ -1608,10 +1614,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       particulars: '',
       category: baseRow?.category || defaultCategory,
       paymentMethod: baseRow?.paymentMethod || 'Cash',
+      serviceFee: 0,
       chequeNo: '',
       unitPrice: '',
       quantity: 1,
       status: 'Paid',
+      depositStatus: 'Deposited',
     }
     setRows((prev) => {
       const copy = [...prev]
@@ -1655,6 +1663,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           unitPrice: '',
           quantity: 1,
           status: 'Paid',
+          depositStatus: 'Deposited',
         },
       ])
       return
@@ -1676,6 +1685,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         unitPrice: '',
         quantity: 1,
         status: 'Paid',
+        depositStatus: 'Deposited',
       },
     ])
     setErrorMessage(null)
@@ -1690,9 +1700,36 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== id) return r
+
+        let nextDepositStatus = r.depositStatus || 'Deposited'
+
+        if (field === 'status') {
+          if (value === 'Unpaid') {
+            nextDepositStatus = 'Not Deposited'
+          } else if (value === 'Pending') {
+            const pm = (r.paymentMethod || '').trim().toLowerCase()
+            const hasChq = Boolean(r.chequeNo && r.chequeNo.trim())
+            if (pm !== 'cheque' || !hasChq) {
+              nextDepositStatus = 'Not Deposited'
+            }
+          } else if (value === 'Paid') {
+            const pm = (r.paymentMethod || '').trim().toLowerCase()
+            nextDepositStatus = pm === 'gcash' ? 'Not Deposited' : 'Deposited'
+          }
+        } else if (field === 'paymentMethod' || field === 'chequeNo') {
+          const pm = (field === 'paymentMethod' ? value : r.paymentMethod || '').trim().toLowerCase()
+          const chq = (field === 'chequeNo' ? value : r.chequeNo || '').trim()
+          if (r.status === 'Pending' && (pm !== 'cheque' || !chq)) {
+            nextDepositStatus = 'Not Deposited'
+          } else if (field === 'paymentMethod' && pm === 'gcash') {
+            nextDepositStatus = 'Not Deposited'
+          }
+        }
+
         return {
           ...r,
           [field]: value,
+          depositStatus: field === 'depositStatus' ? value : nextDepositStatus,
         }
       })
     )
@@ -2185,6 +2222,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             chequeNo: first.chequeNo.trim() || undefined,
             category: first.category || SALES_CATEGORY_LIST[0],
             status: first.status,
+            depositStatus: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+            deposit_status: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
             items: itemized,
             bankAccountId: effectiveBankId,
             updatedBy: authorName,
@@ -2298,6 +2337,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               paymentMethod: row.paymentMethod,
               chequeNo: row.chequeNo.trim() || undefined,
               status: row.status,
+              depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
               items: extraItemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
@@ -2345,6 +2386,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               paymentMethod: row.paymentMethod,
               chequeNo: row.chequeNo.trim() || undefined,
               status: row.status,
+              depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
               items: itemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
@@ -2935,6 +2978,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                   <col style={{ width: '110px', minWidth: '110px', maxWidth: '110px' }} />
+                  {isSales && <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />}
                   <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                 </colgroup>
@@ -2967,6 +3011,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     <TableHead className="w-[110px] max-w-[110px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5">
                       STATUS
                     </TableHead>
+                    {isSales && (
+                      <TableHead className="w-[125px] max-w-[125px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5">
+                        DEPOSIT STATUS
+                      </TableHead>
+                    )}
                     <TableHead className="w-[125px] max-w-[125px] text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       TOTAL (₱)
                     </TableHead>
@@ -3306,6 +3355,43 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             )
                           })()}
                         </TableCell>
+
+                        {/* Deposit Status (Sales only) */}
+                        {isSales && (
+                          <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-1.5 box-border">
+                            <select
+                              value={row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                              onChange={(e) => {
+                                const newDs = e.target.value as 'Deposited' | 'Not Deposited'
+                                if (newDs === 'Deposited') {
+                                  if (row.status === 'Unpaid') {
+                                    setErrorMessage('Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.')
+                                    return
+                                  }
+                                  if (row.status === 'Pending') {
+                                    const pm = (row.paymentMethod || '').trim().toLowerCase()
+                                    const hasChq = Boolean(row.chequeNo && row.chequeNo.trim())
+                                    if (pm !== 'cheque' || !hasChq) {
+                                      setErrorMessage('Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance.')
+                                      return
+                                    }
+                                  }
+                                }
+                                setErrorMessage(null)
+                                handleRowChange(row.id, 'depositStatus', newDs)
+                              }}
+                              className={cn(
+                                'w-full h-9 px-1.5 text-xs font-semibold rounded-lg border focus:outline-none focus:ring-1 transition-all cursor-pointer truncate box-border',
+                                (row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500'
+                                  : 'bg-slate-100 text-slate-700 border-slate-300 focus:border-slate-400 focus:ring-slate-400'
+                              )}
+                            >
+                              <option value="Deposited">Deposited</option>
+                              <option value="Not Deposited">Not Deposited</option>
+                            </select>
+                          </TableCell>
+                        )}
 
                         {/* Total Price */}
                         <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-3 text-right box-border">

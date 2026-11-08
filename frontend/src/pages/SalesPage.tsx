@@ -310,6 +310,52 @@ export const SalesPage: React.FC = () => {
     }
   }, [])
 
+  // Toast notification state
+  const [toast, setToast] = React.useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => {
+      setToast(null)
+    }, 4500)
+  }
+
+  const handleDepositStatusChange = async (sale: SalesItem, newStatus: 'Deposited' | 'Not Deposited') => {
+    if (sale.auditStatus === 'Verified') {
+      showToast('This sale has been Verified by an Auditor and is locked as read-only.', 'error')
+      return
+    }
+
+    const st = (sale as any).payment_status || (sale.status === 'Overdue' ? 'Unpaid' : sale.status)
+    if (newStatus === 'Deposited') {
+      if (st === 'Unpaid') {
+        showToast('Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.', 'error')
+        return
+      }
+      if (st === 'Pending') {
+        const pm = (sale.paymentMethod || '').trim().toLowerCase()
+        const hasChq = Boolean(sale.chequeNo && sale.chequeNo.trim())
+        if (pm !== 'cheque' || !hasChq) {
+          showToast('Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance.', 'error')
+          return
+        }
+      }
+    }
+
+    try {
+      await salesService.updateSaleDepositStatus(sale.id, newStatus)
+      setSales((prev) =>
+        prev.map((s) =>
+          s.id === sale.id
+            ? { ...s, depositStatus: newStatus, deposit_status: newStatus }
+            : s
+        )
+      )
+      showToast(`Deposit status updated to ${newStatus}.`, 'success')
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update deposit status.', 'error')
+    }
+  }
+
   // Handlers for edit and delete
   const handleSaleUpdated = (updatedItem: SalesItem) => {
     setSales((prev) =>
@@ -1303,11 +1349,11 @@ export const SalesPage: React.FC = () => {
           </div>
         </Card>
 
-        {/* 2. Cash Collected (date) = payments received that day/period, including payments on old utang */}
+        {/* 2. Cash Collected (date) = total cash deposited into bank for the period */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-semibold text-muted-fg block">
-              Cash Collected
+              Total Cash (Deposited)
             </span>
             {loading ? (
               <CardSkeleton inline={true} />
@@ -1317,7 +1363,7 @@ export const SalesPage: React.FC = () => {
                   {formatPHP(kpis.totalCash)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Cash collected today & on settled utang
+                  Total cash deposited to bank for {dateRange.label || 'selected period'}
                 </p>
               </>
             )}
@@ -1582,6 +1628,7 @@ export const SalesPage: React.FC = () => {
                                         {showCompanyColumn && <th className="px-3 py-2 font-bold">Company</th>}
                                         <th className="px-3 py-2 font-bold">Particulars</th>
                                         <th className="px-3 py-2 font-bold text-center">Payment Status</th>
+                                        <th className="px-3 py-2 font-bold text-center">Deposit Status</th>
                                         <th className="px-3 py-2 font-bold">Payment Method</th>
                                         <th className="px-3 py-2 font-bold text-right">Amount</th>
                                         <th className="px-3 py-2 font-bold text-center">Audit Status</th>
@@ -1615,6 +1662,34 @@ export const SalesPage: React.FC = () => {
                                             >
                                               {sale.status}
                                             </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+                                            {canAdd && sale.auditStatus !== 'Verified' ? (
+                                              <select
+                                                value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                                onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
+                                                className={cn(
+                                                  'px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase cursor-pointer focus:outline-none focus:ring-1 transition-all',
+                                                  (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:ring-emerald-500'
+                                                    : 'bg-slate-100 text-slate-700 border-slate-300 focus:ring-slate-400'
+                                                )}
+                                              >
+                                                <option value="Deposited">Deposited</option>
+                                                <option value="Not Deposited">Not Deposited</option>
+                                              </select>
+                                            ) : (
+                                              <span
+                                                className={cn(
+                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                                                  (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                    : 'bg-slate-100 text-slate-700 border-slate-300'
+                                                )}
+                                              >
+                                                {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                              </span>
+                                            )}
                                           </td>
                                           <td className="px-3 py-2 text-muted-fg font-medium">
                                             {sale.paymentMethod || 'Cash'}
@@ -1704,38 +1779,42 @@ export const SalesPage: React.FC = () => {
           <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full table-fixed min-w-[940px]">
             <colgroup>
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '15%' }} />
+              <col style={{ width: showCompanyColumn ? '10%' : '12%' }} />
+              {showCompanyColumn && <col style={{ width: '13%' }} />}
+              <col style={{ width: '10%' }} />
+              <col style={{ width: showCompanyColumn ? '18%' : '20%' }} />
               <col style={{ width: '11%' }} />
-              <col style={{ width: '21%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
                 {showCompanyColumn && (
-                  <TableHead className="w-[15%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="w-[13%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                     COMPANY
                   </TableHead>
                 )}
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
                 </TableHead>
-                <TableHead className="w-[21%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[18%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  DEPOSIT STATUS
+                </TableHead>
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   {tableTab === 'Deposit' ? 'DEPOSITED' : 'DEPOSIT'}
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
                 <TableHead className="w-[8%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -1746,11 +1825,11 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 9 : 8} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showCompanyColumn ? 8 : 7}
+                    colSpan={showCompanyColumn ? 9 : 8}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1934,8 +2013,41 @@ export const SalesPage: React.FC = () => {
                         </div>
                       </TableCell>
 
+                      {/* 4b. Deposit Status */}
+                      <TableCell
+                        className="w-[11%] px-3.5 py-3.5 text-xs text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {canAdd && sale.auditStatus !== 'Verified' ? (
+                          <select
+                            value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                            onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
+                            className={cn(
+                              'px-2.5 py-1 rounded-full text-2xs font-bold border tracking-wide uppercase cursor-pointer focus:outline-none focus:ring-1 transition-all',
+                              (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:ring-emerald-500'
+                                : 'bg-slate-100 text-slate-700 border-slate-300 focus:ring-slate-400'
+                            )}
+                          >
+                            <option value="Deposited">Deposited</option>
+                            <option value="Not Deposited">Not Deposited</option>
+                          </select>
+                        ) : (
+                          <span
+                            className={cn(
+                              'inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                              (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : 'bg-slate-100 text-slate-700 border-slate-300'
+                            )}
+                          >
+                            {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                          </span>
+                        )}
+                      </TableCell>
+
                       {/* 5. Deposit */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-emerald-600">
+                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-emerald-600">
                         {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
                       </TableCell>
 
@@ -2255,6 +2367,30 @@ export const SalesPage: React.FC = () => {
           </div>,
           document.body
         )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={cn(
+            'fixed bottom-6 right-6 z-50 p-4 rounded-2xl text-white shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200 max-w-md',
+            toast.type === 'error' ? 'bg-rose-700' : 'bg-emerald-700'
+          )}
+        >
+          {toast.type === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-rose-200 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+          )}
+          <span className="text-xs sm:text-sm font-semibold">{toast.message}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="p-1 rounded-lg hover:bg-white/20 text-white ml-2 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

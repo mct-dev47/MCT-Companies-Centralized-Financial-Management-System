@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
 from app.models.company import Company
-from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut
+from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -82,6 +82,18 @@ def get_sales(
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    # Normalize FastAPI Query parameters if called directly in tests/python code
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+
     is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
@@ -132,6 +144,8 @@ def get_sales(
                 category_id=row.get("category_id"),
                 category_name=cat_map.get(row.get("category_id")) or "None",
                 payment_method=row.get("payment_method"),
+                payment_status=row.get("payment_status") or "Paid",
+                deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
                 transaction_date=row.get("transaction_date"),
                 cheque_no=row.get("cheque_number") or row.get("cheque_no") or row.get("reference_no"),
                 amount=row.get("amount") or 0.0,
@@ -190,6 +204,8 @@ def get_sales(
                 category_id=sale.category_id,
                 category_name=cat_name or "None",
                 payment_method=sale.payment_method,
+                payment_status=sale.payment_status or "Paid",
+                deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
                 transaction_date=sale.transaction_date,
                 cheque_no=sale.cheque_no,
                 amount=sale.amount,
@@ -245,6 +261,18 @@ def get_sales_daily_summary(
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    # Normalize FastAPI Query parameters if called directly in tests/python code
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+
     is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
@@ -293,6 +321,7 @@ def get_sales_daily_summary(
                 "particulars": r.get("particulars") or r.get("description") or "",
                 "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
                 "audit_status": r.get("audit_status") or "Pending Audit",
+                "deposit_status": r.get("deposit_status"),
             })
     except HTTPException:
         raise
@@ -332,6 +361,7 @@ def get_sales_daily_summary(
                 "particulars": s.particulars or "",
                 "cheque_no": s.cheque_no or "",
                 "audit_status": s.audit_status or "Pending Audit",
+                "deposit_status": s.deposit_status,
             })
 
     # Group by date
@@ -358,9 +388,16 @@ def get_sales_daily_summary(
                 continue
 
         amt = Decimal(str(r["amount"] or 0))
-        realized = compute_paid_amount_from_particulars(parts, amt)
+        dep_raw = r.get("deposit_status")
+        # In Scenario A: Only records marked 'Deposited' count toward realized/deposited cash
+        if dep_raw is not None and str(dep_raw).strip():
+            is_deposited = str(dep_raw).strip().lower() == "deposited"
+        else:
+            is_deposited = True
 
-        if is_deposit_view and realized <= Decimal("0.00"):
+        realized = compute_paid_amount_from_particulars(parts, amt) if is_deposited else Decimal("0.00")
+
+        if is_deposit_view and not is_deposited:
             continue
 
         gross = realized if is_deposit_view else amt
@@ -450,6 +487,8 @@ def create_sale(
             "company_id": target_company_id,
             "category_id": resolved_category_id,
             "payment_method": payment_method_str,
+            "payment_status": sale_in.payment_status or "Paid",
+            "deposit_status": sale_in.deposit_status or "Not Deposited",
             "transaction_date": sale_in.transaction_date.isoformat(),
             "cheque_number": cheque,
             "amount": float(sale_in.amount),
@@ -484,6 +523,8 @@ def create_sale(
                 company_id=target_company_id,
                 category_id=resolved_category_id,
                 payment_method=payment_method_str,
+                payment_status=sale_in.payment_status or "Paid",
+                deposit_status=sale_in.deposit_status or "Not Deposited",
                 transaction_date=sale_in.transaction_date,
                 cheque_no=cheque,
                 amount=sale_in.amount,
@@ -547,6 +588,8 @@ def create_sale(
             category_id=created_row.get("category_id"),
             category_name=category_name,
             payment_method=payment_method_str,
+            payment_status=created_row.get("payment_status") or sale_in.payment_status or "Paid",
+            deposit_status=created_row.get("deposit_status") or sale_in.deposit_status or "Not Deposited",
             transaction_date=created_row.get("transaction_date"),
             cheque_no=created_row.get("cheque_number"),
             amount=created_row.get("amount"),
@@ -567,6 +610,8 @@ def create_sale(
             company_id=target_company.company_id,
             category_id=sale_in.category_id,
             payment_method=(sale_in.payment_method or "").strip() or None,
+            payment_status=sale_in.payment_status or "Paid",
+            deposit_status=sale_in.deposit_status or "Not Deposited",
             transaction_date=sale_in.transaction_date,
             cheque_no=cheque,
             amount=sale_in.amount,
@@ -629,6 +674,8 @@ def create_sale(
             category_id=sale.category_id,
             category_name="None",
             payment_method=sale.payment_method,
+            payment_status=sale.payment_status or "Paid",
+            deposit_status=sale.deposit_status or "Not Deposited",
             transaction_date=sale.transaction_date,
             cheque_no=sale.cheque_no,
             amount=sale.amount,
@@ -661,6 +708,8 @@ def get_sale(
                     category_id=row.get("category_id"),
                     category_name=cat_map.get(row.get("category_id")) or "None",
                     payment_method=row.get("payment_method"),
+                    payment_status=row.get("payment_status") or "Paid",
+                    deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
                     transaction_date=row.get("transaction_date"),
                     cheque_no=row.get("cheque_number") or row.get("cheque_no"),
                     amount=row.get("amount") or 0.0,
@@ -696,6 +745,8 @@ def get_sale(
         category_id=sale.category_id,
         category_name=cat_name or "None",
         payment_method=sale.payment_method,
+        payment_status=sale.payment_status or "Paid",
+        deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
@@ -726,6 +777,9 @@ def update_sale(
     old_particulars = None
     old_amount = None
     existing_payment_method = None
+    existing_payment_status = None
+    existing_deposit_status = None
+    existing_cheque_no = None
     sync_svc = SalesReceivablesSyncService(db)
     use_sb = sync_svc._use_supabase()
     client = None
@@ -735,7 +789,7 @@ def update_sale(
             client = get_supabase_admin_client()
             res = (
                 client.table("sales")
-                .select("company_id, audit_status, particulars, amount, payment_method")
+                .select("company_id, audit_status, particulars, amount, payment_method, payment_status, deposit_status, cheque_number")
                 .eq("sales_id", sales_id)
                 .limit(1)
                 .execute()
@@ -747,6 +801,9 @@ def update_sale(
                 old_particulars = sb_existing.get("particulars")
                 old_amount = sb_existing.get("amount")
                 existing_payment_method = sb_existing.get("payment_method")
+                existing_payment_status = sb_existing.get("payment_status")
+                existing_deposit_status = sb_existing.get("deposit_status")
+                existing_cheque_no = sb_existing.get("cheque_number") or sb_existing.get("cheque_no")
         except Exception:
             pass
 
@@ -760,6 +817,12 @@ def update_sale(
             old_amount = existing_local.amount
         if existing_payment_method is None:
             existing_payment_method = existing_local.payment_method
+        if existing_payment_status is None:
+            existing_payment_status = existing_local.payment_status
+        if existing_deposit_status is None:
+            existing_deposit_status = existing_local.deposit_status
+        if existing_cheque_no is None:
+            existing_cheque_no = existing_local.cheque_no
 
     if existing_company_id:
         check_company_access(current_user, existing_company_id)
@@ -770,7 +833,59 @@ def update_sale(
             detail="This sale has been Verified by an Auditor and is locked as read-only.",
         )
 
-    update_payload = {}
+    new_payment_status = sale_in.payment_status if sale_in.payment_status is not None else (existing_payment_status or "Paid")
+    new_payment_method = (
+        (sale_in.payment_method or "").strip()
+        if sale_in.payment_method is not None
+        else (existing_payment_method or "")
+    )
+    cheque = sale_in.cheque_no if sale_in.cheque_no is not None else sale_in.chequeNo
+    new_cheque_no = (
+        cheque.strip()
+        if cheque is not None
+        else (existing_cheque_no or "")
+    )
+
+    # AC-5: If payment status reverts to Unpaid or non-cheque Pending, auto reset deposit status to 'Not Deposited'
+    is_pending_non_cheque = (new_payment_status == "Pending" and (new_payment_method.lower() != "cheque" or not new_cheque_no))
+    if new_payment_status == "Unpaid" or is_pending_non_cheque:
+        if sale_in.deposit_status is not None and sale_in.deposit_status == "Deposited":
+            if new_payment_status == "Unpaid":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+                )
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+        else:
+            new_deposit_status = "Not Deposited"
+    else:
+        new_deposit_status = (
+            sale_in.deposit_status
+            if sale_in.deposit_status is not None
+            else (existing_deposit_status or "Deposited")
+        )
+
+    # Invariant safety enforcement (AC-3, AC-4)
+    if new_payment_status == "Unpaid" and new_deposit_status == "Deposited":
+        raise HTTPException(
+            status_code=422,
+            detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+        )
+    if new_payment_status == "Pending" and new_deposit_status == "Deposited":
+        if new_payment_method.lower() != "cheque" or not new_cheque_no:
+            raise HTTPException(
+                status_code=422,
+                detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+            )
+
+    update_payload = {
+        "payment_status": new_payment_status,
+        "deposit_status": new_deposit_status,
+    }
     if sale_in.transaction_date:
         update_payload["transaction_date"] = sale_in.transaction_date.isoformat()
     if sale_in.amount is not None:
@@ -778,7 +893,6 @@ def update_sale(
     parts = sale_in.particulars or sale_in.description
     if parts is not None:
         update_payload["particulars"] = parts.strip()
-    cheque = sale_in.cheque_no if sale_in.cheque_no is not None else sale_in.chequeNo
     if cheque is not None:
         update_payload["cheque_number"] = cheque.strip() if cheque.strip() else None
 
@@ -837,6 +951,10 @@ def update_sale(
             sale.category_id = update_payload["category_id"]
         if "payment_method" in update_payload:
             sale.payment_method = update_payload["payment_method"]
+        if "payment_status" in update_payload:
+            sale.payment_status = update_payload["payment_status"]
+        if "deposit_status" in update_payload:
+            sale.deposit_status = update_payload["deposit_status"]
         db.commit()
         db.refresh(sale)
 
@@ -899,6 +1017,8 @@ def update_sale(
             category_id=updated_row.get("category_id"),
             category_name=cat_map.get(updated_row.get("category_id")) or "None",
             payment_method=updated_row.get("payment_method"),
+            payment_status=updated_row.get("payment_status") or new_payment_status,
+            deposit_status=updated_row.get("deposit_status") or new_deposit_status,
             transaction_date=updated_row.get("transaction_date"),
             cheque_no=updated_row.get("cheque_number") or updated_row.get("cheque_no"),
             amount=updated_row.get("amount"),
@@ -924,6 +1044,8 @@ def update_sale(
         category_id=sale.category_id,
         category_name=category.name if category else "None",
         payment_method=sale.payment_method,
+        payment_status=sale.payment_status or "Paid",
+        deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
@@ -932,6 +1054,114 @@ def update_sale(
         updated_at=sale.updated_at,
         **audit_fields(sale)
     )
+
+
+@router.patch("/{sales_id}/deposit-status", response_model=SaleOut, summary="Quick toggle sale deposit status")
+def update_sale_deposit_status(
+    sales_id: int,
+    deposit_in: DepositStatusUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_deposit_status = deposit_in.deposit_status
+
+    existing_company_id = None
+    existing_audit_status = None
+    existing_payment_status = None
+    existing_payment_method = None
+    existing_cheque_no = None
+
+    sync_svc = SalesReceivablesSyncService(db)
+    use_sb = sync_svc._use_supabase()
+    client = None
+
+    if use_sb:
+        try:
+            client = get_supabase_admin_client()
+            res = (
+                client.table("sales")
+                .select("company_id, audit_status, payment_status, payment_method, cheque_number, cheque_no")
+                .eq("sales_id", sales_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                sb_existing = res.data[0]
+                existing_company_id = sb_existing.get("company_id")
+                existing_audit_status = sb_existing.get("audit_status")
+                existing_payment_status = sb_existing.get("payment_status")
+                existing_payment_method = sb_existing.get("payment_method")
+                existing_cheque_no = sb_existing.get("cheque_number") or sb_existing.get("cheque_no")
+        except Exception:
+            pass
+
+    existing_local = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    if existing_local:
+        existing_company_id = existing_company_id or existing_local.company_id
+        existing_audit_status = existing_audit_status or existing_local.audit_status
+        existing_payment_status = existing_payment_status or existing_local.payment_status
+        existing_payment_method = existing_payment_method or existing_local.payment_method
+        existing_cheque_no = existing_cheque_no or existing_local.cheque_no
+
+    if not existing_company_id and not existing_local:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    check_company_access(current_user, existing_company_id)
+
+    if (existing_audit_status or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This sale has been Verified by an Auditor and is locked as read-only.",
+        )
+
+    cur_payment_status = (existing_payment_status or "Paid").strip()
+    cur_payment_method = (existing_payment_method or "").strip().lower()
+    cur_cheque_no = (existing_cheque_no or "").strip()
+
+    # AC-3 and AC-4 validation
+    if target_deposit_status == "Deposited":
+        if cur_payment_status == "Unpaid":
+            raise HTTPException(
+                status_code=422,
+                detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+            )
+        elif cur_payment_status == "Pending":
+            if cur_payment_method != "cheque" or not cur_cheque_no:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+
+    # Persist update in Supabase
+    if use_sb and client is not None:
+        try:
+            client.table("sales").update({"deposit_status": target_deposit_status}).eq("sales_id", sales_id).execute()
+        except Exception as e:
+            pass
+
+    if existing_local:
+        existing_local.deposit_status = target_deposit_status
+        db.commit()
+        db.refresh(existing_local)
+
+    ws_manager.broadcast_sync(
+        {
+            "type": "SALES_UPDATED",
+            "company_id": existing_company_id,
+            "payload": {"sale_id": sales_id, "action": "deposit_status_updated", "deposit_status": target_deposit_status},
+        }
+    )
+
+    log_transaction(
+        db, AuditAction.SALE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=sales_id, record_type="sale",
+        extra={"deposit_status": target_deposit_status},
+    )
+
+    return get_sale(sales_id, current_user, db)
 
 
 @router.patch("/{sales_id}/audit", response_model=SaleOut, summary="Save the audit review of a sale (Auditor only)")

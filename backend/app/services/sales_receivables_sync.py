@@ -634,6 +634,28 @@ class SalesReceivablesSyncService:
             if len(lines) <= 1 and rec.transaction_date:
                 sb_payload["transaction_date"] = rec.transaction_date.isoformat()
 
+            if lines:
+                statuses = [ln.status for ln in lines if ln.status]
+                if statuses and all(s == "Paid" for s in statuses):
+                    derived_payment_status = "Paid"
+                elif statuses and all(s == "Unpaid" for s in statuses):
+                    derived_payment_status = "Unpaid"
+                else:
+                    derived_payment_status = "Pending"
+            else:
+                derived_payment_status = "Paid"
+
+            sb_payload["payment_status"] = derived_payment_status
+            if local_sale is not None:
+                local_sale.payment_status = derived_payment_status
+
+            sale_pm = ((sb_row.get("payment_method") if sb_row else None) or (local_sale.payment_method if local_sale else "") or "").strip().lower()
+            sale_chq = ((sb_row.get("cheque_number") if sb_row else None) or (local_sale.cheque_no if local_sale else "") or "").strip()
+            if derived_payment_status == "Unpaid" or (derived_payment_status == "Pending" and (sale_pm != "cheque" or not sale_chq)):
+                sb_payload["deposit_status"] = "Not Deposited"
+                if local_sale is not None:
+                    local_sale.deposit_status = "Not Deposited"
+
             if client is not None:
                 try:
                     client.table("sales").update(sb_payload).eq("sales_id", sale_id).execute()
@@ -897,10 +919,26 @@ class SalesReceivablesSyncService:
 
         if particulars_rewritten and new_lines:
             normalized_particulars = format_sale_lines(new_lines)
+            statuses = [ln.status for ln in new_lines if ln.status]
+            if statuses and all(s == "Paid" for s in statuses):
+                derived_ps = "Paid"
+            elif statuses and all(s == "Unpaid" for s in statuses):
+                derived_ps = "Unpaid"
+            else:
+                derived_ps = "Pending"
+            sync_payload: Dict[str, Any] = {
+                "particulars": normalized_particulars,
+                "payment_status": derived_ps,
+            }
+
+            chk_pm = (new_payment_method or "").strip().lower()
+            if derived_ps == "Unpaid" or (derived_ps == "Pending" and chk_pm != "cheque"):
+                sync_payload["deposit_status"] = "Not Deposited"
+
             client = self._get_supabase_client()
             if client is not None:
                 try:
-                    client.table("sales").update({"particulars": normalized_particulars}).eq(
+                    client.table("sales").update(sync_payload).eq(
                         "sales_id", sales_id
                     ).execute()
                 except Exception:
@@ -908,6 +946,9 @@ class SalesReceivablesSyncService:
             local_sale = self.db.query(Sale).filter(Sale.sales_id == sales_id).first()
             if local_sale is not None:
                 local_sale.particulars = normalized_particulars
+                local_sale.payment_status = derived_ps
+                if "deposit_status" in sync_payload:
+                    local_sale.deposit_status = sync_payload["deposit_status"]
                 self.db.commit()
 
         self.broadcast_sync_events(
