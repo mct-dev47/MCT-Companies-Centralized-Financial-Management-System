@@ -58,6 +58,7 @@ import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { getPaidDepositForSale, getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import { websocketService } from '@/services/websocketService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import { cn } from '@/lib/utils'
@@ -893,7 +894,7 @@ export const TransactionPage: React.FC = () => {
       setDiscrepancyReason('')
       setActiveMenuTx(null)
     } catch (err: any) {
-      alert(err?.message || 'Failed to flag audit discrepancy. Please try again.')
+      notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -997,7 +998,7 @@ export const TransactionPage: React.FC = () => {
   const handleExportPdf = () => {
     const printWindow = window.open('', '_blank')
     if (!printWindow) {
-      alert('Pop-up blocked. Please allow pop-ups for this site to export PDF.')
+      notifyWarning('Pop-up blocked. Please allow pop-ups for this site to export PDF.')
       return
     }
 
@@ -1900,14 +1901,14 @@ export const TransactionPage: React.FC = () => {
 
       {/* 8. Quick Discrepancy Modal from Action Menu */}
       <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
-        <DialogContent className="max-w-[440px] rounded-2xl p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="text-left pb-2 border-b border-stroke/20 pr-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
-                <AlertCircle className="w-4 h-4 text-rose-600" />
+        <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-rose-600" />
               </div>
               <div>
-                <DialogTitle className="text-base font-bold text-focus leading-tight">
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
                   Flag Audit Discrepancy
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-fg mt-0.5">
@@ -1927,7 +1928,7 @@ export const TransactionPage: React.FC = () => {
                 value={discrepancyReason}
                 onChange={(e) => setDiscrepancyReason(e.target.value)}
                 placeholder="e.g. Voucher amount does not match the attached receipt..."
-                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-1 focus:ring-rose-500 font-normal leading-relaxed resize-none"
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 font-normal leading-relaxed resize-none"
               />
               {!discrepancyReason.trim() && (
                 <p className="text-[10px] text-muted-fg leading-tight">
@@ -1936,7 +1937,7 @@ export const TransactionPage: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/20">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
               <Button
                 type="button"
                 variant="outline"
@@ -1946,7 +1947,7 @@ export const TransactionPage: React.FC = () => {
                   setDiscrepancyReason('')
                   setActiveMenuTx(null)
                 }}
-                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+                className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
               >
                 Cancel
               </Button>
@@ -1954,7 +1955,7 @@ export const TransactionPage: React.FC = () => {
                 type="button"
                 disabled={!discrepancyReason.trim() || isSubmittingAudit}
                 onClick={handleConfirmQuickDiscrepancy}
-                className="h-9 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
                 {isSubmittingAudit ? (
                   <>

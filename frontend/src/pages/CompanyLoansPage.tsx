@@ -1,4 +1,3 @@
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { Building2, Download, Search, Tag, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -16,6 +15,7 @@ import {
   BaseModal,
   DropdownFilter,
   ErrorBanner,
+  StatusBadge,
   TableEmptyState,
   TablePagination,
   TableSkeleton,
@@ -315,9 +315,7 @@ export const CompanyLoansPage: React.FC = () => {
                       {group.interestDisplay}
                     </TableCell>
                     <TableCell>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                        {group.paymentStatus}
-                      </span>
+                      <StatusBadge status={group.paymentStatus} />
                     </TableCell>
                   </TableRow>
                 ))

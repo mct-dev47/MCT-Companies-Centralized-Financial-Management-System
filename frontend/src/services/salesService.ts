@@ -23,6 +23,9 @@ export interface SalesItem {
   company: string
   items?: ParticularItem[]
   status: 'Paid' | 'Pending' | 'Overdue' | 'On hold' | 'Unpaid'
+  payment_status?: 'Paid' | 'Pending' | 'Unpaid'
+  depositStatus?: 'Deposited' | 'Not Deposited'
+  deposit_status?: 'Deposited' | 'Not Deposited'
   auditStatus: 'Verified' | 'Pending Audit' | 'Flagged'
   auditedBy?: string
   auditNotes?: string
@@ -52,6 +55,9 @@ export interface NewSalesInput {
   paymentMethod?: string // payment method (GCash, Cash, etc.)
   company: string
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
+  payment_status?: 'Paid' | 'Pending' | 'Unpaid'
+  depositStatus?: 'Deposited' | 'Not Deposited'
+  deposit_status?: 'Deposited' | 'Not Deposited'
   items?: ParticularItem[]
   bankAccountId?: string
   createdBy?: string
@@ -82,6 +88,17 @@ function mapBackendSaleToItem(b: any): SalesItem {
   const parsedItems = parseParticulars(particulars, null, amt)
   const derivedStatus = deriveRecordStatusFromParticulars(parsedItems, 'Paid')
 
+  const rawPaymentStatus = b.payment_status || (derivedStatus === 'Overdue' ? 'Unpaid' : derivedStatus)
+  const resolvedPaymentStatus: 'Paid' | 'Pending' | 'Unpaid' =
+    rawPaymentStatus === 'Unpaid' ? 'Unpaid' : rawPaymentStatus === 'Pending' ? 'Pending' : 'Paid'
+
+  const resolvedDepositStatus: 'Deposited' | 'Not Deposited' =
+    b.deposit_status === 'Deposited' || b.depositStatus === 'Deposited'
+      ? 'Deposited'
+      : (b.deposit_status === 'Not Deposited' || b.depositStatus === 'Not Deposited')
+      ? 'Not Deposited'
+      : (resolvedPaymentStatus === 'Paid' ? 'Deposited' : 'Not Deposited')
+
   const saleId = String(b.sales_id)
   const resolvedAuditStatus: 'Verified' | 'Pending Audit' | 'Flagged' =
     b.audit_status === 'Verified' || b.audit_status === 'Flagged' ? b.audit_status : 'Pending Audit'
@@ -101,6 +118,9 @@ function mapBackendSaleToItem(b: any): SalesItem {
     company: b.company_name || 'MCT Kitchen',
     items: parsedItems,
     status: derivedStatus,
+    payment_status: resolvedPaymentStatus,
+    depositStatus: resolvedDepositStatus,
+    deposit_status: resolvedDepositStatus,
     auditStatus: resolvedAuditStatus,
     auditedBy: b.audited_by || undefined,
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
@@ -239,6 +259,8 @@ export const salesService = {
       description: input.particulars,
       category: input.category && input.category !== 'None' ? input.category : null,
       payment_method: input.paymentMethod || null,
+      payment_status: input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status) || 'Paid',
+      deposit_status: input.deposit_status || input.depositStatus || undefined,
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
     }
@@ -360,6 +382,12 @@ export const salesService = {
     if (input.paymentMethod !== undefined)
       payload.payment_method = input.paymentMethod || null
     if (input.chequeNo !== undefined) payload.chequeNo = input.chequeNo
+    if (input.payment_status !== undefined || input.status !== undefined) {
+      payload.payment_status = input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status)
+    }
+    if (input.deposit_status !== undefined || input.depositStatus !== undefined) {
+      payload.deposit_status = input.deposit_status || input.depositStatus
+    }
 
     try {
       const token =
@@ -444,6 +472,52 @@ export const salesService = {
     })
     this.invalidateCache()
     return inMemorySales.find((s) => s.id === id)!
+  },
+
+  async updateSaleDepositStatus(
+    id: string,
+    depositStatus: 'Deposited' | 'Not Deposited'
+  ): Promise<SalesItem> {
+    this.invalidateCache()
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/sales/${id}/deposit-status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ deposit_status: depositStatus }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendSaleToItem(updated)
+      inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      let errorMsg = 'Failed to update deposit status.'
+      if (typeof errData.detail === 'string') {
+        errorMsg = errData.detail
+      } else if (Array.isArray(errData.detail)) {
+        errorMsg = errData.detail
+          .map((d: any) => {
+            const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+            return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+          })
+          .join('; ')
+      } else if (errData.detail && typeof errData.detail === 'object') {
+        errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+      } else if (typeof errData.message === 'string') {
+        errorMsg = errData.message
+      }
+      throw new Error(errorMsg)
+    }
   },
 
   async deleteSale(id: string): Promise<boolean> {

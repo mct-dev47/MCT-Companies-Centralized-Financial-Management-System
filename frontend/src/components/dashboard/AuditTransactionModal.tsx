@@ -30,7 +30,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
-import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { normalizeDateToYYYYMMDD, formatToYYYYMMDD } from '@/utils/dateUtils'
+import { notifyError } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -180,7 +181,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     category?: string
   }>({})
 
-  const todayIso = React.useMemo(() => new Date().toISOString().split('T')[0], [])
+  const todayIso = React.useMemo(() => formatToYYYYMMDD(new Date()), [])
 
   // Fetch categories from database
   React.useEffect(() => {
@@ -467,7 +468,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       }
     } catch (err: any) {
       console.error('Failed to mark transaction as audited:', err)
-      alert(err?.message || 'Failed to update audit review. Please try again.')
+      notifyError(err, 'Failed to update audit review. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -547,7 +548,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       setDiscrepancyReason('')
     } catch (err: any) {
       console.error('Failed to flag discrepancy:', err)
-      alert(err?.message || 'Failed to flag audit discrepancy. Please try again.')
+      notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -616,7 +617,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       }
     } catch (err: any) {
       console.error('Failed to reset audit status:', err)
-      alert(err?.message || 'Failed to reset audit status. Please try again.')
+      notifyError(err, 'Failed to reset audit status. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
     }
@@ -690,7 +691,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setError('')
     const errors: { date?: string; particulars?: string; amount?: string; category?: string } = {}
 
-    const todayIso = new Date().toISOString().split('T')[0]
+    const todayIso = formatToYYYYMMDD(new Date())
     if (!date.trim()) {
       errors.date = 'Date is required.'
     } else if (date.trim() > todayIso) {
@@ -838,26 +839,26 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         )}
       >
         {/* Header */}
-        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-7">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="w-8 h-8 rounded-lg bg-[#0B0F2B] text-white flex items-center justify-center shrink-0 shadow-xs">
+        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
               {isEditing ? (
-                <Pencil className="w-4 h-4 text-white" />
+                <Pencil className="w-5 h-5 text-white" />
               ) : (
-                <FileText className="w-4 h-4 text-white" />
+                <FileText className="w-5 h-5 text-white" />
               )}
             </div>
             <div>
-              <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">
+              <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">
                 {isEditing ? 'Edit Transaction Details' : (isAdmin ? 'Audit Transaction Details' : 'Transaction Details')}
               </DialogTitle>
+              <DialogDescription className="text-xs text-muted-fg font-normal mt-0.5">
+                {isEditing
+                  ? 'Update the transaction details directly below, then save changes'
+                  : (isAdmin ? 'Complete audit record and transaction details' : 'Complete transaction record')}
+              </DialogDescription>
             </div>
           </div>
-          <DialogDescription className="text-[11px] text-muted-fg font-normal mt-1">
-            {isEditing
-              ? 'Update the transaction details directly below, then save changes'
-              : (isAdmin ? 'Complete audit record and transaction details' : 'Complete transaction record')}
-          </DialogDescription>
         </DialogHeader>
 
         {/* Content Body */}
@@ -1636,14 +1637,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       )}
       {/* Modal: Flag Discrepancy Reason */}
       <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
-        <DialogContent className="max-w-[440px] rounded-2xl p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="text-left pb-2 border-b border-stroke/20 pr-6">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
-                <AlertCircle className="w-4 h-4 text-rose-600" />
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-rose-600" />
               </div>
               <div>
-                <DialogTitle className="text-base font-bold text-focus leading-tight">
+                <DialogTitle className="text-lg font-bold text-focus leading-tight">
                   Flag Audit Discrepancy
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-fg mt-0.5">

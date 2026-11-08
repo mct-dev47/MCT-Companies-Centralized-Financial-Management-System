@@ -38,6 +38,8 @@ class Sale(Base):
     company_id = Column(Integer, nullable=False, index=True)
     category_id = Column(Integer, ForeignKey("category.category_id", ondelete="SET NULL"), nullable=True)
     payment_method = Column(String(100), nullable=True)  # e.g. GCash, Cash, Cheque, Bank Transfer, etc.
+    payment_status = Column(String(50), nullable=False, default="Paid", server_default="Paid")
+    deposit_status = Column(String(50), nullable=False, default="Not Deposited", server_default="Not Deposited")
     transaction_date = Column(Date, nullable=False)
     cheque_no = Column("cheque_number", String(100), nullable=True)
     cheque_number = synonym("cheque_no")

@@ -7,8 +7,12 @@ import type { ExpenseItem } from '@/services/expenseService'
 import type { UtangSale } from '@/services/receivablesStore'
 import { normalizeParticularStatus, parseParticulars } from '@/utils/particularsUtils'
 
-/** Money actually received for a sale from its [Paid] particulars alone. */
+/** Money actually received for a sale from its [Paid] particulars alone, only if marked Deposited. */
 export function getPaidDepositForSale(sale: SalesItem): number {
+  const isDeposited = (sale.depositStatus || sale.deposit_status) === 'Deposited'
+  if (!isDeposited) {
+    return 0
+  }
   const items = parseParticulars(sale.particulars, sale.items, sale.deposit)
   if (items.length > 0) {
     const fallback = normalizeParticularStatus(sale.status, 'Paid')
@@ -21,17 +25,22 @@ export function getPaidDepositForSale(sale: SalesItem): number {
 }
 
 /**
- * Realized cash collected for a sale (Spec 0028 AC-5):
+ * Realized cash collected for a sale (Spec 0028 AC-5 & Spec 0038 Scenario A):
+ * - If not deposited to bank yet, returns 0 so it does not count in Total Cash until banked.
  * - For standalone utang records without a linked `sales` row, returns `amount_paid`.
  * - For `sales` rows without linked receivables, returns `getPaidDepositForSale(sale)`.
  * - For `sales` rows with linked receivables, sums [Paid] lines NOT tracked by a linked
- *   receivable PLUS `amount_paid` across all linked receivables, so partial payments
- *   count toward Total Cash immediately while [Paid] receivable lines are never double-counted.
+ *   receivable PLUS `amount_paid` across all linked receivables.
  */
 export function getRealizedCashForSale(
   sale: SalesItem,
   linkedReceivables?: UtangSale[]
 ): number {
+  const isDeposited = (sale.depositStatus || sale.deposit_status) === 'Deposited'
+  if (!isDeposited) {
+    return 0
+  }
+
   const saleWithMeta = sale as SalesItem & {
     isStandaloneUtang?: boolean
     amount_paid?: number

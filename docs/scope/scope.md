@@ -16,6 +16,7 @@
 | Transaction Sheet Validation, Company Payment Methods with Service Fees, and Supervisor View Cleanups | in-progress | [0035](../specs/0035-sales-validation-gcash-fee-supervisor-cleanups.md) |
 | Transaction Sheet Particulars Scoping, Default Rendered Fee, Humanized Validation, and Keyboard Flow | in-progress | [0036](../specs/0036-transaction-particulars-scope-and-keyboard-flow.md) |
 | Transaction Sheet Fee Zero Handling, Debtor Pre fill on Edit, Deposit Subtab Filtering, and Clean Particulars Start | completed | [0037](../specs/0037-sales-expense-add-and-records-refinements.md) |
+| Sales Deposit Status and Payment Validation Rules | completed | [0038](../specs/0038-sales-deposit-status-and-validation.md) |
 | Lending Audit Workflow and Visibility | in-progress | [0031](../specs/0031-lending-audit-workflow-and-visibility/index.md) |
 | Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
@@ -215,6 +216,22 @@
   - [x] Milestone 4: Clean company particulars test data and empty state (AC-6)
 - [ ] Verify it: /check verify 0037
 - [ ] Test it: /test 0037
+
+### Sales Deposit Status and Payment Validation Rules
+**Status**: in-progress
+**Spec**: [0038](../specs/0038-sales-deposit-status-and-validation.md)
+**Intent**: Introduce a deposit status column for sales records and strictly enforce valid state combinations between payment status and deposit status across the FastAPI backend and React frontend with safe historical data backfills.
+**Done when**: Sales persist deposit_status ('Deposited', 'Not Deposited'), Paid sales allow both statuses, Unpaid sales lock strictly to 'Not Deposited', Pending sales allow 'Deposited' only for Cheque with cheque number, backend routes and Pydantic schemas validate combinations with 422 errors, sales table shows deposit status column with inline dropdown and Add Transaction sheet provides synchronized deposit status controls, and past records receive safe backfills.
+
+- [x] Design it (spec): [0038](../specs/0038-sales-deposit-status-and-validation.md)
+- [x] Build it: /develop 0038 (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Backend models, migration, and safe backfill (AC-1, AC-7)
+  - [x] Milestone 2: Pydantic schemas and validation rules (AC-1, AC-2, AC-3, AC-4, AC-5)
+  - [x] Milestone 3: API endpoints and receivables sync invariants (AC-2, AC-3, AC-4, AC-5, AC-6)
+  - [x] Milestone 4: Frontend salesService, types, SalesPage column, and AddTransactionSheetPage controls (AC-1, AC-2, AC-3, AC-4, AC-6)
+  - [x] Milestone 5: Automated backend tests for all status combinations (AC-1, AC-2, AC-3, AC-4, AC-5)
+- [x] Verify it: /check verify 0038
+- [ ] Test it: /test 0038
 
 ### Lending Audit Workflow and Visibility
 **Status**: in-progress

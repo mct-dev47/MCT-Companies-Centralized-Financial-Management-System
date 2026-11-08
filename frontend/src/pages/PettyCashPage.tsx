@@ -32,6 +32,7 @@ import {
 import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
 import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -2456,15 +2457,21 @@ export const PettyCashPage: React.FC = () => {
 
       {/* Edit Top Up Request Modal */}
       <Dialog open={Boolean(editEntry)} onOpenChange={(open) => !open && setEditEntry(null)}>
-        <DialogContent className="sm:max-w-[640px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="pb-3 border-b border-stroke/20">
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Pencil className="w-5 h-5 text-primary" />
-              <span>Edit Petty Cash Request</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Update the requested amount or particulars before finance reviews it.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="pb-3 border-b border-stroke/30 text-left">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Pencil className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Edit Petty Cash Request
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Update the requested amount or particulars before finance reviews it.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {editEntry && (
@@ -2513,21 +2520,19 @@ export const PettyCashPage: React.FC = () => {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
                   onClick={() => setEditEntry(null)}
-                  className="h-9 px-3 text-xs"
+                  className="h-10 px-4 rounded-xl text-xs font-semibold"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
-                  size="sm"
                   disabled={isEditing}
-                  className="h-9 px-4 text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white"
+                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary hover:bg-primary-hover text-white"
                 >
                   {isEditing ? 'Saving…' : 'Save Changes'}
                 </Button>
@@ -2538,69 +2543,47 @@ export const PettyCashPage: React.FC = () => {
       </Dialog>
 
       {/* Delete Top Up Confirmation Modal */}
-      <Dialog
+      <ConfirmModal
         open={Boolean(deleteConfirmEntry)}
         onOpenChange={(open) => !open && setDeleteConfirmEntry(null)}
-      >
-        <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg font-bold text-focus">
-              Delete Petty Cash Request
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg font-normal">
-              Are you sure you want to delete this pending request? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {deleteError && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
-              {deleteError}
-            </div>
-          )}
-
-          {deleteConfirmEntry && (
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 my-2">
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Company:</span>
-                <span className="font-semibold text-focus">{deleteConfirmEntry.companyName}</span>
+        title="Delete Petty Cash Request"
+        description={
+          <>
+            Are you sure you want to delete this pending request? This action cannot be undone.
+            {deleteError && (
+              <div className="mt-2 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 text-left">
+                {deleteError}
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Particulars:</span>
-                <span className="font-medium text-focus truncate max-w-[200px]">
-                  {deleteConfirmEntry.description || '—'}
-                </span>
+            )}
+            {deleteConfirmEntry && (
+              <div className="mt-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 text-left">
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Company:</span>
+                  <span className="font-semibold text-focus">{deleteConfirmEntry.companyName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Particulars:</span>
+                  <span className="font-medium text-focus truncate max-w-[200px]">
+                    {deleteConfirmEntry.description || '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Amount:</span>
+                  <span className="font-bold text-rose-600">
+                    {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn)}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Amount:</span>
-                <span className="font-bold text-red-600">
-                  {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn)}
-                </span>
-              </div>
-            </div>
-          )}
-
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteConfirmEntry(null)}
-              className="h-9 px-3 rounded-lg text-xs"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="h-9 px-4 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs"
-            >
-              {isDeleting ? 'Deleting…' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+            )}
+          </>
+        }
+        confirmLabel="Delete"
+        loadingLabel="Deleting…"
+        variant="destructive"
+        action="delete"
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Top Up / Request Petty Cash Modal */}
       <TopUpPettyCashModal

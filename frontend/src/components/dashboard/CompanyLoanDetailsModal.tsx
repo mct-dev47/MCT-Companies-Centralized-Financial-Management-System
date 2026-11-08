@@ -62,7 +62,7 @@ export const CompanyLoanDetailsModal: React.FC<CompanyLoanDetailsModalProps> = (
         }
       case 'Partially Paid':
         return {
-          bg: 'bg-blue-50 text-blue-700 border-blue-200/80',
+          bg: 'bg-amber-50 text-amber-700 border-amber-200/80',
           icon: Clock,
           label: 'Partially Paid',
         }
@@ -87,13 +87,13 @@ export const CompanyLoanDetailsModal: React.FC<CompanyLoanDetailsModalProps> = (
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="rounded-[24px] sm:rounded-[28px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl sm:max-w-[820px] max-h-[85vh] overflow-y-auto">
+      <DialogContent className="rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl sm:max-w-[820px] max-h-[85vh] overflow-y-auto">
         {/* 1. Header */}
         <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0 shadow-xs">
-                <HandCoins className="w-5 h-5 text-[#960C01]" />
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                <HandCoins className="w-5 h-5 text-white" />
               </div>
               <div>
                 <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">

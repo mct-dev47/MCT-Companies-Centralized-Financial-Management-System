@@ -116,6 +116,20 @@ def init_db():
         from sqlalchemy import inspect as sqla_inspect, text
         inspector = sqla_inspect(engine)
         table_names = set(inspector.get_table_names())
+        if "sales" in table_names:
+            sales_cols = {col["name"] for col in inspector.get_columns("sales")}
+            if "payment_status" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN payment_status VARCHAR(50) DEFAULT 'Paid'"))
+            if "deposit_status" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_status VARCHAR(50) DEFAULT 'Not Deposited'"))
+            # Safe backfill (AC-7)
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
+                conn.execute(text("UPDATE sales SET deposit_status = 'Deposited' WHERE payment_status = 'Paid' AND (deposit_status IS NULL OR deposit_status = '' OR deposit_status = 'Not Deposited')"))
+                conn.execute(text("UPDATE sales SET deposit_status = 'Not Deposited' WHERE payment_status IN ('Unpaid', 'Pending')"))
+
         if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}
             if "balance" not in existing_cols:

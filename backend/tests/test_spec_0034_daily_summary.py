@@ -77,6 +77,7 @@ def test_sales_daily_summary_aggregation(client, db_session):
         amount=Decimal("1500.00"),
         particulars="Burger sales (Paid: 1500.00)",
         cheque_no="CHQ-001",
+        deposit_status="Deposited",
         audit_status="Verified",
     )
     sale2 = Sale(
@@ -86,6 +87,7 @@ def test_sales_daily_summary_aggregation(client, db_session):
         amount=Decimal("500.00"),
         particulars="Drinks (Paid: 500.00)",
         cheque_no="CHQ-002",
+        deposit_status="Deposited",
         audit_status="Verified",
     )
     sale3 = Sale(
