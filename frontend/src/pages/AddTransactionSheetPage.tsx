@@ -1070,9 +1070,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     CompanyParticular[]
   >([])
 
+  const effectiveParticularsCompany = React.useMemo(() => {
+    if (isAuditor) return assignedCompany
+    if (selectedCompany && selectedCompany !== 'All Companies') return selectedCompany
+    return assignedCompany || user?.assignedCompany || 'MCT Kitchen'
+  }, [isAuditor, selectedCompany, assignedCompany, user?.assignedCompany])
+
   React.useEffect(() => {
     let isMounted = true
-    const comp = isAuditor ? assignedCompany : selectedCompany
+    const comp = effectiveParticularsCompany
     if (!comp) return
 
     const txType = isSales ? 'Sales' : 'Expense'
@@ -1084,10 +1090,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return () => {
       isMounted = false
     }
-  }, [isAuditor, assignedCompany, selectedCompany, isSales])
+  }, [effectiveParticularsCompany, isSales])
 
   const handleSaveParticularToList = async (name: string) => {
-    const comp = isAuditor ? assignedCompany : selectedCompany
+    const comp = effectiveParticularsCompany
     const trimmed = name.trim()
     if (!comp || !trimmed) return
 
@@ -1120,7 +1126,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   }
 
   const handleDeleteParticularFromList = async (id: number) => {
-    const comp = isAuditor ? assignedCompany : selectedCompany
+    const comp = effectiveParticularsCompany
     const txType = isSales ? 'Sales' : 'Expense'
     setSavedParticulars((prev) => prev.filter((p) => p.id !== id))
     await particularsService.deleteParticular(id, comp, txType)
@@ -2436,6 +2442,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
       bankService.invalidateCache()
       bankService.prefetchAccounts(companyToUse)
+
+      // Invalidate particulars cache and persist row particulars for future autocomplete
+      const txType = isSales ? 'Sales' : 'Expense'
+      for (const row of validRows) {
+        const pName = row.particulars?.trim()
+        if (pName) {
+          particularsService.addParticular(companyToUse, pName, txType).catch(() => {})
+        }
+      }
+      particularsService.invalidateCache(companyToUse, txType)
+      if (effectiveParticularsCompany && effectiveParticularsCompany !== companyToUse) {
+        particularsService.invalidateCache(effectiveParticularsCompany, txType)
+      }
 
       setSuccessBanner({
         count: validRowsCount,

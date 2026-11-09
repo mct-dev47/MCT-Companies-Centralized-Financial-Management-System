@@ -15,6 +15,7 @@ from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
+from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 
 router = APIRouter()
 
@@ -573,6 +574,15 @@ def create_expense(
             except Exception:
                 pass
 
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company_id, target_company_name, p_name, "Expense"
+                )
+        except Exception:
+            pass
+
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_CREATED,
@@ -669,6 +679,15 @@ def create_expense(
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company.company_name}})
             except Exception:
                 pass
+
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company_id, target_company_name, p_name, "Expense"
+                )
+        except Exception:
+            pass
 
         cat = db.query(Category).filter(Category.category_id == expense.category_id).first() if expense.category_id else None
 
@@ -897,6 +916,17 @@ def update_expense(
             expense.payment_method = update_payload["payment_method"]
         db.commit()
         db.refresh(expense)
+
+    # Auto-save updated particulars to company library
+    if parts:
+        try:
+            target_cid = (updated_row.get("company_id") if updated_row else None) or (expense.company_id if expense else None)
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_cid, None, p_name, "Expense"
+                )
+        except Exception:
+            pass
 
     if updated_row:
         client = get_supabase_admin_client()

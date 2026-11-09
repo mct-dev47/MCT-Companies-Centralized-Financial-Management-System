@@ -18,6 +18,7 @@ from app.services.sales_receivables_sync import (
     compute_paid_amount_from_particulars,
 )
 from app.core.websocket import ws_manager
+from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 
 router = APIRouter()
 
@@ -573,6 +574,15 @@ def create_sale(
             }
         )
 
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company_id, target_company_name, p_name, "Sales"
+                )
+        except Exception:
+            pass
+
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
@@ -665,6 +675,15 @@ def create_sale(
                 "payload": {"sale_id": sale.sales_id, "action": "created"},
             }
         )
+
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company.company_id, target_company.company_name, p_name, "Sales"
+                )
+        except Exception:
+            pass
 
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
@@ -992,6 +1011,16 @@ def update_sale(
         else existing_payment_method
     )
     actor_email = current_user.get("email") or f"user-{current_user.get('user_id')}"
+
+    # Auto-save updated particulars to company library
+    if final_particulars:
+        try:
+            for p_name in extract_particular_names(final_particulars):
+                save_company_particular_if_not_exists(
+                    db, existing_company_id, None, p_name, "Sales"
+                )
+        except Exception:
+            pass
 
     sync_svc.sync_sale_updated_to_receivables(
         sales_id,

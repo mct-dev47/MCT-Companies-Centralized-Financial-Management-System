@@ -21,6 +21,10 @@ import {
   type NewExpenseInput,
   type ExpenseItem,
 } from '@/services/expenseService'
+import {
+  particularsService,
+  type CompanyParticular,
+} from '@/services/particularsService'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
@@ -99,6 +103,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [chequeNo, setChequeNo] = React.useState('')
   const [pettyCashCategory, setPettyCashCategory] = React.useState('')
   const [particulars, setParticulars] = React.useState('')
+  const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
   const [paymentMethod, setPaymentMethod] = React.useState(initialPaymentMethod || 'Cash')
   const [category, setCategory] = React.useState(
@@ -188,6 +193,24 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       isMounted = false
     }
   }, [open])
+
+  // Load previous particulars for suggestions/autocomplete
+  React.useEffect(() => {
+    let mounted = true
+    if (open && assignedCompany) {
+      particularsService
+        .getParticulars(assignedCompany, 'Expense')
+        .then((data) => {
+          if (mounted && data) {
+            setParticularOptions(data)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, assignedCompany])
 
   const filteredCategoryOptions = React.useMemo(() => {
     if (!isCategoryTyping) return categoryOptions
@@ -326,6 +349,13 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       }
       const created = await expenseService.addExpense(payload)
 
+      if (finalParticulars && assignedCompany) {
+        particularsService
+          .addParticular(assignedCompany, finalParticulars, 'Expense')
+          .catch(() => {})
+        particularsService.invalidateCache(assignedCompany, 'Expense')
+      }
+
       setIsConfirmOpen(false)
       onOpenChange(false)
       onSuccess(created)
@@ -429,6 +459,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   </Label>
                   <Input
                     type="text"
+                    list="expense-particular-list"
                     placeholder="e.g. Taxi fare to bank, Bond paper A4..."
                     value={particulars}
                     maxLength={255}
@@ -481,6 +512,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </Label>
                 <Input
                   type="text"
+                  list="expense-particular-list"
                   placeholder="e.g. Commercial Kitchen Gas & Utility Bill"
                   value={particulars}
                   maxLength={255}
@@ -502,6 +534,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 )}
               </div>
             )}
+
+            <datalist id="expense-particular-list">
+              {particularOptions.map((opt) => (
+                <option key={opt.id} value={opt.name} />
+              ))}
+            </datalist>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               {/* 4. Withdrawal Amount */}

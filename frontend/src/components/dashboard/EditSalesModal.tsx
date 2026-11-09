@@ -21,6 +21,10 @@ import {
   type NewSalesInput,
   type SalesItem,
 } from '@/services/salesService'
+import {
+  particularsService,
+  type CompanyParticular,
+} from '@/services/particularsService'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 
@@ -52,6 +56,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
   const [date, setDate] = React.useState('')
   const [chequeNo, setChequeNo] = React.useState('')
   const [particulars, setParticulars] = React.useState('')
+  const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
   const [category, setCategory] = React.useState('None')
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
@@ -77,6 +82,23 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
       setFieldErrors({})
     }
   }, [open, sale])
+
+  React.useEffect(() => {
+    let mounted = true
+    if (open && sale?.company) {
+      particularsService
+        .getParticulars(sale.company, 'Sales')
+        .then((data) => {
+          if (mounted && data) {
+            setParticularOptions(data)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, sale?.company])
 
   const filteredCategoryOptions = React.useMemo(() => {
     const q = category.trim().toLowerCase()
@@ -138,6 +160,12 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
         category: category.trim() || 'None',
       }
       const updated = await salesService.updateSale(sale.id, payload)
+      if (particulars.trim() && sale.company) {
+        particularsService
+          .addParticular(sale.company, particulars.trim(), 'Sales')
+          .catch(() => {})
+        particularsService.invalidateCache(sale.company, 'Sales')
+      }
       onOpenChange(false)
       onSuccess(updated)
     } catch (err: any) {
@@ -227,6 +255,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
             </Label>
             <Input
               type="text"
+              list="edit-sales-particular-list"
               placeholder="e.g. Catering Deposit"
               value={particulars}
               onChange={(e) => {
@@ -238,6 +267,11 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                 fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
               )}
             />
+            <datalist id="edit-sales-particular-list">
+              {particularOptions.map((opt) => (
+                <option key={opt.id} value={opt.name} />
+              ))}
+            </datalist>
             {fieldErrors.particulars && (
               <p className="text-[11px] text-red-600 font-medium">{fieldErrors.particulars}</p>
             )}

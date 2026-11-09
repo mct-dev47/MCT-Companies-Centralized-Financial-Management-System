@@ -1,4 +1,5 @@
-from typing import List, Optional
+import re
+from typing import Dict, List, Optional, Set
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -12,10 +13,166 @@ from app.core.dependencies import (
 )
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
+from app.models.finance import Expense, Sale
 from app.models.particular import CompanyParticular
 from app.schemas.particular import CompanyParticularCreate, CompanyParticularOut
 
 router = APIRouter()
+
+
+def extract_particular_names(raw_text: Optional[str]) -> List[str]:
+    """
+    Extracts clean, reusable itemized particular names from raw particulars strings.
+    Removes systemic prefixes, pricing formulas, quantity indicators, and status tags.
+    """
+    if not raw_text or not str(raw_text).strip():
+        return []
+    results: List[str] = []
+    lines = [ln.strip() for ln in str(raw_text).strip().splitlines() if ln.strip()]
+    for line in lines:
+        cleaned = line.strip()
+        for prefix in (
+            "sales collection:",
+            "expense disbursement:",
+            "adjustment reversal on receivable -",
+            "rental payment -",
+            "petty cash reimbursement for",
+            "petty cash reimbursement",
+            "petty cash top up funded for",
+            "petty cash top up from",
+        ):
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+
+        # Remove trailing status tags like [Paid], [Unpaid], [Pending], [On hold], [Verified]
+        cleaned = re.sub(
+            r"\s*\[(Paid|Unpaid|Pending|On hold|Verified|Overdue)\]\s*$",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # Remove trailing pricing/qty pattern: e.g. (2x @ ₱500.00 = ₱1,000.00) or (2x) or (₱2,500.00)
+        cleaned = re.sub(r"\s*\(\s*\d+\s*x.*?\)\s*$", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"\s*\(\s*₱?[\d,]+(\.\d+)?\s*\)\s*$", "", cleaned).strip()
+
+        # Remove leading numbering like 1. or #1
+        cleaned = re.sub(r"^(\d+[\.\)]|\#\d+)\s*", "", cleaned).strip()
+
+        # Strip trailing colon or dashes
+        cleaned = cleaned.strip(":- ")
+        if (
+            cleaned
+            and len(cleaned) >= 2
+            and not cleaned.lower().startswith("ref-")
+            and not cleaned.lower().startswith("chq-")
+        ):
+            results.append(cleaned)
+    return results
+
+
+def save_company_particular_if_not_exists(
+    db: Session,
+    company_id: Optional[int],
+    company_name: Optional[str],
+    name: str,
+    transaction_type: str = "Sales",
+) -> Optional[CompanyParticular]:
+    """
+    Persists a particular to company_particulars if not already present.
+    Synchronizes across local SQLite and Supabase.
+    """
+    cleaned_name = (name or "").strip()
+    if not cleaned_name or len(cleaned_name) < 2:
+        return None
+
+    tx_type = "Expense" if (transaction_type or "").strip().lower() == "expense" else "Sales"
+    target_id = company_id
+    target_name = company_name
+
+    if not target_id and target_name:
+        try:
+            comp = resolve_company(db, company_name=target_name)
+            target_id = comp.company_id
+            target_name = comp.company_name
+        except Exception:
+            pass
+    elif target_id and not target_name:
+        try:
+            comp = resolve_company(db, company_id=target_id)
+            target_name = comp.company_name
+        except Exception:
+            pass
+
+    # Check local duplicate
+    duplicate_filters = [
+        func.lower(CompanyParticular.name) == cleaned_name.lower(),
+    ]
+    if target_id and target_name:
+        duplicate_filters.append(
+            (CompanyParticular.company_id == target_id)
+            | (func.lower(CompanyParticular.company_name) == func.lower(target_name))
+        )
+    elif target_id:
+        duplicate_filters.append(CompanyParticular.company_id == target_id)
+    elif target_name:
+        duplicate_filters.append(func.lower(CompanyParticular.company_name) == func.lower(target_name))
+
+    if tx_type == "Sales":
+        duplicate_filters.append(
+            (func.lower(CompanyParticular.transaction_type) == "sales")
+            | (CompanyParticular.transaction_type.is_(None))
+        )
+    else:
+        duplicate_filters.append(func.lower(CompanyParticular.transaction_type) == "expense")
+
+    existing = db.query(CompanyParticular).filter(*duplicate_filters).first()
+    if existing:
+        return existing
+
+    created_id = None
+    client = get_supabase_admin_client()
+    if client:
+        try:
+            sb_check = client.table("company_particulars").select("*").ilike("name", cleaned_name)
+            if target_id:
+                sb_check = sb_check.eq("company_id", target_id)
+            elif target_name:
+                sb_check = sb_check.ilike("company_name", target_name)
+            if tx_type == "Sales":
+                sb_check = sb_check.or_("transaction_type.eq.Sales,transaction_type.is.null")
+            else:
+                sb_check = sb_check.ilike("transaction_type", "expense")
+            res = sb_check.execute()
+            if res.data and len(res.data) > 0:
+                created_id = res.data[0].get("id")
+            else:
+                ins = client.table("company_particulars").insert({
+                    "company_id": target_id,
+                    "company_name": target_name,
+                    "name": cleaned_name,
+                    "transaction_type": tx_type,
+                }).execute()
+                if ins.data and len(ins.data) > 0:
+                    created_id = ins.data[0].get("id")
+        except Exception:
+            pass
+
+    new_p = CompanyParticular(
+        id=created_id,
+        company_id=target_id,
+        company_name=target_name,
+        name=cleaned_name,
+        transaction_type=tx_type,
+    )
+    try:
+        db.add(new_p)
+        db.commit()
+        db.refresh(new_p)
+        return new_p
+    except Exception:
+        db.rollback()
+        return None
 
 
 @router.get("", response_model=List[CompanyParticularOut], summary="List saved particulars for a company")
@@ -54,8 +211,11 @@ def get_company_particulars(
         if not is_privileged and user_company_ids:
             target_company_id = user_company_ids[0]
 
-    # Try Supabase first if available
+    # Map of lowercase name -> CompanyParticularOut
+    results_map: Dict[str, CompanyParticularOut] = {}
     client = get_supabase_admin_client()
+
+    # 1. Fetch from Supabase company_particulars table
     if client:
         try:
             query = client.table("company_particulars").select("*")
@@ -71,76 +231,129 @@ def get_company_particulars(
                     query = query.ilike("transaction_type", tx_type)
 
             res = query.order("name").execute()
-            if res.data is not None:
-                # Sync into local SQLite
-                existing_names = {
-                    p.name.strip().lower()
-                    for p in db.query(CompanyParticular).all()
-                    if (
-                        (target_company_id and p.company_id == target_company_id)
-                        or (target_company_name and (p.company_name or "").lower() == target_company_name.lower())
-                    )
-                    and (
-                        not tx_type
-                        or (tx_type.lower() == "sales" and (not p.transaction_type or p.transaction_type.lower() == "sales"))
-                        or (p.transaction_type and p.transaction_type.lower() == tx_type.lower())
-                    )
-                }
+            if res.data:
                 for row in res.data:
                     pname = (row.get("name") or "").strip()
-                    row_tx = row.get("transaction_type") or "Sales"
-                    if pname and pname.lower() not in existing_names:
-                        db.add(
-                            CompanyParticular(
-                                id=row.get("id"),
-                                company_id=row.get("company_id") or target_company_id,
-                                company_name=row.get("company_name") or target_company_name,
-                                name=pname,
-                                transaction_type=row_tx,
-                            )
+                    if pname and pname.lower() not in results_map:
+                        results_map[pname.lower()] = CompanyParticularOut(
+                            id=row["id"],
+                            name=pname,
+                            company_id=row.get("company_id") or target_company_id,
+                            company_name=row.get("company_name") or target_company_name,
+                            transaction_type=row.get("transaction_type") or (tx_type or "Sales"),
+                            created_at=row.get("created_at"),
                         )
-                        existing_names.add(pname.lower())
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-
-                return [
-                    CompanyParticularOut(
-                        id=row["id"],
-                        name=row["name"],
-                        company_id=row.get("company_id"),
-                        company_name=row.get("company_name"),
-                        transaction_type=row.get("transaction_type") or "Sales",
-                        created_at=row.get("created_at"),
-                    )
-                    for row in res.data
-                ]
         except Exception:
-            # Table might not exist yet in Supabase or network issue; fall through to SQLAlchemy
             pass
 
-    query = db.query(CompanyParticular)
+    # 2. Fetch from local SQLite CompanyParticular table
+    local_query = db.query(CompanyParticular)
     if target_company_id and target_company_name:
-        query = query.filter(
+        local_query = local_query.filter(
             (CompanyParticular.company_id == target_company_id)
             | (func.lower(CompanyParticular.company_name) == func.lower(target_company_name))
         )
     elif target_company_id:
-        query = query.filter(CompanyParticular.company_id == target_company_id)
+        local_query = local_query.filter(CompanyParticular.company_id == target_company_id)
     elif target_company_name:
-        query = query.filter(func.lower(CompanyParticular.company_name) == func.lower(target_company_name))
+        local_query = local_query.filter(func.lower(CompanyParticular.company_name) == func.lower(target_company_name))
 
     if tx_type:
         if tx_type.lower() == "sales":
-            query = query.filter(
+            local_query = local_query.filter(
                 (func.lower(CompanyParticular.transaction_type) == "sales")
                 | (CompanyParticular.transaction_type.is_(None))
             )
         else:
-            query = query.filter(func.lower(CompanyParticular.transaction_type) == tx_type.lower())
+            local_query = local_query.filter(func.lower(CompanyParticular.transaction_type) == tx_type.lower())
 
-    return query.order_by(func.lower(CompanyParticular.name).asc()).all()
+    for row in local_query.all():
+        pname = (row.name or "").strip()
+        if pname and pname.lower() not in results_map:
+            results_map[pname.lower()] = CompanyParticularOut(
+                id=row.id,
+                name=pname,
+                company_id=row.company_id or target_company_id,
+                company_name=row.company_name or target_company_name,
+                transaction_type=row.transaction_type or (tx_type or "Sales"),
+                created_at=row.created_at,
+            )
+
+    # 3. Automatically harvest from actual historical transactions
+    # This guarantees that previous particulars entered in sales or expenses are immediately available
+    harvested_sales_raw: List[str] = []
+    harvested_expense_raw: List[str] = []
+
+    if not tx_type or tx_type.lower() == "sales":
+        # Check SQLite sales
+        sq = db.query(Sale.particulars).filter(Sale.particulars.isnot(None), Sale.particulars != "")
+        if target_company_id:
+            sq = sq.filter(Sale.company_id == target_company_id)
+        harvested_sales_raw.extend([r[0] for r in sq.order_by(Sale.sales_id.desc()).limit(200).all() if r[0]])
+
+        # Check Supabase sales
+        if client:
+            try:
+                sb_sq = client.table("sales").select("particulars")
+                if target_company_id:
+                    sb_sq = sb_sq.eq("company_id", target_company_id)
+                sb_res = sb_sq.order("sales_id", desc=True).limit(150).execute()
+                if sb_res.data:
+                    harvested_sales_raw.extend([r.get("particulars") for r in sb_res.data if r.get("particulars")])
+            except Exception:
+                pass
+
+        for raw_item in harvested_sales_raw:
+            for p_name in extract_particular_names(raw_item):
+                low = p_name.lower()
+                if low not in results_map:
+                    saved = save_company_particular_if_not_exists(
+                        db, target_company_id, target_company_name, p_name, "Sales"
+                    )
+                    results_map[low] = CompanyParticularOut(
+                        id=saved.id if saved else len(results_map) + 1,
+                        name=p_name,
+                        company_id=target_company_id,
+                        company_name=target_company_name,
+                        transaction_type="Sales",
+                    )
+
+    if not tx_type or tx_type.lower() == "expense":
+        # Check SQLite expenses
+        eq = db.query(Expense.description).filter(Expense.description.isnot(None), Expense.description != "")
+        if target_company_id:
+            eq = eq.filter(Expense.company_id == target_company_id)
+        harvested_expense_raw.extend([r[0] for r in eq.order_by(Expense.expense_id.desc()).limit(200).all() if r[0]])
+
+        # Check Supabase expenses
+        if client:
+            try:
+                sb_eq = client.table("expenses").select("description")
+                if target_company_id:
+                    sb_eq = sb_eq.eq("company_id", target_company_id)
+                sb_res = sb_eq.order("expense_id", desc=True).limit(150).execute()
+                if sb_res.data:
+                    harvested_expense_raw.extend([r.get("description") for r in sb_res.data if r.get("description")])
+            except Exception:
+                pass
+
+        for raw_item in harvested_expense_raw:
+            for p_name in extract_particular_names(raw_item):
+                low = p_name.lower()
+                if low not in results_map:
+                    saved = save_company_particular_if_not_exists(
+                        db, target_company_id, target_company_name, p_name, "Expense"
+                    )
+                    results_map[low] = CompanyParticularOut(
+                        id=saved.id if saved else len(results_map) + 1,
+                        name=p_name,
+                        company_id=target_company_id,
+                        company_name=target_company_name,
+                        transaction_type="Expense",
+                    )
+
+    # Return sorted alphabetically by name
+    return sorted(results_map.values(), key=lambda x: (x.name or "").lower())
 
 
 @router.post("", response_model=CompanyParticularOut, status_code=status.HTTP_201_CREATED, summary="Save a particular to company's list")

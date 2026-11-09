@@ -22,6 +22,10 @@ import {
   type NewSalesInput,
   type SalesItem,
 } from '@/services/salesService'
+import {
+  particularsService,
+  type CompanyParticular,
+} from '@/services/particularsService'
 import { expenseService } from '@/services/expenseService'
 import { bankService } from '@/services/bankService'
 import { receivablesStore, type PaymentOption, type CustomerType } from '@/services/receivablesStore'
@@ -62,6 +66,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [date, setDate] = React.useState(getTodayIso())
   const [chequeNo, setChequeNo] = React.useState('')
   const [particulars, setParticulars] = React.useState('')
+  const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
   const [paymentMethod, setPaymentMethod] = React.useState('Cash')
   const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
@@ -106,6 +111,24 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       mounted = false
     }
   }, [open])
+
+  // Load previous particulars for suggestions/autocomplete
+  React.useEffect(() => {
+    let mounted = true
+    if (open && assignedCompany) {
+      particularsService
+        .getParticulars(assignedCompany, 'Sales')
+        .then((data) => {
+          if (mounted && data) {
+            setParticularOptions(data)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, assignedCompany])
 
   // Check if assigned company has any registered bank accounts
   const [hasBankAccounts, setHasBankAccounts] = React.useState<boolean | null>(null)
@@ -253,6 +276,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       }
       const created = await salesService.addSale(payload)
 
+      if (particulars.trim() && assignedCompany) {
+        particularsService
+          .addParticular(assignedCompany, particulars.trim(), 'Sales')
+          .catch(() => {})
+        particularsService.invalidateCache(assignedCompany, 'Sales')
+      }
+
       // Only record in receivables if there is an unpaid balance (Utang / Partial)
       if (paymentOption !== 'Paid in full') {
         const parsedSaleId = created?.id ? Number(created.id) : undefined
@@ -375,6 +405,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               </Label>
               <Input
                 type="text"
+                list="sales-particular-list"
                 placeholder="e.g. Corporate Banquet Catering Deposit"
                 value={particulars}
                 maxLength={255}
@@ -389,6 +420,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
                 )}
               />
+              <datalist id="sales-particular-list">
+                {particularOptions.map((opt) => (
+                  <option key={opt.id} value={opt.name} />
+                ))}
+              </datalist>
               {fieldErrors.particulars && (
                 <p className="text-[11px] text-red-600 font-medium">
                   {fieldErrors.particulars}
