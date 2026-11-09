@@ -98,11 +98,13 @@ def refresh_token(
 
     if verification.get("is_grace_hit"):
         cached = verification["cached_result"]
-        set_refresh_cookie(response, cached["cookie_value"], cached.get("remember_me", False))
-        return TokenResponse(access_token=cached["access_token"], user=cached["user_info"])
+        remember_me_val = bool(cached.get("remember_me", False))
+        set_refresh_cookie(response, cached["cookie_value"], remember_me_val)
+        return TokenResponse(access_token=cached["access_token"], user=cached["user_info"], remember_me=remember_me_val)
 
     old_payload = verification["payload"]
     user = verification["user"]
+    remember_me_val = bool(old_payload.get("remember_me", False))
 
     new_cookie_value, access_token, user_info = rotate_refresh_token(
         old_payload=old_payload,
@@ -110,8 +112,8 @@ def refresh_token(
         db=db,
     )
 
-    set_refresh_cookie(response, new_cookie_value, old_payload.get("remember_me", False))
-    return TokenResponse(access_token=access_token, user=user_info)
+    set_refresh_cookie(response, new_cookie_value, remember_me_val)
+    return TokenResponse(access_token=access_token, user=user_info, remember_me=remember_me_val)
 
 # logout user
 @router.post("/logout", response_model=MessageResponse, summary="User Logout")

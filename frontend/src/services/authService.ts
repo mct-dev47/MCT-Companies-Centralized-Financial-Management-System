@@ -40,6 +40,8 @@ export interface Resend2FAResponse {
 const SESSION_STORAGE_KEY = 'mct_session_user'
 const ACCESS_TOKEN_KEY = 'mct_access_token'
 const LAST_ACTIVITY_KEY = 'mct_last_activity'
+const REMEMBER_ME_KEY = 'mct_remember_me'
+const TAB_SESSION_KEY = 'mct_tab_session'
 const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes idle timeout (AC-5)
 
 let inMemoryAccessToken: string | null = null
@@ -55,6 +57,13 @@ if (typeof window !== 'undefined') {
     localStorage.removeItem(ACCESS_TOKEN_KEY)
     sessionStorage.removeItem(SESSION_STORAGE_KEY)
     sessionStorage.removeItem('mct_user')
+
+    // Clean foreign keys lingering from other projects hosted on localhost
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('mapbox.')) {
+        localStorage.removeItem(key)
+      }
+    })
   } catch {
     // ignore
   }
@@ -449,6 +458,16 @@ export const authService = {
         const mapped = mapUser(data.user)
         inMemorySessionUser = mapped
         sessionExpirationReason = null
+
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(TAB_SESSION_KEY, '1')
+          if (data.remember_me) {
+            localStorage.setItem(REMEMBER_ME_KEY, '1')
+          } else {
+            localStorage.removeItem(REMEMBER_ME_KEY)
+          }
+        }
+
         scheduleProactiveRefresh(data.access_token)
         this.touchSessionActivity()
         return mapped
@@ -468,6 +487,18 @@ export const authService = {
    * Bootstrap authentication upon application start via refresh cookie (AC-13).
    */
   async initSession(): Promise<{ user: User | null; reason: 'inactivity' | 'max_duration' | null }> {
+    if (typeof window !== 'undefined') {
+      const hasRememberMe = localStorage.getItem(REMEMBER_ME_KEY) === '1'
+      const hasTabSession = sessionStorage.getItem(TAB_SESSION_KEY) === '1'
+
+      // If Remember Me was unchecked and this is a brand new tab,
+      // terminate any lingering session cookie and demand fresh credentials.
+      if (!hasRememberMe && !hasTabSession) {
+        await this.signOut()
+        return { user: null, reason: null }
+      }
+    }
+
     const user = await this.refreshSession()
     return { user, reason: sessionExpirationReason }
   },
@@ -520,7 +551,17 @@ export const authService = {
           sessionStorage.removeItem(SESSION_STORAGE_KEY)
           sessionStorage.removeItem(LAST_ACTIVITY_KEY)
           sessionStorage.removeItem('mct_user')
+          sessionStorage.removeItem('mct_active_company_session')
+          sessionStorage.removeItem('mct_dynamic_companies_cache')
+          sessionStorage.removeItem('mct_selected_company')
+          sessionStorage.removeItem(TAB_SESSION_KEY)
           localStorage.removeItem(ACCESS_TOKEN_KEY)
+          localStorage.removeItem(REMEMBER_ME_KEY)
+          Object.keys(localStorage).forEach((key) => {
+            if (key.startsWith('mapbox.')) {
+              localStorage.removeItem(key)
+            }
+          })
         } catch {
           // ignore storage cleanup failures
         }
@@ -539,12 +580,23 @@ export const authService = {
     const response = await request<{
       access_token: string
       user: BackendUserPayload
+      remember_me?: boolean
     }>('/login/verify-otp', { otp: code })
 
     inMemoryAccessToken = response.access_token
     const mapped = mapUser(response.user)
     inMemorySessionUser = mapped
     sessionExpirationReason = null
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(TAB_SESSION_KEY, '1')
+      if (response.remember_me) {
+        localStorage.setItem(REMEMBER_ME_KEY, '1')
+      } else {
+        localStorage.removeItem(REMEMBER_ME_KEY)
+      }
+    }
+
     scheduleProactiveRefresh(response.access_token)
     this.touchSessionActivity()
 

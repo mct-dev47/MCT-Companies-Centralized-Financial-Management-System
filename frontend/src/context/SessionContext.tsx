@@ -141,6 +141,17 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
       // Regardless of outcome, clear session state in memory
       setUser(null)
       clearNotificationCache()
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('mct_active_company_session')
+          sessionStorage.removeItem('mct_dynamic_companies_cache')
+          sessionStorage.removeItem('mct_selected_company')
+          sessionStorage.removeItem('mct_tab_session')
+          localStorage.removeItem('mct_remember_me')
+        } catch {
+          // ignore cleanup errors
+        }
+      }
       setStatus('unauthenticated')
     }
   }, [])

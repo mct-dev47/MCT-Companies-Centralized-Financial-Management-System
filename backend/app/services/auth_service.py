@@ -598,7 +598,7 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
     except Exception:
         pass
 
-    return TokenResponse(access_token=access_token, user=user_info), refresh_cookie, remember_me
+    return TokenResponse(access_token=access_token, user=user_info, remember_me=remember_me), refresh_cookie, remember_me
 
 
 def resend_login_otp(db: Optional[Session], ip_address: str, cookie_value: str | None) -> tuple[OtpResponse, str]:

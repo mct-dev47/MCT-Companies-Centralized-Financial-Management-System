@@ -59,6 +59,15 @@ export const SignInForm: React.FC = () => {
     },
   })
 
+  // Ensure Remember Me is always unchecked and fields are reset upon entering sign-in
+  React.useEffect(() => {
+    form.reset({
+      email: '',
+      password: '',
+      rememberMe: false,
+    })
+  }, [form])
+
   const onSubmit = async (values: SignInFormValues) => {
     try {
       setServerError(null)

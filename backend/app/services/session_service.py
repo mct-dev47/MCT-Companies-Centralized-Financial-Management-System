@@ -97,9 +97,13 @@ def set_refresh_cookie(response: Response, cookie_value: str, remember_me: bool)
 
 
 def clear_refresh_cookie(response: Response) -> None:
+    is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     response.delete_cookie(
         key=settings.REFRESH_COOKIE_NAME,
         path=settings.REFRESH_COOKIE_PATH,
+        httponly=True,
+        secure=is_secure,
+        samesite="lax",
     )
 
 

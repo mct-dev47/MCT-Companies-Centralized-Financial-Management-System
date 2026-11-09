@@ -12,6 +12,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    remember_me: Optional[bool] = False
     encrypted_response: Optional[str] = None
 
 class LoginChallengeResponse(BaseModel):
