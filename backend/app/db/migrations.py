@@ -126,6 +126,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0040_user_token_version")
             logger.info("Migration 0040_user_token_version applied successfully.")
 
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_user_invitations_purpose'")
+    ).first()
+
+    if not result_0041:
+        script_0041 = MIGRATIONS_DIR / "0041_user_invitations_purpose.postgres.sql"
+        if script_0041.exists():
+            with open(script_0041, "r", encoding="utf-8") as f:
+                sql_0041 = f.read()
+            clean_0041 = sql_0041.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0041))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0041_user_invitations_purpose')"))
+            applied.append("0041_user_invitations_purpose")
+            logger.info("Migration 0041_user_invitations_purpose applied successfully.")
+
     conn.commit()
     return applied
 
@@ -302,6 +318,32 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0040_user_token_version")
         logger.info("SQLite migration 0040_user_token_version applied successfully.")
+
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_user_invitations_purpose'")
+    ).first()
+
+    if not result_0041:
+        inv_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitations'")
+        ).first()
+        if inv_table_exists:
+            inv_cols_res = conn.execute(text("PRAGMA table_info(user_invitations)")).fetchall()
+            inv_cols = {row[1] for row in inv_cols_res}
+            if "purpose" not in inv_cols:
+                conn.execute(
+                    text("ALTER TABLE user_invitations ADD COLUMN purpose VARCHAR(30) NOT NULL DEFAULT 'initial_password_setup'")
+                )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_user_invitations_user_purpose ON user_invitations(user_id, purpose, status)")
+            )
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0041_user_invitations_purpose')")
+        )
+        applied.append("0041_user_invitations_purpose")
+        logger.info("SQLite migration 0041_user_invitations_purpose applied successfully.")
 
     conn.commit()
     return applied

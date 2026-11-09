@@ -19,6 +19,8 @@ from app.schemas.auth import (
     SetupPasswordRequest,
     ReauthenticateRequest,
     ReauthenticateResponse,
+    TokenValidateRequest,
+    TokenValidateResponse,
 )
 from app.schemas.user import UserResponse
 from app.services.auth_service import (
@@ -30,6 +32,7 @@ from app.services.auth_service import (
     verify_login_otp,
     resend_login_otp,
     setup_invitation_password,
+    validate_invitation_token,
 )
 from app.services.session_service import (
     set_refresh_cookie,
@@ -214,6 +217,19 @@ def reauthenticate(
 
     token, expires_in = create_reauth_token(user_id=user_id)
     return ReauthenticateResponse(reauth_token=token, expires_in=expires_in, success=True)
+
+# validate invitation or reset token on link opening (AC-20, AC-22)
+@router.post("/tokens/validate", response_model=TokenValidateResponse, summary="Validate Token Authenticity and Purpose")
+def validate_token(
+    data: TokenValidateRequest,
+    db: Session = Depends(get_db),
+):
+    token = data.token
+    if data.encrypted_payload:
+        from app.core.encryption import decrypt_payload
+        decrypted = decrypt_payload(data.encrypted_payload)
+        token = decrypted.get("token", token)
+    return validate_invitation_token(db=db, token=token)
 
 # request password reset
 @router.post("/forgot-password", response_model=MessageResponse, summary="Request Password Reset")

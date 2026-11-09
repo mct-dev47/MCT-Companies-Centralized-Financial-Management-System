@@ -195,21 +195,23 @@ class UserService:
                 self.db.add(UserCompany(user_id=user.user_id, company_id=cid))
 
             # Generate Single-Use Setup Token
+            from app.core.config import settings
+            from app.core.encryption import encrypt_invitation_token
             raw_token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
             now = datetime.now(timezone.utc)
+            expiry_hours = getattr(settings, "INITIAL_SETUP_TOKEN_LIFETIME_HOURS", 24)
             invitation = UserInvitation(
                 user_id=user.user_id,
                 token_hash=token_hash,
                 status="PENDING",
-                expires_at=now + timedelta(hours=24),
+                purpose="initial_password_setup",
+                expires_at=now + timedelta(hours=expiry_hours),
             )
             self.db.add(invitation)
             self.db.flush()
 
             # Enqueue to Outbox with encrypted payload
-            from app.core.config import settings
-            from app.core.encryption import encrypt_invitation_token
             frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
             encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
             setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
@@ -218,6 +220,7 @@ class UserService:
                 "user_name": user.name,
                 "setup_url": setup_url,
                 "raw_token": raw_token,
+                "purpose": "initial_password_setup",
             })
             outbox_entry = InvitationOutbox(
                 idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",
@@ -259,10 +262,14 @@ class UserService:
         if user.status == "ACTIVE":
             raise UserValidationError("User account is already active and cannot be re-invited.")
 
-        # Revoke old pending or claimed invitations
+        if user.status in ("SUSPENDED", "DEACTIVATED", "LOCKED"):
+            raise UserValidationError(f"User account is {user.status.lower()} and cannot be re-invited.")
+
+        # Revoke old pending or claimed setup invitations and cancel jobs (AC-4)
         self.db.query(UserInvitation).filter(
             UserInvitation.user_id == user_id,
             UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+            UserInvitation.purpose == "initial_password_setup",
         ).update({"status": "REVOKED"}, synchronize_session=False)
 
         # Cancel pending outbox jobs
@@ -272,20 +279,22 @@ class UserService:
         ).update({"status": "CANCELLED", "encrypted_payload": None}, synchronize_session=False)
 
         # Generate fresh single-use token
+        from app.core.config import settings
+        from app.core.encryption import encrypt_invitation_token
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         now = datetime.now(timezone.utc)
+        expiry_hours = getattr(settings, "INITIAL_SETUP_TOKEN_LIFETIME_HOURS", 24)
         invitation = UserInvitation(
             user_id=user.user_id,
             token_hash=token_hash,
             status="PENDING",
-            expires_at=now + timedelta(hours=24),
+            purpose="initial_password_setup",
+            expires_at=now + timedelta(hours=expiry_hours),
         )
         self.db.add(invitation)
         self.db.flush()
 
-        from app.core.config import settings
-        from app.core.encryption import encrypt_invitation_token
         frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
         encrypted_token = encrypt_invitation_token(raw_token, user.user_id)
         setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
@@ -294,6 +303,7 @@ class UserService:
             "user_name": user.name,
             "setup_url": setup_url,
             "raw_token": raw_token,
+            "purpose": "initial_password_setup",
         })
         outbox_entry = InvitationOutbox(
             idempotency_key=f"invite:{user.user_id}:{invitation.invitation_id}",

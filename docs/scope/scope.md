@@ -22,6 +22,7 @@
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
 | Secure Remember Me Authentication and Session Management | in-progress | [0039](../specs/0039-secure-remember-me-authentication/index.md) |
+| Password Reset and Initial Account Password Setup Security | in-progress | [0040](../specs/0040-password-reset-and-setup-security/index.md) |
 
 ---
 
@@ -311,3 +312,20 @@
   - [x] Milestone 5: Automated test suite covering cookie attributes, rotation, idle timeout, absolute lifetime, concurrency, password safety, reauthentication, and revocation (AC-1 through AC-17)
 - [ ] Verify it: /check verify remember-me-auth
 - [ ] Test it: /test remember-me-auth
+
+### Password Reset and Initial Account Password Setup Security
+**Status**: in-progress
+**Spec**: [0040](../specs/0040-password-reset-and-setup-security/index.md)
+**Intent**: Implement a secure password recovery flow and harden the initial account password setup flow with single use tokens, purpose separation, URL fragment scrubbing, session revocation, rate limiting, and execution duration padding against enumeration.
+**Done when**: Initial setup tokens expire in 24 hours and reset tokens expire in 30 minutes; tokens are single use, purpose isolated, and stored only as SHA-256 hashes; forgot password requests return constant public responses with execution time floor padding and 60 second silent resend cooldown; password resets increment token_version revoking all active sessions across devices; both flows reuse the single Set Password interface at `/auth/setup-password` dynamically adapting to verified token purpose; and all 22 automated test scenarios pass.
+
+- [x] Design it (spec): [0040](../specs/0040-password-reset-and-setup-security/index.md)
+- [x] Build it: /develop password-reset-and-setup-security (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration adding purpose column and compound index to user_invitations, core token helpers, and configuration settings (AC-1, AC-6, AC-10, AC-12, AC-15, AC-16, AC-21)
+  - [x] Milestone 2: Link validation endpoint with status code contract, URL fragment scrubbing, and frontend mount time validation (AC-18, AC-20, AC-22)
+  - [x] Milestone 3: Forgot password endpoint with dual sliding window rate limiting, monotonic time floor padding, 60 second silent cooldown, and outbox dispatch (AC-7, AC-8, AC-9, AC-15, AC-19)
+  - [x] Milestone 4: Atomic password reset and initial setup endpoints with purpose enforcement, three phase Supabase compensation saga, session revocation, and security notices (AC-2, AC-3, AC-4, AC-5, AC-11, AC-13, AC-14, AC-17)
+  - [x] Milestone 5: Frontend Set Password modal consolidation, RecoveryDialog streamlining, and email dispatcher template handling (AC-18, AC-19, AC-20)
+  - [x] Milestone 6: Comprehensive automated test suite verifying all 22 acceptance criteria (AC-1 through AC-22)
+- [ ] Verify it: /check verify password-reset-and-setup-security
+- [ ] Test it: /test password-reset-and-setup-security

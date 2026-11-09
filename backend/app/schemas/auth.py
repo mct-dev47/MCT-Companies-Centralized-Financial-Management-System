@@ -60,3 +60,12 @@ class ReauthenticateResponse(BaseModel):
     reauth_token: str
     expires_in: int
     success: bool = True
+
+class TokenValidateRequest(BaseModel):
+    token: Optional[str] = None
+    encrypted_payload: Optional[str] = None
+
+class TokenValidateResponse(BaseModel):
+    valid: bool = True
+    purpose: str
+    masked_email: str

@@ -6,7 +6,10 @@ import secrets
 import json
 import hashlib
 import threading
+import time
+import html
 import re
+from collections import defaultdict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 import jwt
@@ -14,10 +17,11 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
 from app.core.config import settings
-from app.core.encryption import decrypt_payload, encrypt_payload
+from app.core.encryption import decrypt_payload, encrypt_payload, encrypt_invitation_token
 from app.db.supabase import get_supabase_client, get_supabase_admin_client
 from app.models.user import User
 from app.models.company import Company
+from app.models.invitation import UserInvitation, InvitationOutbox
 from app.schemas.auth import (
     LoginRequest,
     TokenResponse,
@@ -27,6 +31,7 @@ from app.schemas.auth import (
     LoginChallengeResponse,
     VerifyOtpRequest,
     OtpResponse,
+    TokenValidateResponse,
 )
 from app.schemas.user import UserResponse
 from app.services.audit_service import (
@@ -47,6 +52,17 @@ logger = logging.getLogger(__name__)
 OTP_COOKIE_NAME = "mct_login_otp"
 _rate_limits: dict[str, dict[str, object]] = {}
 _otp_challenges: dict[str, dict[str, object]] = {}
+
+_forgot_pwd_lock = threading.Lock()
+_forgot_pwd_email_requests: dict[str, list[float]] = defaultdict(list)
+_forgot_pwd_ip_requests: dict[str, list[float]] = defaultdict(list)
+_forgot_pwd_last_sent: dict[str, float] = {}
+
+
+def _pad_duration(start_perf: float, floor_seconds: float) -> None:
+    elapsed = time.perf_counter() - start_perf
+    if elapsed < floor_seconds:
+        time.sleep(floor_seconds - elapsed)
 
 
 def _mask_email(email: str) -> str:
@@ -661,127 +677,495 @@ def logout_user(
     return MessageResponse(message="Successfully logged out.", success=True)
 
 
-# request password reset with encrypted payload support
+def validate_invitation_token(db: Session, token: str) -> TokenValidateResponse:
+    """
+    Validates token authenticity, purpose, status, and expiry on link mount without consuming it.
+    Returns 200 with purpose and masked email for valid tokens.
+    Raises 410 for expired, 400 for used or invalid, and 422 for malformed tokens.
+    """
+    clean_token = (token or "").strip()
+    if not clean_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Token is required.",
+        )
+
+    actual_token = clean_token
+    if clean_token.startswith("gAAAAA"):
+        try:
+            payload = decrypt_payload(clean_token)
+            actual_token = payload.get("token", "")
+            if not actual_token:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Malformed token payload.",
+                )
+        except HTTPException:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Malformed or invalid token.",
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Malformed or invalid token.",
+            )
+    else:
+        if len(clean_token) < 16:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Malformed token format.",
+            )
+
+    token_hash = hashlib.sha256(actual_token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    invitation = db.query(UserInvitation).filter(UserInvitation.token_hash == token_hash).first()
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid invitation token.",
+        )
+
+    if invitation.status in ("ACCEPTED", "CLAIMED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This link has already been used.",
+        )
+
+    if invitation.status == "REVOKED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This link has been revoked.",
+        )
+
+    exp = invitation.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+
+    if exp <= now or invitation.status == "EXPIRED":
+        if invitation.status != "EXPIRED":
+            db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
+                {"status": "EXPIRED"}, synchronize_session=False
+            )
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="This link has expired.",
+        )
+
+    user = db.query(User).filter(User.user_id == invitation.user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found.")
+
+    if user.status in ("SUSPENDED", "DEACTIVATED", "LOCKED"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Account is {user.status.lower()}. Please contact an administrator.",
+        )
+
+    masked = _mask_email(user.email)
+    purpose = invitation.purpose or "initial_password_setup"
+
+    return TokenValidateResponse(
+        valid=True,
+        purpose=purpose,
+        masked_email=masked,
+    )
+
+
+# request password reset with dual sliding-window rate limiting, time floor, and 60s cooldown
 def request_password_reset(
     db: Session,
     request_data: PasswordResetRequest,
     ip_address: str = "unknown",
 ) -> MessageResponse:
+    start_perf = time.perf_counter()
+    floor_ms = getattr(settings, "FORGOT_PASSWORD_TIME_FLOOR_MS", 180)
+    floor_seconds = float(floor_ms) / 1000.0
+
     email = request_data.email
     if request_data.encrypted_payload:
         decrypted = decrypt_payload(request_data.encrypted_payload)
         email = decrypted.get("email", email)
 
     if not email:
+        _pad_duration(start_perf, floor_seconds)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email is required for password reset.",
         )
 
     normalized_email = str(email).strip().lower()
+    clean_ip = (ip_address or "unknown").strip()
+    is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
+
+    max_email = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_EMAIL_COUNT", 5)
+    email_window = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_EMAIL_WINDOW_SECONDS", 900)
+    max_ip = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_IP_COUNT", 10)
+    ip_window = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_IP_WINDOW_SECONDS", 900)
+    silent_cooldown = getattr(settings, "FORGOT_PASSWORD_SILENT_COOLDOWN_SECONDS", 60)
+
+    now_ts = time.time()
+    in_cooldown = False
+
+    with _forgot_pwd_lock:
+        ip_window_start = now_ts - ip_window
+        email_window_start = now_ts - email_window
+
+        ip_reqs = [t for t in _forgot_pwd_ip_requests[clean_ip] if t > ip_window_start]
+        _forgot_pwd_ip_requests[clean_ip] = ip_reqs
+
+        email_reqs = [t for t in _forgot_pwd_email_requests[normalized_email] if t > email_window_start]
+        _forgot_pwd_email_requests[normalized_email] = email_reqs
+
+        if (not is_trusted_ip and len(ip_reqs) >= max_ip) or (len(email_reqs) >= max_email):
+            _pad_duration(start_perf, floor_seconds)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many password reset requests. Please try again later.",
+            )
+
+        _forgot_pwd_ip_requests[clean_ip].append(now_ts)
+        _forgot_pwd_email_requests[normalized_email].append(now_ts)
+
+        last_sent = _forgot_pwd_last_sent.get(normalized_email, 0)
+        if (now_ts - last_sent) < silent_cooldown:
+            in_cooldown = True
+
+    generic_response = MessageResponse(
+        message="If an account exists for that email address, you will receive instructions to reset your password.",
+        success=True,
+    )
+
+    if in_cooldown:
+        _pad_duration(start_perf, floor_seconds)
+        return generic_response
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+
+    # Ineligible or unregistered accounts: perform dummy computation, pad time floor, and return identical generic message
+    if not user or user.status != "ACTIVE":
+        _ = hashlib.sha256((normalized_email + "dummy_timing_padding_entropy").encode("utf-8")).hexdigest()
+        _pad_duration(start_perf, floor_seconds)
+        return generic_response
+
+    with _forgot_pwd_lock:
+        _forgot_pwd_last_sent[normalized_email] = now_ts
+
+    # Revoke previous pending or claimed reset tokens for this user (AC-4)
+    db.query(UserInvitation).filter(
+        UserInvitation.user_id == user.user_id,
+        UserInvitation.purpose == "password_reset",
+        UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+    ).update({"status": "REVOKED"}, synchronize_session=False)
+
+    # Cancel previous pending or failed reset outbox jobs for this user
+    db.query(InvitationOutbox).filter(
+        InvitationOutbox.user_id == user.user_id,
+        InvitationOutbox.status.in_(["PENDING", "FAILED"]),
+    ).update({"status": "CANCELLED", "encrypted_payload": None}, synchronize_session=False)
+
+    # Generate fresh cryptographically secure reset token (AC-15)
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    now_utc = datetime.now(timezone.utc)
+    reset_minutes = getattr(settings, "PASSWORD_RESET_TOKEN_LIFETIME_MINUTES", 30)
+    expires_at = now_utc + timedelta(minutes=reset_minutes)
+
+    invitation = UserInvitation(
+        user_id=user.user_id,
+        token_hash=token_hash,
+        status="PENDING",
+        purpose="password_reset",
+        expires_at=expires_at,
+    )
+    db.add(invitation)
+    db.flush()
+
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip("/")
+    encrypted_token = encrypt_invitation_token(raw_token, user.user_id, purpose="password_reset")
+    setup_url = f"{frontend_url}/auth/setup-password#token={encrypted_token}"
+    encrypted_payload = encrypt_payload({
+        "user_id": user.user_id,
+        "user_name": user.name,
+        "setup_url": setup_url,
+        "raw_token": raw_token,
+        "purpose": "password_reset",
+    })
+
+    outbox_entry = InvitationOutbox(
+        idempotency_key=f"reset:{user.user_id}:{invitation.invitation_id}",
+        user_id=user.user_id,
+        invitation_id=invitation.invitation_id,
+        recipient_email=user.email,
+        encrypted_payload=encrypted_payload,
+        status="PENDING",
+    )
+    db.add(outbox_entry)
+    db.commit()
+
+    try:
+        from app.services.invitation_dispatcher import process_pending_outbox_batch
+        threading.Thread(target=process_pending_outbox_batch, daemon=True).start()
+    except Exception as exc:
+        logger.warning("Could not trigger background outbox dispatcher for reset: %s", exc)
 
     try:
         log_forgot_password(db, ip_address=ip_address, email=normalized_email)
     except Exception:
         pass
 
-    if settings.SUPABASE_URL and settings.SUPABASE_KEY:
-        try:
-            supabase = get_supabase_client()
-            supabase.auth.reset_password_for_email(normalized_email)
-        except Exception as e:
-            logger.warning(f"Supabase reset_password_for_email error: {e}")
-
-    return MessageResponse(
-        message="If an account with that email exists, a password reset request has been initiated.",
-        success=True,
-    )
+    _pad_duration(start_perf, floor_seconds)
+    return generic_response
 
 
-# reset password with encrypted payload support
+# reset password with atomic token consumption, Supabase compensation saga, and token_version bumping
 def reset_password(
     db: Session,
     confirm_data: PasswordResetConfirm,
 ) -> MessageResponse:
-    email = confirm_data.email
+    raw_token_input = confirm_data.token
     new_password = confirm_data.new_password
-    token = confirm_data.token
 
     if confirm_data.encrypted_payload:
         decrypted = decrypt_payload(confirm_data.encrypted_payload)
-        email = decrypted.get("email", email)
         new_password = decrypted.get("new_password", new_password)
-        token = decrypted.get("token", token)
+        raw_token_input = decrypted.get("token", raw_token_input)
 
-    if not email or not new_password:
+    clean_token = (raw_token_input or "").strip()
+    if not clean_token:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email address and new password are required.",
+            detail="Reset token is required.",
         )
 
-    normalized_email = str(email).strip().lower()
+    # Password complexity policy
+    clean_pwd = new_password or ""
+    if len(clean_pwd) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must be at least 10 characters long.",
+        )
+    if (
+        not re.search(r"[A-Z]", clean_pwd)
+        or not re.search(r"[a-z]", clean_pwd)
+        or not re.search(r"[0-9]", clean_pwd)
+        or not any(c in '!@#$%^&*(),.?":{}|<>-=_+' for c in clean_pwd)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Password must contain uppercase letters, lowercase letters, numbers, and symbols.",
+        )
 
+    actual_token = clean_token
+    if clean_token.startswith("gAAAAA"):
+        try:
+            payload = decrypt_payload(clean_token)
+            actual_token = payload.get("token", clean_token)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reset link is invalid, expired, or has already been used.",
+            )
+
+    token_hash = hashlib.sha256(actual_token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    invitation = (
+        db.query(UserInvitation)
+        .filter(UserInvitation.token_hash == token_hash)
+        .first()
+    )
+    if not invitation:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset link is invalid, expired, or has already been used.",
+        )
+
+    # Strict purpose isolation (AC-6, AC-12)
+    if invitation.purpose != "password_reset":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid token purpose for password reset.",
+        )
+
+    if invitation.status in ("REVOKED", "EXPIRED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This reset link has been {invitation.status.lower()} and is no longer valid.",
+        )
+
+    if invitation.status == "ACCEPTED":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset link has already been used to change a password.",
+        )
+
+    exp = invitation.expires_at
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp <= now:
+        db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
+            {"status": "EXPIRED"}, synchronize_session=False
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset link has expired. Please submit a new reset request.",
+        )
+
+    # Phase 1: Atomic conditional claim matching both status and purpose (AC-16)
+    rows = (
+        db.query(UserInvitation)
+        .filter(
+            UserInvitation.invitation_id == invitation.invitation_id,
+            UserInvitation.status == "PENDING",
+            UserInvitation.purpose == "password_reset",
+            UserInvitation.expires_at > now,
+        )
+        .update(
+            {"status": "CLAIMED", "claimed_at": now},
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+
+    if rows == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset link is currently being processed or has already been used.",
+        )
+
+    user = db.query(User).filter(User.user_id == invitation.user_id).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found.")
+
+    if user.status in ("LOCKED", "SUSPENDED", "DEACTIVATED"):
+        db.query(UserInvitation).filter(
+            UserInvitation.invitation_id == invitation.invitation_id,
+            UserInvitation.status == "CLAIMED",
+        ).update({"status": "PENDING", "claimed_at": None}, synchronize_session=False)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Account is {user.status.lower()}. Please contact an administrator.",
+        )
+
+    # Phase 2: Supabase Admin Auth update with automatic rollback to PENDING on error (AC-17)
     if settings.SUPABASE_URL and settings.SUPABASE_KEY:
         try:
-            supabase = get_supabase_client()
-            supabase.auth.update_user({"password": new_password})
-        except Exception as e:
-            logger.error(f"Failed to update password via Supabase Auth SDK: {e}")
-            if settings.SUPABASE_SERVICE_ROLE_KEY:
-                try:
-                    admin_client = get_supabase_admin_client()
-                    user = db.query(User).filter(User.email == normalized_email).first()
-                    if user:
-                        auth_users = admin_client.auth.admin.list_users()
-                        auth_user = next(
-                            (
-                                auth_user
-                                for auth_user in getattr(auth_users, "users", auth_users)
-                                if str(getattr(auth_user, "email", "")).lower()
-                                == normalized_email
-                            ),
-                            None,
-                        )
-                        if auth_user is None:
-                            raise ValueError("Authentication user not found.")
-                        admin_client.auth.admin.update_user_by_id(
-                            str(auth_user.id),
-                            {"password": new_password},
-                        )
-                except Exception as admin_err:
-                    logger.error(f"Admin auth password update failed: {admin_err}")
+            from app.services.user_service import UserService
+            auth_user_id = UserService(db)._find_auth_user_id(user.email)
+            get_supabase_admin_client().auth.admin.update_user_by_id(
+                auth_user_id,
+                {
+                    "password": clean_pwd,
+                },
+            )
+        except Exception as exc:
+            db.query(UserInvitation).filter(
+                UserInvitation.invitation_id == invitation.invitation_id,
+                UserInvitation.status == "CLAIMED",
+            ).update({"status": "PENDING", "claimed_at": None}, synchronize_session=False)
+            db.commit()
+            logger.exception("Failed to update password in Supabase Auth during reset: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Authentication provider service error. Please try again.",
+            )
 
-    user = db.query(User).filter(User.email == normalized_email).first()
-    if user:
+    # Phase 3: Finalize DB commit: bump token_version (session revocation), invalidate tokens, clear rate limit lockout (AC-13)
+    try:
         user.token_version = int(getattr(user, "token_version", 1) or 1) + 1
-        user.updated_at = datetime.now(timezone.utc)
-        db.add(user)
-        db.commit()
+        user.updated_at = now
 
+        db.query(UserInvitation).filter(
+            UserInvitation.invitation_id == invitation.invitation_id
+        ).update(
+            {"status": "ACCEPTED", "accepted_at": now},
+            synchronize_session=False,
+        )
+
+        db.query(UserInvitation).filter(
+            UserInvitation.user_id == user.user_id,
+            UserInvitation.purpose == "password_reset",
+            UserInvitation.status == "PENDING",
+        ).update({"status": "REVOKED"}, synchronize_session=False)
+
+        # Clear login rate limit lockout (AC-13)
         try:
-            log_password_reset(
-                db,
-                user_id=user.user_id,
-                company_id=user.company_id,
-                ip_address="system",   # no Request object here; callers can pass it if needed
-                email=normalized_email,
-                success=True,
+            from app.models.security import LoginRateLimit
+            db.query(LoginRateLimit).filter(LoginRateLimit.locked_until <= now).update(
+                {"failed_attempts": 0, "locked_until": None}, synchronize_session=False
             )
         except Exception:
-            db.rollback()
+            pass
+
+        db.commit()
+        logger.info("Successfully reset password and bumped token_version for user_id=%s", user.user_id)
+    except Exception as dberr:
+        db.rollback()
+        logger.error("DB commit failed after password reset for user %s: %s", user.user_id, dberr)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to finalize password reset. Please try again.",
+        )
+
+    # Informational confirmation email in background worker (AC-13)
+    try:
+        def _dispatch_confirmation():
+            subj = "Your password was reset - MCT Financial Management System"
+            txt = (
+                f"Hello {user.name},\n\n"
+                f"Your account password has been successfully reset. "
+                f"If you did not initiate this change, please contact an administrator immediately.\n\n"
+                f"MCT Companies Centralized Financial Management System"
+            )
+            h_content = f"""
+            <div style="font-family: sans-serif; max-width: 500px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #0f172a;">Password Reset Complete</h2>
+                <p style="color: #334155; font-size: 15px;">Hello {html.escape(user.name)},</p>
+                <p style="color: #334155; font-size: 15px;">Your account password has been successfully reset. All active sessions have been terminated across all devices.</p>
+                <p style="color: #64748b; font-size: 13px;">If you did not make this change, please contact an administrator immediately to secure your account.</p>
+                <hr style="border: none; border-top: 1px solid #f1f5f9; margin: 20px 0;" />
+                <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
+            </div>
+            """
+            from app.services.email_service import send_transactional_email
+            send_transactional_email(
+                to_email=user.email,
+                subject=subj,
+                html_content=h_content,
+                text_content=txt,
+                enforce_cooldown=False,
+            )
+        threading.Thread(target=_dispatch_confirmation, daemon=True).start()
+    except Exception as mail_err:
+        logger.warning("Could not dispatch confirmation email: %s", mail_err)
+
+    try:
+        log_password_reset(
+            db,
+            user_id=user.user_id,
+            company_id=user.company_id,
+            ip_address="system",
+            email=user.email,
+            success=True,
+        )
+    except Exception:
+        pass
 
     return MessageResponse(
-        message="Password has been reset successfully.",
+        message="Password has been reset successfully. You may now log in.",
         success=True,
     )
 
 
-
 def setup_invitation_password(db: Session, token: str, new_password: str) -> MessageResponse:
     """
-    Concurrency-safe invitation password setup.
-    Enforces password complexity, atomic single-use claim, Supabase Auth update,
-    and DB user activation (ACTIVE).
+    Concurrency-safe initial password setup with strict purpose enforcement,
+    three-phase Supabase saga, and account activation to ACTIVE.
     """
     clean_token = (token or "").strip()
     if not clean_token:
@@ -805,14 +1189,19 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
             detail="Password must contain uppercase letters, lowercase letters, numbers, and symbols.",
         )
 
-    import hashlib
-    from app.core.encryption import decrypt_invitation_token
-    actual_token = decrypt_invitation_token(clean_token)
+    actual_token = clean_token
+    if clean_token.startswith("gAAAAA"):
+        try:
+            payload = decrypt_payload(clean_token)
+            actual_token = payload.get("token", clean_token)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invitation link is invalid, expired, or has already been used.",
+            )
+
     token_hash = hashlib.sha256(actual_token.encode("utf-8")).hexdigest()
     now = datetime.now(timezone.utc)
-
-    from app.models.invitation import UserInvitation
-    from app.services.user_service import UserService
 
     # 1. Lookup candidate invitation
     invitation = (
@@ -824,6 +1213,13 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invitation link is invalid, expired, or has already been used.",
+        )
+
+    # Strict purpose enforcement (AC-6)
+    if invitation.purpose != "initial_password_setup":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid token purpose for initial password setup.",
         )
 
     if invitation.status in ("REVOKED", "EXPIRED"):
@@ -852,12 +1248,13 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
             detail="This invitation link has expired. Please contact an administrator for a new invitation.",
         )
 
-    # 2. Atomic conditional claim: transition PENDING -> CLAIMED
+    # 2. Phase 1: Atomic conditional claim matching status and purpose (AC-16)
     rows = (
         db.query(UserInvitation)
         .filter(
             UserInvitation.invitation_id == invitation.invitation_id,
             UserInvitation.status == "PENDING",
+            UserInvitation.purpose == "initial_password_setup",
             UserInvitation.expires_at > now,
         )
         .update(
@@ -873,19 +1270,25 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
             detail="Invitation link is currently being processed or has already been used.",
         )
 
-    # 3. Lock User row
+    # 3. Check user record & eligibility (AC-5)
     user = db.query(User).filter(User.user_id == invitation.user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User account not found.")
 
-    if user.status in ("LOCKED", "SUSPENDED"):
+    if user.status in ("LOCKED", "SUSPENDED", "DEACTIVATED"):
+        db.query(UserInvitation).filter(
+            UserInvitation.invitation_id == invitation.invitation_id,
+            UserInvitation.status == "CLAIMED",
+        ).update({"status": "PENDING", "claimed_at": None}, synchronize_session=False)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Account is {user.status.lower()}. Please contact an administrator.",
         )
 
-    # 4. Update password in Supabase Auth & confirm email
+    # 4. Phase 2: Update password in Supabase Auth with rollback to PENDING on error (AC-17)
     try:
+        from app.services.user_service import UserService
         auth_user_id = UserService(db)._find_auth_user_id(user.email)
         get_supabase_admin_client().auth.admin.update_user_by_id(
             auth_user_id,
@@ -896,7 +1299,6 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
             },
         )
     except Exception as exc:
-        # Revert claim to PENDING on Supabase error so user can retry safely
         db.query(UserInvitation).filter(
             UserInvitation.invitation_id == invitation.invitation_id,
             UserInvitation.status == "CLAIMED",
@@ -908,18 +1310,27 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
             detail="Authentication provider service error. Please try again.",
         )
 
-    # 5. Finalize DB user activation & invitation acceptance
+    # 5. Phase 3: Finalize DB user activation & invitation acceptance
     try:
         user.status = "ACTIVE"
         user.must_change_password = False
         user.token_version = int(getattr(user, "token_version", 1) or 1) + 1
         user.updated_at = now
+
         db.query(UserInvitation).filter(
             UserInvitation.invitation_id == invitation.invitation_id
         ).update(
             {"status": "ACCEPTED", "accepted_at": now},
             synchronize_session=False,
         )
+
+        # Invalidate any other pending setup tokens for this user (AC-4)
+        db.query(UserInvitation).filter(
+            UserInvitation.user_id == user.user_id,
+            UserInvitation.purpose == "initial_password_setup",
+            UserInvitation.status == "PENDING",
+        ).update({"status": "REVOKED"}, synchronize_session=False)
+
         db.commit()
         logger.info("Successfully activated user_id=%s via invitation redemption.", user.user_id)
     except Exception as dberr:

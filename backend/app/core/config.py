@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     REFRESH_COOKIE_NAME: str = "mct_refresh_token"
     REFRESH_COOKIE_PATH: str = "/api/v1/auth"
 
+    INITIAL_SETUP_TOKEN_LIFETIME_HOURS: int = 24
+    PASSWORD_RESET_TOKEN_LIFETIME_MINUTES: int = 30
+    FORGOT_PASSWORD_RATE_LIMIT_EMAIL_COUNT: int = 5
+    FORGOT_PASSWORD_RATE_LIMIT_EMAIL_WINDOW_SECONDS: int = 900
+    FORGOT_PASSWORD_RATE_LIMIT_IP_COUNT: int = 10
+    FORGOT_PASSWORD_RATE_LIMIT_IP_WINDOW_SECONDS: int = 900
+    FORGOT_PASSWORD_SILENT_COOLDOWN_SECONDS: int = 60
+    FORGOT_PASSWORD_TIME_FLOOR_MS: int = 180
+
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod
     def validate_jwt_secret(cls, v: Union[SecretStr, str]) -> SecretStr:
