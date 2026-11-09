@@ -161,6 +161,7 @@ class InvitationDispatcher:
             payload_data = decrypt_payload(job.encrypted_payload)
             setup_url = payload_data.get("setup_url", "")
             user_name = payload_data.get("user_name", "Valued Employee")
+            purpose = payload_data.get("purpose") or (parent_invitation.purpose if parent_invitation else "initial_password_setup")
         except Exception as exc:
             logger.error("Payload decryption failed for job %s: %s. Marking DEAD_LETTER.", job.job_id, exc)
             self._update_job_status(
@@ -182,30 +183,57 @@ class InvitationDispatcher:
             return self._finalize_success(job.job_id, claim_token, job.user_id)
 
         safe_user_name = html.escape(user_name)
-        email_body_html = f"""
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
-            <h2 style="color: #0f172a;">Welcome to MCT Financial Management System</h2>
-            <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
-            <p style="color: #334155; font-size: 15px;">
-                An account has been created for you. To complete your account activation and access the system, please set your personal password by clicking the link below:
-            </p>
-            <div style="margin: 24px 0;">
-                <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
-                    Set Up Your Password
-                </a>
+
+        if purpose == "password_reset":
+            email_subject = "Reset Your Password - MCT Financial Management System"
+            email_body_html = f"""
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #0f172a;">Reset Your Password</h2>
+                <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
+                <p style="color: #334155; font-size: 15px;">
+                    We received a request to reset your password for the MCT Financial Management System. Click the link below to choose a new password:
+                </p>
+                <div style="margin: 24px 0;">
+                    <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                        Reset Your Password
+                    </a>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">
+                    This single-use link expires in 30 minutes. If you did not request a password reset, you can safely ignore this email.
+                </p>
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+                <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
             </div>
-            <p style="color: #64748b; font-size: 13px;">
-                This single-use link expires in 24 hours. For security reasons, do not share this link with anyone.
-            </p>
-            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-            <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
-        </div>
-        """
+            """
+            email_text_content = f"Hello {user_name}! Reset your password here: {setup_url} (Expires in 30 minutes)"
+        else:
+            email_subject = "Complete Your Account Setup - MCT Financial Management System"
+            email_body_html = f"""
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #0f172a;">Welcome to MCT Financial Management System</h2>
+                <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
+                <p style="color: #334155; font-size: 15px;">
+                    An account has been created for you. To complete your account activation and access the system, please set your personal password by clicking the link below:
+                </p>
+                <div style="margin: 24px 0;">
+                    <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                        Set Up Your Password
+                    </a>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">
+                    This single-use link expires in 24 hours. For security reasons, do not share this link with anyone.
+                </p>
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+                <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
+            </div>
+            """
+            email_text_content = f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)"
 
         # Log invitation setup link with masked PII and redacted sensitive token in server logs
         logger.info(
-            "Account setup link generated for %s: %s",
+            "Account link generated for %s (purpose=%s): %s",
             mask_email(job.recipient_email),
+            purpose,
             mask_sensitive_url(setup_url),
         )
 
@@ -220,9 +248,9 @@ class InvitationDispatcher:
                     "name": safe_user_name,
                 }
             ],
-            "subject": "Complete Your Account Setup - MCT Financial Management System",
+            "subject": email_subject,
             "htmlContent": email_body_html,
-            "textContent": f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)",
+            "textContent": email_text_content,
             "headers": {
                 "X-Mailin-Track": "0",
             },

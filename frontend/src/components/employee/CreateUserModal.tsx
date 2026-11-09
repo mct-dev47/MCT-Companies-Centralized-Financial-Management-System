@@ -787,11 +787,6 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
             <span>
               Are you sure you want to add{' '}
               <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
-              {selectedCompanies.length > 0 ? (
-                <>
-                  appointed to <strong className="text-focus">{selectedCompanies.join(', ')}</strong>{' '}
-                </>
-              ) : null}
               as <strong className="text-focus">{pendingValues?.role}</strong>?
             </span>
             {selectedCompanies.length > 0 && (

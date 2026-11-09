@@ -56,12 +56,36 @@ class Settings(BaseSettings):
     OTP_COOKIE_SECURE: bool = False
 
     LOGIN_MAX_ATTEMPTS: int = 5
-    LOGIN_LOCKOUT_MINUTES: int = 10
+    LOGIN_LOCKOUT_MINUTES: int = 15
+    LOGIN_GLOBAL_EMAIL_MAX_ATTEMPTS: int = 15
+    LOGIN_IP_MAX_ATTEMPTS: int = 30
     OTP_MAX_ATTEMPTS: int = 5
     OTP_RESEND_LIMIT: int = 5
     OTP_RESEND_INTERVAL_SECONDS: int = 120
+    OTP_RESEND_LOCKOUT_MINUTES: int = 15
     OTP_EXPIRES_SECONDS: int = 180
-    SESSION_IDLE_TIMEOUT_SECONDS: int = 7200
+    OTP_AUDIT_RETENTION_DAYS: int = 30
+    OTP_HMAC_SECRET: SecretStr = SecretStr("")
+    API_RATE_LIMIT_PER_MINUTE: int = 120
+    HEAVY_API_RATE_LIMIT_PER_MINUTE: int = 30
+    RATE_LIMIT_ENABLED: bool = True
+    TRUSTED_PROXIES: str = "127.0.0.1,::1"
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = 300
+    SESSION_IDLE_TIMEOUT_SECONDS: int = 1800
+    SESSION_ABSOLUTE_LIFETIME_SECONDS: int = 28800
+    REFRESH_GRACE_PERIOD_SECONDS: int = 15
+    REAUTH_TOKEN_EXPIRE_SECONDS: int = 300
+    REFRESH_COOKIE_NAME: str = "mct_refresh_token"
+    REFRESH_COOKIE_PATH: str = "/api/v1/auth"
+
+    INITIAL_SETUP_TOKEN_LIFETIME_HOURS: int = 24
+    PASSWORD_RESET_TOKEN_LIFETIME_MINUTES: int = 30
+    FORGOT_PASSWORD_RATE_LIMIT_EMAIL_COUNT: int = 5
+    FORGOT_PASSWORD_RATE_LIMIT_EMAIL_WINDOW_SECONDS: int = 900
+    FORGOT_PASSWORD_RATE_LIMIT_IP_COUNT: int = 10
+    FORGOT_PASSWORD_RATE_LIMIT_IP_WINDOW_SECONDS: int = 900
+    FORGOT_PASSWORD_SILENT_COOLDOWN_SECONDS: int = 60
+    FORGOT_PASSWORD_TIME_FLOOR_MS: int = 180
 
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod
@@ -80,6 +104,15 @@ class Settings(BaseSettings):
     @property
     def resend_api_key_plain(self) -> str:
         return unwrap_secret(self.RESEND_API_KEY)
+
+    @property
+    def otp_hmac_secret_plain(self) -> str:
+        secret = unwrap_secret(self.OTP_HMAC_SECRET)
+        if not secret:
+            secret = unwrap_secret(self.SUPABASE_JWT_SECRET) or self.SUPABASE_KEY
+        if not secret or len(secret.strip()) < 32:
+            secret = "mct-centralized-rate-limit-otp-hmac-secret-32chars-min!"
+        return secret.strip()
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

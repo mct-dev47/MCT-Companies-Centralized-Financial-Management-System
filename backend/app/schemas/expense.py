@@ -3,18 +3,20 @@ from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
 
-class ExpenseBase(BaseModel):
+from app.schemas.base import StrictBaseModel
+
+class ExpenseBase(StrictBaseModel):
     company_id: Optional[int] = None
     category_id: Optional[int] = None
     created_by: Optional[int] = None
     expense_date: date
-    reference_no: Optional[str] = None
-    cheque_no: Optional[str] = None
+    reference_no: Optional[str] = Field(None, max_length=100)
+    cheque_no: Optional[str] = Field(None, max_length=100)
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Withdrawal amount must be at least 1.00 (cannot be negative or zero)")
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
-    particulars: Optional[str] = Field(None, description="Particulars / description")
-    description: Optional[str] = None
-    remarks: Optional[str] = Field(None, description="Operational remarks by supervisor/finance")
+    particulars: Optional[str] = Field(None, max_length=500, description="Particulars / description")
+    description: Optional[str] = Field(None, max_length=500)
+    remarks: Optional[str] = Field(None, max_length=500, description="Operational remarks by supervisor/finance")
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -39,11 +41,11 @@ class ExpenseBase(BaseModel):
         return v
 
 class ExpenseCreate(ExpenseBase):
-    company: Optional[str] = None
-    category: Optional[str] = None
-    chequeNo: Optional[str] = None
-    payment_method: Optional[str] = None
-    bank_account_id: Optional[str] = None
+    company: Optional[str] = Field(None, max_length=150)
+    category: Optional[str] = Field(None, max_length=150)
+    chequeNo: Optional[str] = Field(None, max_length=100)
+    payment_method: Optional[str] = Field(None, max_length=50)
+    bank_account_id: Optional[str] = Field(None, max_length=50)
 
     @model_validator(mode="after")
     def validate_required_fields(self):
@@ -73,20 +75,20 @@ class ExpenseCreate(ExpenseBase):
 
         return self
 
-class ExpenseUpdate(BaseModel):
+class ExpenseUpdate(StrictBaseModel):
     category_id: Optional[int] = None
-    category: Optional[str] = None
-    payment_method: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=150)
+    payment_method: Optional[str] = Field(None, max_length=50)
     expense_date: Optional[date] = None
-    reference_no: Optional[str] = None
-    cheque_no: Optional[str] = None
-    chequeNo: Optional[str] = None
+    reference_no: Optional[str] = Field(None, max_length=100)
+    cheque_no: Optional[str] = Field(None, max_length=100)
+    chequeNo: Optional[str] = Field(None, max_length=100)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     withdrawal: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     amount_paid: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    particulars: Optional[str] = None
-    description: Optional[str] = None
-    remarks: Optional[str] = None
+    particulars: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(None, max_length=500)
+    remarks: Optional[str] = Field(None, max_length=500)
 
     @field_validator('amount', 'withdrawal', mode='before')
     @classmethod

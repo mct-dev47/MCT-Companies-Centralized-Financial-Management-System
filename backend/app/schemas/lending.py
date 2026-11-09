@@ -1,15 +1,16 @@
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from decimal import Decimal
+from app.schemas.base import StrictBaseModel
 
 
-class LendingCalculateRequest(BaseModel):
+class LendingCalculateRequest(StrictBaseModel):
     principal: Decimal = Field(..., ge=1.0)
     interest_rate: Decimal = Field(default=Decimal("20.00"), ge=0.0)
-    payment_frequency: str = Field(default="Daily")
+    payment_frequency: str = Field(default="Daily", max_length=50)
     term_days: Optional[int] = Field(default=40, ge=1)
-    date_borrowed: Optional[str] = None
-    due_date: Optional[str] = ""
+    date_borrowed: Optional[str] = Field(None, max_length=50)
+    due_date: Optional[str] = Field("", max_length=50)
 
 
 class LendingCalculateResponse(BaseModel):
@@ -27,31 +28,31 @@ class LendingCalculateResponse(BaseModel):
     due_date: str
 
 
-class BorrowerCreateRequest(BaseModel):
-    borrower_name: str = Field(..., min_length=1)
-    borrower_contact: Optional[str] = ""
-    borrower_address: Optional[str] = ""
+class BorrowerCreateRequest(StrictBaseModel):
+    borrower_name: str = Field(..., min_length=1, max_length=200)
+    borrower_contact: Optional[str] = Field("", max_length=100)
+    borrower_address: Optional[str] = Field("", max_length=500)
     loan_amount: Decimal = Field(..., ge=1.0)
     interest_rate: Decimal = Field(default=Decimal("20.00"), ge=0.0)
-    payment_frequency: str = Field(default="Daily")
+    payment_frequency: str = Field(default="Daily", max_length=50)
     term_days: Optional[int] = Field(default=40, ge=1)
-    date_borrowed: Optional[str] = None
-    due_date: Optional[str] = ""
-    notes: Optional[str] = ""
+    date_borrowed: Optional[str] = Field(None, max_length=50)
+    due_date: Optional[str] = Field("", max_length=50)
+    notes: Optional[str] = Field("", max_length=1000)
 
 
-class BorrowerUpdateRequest(BaseModel):
-    borrower_name: Optional[str] = None
-    borrower_contact: Optional[str] = None
-    borrower_address: Optional[str] = None
+class BorrowerUpdateRequest(StrictBaseModel):
+    borrower_name: Optional[str] = Field(None, max_length=200)
+    borrower_contact: Optional[str] = Field(None, max_length=100)
+    borrower_address: Optional[str] = Field(None, max_length=500)
     loan_amount: Optional[Decimal] = None
     interest_rate: Optional[Decimal] = None
-    payment_frequency: Optional[str] = None
-    term_days: Optional[int] = None
-    date_borrowed: Optional[str] = None
-    due_date: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
+    payment_frequency: Optional[str] = Field(None, max_length=50)
+    term_days: Optional[int] = Field(None, ge=1)
+    date_borrowed: Optional[str] = Field(None, max_length=50)
+    due_date: Optional[str] = Field(None, max_length=50)
+    status: Optional[str] = Field(None, max_length=50)
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
 class BorrowerDeleteResponse(BaseModel):
@@ -59,44 +60,44 @@ class BorrowerDeleteResponse(BaseModel):
     message: str = "Borrower deleted successfully."
 
 
-class LendingPaymentCreateRequest(BaseModel):
+class LendingPaymentCreateRequest(StrictBaseModel):
     borrower_id: int
-    payment_date: str
-    cycle_due_date: Optional[str] = None
+    payment_date: str = Field(..., max_length=50)
+    cycle_due_date: Optional[str] = Field(None, max_length=50)
     cycle_index: Optional[int] = None
     amount: Decimal = Field(..., ge=1.0)
     penalty_amount: Optional[Decimal] = Field(default=Decimal("0.00"), ge=0.0)
-    method: str = Field(default="Cash")
-    reference_no: Optional[str] = ""
-    notes: Optional[str] = Field(default="", max_length=255)
-    recorded_by: Optional[str] = None
+    method: str = Field(default="Cash", max_length=50)
+    reference_no: Optional[str] = Field("", max_length=100)
+    notes: Optional[str] = Field(default="", max_length=500)
+    recorded_by: Optional[str] = Field(None, max_length=150)
 
 
-class LendingPaymentUpdateRequest(BaseModel):
-    payment_date: Optional[str] = None
-    cycle_due_date: Optional[str] = None
+class LendingPaymentUpdateRequest(StrictBaseModel):
+    payment_date: Optional[str] = Field(None, max_length=50)
+    cycle_due_date: Optional[str] = Field(None, max_length=50)
     cycle_index: Optional[int] = None
     amount: Optional[Decimal] = Field(default=None, ge=1.0)
     penalty_amount: Optional[Decimal] = Field(default=None, ge=0.0)
-    method: Optional[str] = None
-    reference_no: Optional[str] = ""
-    notes: Optional[str] = Field(default="", max_length=255)
-    recorded_by: Optional[str] = None
+    method: Optional[str] = Field(None, max_length=50)
+    reference_no: Optional[str] = Field("", max_length=100)
+    notes: Optional[str] = Field(default="", max_length=500)
+    recorded_by: Optional[str] = Field(None, max_length=150)
 
 
-class LendingTransactionCreateRequest(BaseModel):
+class LendingTransactionCreateRequest(StrictBaseModel):
     borrower_id: int
-    payment_date: str
-    cycle_due_date: Optional[str] = None
+    payment_date: str = Field(..., max_length=50)
+    cycle_due_date: Optional[str] = Field(None, max_length=50)
     cycle_index: Optional[int] = None
     amount: Decimal = Field(..., ge=0.01)
     penalty_amount: Optional[Decimal] = Field(default=None, ge=0.0)
     penalty_portion: Optional[Decimal] = Field(default=None, ge=0.0)
-    payment_method: str = Field(default="Cash")
-    transaction_type: str = Field(default="Repayment")
-    reference_no: Optional[str] = ""
-    notes: Optional[str] = Field(default="", max_length=255)
-    recorded_by: Optional[str] = None
+    payment_method: str = Field(default="Cash", max_length=50)
+    transaction_type: str = Field(default="Repayment", max_length=50)
+    reference_no: Optional[str] = Field("", max_length=100)
+    notes: Optional[str] = Field(default="", max_length=500)
+    recorded_by: Optional[str] = Field(None, max_length=150)
 
 
 class LendingTransactionOut(BaseModel):

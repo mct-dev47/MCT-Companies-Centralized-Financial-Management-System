@@ -21,6 +21,9 @@
 | Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
+| Secure Remember Me Authentication and Session Management | in-progress | [0039](../specs/0039-secure-remember-me-authentication/index.md) |
+| Password Reset and Initial Account Password Setup Security | in-progress | [0040](../specs/0040-password-reset-and-setup-security/index.md) |
+| Secure Rate Limiting for Login, OTP Resend, and API Requests | in-progress | [0041](../specs/0041-secure-rate-limiting/index.md) |
 | Transactions Daily Summary and Remarks Refinements | in-progress | [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md) |
 | Daily Remarks for Sales and Expenses | in-progress | [0041](../specs/0041-daily-remarks.md) |
 
@@ -327,3 +330,54 @@
   - [x] Milestone 3: Day Remark column on Sales and Expense Daily Summary, and Day remark row in the finance modal (AC-1, AC-2, AC-3)
 - [ ] Verify it: /check verify daily-remarks
 - [ ] Test it: /test daily-remarks
+
+### Secure Remember Me Authentication and Session Management
+**Status**: in-progress
+**Spec**: [0039](../specs/0039-secure-remember-me-authentication/index.md)
+**Intent**: Implement persistent and session based refresh credentials via secure cookies, enforce a thirty minute idle timeout and eight hour absolute session lifetime, keep access tokens strictly in client memory, and provide instant session revocation upon logout, password reset, or account lock.
+**Done when**: Remember Me checkbox controls cookie persistence across browser restarts, access tokens live only in JavaScript memory with proactive and reactive refresh, the backend rejects refresh requests after thirty minutes of qualifying inactivity or eight hours of total session age, token rotation with a fifteen second grace period prevents false reuse errors, logout and password resets immediately revoke active sessions, and expired sessions redirect users to `/login` with an explanatory alert banner.
+
+- [x] Design it (spec): [0039](../specs/0039-secure-remember-me-authentication/index.md)
+- [x] Build it: /develop remember-me-auth (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration adding token_version to users table, model updates, and security configuration (AC-3, AC-5, AC-6, AC-12, AC-15)
+  - [x] Milestone 2: Backend refresh cookie issuance, token rotation, idle and absolute timeout verification, and CSRF protection (AC-1, AC-2, AC-4, AC-7, AC-8, AC-9, AC-11)
+  - [x] Milestone 3: Session revocation on logout, password reset, and account lock, reauthentication guard, and qualifying activity tracking (AC-5, AC-7, AC-10, AC-12, AC-14, AC-16)
+  - [x] Milestone 4: Frontend in memory access token management, silent session bootstrap, proactive and reactive refresh, and session expiration banners (AC-3, AC-4, AC-13, AC-15, AC-17)
+  - [x] Milestone 5: Automated test suite covering cookie attributes, rotation, idle timeout, absolute lifetime, concurrency, password safety, reauthentication, and revocation (AC-1 through AC-17)
+- [ ] Verify it: /check verify remember-me-auth
+- [ ] Test it: /test remember-me-auth
+
+### Password Reset and Initial Account Password Setup Security
+**Status**: in-progress
+**Spec**: [0040](../specs/0040-password-reset-and-setup-security/index.md)
+**Intent**: Implement a secure password recovery flow and harden the initial account password setup flow with single use tokens, purpose separation, URL fragment scrubbing, session revocation, rate limiting, and execution duration padding against enumeration.
+**Done when**: Initial setup tokens expire in 24 hours and reset tokens expire in 30 minutes; tokens are single use, purpose isolated, and stored only as SHA-256 hashes; forgot password requests return constant public responses with execution time floor padding and 60 second silent resend cooldown; password resets increment token_version revoking all active sessions across devices; both flows reuse the single Set Password interface at `/auth/setup-password` dynamically adapting to verified token purpose; and all 22 automated test scenarios pass.
+
+- [x] Design it (spec): [0040](../specs/0040-password-reset-and-setup-security/index.md)
+- [x] Build it: /develop password-reset-and-setup-security (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration adding purpose column and compound index to user_invitations, core token helpers, and configuration settings (AC-1, AC-6, AC-10, AC-12, AC-15, AC-16, AC-21)
+  - [x] Milestone 2: Link validation endpoint with status code contract, URL fragment scrubbing, and frontend mount time validation (AC-18, AC-20, AC-22)
+  - [x] Milestone 3: Forgot password endpoint with dual sliding window rate limiting, monotonic time floor padding, 60 second silent cooldown, and outbox dispatch (AC-7, AC-8, AC-9, AC-15, AC-19)
+  - [x] Milestone 4: Atomic password reset and initial setup endpoints with purpose enforcement, three phase Supabase compensation saga, session revocation, and security notices (AC-2, AC-3, AC-4, AC-5, AC-11, AC-13, AC-14, AC-17)
+  - [x] Milestone 5: Frontend Set Password modal consolidation, RecoveryDialog streamlining, and email dispatcher template handling (AC-18, AC-19, AC-20)
+  - [x] Milestone 6: Comprehensive automated test suite verifying all 22 acceptance criteria (AC-1 through AC-22)
+- [ ] Verify it: /check verify password-reset-and-setup-security
+- [ ] Test it: /test password-reset-and-setup-security
+
+### Secure Rate Limiting for Login, OTP Resend, and API Requests
+**Status**: in-progress
+**Spec**: [0041](../specs/0041-secure-rate-limiting/index.md)
+**Intent**: Implement production grade rate limiting across login, OTP resend, and general API endpoints with atomic PostgreSQL persistence, keyed HMAC OTP storage, two phase resend invalidation, 30 day audit retention, live frontend timers, and centralized secure error handling.
+**Done when**: 5 failed login attempts trigger a 15 minute lockout for the email and IP combination with live MM:SS countdown; OTP resend enforces a 2 minute cooldown and 15 minute lockout after 5 resends; replacement OTP invalidates prior code only upon confirmed email send; OTP codes use keyed HMAC-SHA256; general API routes enforce 120 req/min per IP via worker memory; heavy calculation routes enforce 30 req/min via database; all errors return standardized JSON with request correlation IDs; and all 35 automated test scenarios pass.
+
+- [x] Design it (spec): [0041](../specs/0041-secure-rate-limiting/index.md)
+- [x] Build it: /develop secure-rate-limiting (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration for rate_limits and login_otp_challenges, core rate limiter service, and network trusted proxy resolver (AC-1, AC-2, AC-4, AC-8, AC-21, AC-22, AC-24, AC-26, AC-28)
+  - [x] Milestone 2: Centralized error handling, request correlation ID middleware, and safe error mapping matrix (AC-29, AC-30, AC-32, AC-33, AC-35)
+  - [x] Milestone 3: Three tier login rate limiting, progressive account throttling, and rate limit status endpoint (AC-1, AC-2, AC-3, AC-5, AC-6, AC-7, AC-9, AC-10, AC-23, AC-31)
+  - [x] Milestone 4: Persistent HMAC OTP challenge service with two phase resend invalidation and 30 day audit retention (AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-26, AC-27, AC-28)
+  - [x] Milestone 5: Centralized API rate limiting middleware with worker memory sliding windows and database heavy route limits (AC-20, AC-21, AC-23)
+  - [x] Milestone 6: Frontend login and OTP live countdown timers, reload restoration, and error mapping (AC-3, AC-9, AC-11, AC-13, AC-19, AC-32, AC-34)
+  - [x] Milestone 7: Comprehensive automated test suite verifying all 35 acceptance criteria (AC-1 through AC-35)
+- [x] Verify it: /check verify secure-rate-limiting
+- [x] Test it: /test secure-rate-limiting

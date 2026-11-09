@@ -3,17 +3,19 @@ from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
 
-class SaleBase(BaseModel):
+from app.schemas.base import StrictBaseModel
+
+class SaleBase(StrictBaseModel):
     company_id: Optional[int] = None
     category_id: Optional[int] = None
     transaction_date: date
-    cheque_no: Optional[str] = None
+    cheque_no: Optional[str] = Field(None, max_length=100)
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Amount must be at least 1.00 (cannot be 0 or less than 1)")
-    particulars: Optional[str] = Field(None, description="Particulars / description")
-    payment_status: Optional[str] = Field("Paid", description="Payment status: Paid, Pending, Unpaid")
-    deposit_status: Optional[str] = Field(None, description="Deposit status: Deposited, Not Deposited")
+    particulars: Optional[str] = Field(None, max_length=500, description="Particulars / description")
+    payment_status: Optional[str] = Field("Paid", max_length=50, description="Payment status: Paid, Pending, Unpaid")
+    deposit_status: Optional[str] = Field(None, max_length=50, description="Deposit status: Deposited, Not Deposited")
     deposit_date: Optional[date] = Field(None, description="Day the money reached the bank (defaults to the sale date when Deposited)")
-    remarks: Optional[str] = Field(None, description="Operational remarks by supervisor/finance")
+    remarks: Optional[str] = Field(None, max_length=500, description="Operational remarks by supervisor/finance")
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -38,13 +40,13 @@ class SaleBase(BaseModel):
         return v
 
 class SaleCreate(SaleBase):
-    company: Optional[str] = None
-    category: Optional[str] = None
-    chequeNo: Optional[str] = None
-    reference_no: Optional[str] = None
-    description: Optional[str] = None
-    payment_method: Optional[str] = None
-    bank_account_id: Optional[str] = None
+    company: Optional[str] = Field(None, max_length=150)
+    category: Optional[str] = Field(None, max_length=150)
+    chequeNo: Optional[str] = Field(None, max_length=100)
+    reference_no: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=500)
+    payment_method: Optional[str] = Field(None, max_length=50)
+    bank_account_id: Optional[str] = Field(None, max_length=50)
 
     @model_validator(mode="after")
     def validate_required_fields(self):
@@ -122,20 +124,20 @@ class SaleCreate(SaleBase):
 
         return self
 
-class SaleUpdate(BaseModel):
+class SaleUpdate(StrictBaseModel):
     category_id: Optional[int] = None
-    category: Optional[str] = None
-    payment_method: Optional[str] = None
-    payment_status: Optional[str] = None
-    deposit_status: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=150)
+    payment_method: Optional[str] = Field(None, max_length=50)
+    payment_status: Optional[str] = Field(None, max_length=50)
+    deposit_status: Optional[str] = Field(None, max_length=50)
     deposit_date: Optional[date] = None
     transaction_date: Optional[date] = None
-    cheque_no: Optional[str] = None
-    chequeNo: Optional[str] = None
+    cheque_no: Optional[str] = Field(None, max_length=100)
+    chequeNo: Optional[str] = Field(None, max_length=100)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
-    particulars: Optional[str] = None
-    description: Optional[str] = None
-    remarks: Optional[str] = None
+    particulars: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(None, max_length=500)
+    remarks: Optional[str] = Field(None, max_length=500)
 
     @field_validator('amount', mode='before')
     @classmethod

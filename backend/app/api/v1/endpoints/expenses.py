@@ -21,6 +21,7 @@ router = APIRouter()
 
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
+from app.core.pagination import PaginationParams
 from app.core.cache import get_cached, set_cached
 
 def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
@@ -134,6 +135,7 @@ def get_expenses(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
+    pagination: PaginationParams = Depends(),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
@@ -174,7 +176,8 @@ def get_expenses(
         if end_date:
             sb_query = sb_query.lte("expense_date", end_date.isoformat())
 
-        res = sb_query.order("expense_date", desc=True).order("expense_id", desc=True).execute()
+        sb_query = sb_query.order("expense_date", desc=True).order("expense_id", desc=True)
+        res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
         return [
@@ -241,7 +244,7 @@ def get_expenses(
         if end_date:
             query = query.filter(Expense.expense_date <= end_date)
 
-        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
         return [
             ExpenseOut(

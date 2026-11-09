@@ -5,12 +5,14 @@ from app.schemas.user import UserResponse
 class LoginRequest(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
+    remember_me: Optional[bool] = False
     encrypted_payload: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+    remember_me: Optional[bool] = False
     encrypted_response: Optional[str] = None
 
 class LoginChallengeResponse(BaseModel):
@@ -49,3 +51,21 @@ class SetupPasswordRequest(BaseModel):
     token: Optional[str] = None
     new_password: Optional[str] = None
     encrypted_payload: Optional[str] = None
+
+class ReauthenticateRequest(BaseModel):
+    password: Optional[str] = None
+    encrypted_payload: Optional[str] = None
+
+class ReauthenticateResponse(BaseModel):
+    reauth_token: str
+    expires_in: int
+    success: bool = True
+
+class TokenValidateRequest(BaseModel):
+    token: Optional[str] = None
+    encrypted_payload: Optional[str] = None
+
+class TokenValidateResponse(BaseModel):
+    valid: bool = True
+    purpose: str
+    masked_email: str
