@@ -34,8 +34,28 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
   const [isSuccess, setIsSuccess] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
   const resendCountdown = useCountdown({ initialSeconds: 120 })
+  const lockoutCountdown = useCountdown({ initialSeconds: 0 })
 
   const challengeEmail = (location.state as { email?: string })?.email
+
+  // Synchronize server authoritative cooldown and resend lockout state on mount (AC-15, AC-19)
+  React.useEffect(() => {
+    async function syncStatus() {
+      try {
+        const st = await authService.getRateLimitStatus(challengeEmail)
+        if (st.resend_locked && st.resend_retry_after > 0) {
+          lockoutCountdown.start(st.resend_retry_after)
+        } else if (st.cooldown_remaining > 0) {
+          resendCountdown.start(st.cooldown_remaining)
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (open) {
+      syncStatus()
+    }
+  }, [open, challengeEmail])
 
   const resetState = React.useCallback(() => {
     setCode('')
@@ -194,9 +214,11 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
               </div>
 
               <div className="text-center text-xs sm:text-sm text-muted-fg font-medium">
-                {resendCountdown.isExpired
-                  ? 'You can request a new code.'
-                  : `Resend available in ${resendCountdown.formattedTime}`}
+                {lockoutCountdown.secondsLeft > 0
+                  ? `Resend locked. Try again in ${lockoutCountdown.formattedTime}`
+                  : resendCountdown.secondsLeft > 0
+                  ? `Resend available in ${resendCountdown.formattedTime}`
+                  : 'You can request a new code.'}
               </div>
 
               {/* Action Buttons */}
@@ -204,7 +226,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                 <Button
                   type="submit"
                   disabled={isVerifyDisabled}
-                  className="w-full h-11 text-sm font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs transition-all cursor-pointer"
+                  className="w-full h-11 text-sm font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs transition-all cursor-pointer disabled:opacity-50"
                 >
                   {isLoading ? (
                     <>
@@ -226,10 +248,15 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                       setCode('')
                       resendCountdown.start(result.resendAvailableIn)
                     } catch (err: unknown) {
+                      const anyErr = err as any
+                      const retrySec = anyErr?.retry_after || anyErr?.response?.data?.retry_after || anyErr?.data?.retry_after
+                      if (anyErr?.code === 'OTP_RESEND_LOCKED' || (retrySec && Number(retrySec) > 120)) {
+                        lockoutCountdown.start(Number(retrySec || 900))
+                      }
                       setError(formatUserFriendlyErrorMessage(err, 'Unable to resend the code.'))
                     }
                   }}
-                  disabled={!resendCountdown.isExpired || isLoading}
+                  disabled={lockoutCountdown.secondsLeft > 0 || resendCountdown.secondsLeft > 0 || isLoading}
                   className="w-full h-11 text-xs sm:text-sm font-semibold rounded-xl border-stroke/40 hover:bg-surface text-focus transition-all cursor-pointer disabled:opacity-50"
                 >
                   Resend Code

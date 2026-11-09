@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.db.supabase import get_supabase_client
 from app.core.config import settings
 from app.core.dependencies import get_current_user, AuthenticatedUser
+from app.core.network import get_trusted_client_ip
 from app.core.security import get_access_token, revoke_access_token
 from app.schemas.auth import (
     LoginRequest,
@@ -54,7 +55,8 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    result, cookie = login_user(db=db, login_data=login_data, ip_address=request.client.host if request.client else "unknown")
+    client_ip = get_trusted_client_ip(request)
+    result, cookie = login_user(db=db, login_data=login_data, ip_address=client_ip)
     is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result
@@ -66,10 +68,11 @@ def verify_otp(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    client_ip = get_trusted_client_ip(request)
     result, refresh_cookie, remember_me = verify_login_otp(
         db=db,
         otp_data=otp_data,
-        ip_address=request.client.host if request.client else "unknown",
+        ip_address=client_ip,
         cookie_value=request.cookies.get("mct_login_otp"),
     )
     response.delete_cookie("mct_login_otp")
@@ -82,10 +85,78 @@ def resend_otp(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    result, cookie = resend_login_otp(db=db, ip_address=request.client.host if request.client else "unknown", cookie_value=request.cookies.get("mct_login_otp"))
+    client_ip = get_trusted_client_ip(request)
+    result, cookie = resend_login_otp(
+        db=db,
+        ip_address=client_ip,
+        cookie_value=request.cookies.get("mct_login_otp"),
+    )
     is_secure = settings.OTP_COOKIE_SECURE or (settings.ENVIRONMENT.lower() == "production")
     response.set_cookie("mct_login_otp", cookie, httponly=True, secure=is_secure, samesite="lax", max_age=settings.OTP_EXPIRES_SECONDS)
     return result
+
+@router.get("/rate-limit-status", summary="Check Rate Limit and Cooldown Status")
+def get_rate_limit_status(
+    request: Request,
+    email: Optional[str] = None,
+    scope: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timezone
+    from app.services.rate_limiter import rate_limiter, get_login_combo_key, get_login_ip_key
+    from app.services.otp_service import otp_service
+    from app.core.encryption import decrypt_payload
+
+    client_ip = get_trusted_client_ip(request)
+    now = datetime.now(timezone.utc)
+    resend_cooldown = 0
+    resend_locked = False
+    resend_retry_after = 0
+
+    # Check OTP challenge cookie if present
+    cookie_val = request.cookies.get("mct_login_otp")
+    if cookie_val:
+        try:
+            challenge = decrypt_payload(cookie_val)
+            cid = challenge.get("challenge_id")
+            if cid:
+                c_status = otp_service.get_challenge_status(db, cid, client_ip, now=now)
+                resend_cooldown = c_status.get("cooldown_remaining", 0)
+                resend_locked = c_status.get("resend_locked", False)
+                resend_retry_after = c_status.get("resend_retry_after", 0)
+        except Exception:
+            pass
+
+    # Check login rate limit status (email + IP combo, or IP)
+    is_locked = False
+    retry_after = 0
+    locked_until_str = None
+
+    if email:
+        from app.core.company_resolver import normalize_email
+        combo_key, _, _ = get_login_combo_key(normalize_email(email), client_ip)
+        combo_status = rate_limiter.get_status(db, combo_key, now=now)
+        if combo_status.get("locked"):
+            is_locked = True
+            retry_after = combo_status.get("retry_after", 0)
+            locked_until_str = combo_status.get("locked_until")
+
+    if not is_locked:
+        ip_key, _, _ = get_login_ip_key(client_ip)
+        ip_status = rate_limiter.get_status(db, ip_key, now=now)
+        if ip_status.get("locked"):
+            is_locked = True
+            retry_after = ip_status.get("retry_after", 0)
+            locked_until_str = ip_status.get("locked_until")
+
+    return {
+        "locked": is_locked,
+        "retry_after": retry_after,
+        "locked_until": locked_until_str,
+        "cooldown_remaining": resend_cooldown,
+        "resend_locked": resend_locked,
+        "resend_retry_after": resend_retry_after,
+    }
 
 @router.post("/refresh", response_model=TokenResponse, summary="Refresh Access Token and Rotate Refresh Cookie")
 def refresh_token(

@@ -23,6 +23,7 @@
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
 | Secure Remember Me Authentication and Session Management | in-progress | [0039](../specs/0039-secure-remember-me-authentication/index.md) |
 | Password Reset and Initial Account Password Setup Security | in-progress | [0040](../specs/0040-password-reset-and-setup-security/index.md) |
+| Secure Rate Limiting for Login, OTP Resend, and API Requests | in-progress | [0041](../specs/0041-secure-rate-limiting/index.md) |
 
 ---
 
@@ -329,3 +330,21 @@
   - [x] Milestone 6: Comprehensive automated test suite verifying all 22 acceptance criteria (AC-1 through AC-22)
 - [ ] Verify it: /check verify password-reset-and-setup-security
 - [ ] Test it: /test password-reset-and-setup-security
+
+### Secure Rate Limiting for Login, OTP Resend, and API Requests
+**Status**: in-progress
+**Spec**: [0041](../specs/0041-secure-rate-limiting/index.md)
+**Intent**: Implement production grade rate limiting across login, OTP resend, and general API endpoints with atomic PostgreSQL persistence, keyed HMAC OTP storage, two phase resend invalidation, 30 day audit retention, live frontend timers, and centralized secure error handling.
+**Done when**: 5 failed login attempts trigger a 15 minute lockout for the email and IP combination with live MM:SS countdown; OTP resend enforces a 2 minute cooldown and 15 minute lockout after 5 resends; replacement OTP invalidates prior code only upon confirmed email send; OTP codes use keyed HMAC-SHA256; general API routes enforce 120 req/min per IP via worker memory; heavy calculation routes enforce 30 req/min via database; all errors return standardized JSON with request correlation IDs; and all 35 automated test scenarios pass.
+
+- [x] Design it (spec): [0041](../specs/0041-secure-rate-limiting/index.md)
+- [x] Build it: /develop secure-rate-limiting (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration for rate_limits and login_otp_challenges, core rate limiter service, and network trusted proxy resolver (AC-1, AC-2, AC-4, AC-8, AC-21, AC-22, AC-24, AC-26, AC-28)
+  - [x] Milestone 2: Centralized error handling, request correlation ID middleware, and safe error mapping matrix (AC-29, AC-30, AC-32, AC-33, AC-35)
+  - [x] Milestone 3: Three tier login rate limiting, progressive account throttling, and rate limit status endpoint (AC-1, AC-2, AC-3, AC-5, AC-6, AC-7, AC-9, AC-10, AC-23, AC-31)
+  - [x] Milestone 4: Persistent HMAC OTP challenge service with two phase resend invalidation and 30 day audit retention (AC-11, AC-12, AC-13, AC-14, AC-15, AC-16, AC-17, AC-18, AC-26, AC-27, AC-28)
+  - [x] Milestone 5: Centralized API rate limiting middleware with worker memory sliding windows and database heavy route limits (AC-20, AC-21, AC-23)
+  - [x] Milestone 6: Frontend login and OTP live countdown timers, reload restoration, and error mapping (AC-3, AC-9, AC-11, AC-13, AC-19, AC-32, AC-34)
+  - [x] Milestone 7: Comprehensive automated test suite verifying all 35 acceptance criteria (AC-1 through AC-35)
+- [ ] Verify it: /check verify secure-rate-limiting
+- [ ] Test it: /test secure-rate-limiting

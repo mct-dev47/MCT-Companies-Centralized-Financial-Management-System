@@ -202,19 +202,21 @@ async function getRequest<T>(path: string, isRetry: boolean = false): Promise<T>
     throw new Error('Unauthorized')
   }
   const responseText = await response.text()
-  let data: { detail?: string } = {}
+  let data: any = {}
   try {
-    data = responseText ? (JSON.parse(responseText) as { detail?: string }) : {}
+    data = responseText ? JSON.parse(responseText) : {}
   } catch {
     data = {}
   }
   if (!response.ok) {
-    throw new Error(
-      formatUserFriendlyErrorMessage(
-        { status: response.status, ...data },
-        data.detail || responseText || `Authentication request failed (${response.status}).`
-      )
+    const errorPayload = { status: response.status, ...data }
+    const errorMsg = formatUserFriendlyErrorMessage(
+      errorPayload,
+      data.detail || responseText || `Authentication request failed (${response.status}).`
     )
+    const err = new Error(errorMsg)
+    Object.assign(err, errorPayload, { response: { status: response.status, data } })
+    throw err
   }
   return data as T
 }
@@ -239,19 +241,21 @@ async function request<T>(path: string, body: unknown, isRetry: boolean = false)
     }
   }
   const responseText = await response.text()
-  let data: { detail?: string } = {}
+  let data: any = {}
   try {
-    data = responseText ? (JSON.parse(responseText) as { detail?: string }) : {}
+    data = responseText ? JSON.parse(responseText) : {}
   } catch {
     data = {}
   }
   if (!response.ok) {
-    throw new Error(
-      formatUserFriendlyErrorMessage(
-        { status: response.status, ...data },
-        data.detail || responseText || `Authentication request failed (${response.status}).`
-      )
+    const errorPayload = { status: response.status, ...data }
+    const errorMsg = formatUserFriendlyErrorMessage(
+      errorPayload,
+      data.detail || responseText || `Authentication request failed (${response.status}).`
     )
+    const err = new Error(errorMsg)
+    Object.assign(err, errorPayload, { response: { status: response.status, data } })
+    throw err
   }
   return data as T
 }
@@ -618,6 +622,50 @@ export const authService = {
       }
     } catch (error) {
       throw error
+    }
+  },
+
+  /**
+   * Check login rate limit and OTP cooldown/lockout status from server (AC-9, AC-15, AC-19).
+   */
+  async getRateLimitStatus(email?: string): Promise<{
+    locked: boolean
+    retry_after: number
+    locked_until: string | null
+    cooldown_remaining: number
+    resend_locked: boolean
+    resend_retry_after: number
+  }> {
+    try {
+      const query = email ? `?email=${encodeURIComponent(email)}` : ''
+      const response = await fetch(`/api/v1/auth/rate-limit-status${query}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      })
+      if (!response.ok) {
+        return {
+          locked: false,
+          retry_after: 0,
+          locked_until: null,
+          cooldown_remaining: 0,
+          resend_locked: false,
+          resend_retry_after: 0,
+        }
+      }
+      return await response.json()
+    } catch {
+      return {
+        locked: false,
+        retry_after: 0,
+        locked_until: null,
+        cooldown_remaining: 0,
+        resend_locked: false,
+        resend_retry_after: 0,
+      }
     }
   },
 }
