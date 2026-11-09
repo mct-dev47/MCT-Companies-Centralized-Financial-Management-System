@@ -110,17 +110,17 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] max-h-[85vh] overflow-y-auto rounded-[24px] p-5 sm:p-6 bg-white border border-stroke/30 shadow-2xl">
-        <DialogHeader className="text-left pb-3 border-b border-stroke/20">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <CheckCircle2 className="w-4 h-4 text-white" />
+      <DialogContent className="sm:max-w-[620px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
+        <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+              <CheckCircle2 className="w-5 h-5 text-white" />
             </div>
             <div>
-              <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">
+              <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
                 Update Loan Status
               </DialogTitle>
-              <DialogDescription className="text-[11px] text-muted-fg font-normal mt-0.5">
+              <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
                 Update repayment status for this borrowed money record
               </DialogDescription>
             </div>
@@ -213,20 +213,20 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/20">
+          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">
             <Button
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
-              className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
             >
               Cancel
             </Button>
             <Button
               type="submit"
               disabled={isSubmitting}
-              className="h-9 px-5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs"
+              className="h-10 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white cursor-pointer shadow-xs"
             >
               {isSubmitting ? (
                 <>

@@ -10,6 +10,8 @@ export default {
       colors: {
         primary: {
           DEFAULT: '#960C01',
+          hover: '#800a01',
+          active: '#700801',
           foreground: '#FFFFFF',
           tint: 'rgb(150 12 1 / 0.2)',
         },

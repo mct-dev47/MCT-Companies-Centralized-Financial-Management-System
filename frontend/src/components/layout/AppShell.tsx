@@ -27,10 +27,22 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       document.title = 'Loan - MCT Centralized Financial System'
     } else if (path.startsWith('/lending')) {
       document.title = 'Lending - MCT Centralized Financial System'
+    } else if (path.startsWith('/tenant')) {
+      document.title = 'Tenants - MCT Centralized Financial System'
+    } else if (path.startsWith('/receivables') || path.startsWith('/utang')) {
+      document.title = 'Receivables - MCT Centralized Financial System'
+    } else if (path.startsWith('/bank-management')) {
+      document.title = 'Bank Management - MCT Centralized Financial System'
+    } else if (path.startsWith('/petty-cash')) {
+      document.title = 'Petty Cash - MCT Centralized Financial System'
     } else if (path.startsWith('/bills')) {
       document.title = 'Bills - MCT Centralized Financial System'
     } else if (path.startsWith('/transaction')) {
       document.title = 'Transactions - MCT Centralized Financial System'
+    } else if (path.startsWith('/employee')) {
+      document.title = 'Companies - MCT Centralized Financial System'
+    } else if (path.startsWith('/users') || path.startsWith('/user-management')) {
+      document.title = 'User Management - MCT Centralized Financial System'
     } else if (path.startsWith('/activity-log')) {
       document.title = 'Activity Log - MCT Centralized Financial System'
     } else if (path.startsWith('/settings')) {

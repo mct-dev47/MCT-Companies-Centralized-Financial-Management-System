@@ -103,7 +103,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
     setError('')
     const errors: { date?: string; particulars?: string; amount?: string; category?: string } = {}
 
-    const todayIso = new Date().toISOString().split('T')[0]
+    const todayIso = formatToYYYYMMDD(new Date())
     if (!date.trim()) {
       errors.date = 'Date is required.'
     } else if (date.trim() > todayIso) {
@@ -154,7 +154,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
       <DialogContent className="sm:max-w-[660px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
         <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
               <Pencil className="w-5 h-5" />
             </div>
             <div>
@@ -170,7 +170,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
           {error && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
               <span>{error}</span>
             </div>
@@ -184,7 +184,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
               </Label>
               <Input
                 type="date"
-                max={new Date().toISOString().split('T')[0]}
+                max={formatToYYYYMMDD(new Date())}
                 value={date}
                 onChange={(e) => {
                   setDate(e.target.value)

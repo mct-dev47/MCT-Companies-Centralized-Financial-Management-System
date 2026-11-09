@@ -4,7 +4,8 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
-import { TablePagination, TableEmptyState } from '@/components/common'
+import { ConfirmModal, TablePagination, TableEmptyState } from '@/components/common'
+import { notifySuccess } from '@/utils/errorUtils'
 import {
   Table,
   TableBody,
@@ -371,13 +372,8 @@ export const ReceivablesPage: React.FC = () => {
   const companyPos = useDropdownPosition(companyDropdownRef, isCompanyDropdownOpen)
 
   // Feedback banner
-  const [toastMessage, setToastMessage] = React.useState<string | null>(null)
-
   const showToast = (msg: string) => {
-    setToastMessage(msg)
-    setTimeout(() => {
-      setToastMessage(null)
-    }, 4500)
+    notifySuccess(msg)
   }
 
   React.useEffect(() => {
@@ -578,21 +574,6 @@ export const ReceivablesPage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
-      {/* Toast Confirmation Banner */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-emerald-700 text-white shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200">
-          <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
-          <span className="text-xs sm:text-sm font-semibold">{toastMessage}</span>
-          <button
-            type="button"
-            onClick={() => setToastMessage(null)}
-            className="p-1 rounded-lg hover:bg-emerald-600/80 text-white ml-2 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
       {selectedPersonForLedger ? (
         <PersonLedgerPageView
           person={selectedPersonForLedger}
@@ -1374,15 +1355,21 @@ export const ReceivablesPage: React.FC = () => {
       {/* Dialog: Edit Debtor Profile (AC-2, AC-3, AC-9) */}
       {editingPerson && (
         <Dialog open={Boolean(editingPerson)} onOpenChange={(o) => !o && setEditingPerson(null)}>
-          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-[#960C01]" />
-                <span>Edit Debtor Profile</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Update debtor name or customer classification across all non-locked receivable orders for this account.
-              </DialogDescription>
+          <DialogContent className="sm:max-w-[460px] p-6 sm:p-7 rounded-[24px] bg-white border border-stroke/50 shadow-modal">
+            <DialogHeader className="text-left space-y-1.5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                  <Edit2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-extrabold text-focus">
+                    Edit Debtor Profile
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                    Update debtor name or customer classification across all non-locked receivable orders for this account.
+                  </DialogDescription>
+                </div>
+              </div>
             </DialogHeader>
 
             {personEditError && (
@@ -1401,7 +1388,7 @@ export const ReceivablesPage: React.FC = () => {
                   type="text"
                   value={editPersonName}
                   onChange={(e) => setEditPersonName(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
 
@@ -1412,7 +1399,7 @@ export const ReceivablesPage: React.FC = () => {
                   onChange={(e) =>
                     setEditPersonType(e.target.value === 'Staff' ? 'Staff' : 'External')
                   }
-                  className="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 >
                   <option value="External">External</option>
                   <option value="Staff">Staff</option>
@@ -1420,22 +1407,21 @@ export const ReceivablesPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-stroke/30">
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 onClick={() => setEditingPerson(null)}
                 disabled={isSavingPersonEdit}
+                className="h-10 px-4 rounded-xl text-xs font-semibold"
               >
                 Cancel
               </Button>
               <Button
                 type="button"
-                size="sm"
                 onClick={handleSavePersonEdit}
                 disabled={isSavingPersonEdit}
-                className="bg-[#960C01] hover:bg-[#7d0a00] text-white"
+                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold"
               >
                 {isSavingPersonEdit ? 'Updating...' : 'Save Changes'}
               </Button>
@@ -1445,50 +1431,29 @@ export const ReceivablesPage: React.FC = () => {
       )}
 
       {/* Dialog: Confirm Delete Debtor Account (AC-3, AC-9) */}
-      {deletingPerson && (
-        <Dialog open={Boolean(deletingPerson)} onOpenChange={(o) => !o && setDeletingPerson(null)}>
-          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-600" />
-                <span>Delete Debtor Account?</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Are you sure you want to delete all receivable records for{' '}
-                <strong>{deletingPerson.name}</strong>? Linked sale lines and deposited payments will be reversed automatically.
-              </DialogDescription>
-            </DialogHeader>
-
+      <ConfirmModal
+        open={Boolean(deletingPerson)}
+        onOpenChange={(o) => !o && setDeletingPerson(null)}
+        title="Delete Debtor Account?"
+        description={
+          <>
+            Are you sure you want to delete all receivable records for{' '}
+            <strong className="text-focus">{deletingPerson?.name}</strong>? Linked sale lines and deposited payments will be reversed automatically.
             {personDeleteError && (
-              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+              <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2 text-left">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                 <span>{personDeleteError}</span>
               </div>
             )}
-
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setDeletingPerson(null)}
-                disabled={isDeletingPerson}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleConfirmDeletePerson}
-                disabled={isDeletingPerson}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {isDeletingPerson ? 'Deleting...' : 'Confirm Delete'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+          </>
+        }
+        confirmLabel="Confirm Delete"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingPerson}
+        onConfirm={handleConfirmDeletePerson}
+      />
     </div>
   )
 }

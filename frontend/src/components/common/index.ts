@@ -18,4 +18,7 @@ export { ErrorBanner, type ErrorBannerProps } from './ErrorBanner'
 export { Toaster, NOTIFICATION_STYLES } from './Toaster'
 export { LiveDateTimeBadge } from './LiveDateTimeBadge'
 export { ImageCropperModal } from './ImageCropperModal'
+export { RowActionsMenu, type RowActionsMenuProps } from './RowActionsMenu'
+export { StatusBadge, type StatusBadgeProps, type StatusType } from './StatusBadge'
+export { SharedPaymentModal } from './SharedPaymentModal'
 

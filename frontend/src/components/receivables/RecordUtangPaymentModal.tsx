@@ -234,17 +234,21 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[760px] max-h-[90vh] overflow-y-auto bg-white rounded-[24px] p-5 sm:p-6 border border-stroke/30 shadow-2xl">
-        <DialogHeader className="pb-3 border-b border-stroke/20 pr-8 text-left">
+        <DialogHeader className="pb-3 border-b border-stroke/30 pr-8 text-left">
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-                <Coins className="h-5 w-5 text-emerald-600" />
-                <span>Record Payment</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                Record payment remittance for{' '}
-                <strong className="text-focus">{customerName}</strong> ({targetCompany || 'Receivables'}).
-              </DialogDescription>
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Coins className="h-5 w-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Record Payment
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Record payment remittance for{' '}
+                  <strong className="text-focus">{customerName}</strong> ({targetCompany || 'Receivables'}).
+                </DialogDescription>
+              </div>
             </div>
 
             <span
@@ -582,7 +586,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                       'p-2.5 rounded-xl border flex items-center justify-between text-xs',
                       willBeFullyPaid
                         ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                        : 'bg-blue-50/70 border-blue-200 text-blue-900'
+                        : 'bg-amber-50/70 border-amber-200 text-amber-900'
                     )}
                   >
                     <div className="flex items-center gap-1.5">
@@ -599,7 +603,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                         'px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider',
                         willBeFullyPaid
                           ? 'bg-emerald-200/80 text-emerald-800'
-                          : 'bg-blue-200/80 text-blue-800'
+                          : 'bg-amber-200/80 text-amber-800'
                       )}
                     >
                       {willBeFullyPaid ? 'Fully Paid' : 'Partially Paid'}

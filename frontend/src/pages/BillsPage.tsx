@@ -580,46 +580,18 @@ export const BillsPage: React.FC = () => {
           onBillPaid={handleBillUpdated}
         />
 
-        <Dialog
+        <ConfirmModal
           open={Boolean(deleteConfirmBill)}
           onOpenChange={(open) => !open && setDeleteConfirmBill(null)}
-        >
-          <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto p-6 rounded-[24px] bg-white border border-neutral-200 shadow-2xl">
-            <DialogHeader>
-              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 mb-2">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <DialogTitle className="text-lg font-bold text-neutral-900">
-                Delete Monthly Bill?
-              </DialogTitle>
-              <DialogDescription className="text-xs text-neutral-600 mt-1">
-                Are you sure you want to delete the bill for{' '}
-                <strong className="text-neutral-800">{deleteConfirmBill?.billerName}</strong> (
-                {deleteConfirmBill?.company})? This action cannot be undone.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="mt-5 flex items-center justify-end gap-2.5">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isDeleting}
-                onClick={() => setDeleteConfirmBill(null)}
-                className="rounded-xl h-10 px-4 text-xs font-semibold border-neutral-200 hover:bg-neutral-100 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                disabled={isDeleting}
-                onClick={handleConfirmDelete}
-                className="rounded-xl h-10 px-5 text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-md shadow-rose-600/20 cursor-pointer"
-              >
-                {isDeleting ? 'Deleting...' : 'Delete Bill'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+          title="Delete Monthly Bill?"
+          description={`Are you sure you want to delete the bill for ${deleteConfirmBill?.billerName || ''} (${deleteConfirmBill?.company || ''})? This action cannot be undone.`}
+          confirmLabel="Delete Bill"
+          loadingLabel="Deleting..."
+          variant="destructive"
+          actionType="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDelete}
+        />
       </>
     )
   }
@@ -1242,7 +1214,7 @@ export const BillsPage: React.FC = () => {
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Mark as Audit</span>
+                  <span>Mark as Audited</span>
                 </button>
                 <button
                   type="button"
@@ -1251,10 +1223,10 @@ export const BillsPage: React.FC = () => {
                     const b = activeMenuBill || bills.find((item) => item.id === openMenuBillId)
                     if (b) handleMarkBillAudit(b, 'Flagged')
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors text-left cursor-pointer"
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                 >
-                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Mark as Discrepancy</span>
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Flag Discrepancy</span>
                 </button>
                 <div className="h-px bg-slate-100 my-1" />
                 <button

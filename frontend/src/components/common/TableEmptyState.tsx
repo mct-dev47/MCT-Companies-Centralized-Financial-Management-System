@@ -8,6 +8,7 @@ export interface TableEmptyStateProps {
   icon?: React.ComponentType<{ className?: string }>
   title: string
   description?: React.ReactNode
+  message?: React.ReactNode
   action?: React.ReactNode
   className?: string
 }
@@ -20,9 +21,11 @@ export const TableEmptyState: React.FC<TableEmptyStateProps> = ({
   icon: Icon = Inbox,
   title,
   description,
+  message,
   action,
   className,
 }) => {
+  const effectiveDescription = description ?? message
   return (
     <TableRow className="hover:bg-transparent">
       <TableCell
@@ -34,8 +37,8 @@ export const TableEmptyState: React.FC<TableEmptyStateProps> = ({
             <Icon className="w-6 h-6" />
           </div>
           <p className="font-semibold text-focus text-sm sm:text-base">{title}</p>
-          {description && (
-            <p className="text-xs text-muted-fg leading-relaxed">{description}</p>
+          {effectiveDescription && (
+            <p className="text-xs text-muted-fg leading-relaxed">{effectiveDescription}</p>
           )}
           {action && <div className="mt-2">{action}</div>}
         </div>
