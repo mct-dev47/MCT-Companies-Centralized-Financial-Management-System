@@ -344,6 +344,8 @@ class BillsService:
         company_id: Optional[int] = None,
         company_name: Optional[str] = None,
         company_ids: Optional[List[int]] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[BillOut]:
         query = self.db.query(Bill).options(joinedload(Bill.company), selectinload(Bill.payments))
         if company_id:
@@ -353,7 +355,12 @@ class BillsService:
             query = query.filter(Bill.company_id == resolved.company_id)
         elif company_ids:
             query = query.filter(Bill.company_id.in_(company_ids))
-        return [self._to_output(bill) for bill in query.order_by(Bill.created_at.desc(), Bill.bill_id.desc()).all()]
+        query = query.order_by(Bill.created_at.desc(), Bill.bill_id.desc())
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return [self._to_output(bill) for bill in query.all()]
 
     def get_bill(self, bill_id: int) -> Bill:
         bill = (

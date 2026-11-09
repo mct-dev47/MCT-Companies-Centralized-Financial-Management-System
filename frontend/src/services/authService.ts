@@ -40,37 +40,85 @@ export interface Resend2FAResponse {
 const SESSION_STORAGE_KEY = 'mct_session_user'
 const ACCESS_TOKEN_KEY = 'mct_access_token'
 const LAST_ACTIVITY_KEY = 'mct_last_activity'
-const SESSION_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
+const REMEMBER_ME_KEY = 'mct_remember_me'
+const TAB_SESSION_KEY = 'mct_tab_session'
+const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes idle timeout (AC-5)
 
-function getInitialUser(): User | null {
-  if (typeof window !== 'undefined') {
-    try {
-      const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
-      const token = sessionStorage.getItem(ACCESS_TOKEN_KEY)
-      const lastActivity = Number(sessionStorage.getItem(LAST_ACTIVITY_KEY))
-      const tokenPayload = token
-        ? JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
-        : null
-      const tokenIsValid =
-        tokenPayload &&
-        typeof tokenPayload.exp === 'number' &&
-        tokenPayload.exp * 1000 > Date.now()
-      if (
-        stored &&
-        tokenIsValid &&
-        Number.isFinite(lastActivity) &&
-        Date.now() - lastActivity < SESSION_IDLE_TIMEOUT_MS
-      ) {
-        return JSON.parse(stored)
+let inMemoryAccessToken: string | null = null
+let inMemorySessionUser: User | null = null
+let proactiveRefreshTimer: number | null = null
+let refreshPromise: Promise<User | null> | null = null
+let sessionExpirationReason: 'inactivity' | 'max_duration' | null = null
+
+// AC-3 & AC-15: Ensure no legacy tokens remain in browser storage
+if (typeof window !== 'undefined') {
+  try {
+    sessionStorage.removeItem(ACCESS_TOKEN_KEY)
+    localStorage.removeItem(ACCESS_TOKEN_KEY)
+    sessionStorage.removeItem(SESSION_STORAGE_KEY)
+    sessionStorage.removeItem('mct_user')
+
+    // Clean foreign keys lingering from other projects hosted on localhost
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith('mapbox.')) {
+        localStorage.removeItem(key)
       }
-      sessionStorage.removeItem(SESSION_STORAGE_KEY)
-      sessionStorage.removeItem(ACCESS_TOKEN_KEY)
-      sessionStorage.removeItem(LAST_ACTIVITY_KEY)
-    } catch {
-      // ignore
+    })
+  } catch {
+    // ignore
+  }
+
+  // Intercept sessionStorage.getItem('mct_access_token') so any unmigrated code
+  // reads the live in-memory access token without storing it in browser storage.
+  try {
+    const originalGetItem = window.sessionStorage.getItem.bind(window.sessionStorage)
+    window.sessionStorage.getItem = function (key: string): string | null {
+      if (key === ACCESS_TOKEN_KEY) {
+        return inMemoryAccessToken
+      }
+      return originalGetItem(key)
     }
+  } catch {
+    // ignore
+  }
+}
+
+export function getAuthToken(): string | null {
+  return inMemoryAccessToken
+}
+
+function parseTokenExpiration(token: string): number | null {
+  try {
+    const payload = JSON.parse(
+      atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+    )
+    if (payload && typeof payload.exp === 'number') {
+      return payload.exp * 1000
+    }
+  } catch {
+    // ignore
   }
   return null
+}
+
+function scheduleProactiveRefresh(token: string): void {
+  if (typeof window === 'undefined') return
+  if (proactiveRefreshTimer !== null) {
+    window.clearTimeout(proactiveRefreshTimer)
+    proactiveRefreshTimer = null
+  }
+  const expMs = parseTokenExpiration(token)
+  if (!expMs) return
+
+  // Schedule refresh 30 seconds before expiration (tokens expire at 300s)
+  const delay = Math.max(expMs - Date.now() - 30_000, 10_000)
+  proactiveRefreshTimer = window.setTimeout(async () => {
+    try {
+      await authService.refreshSession()
+    } catch {
+      // ignore background refresh failure
+    }
+  }, delay)
 }
 
 /**
@@ -86,7 +134,7 @@ export function detectUserByEmail(email: string): User {
 
   if (isClarian) {
     return {
-      id: usr_,
+      id: `usr_${Date.now()}`,
       fullName: 'Clarian Cuenta',
       email: email.trim(),
       role: 'Supervisor',
@@ -118,7 +166,7 @@ export function detectUserByEmail(email: string): User {
     role = 'Finance'
   }
   return {
-    id: usr_,
+    id: `usr_${Date.now()}`,
     fullName: formatRealName(email.trim()),
     email: email.trim(),
     role: role,
@@ -127,71 +175,87 @@ export function detectUserByEmail(email: string): User {
   }
 }
 
-let inMemorySessionUser: User | null = getInitialUser()
-
-async function getRequest<T>(path: string): Promise<T> {
-  const token =
-    typeof window !== 'undefined'
-      ? sessionStorage.getItem(ACCESS_TOKEN_KEY)
-      : null
+async function getRequest<T>(path: string, isRetry: boolean = false): Promise<T> {
+  const token = inMemoryAccessToken
   if (!token) {
+    if (!isRetry) {
+      const refreshed = await authService.refreshSession()
+      if (refreshed && inMemoryAccessToken) {
+        return getRequest<T>(path, true)
+      }
+    }
     throw new Error('No access token available')
   }
   const response = await fetch(`/api/v1/auth${path}`, {
     method: 'GET',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
   })
-  if (response.status === 401) {
+  if (response.status === 401 && !isRetry) {
+    const refreshed = await authService.refreshSession()
+    if (refreshed && inMemoryAccessToken) {
+      return getRequest<T>(path, true)
+    }
     throw new Error('Unauthorized')
   }
   const responseText = await response.text()
-  let data: { detail?: string } = {}
+  let data: any = {}
   try {
-    data = responseText ? (JSON.parse(responseText) as { detail?: string }) : {}
+    data = responseText ? JSON.parse(responseText) : {}
   } catch {
     data = {}
   }
   if (!response.ok) {
-    throw new Error(
-      formatUserFriendlyErrorMessage(
-        { status: response.status, ...data },
-        data.detail || responseText || `Authentication request failed (${response.status}).`
-      )
+    const errorPayload = { status: response.status, ...data }
+    const errorMsg = formatUserFriendlyErrorMessage(
+      errorPayload,
+      data.detail || responseText || `Authentication request failed (${response.status}).`
     )
+    const err = new Error(errorMsg)
+    Object.assign(err, errorPayload, { response: { status: response.status, data } })
+    throw err
   }
   return data as T
 }
 
-async function request<T>(path: string, body: unknown): Promise<T> {
-  const token =
-    typeof window !== 'undefined'
-      ? sessionStorage.getItem(ACCESS_TOKEN_KEY)
-      : null
+async function request<T>(path: string, body: unknown, isRetry: boolean = false): Promise<T> {
+  const token = inMemoryAccessToken
   const response = await fetch(`/api/v1/auth${path}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      'X-MCT-CSRF': '1',
+      'X-Requested-With': 'XMLHttpRequest',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(body),
   })
+  if (response.status === 401 && !isRetry && !path.includes('/login') && !path.includes('/refresh')) {
+    const refreshed = await authService.refreshSession()
+    if (refreshed && inMemoryAccessToken) {
+      return request<T>(path, body, true)
+    }
+  }
   const responseText = await response.text()
-  let data: { detail?: string } = {}
+  let data: any = {}
   try {
-    data = responseText ? (JSON.parse(responseText) as { detail?: string }) : {}
+    data = responseText ? JSON.parse(responseText) : {}
   } catch {
     data = {}
   }
   if (!response.ok) {
-    throw new Error(
-      formatUserFriendlyErrorMessage(
-        { status: response.status, ...data },
-        data.detail || responseText || `Authentication request failed (${response.status}).`
-      )
+    const errorPayload = { status: response.status, ...data }
+    const errorMsg = formatUserFriendlyErrorMessage(
+      errorPayload,
+      data.detail || responseText || `Authentication request failed (${response.status}).`
     )
+    const err = new Error(errorMsg)
+    Object.assign(err, errorPayload, { response: { status: response.status, data } })
+    throw err
   }
   return data as T
 }
@@ -292,11 +356,20 @@ function mapUser(user: BackendUserPayload): User {
 }
 
 export const authService = {
+  getAccessToken(): string | null {
+    return inMemoryAccessToken
+  },
+
+  getExpirationReason(): 'inactivity' | 'max_duration' | null {
+    return sessionExpirationReason
+  },
+
   touchSessionActivity(): void {
     if (typeof window !== 'undefined') {
       sessionStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()))
     }
   },
+
   /**
    * Validates credentials and starts an email OTP challenge.
    */
@@ -305,6 +378,7 @@ export const authService = {
     let body: Record<string, unknown> = {
       email: values.email,
       password: values.password,
+      remember_me: Boolean(values.rememberMe),
     }
 
     if (configuredKey) {
@@ -312,6 +386,7 @@ export const authService = {
         const encryptedPayload = await encryptPayload({
           email: values.email,
           password: values.password,
+          remember_me: Boolean(values.rememberMe),
         })
         if (encryptedPayload) {
           body = { encrypted_payload: encryptedPayload }
@@ -328,18 +403,11 @@ export const authService = {
   },
 
   /**
-  /**
-   * Updates user session properties in memory, sessionStorage, and localStorage.
+   * Updates user session properties in memory.
    */
   updateSessionUser(partial: Partial<User>): User | null {
     if (inMemorySessionUser) {
       inMemorySessionUser = { ...inMemorySessionUser, ...partial }
-      if (typeof window !== 'undefined') {
-        try {
-          sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(inMemorySessionUser))
-          sessionStorage.setItem('mct_user', JSON.stringify(inMemorySessionUser))
-        } catch { }
-      }
     }
     if (typeof window !== 'undefined' && partial.avatarUrl !== undefined) {
       try {
@@ -354,92 +422,150 @@ export const authService = {
   },
 
   /**
-   * Retrieves the current user session from memory, backend, or storage.
+   * Dedicated silent refresh method validating cookie and rotating token (AC-4, AC-8).
+   */
+  async refreshSession(): Promise<User | null> {
+    if (refreshPromise) {
+      return refreshPromise
+    }
+
+    refreshPromise = (async () => {
+      try {
+        const response = await fetch('/api/v1/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-MCT-CSRF': '1',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        })
+
+        if (!response.ok) {
+          const reasonHeader = response.headers.get('X-Reason-Code')
+          if (reasonHeader === 'SESSION_EXPIRED_IDLE') {
+            sessionExpirationReason = 'inactivity'
+          } else if (reasonHeader === 'SESSION_EXPIRED_MAX_DURATION') {
+            sessionExpirationReason = 'max_duration'
+          }
+          inMemoryAccessToken = null
+          inMemorySessionUser = null
+          if (proactiveRefreshTimer !== null) {
+            window.clearTimeout(proactiveRefreshTimer)
+            proactiveRefreshTimer = null
+          }
+          return null
+        }
+
+        const data = await response.json()
+        inMemoryAccessToken = data.access_token
+        const mapped = mapUser(data.user)
+        inMemorySessionUser = mapped
+        sessionExpirationReason = null
+
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem(TAB_SESSION_KEY, '1')
+          if (data.remember_me) {
+            localStorage.setItem(REMEMBER_ME_KEY, '1')
+          } else {
+            localStorage.removeItem(REMEMBER_ME_KEY)
+          }
+        }
+
+        scheduleProactiveRefresh(data.access_token)
+        this.touchSessionActivity()
+        return mapped
+      } catch {
+        inMemoryAccessToken = null
+        inMemorySessionUser = null
+        return null
+      } finally {
+        refreshPromise = null
+      }
+    })()
+
+    return refreshPromise
+  },
+
+  /**
+   * Bootstrap authentication upon application start via refresh cookie (AC-13).
+   */
+  async initSession(): Promise<{ user: User | null; reason: 'inactivity' | 'max_duration' | null }> {
+    if (typeof window !== 'undefined') {
+      const hasRememberMe = localStorage.getItem(REMEMBER_ME_KEY) === '1'
+      const hasTabSession = sessionStorage.getItem(TAB_SESSION_KEY) === '1'
+
+      // If Remember Me was unchecked and this is a brand new tab,
+      // terminate any lingering session cookie and demand fresh credentials.
+      if (!hasRememberMe && !hasTabSession) {
+        await this.signOut()
+        return { user: null, reason: null }
+      }
+    }
+
+    const user = await this.refreshSession()
+    return { user, reason: sessionExpirationReason }
+  },
+
+  /**
+   * Retrieves the current active user session from memory or triggers silent refresh.
    */
   async getSession(): Promise<User | null> {
     if (typeof window === 'undefined') return null
 
-    const token = sessionStorage.getItem(ACCESS_TOKEN_KEY)
-    if (!token) {
-      inMemorySessionUser = null
-      return null
-    }
-
-    // Verify token expiration
-    try {
-      const tokenPayload = JSON.parse(
-        atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
-      )
-      if (
-        !tokenPayload ||
-        typeof tokenPayload.exp !== 'number' ||
-        tokenPayload.exp * 1000 <= Date.now()
-      ) {
-        await this.signOut()
-        return null
-      }
-    } catch {
-      await this.signOut()
-      return null
-    }
-
-    // Check last activity idle timeout
-    const lastActivity = Number(sessionStorage.getItem(LAST_ACTIVITY_KEY))
-    if (!Number.isFinite(lastActivity) || Date.now() - lastActivity >= SESSION_IDLE_TIMEOUT_MS) {
-      await this.signOut()
-      return null
-    }
-
-    // Live backend fetch from /me to guarantee user profile is synchronized with Supabase
-    try {
-      const backendUser = await getRequest<BackendUserPayload>('/me')
-      const mapped = mapUser(backendUser)
-      inMemorySessionUser = mapped
-      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(mapped))
-      sessionStorage.setItem('mct_user', JSON.stringify(mapped))
-      this.touchSessionActivity()
-    } catch {
-      // If fetching /me fails (e.g. offline/network glitch), fall back to cached session storage if valid
-      const stored = sessionStorage.getItem(SESSION_STORAGE_KEY)
-      if (stored) {
-        try {
-          inMemorySessionUser = JSON.parse(stored)
-        } catch {
-          await this.signOut()
-          return null
-        }
-      } else {
-        await this.signOut()
-        return null
+    if (inMemoryAccessToken && inMemorySessionUser) {
+      const expMs = parseTokenExpiration(inMemoryAccessToken)
+      if (expMs && expMs > Date.now()) {
+        return inMemorySessionUser
       }
     }
 
-    if (inMemorySessionUser) {
-      try {
-        const customAvatar = localStorage.getItem('mct_user_avatar')
-        if (customAvatar) {
-          inMemorySessionUser.avatarUrl = customAvatar
-        }
-      } catch { }
-    }
-    return inMemorySessionUser
+    // Silent refresh to retrieve fresh access token from HttpOnly cookie
+    return this.refreshSession()
   },
 
   /**
-   * Clears session.
+   * Clears in-memory credentials and invalidates server-side session (AC-10).
    */
   async signOut(): Promise<void> {
     try {
-      if (typeof window !== 'undefined' && sessionStorage.getItem(ACCESS_TOKEN_KEY)) {
-        await request('/logout', {})
-      }
+      await fetch('/api/v1/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-MCT-CSRF': '1',
+          'X-Requested-With': 'XMLHttpRequest',
+          ...(inMemoryAccessToken ? { Authorization: `Bearer ${inMemoryAccessToken}` } : {}),
+        },
+      })
+    } catch {
+      // ignore logout network errors
     } finally {
+      inMemoryAccessToken = null
       inMemorySessionUser = null
+      sessionExpirationReason = null
+      if (proactiveRefreshTimer !== null) {
+        window.clearTimeout(proactiveRefreshTimer)
+        proactiveRefreshTimer = null
+      }
       if (typeof window !== 'undefined') {
         try {
           sessionStorage.removeItem(ACCESS_TOKEN_KEY)
           sessionStorage.removeItem(SESSION_STORAGE_KEY)
           sessionStorage.removeItem(LAST_ACTIVITY_KEY)
+          sessionStorage.removeItem('mct_user')
+          sessionStorage.removeItem('mct_active_company_session')
+          sessionStorage.removeItem('mct_dynamic_companies_cache')
+          sessionStorage.removeItem('mct_selected_company')
+          sessionStorage.removeItem(TAB_SESSION_KEY)
+          localStorage.removeItem(ACCESS_TOKEN_KEY)
+          localStorage.removeItem(REMEMBER_ME_KEY)
+          Object.keys(localStorage).forEach((key) => {
+            if (key.startsWith('mapbox.')) {
+              localStorage.removeItem(key)
+            }
+          })
         } catch {
           // ignore storage cleanup failures
         }
@@ -448,7 +574,7 @@ export const authService = {
   },
 
   /**
-   * Verify the email OTP and complete authentication.
+   * Verify the email OTP and complete authentication, storing access token strictly in memory (AC-3).
    */
   async verify2FA(code: string): Promise<Verify2FAResponse> {
     if (code.length !== 6) {
@@ -458,19 +584,26 @@ export const authService = {
     const response = await request<{
       access_token: string
       user: BackendUserPayload
+      remember_me?: boolean
     }>('/login/verify-otp', { otp: code })
+
+    inMemoryAccessToken = response.access_token
     const mapped = mapUser(response.user)
     inMemorySessionUser = mapped
+    sessionExpirationReason = null
+
     if (typeof window !== 'undefined') {
-      try {
-        sessionStorage.setItem(ACCESS_TOKEN_KEY, response.access_token)
-        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(mapped))
-      sessionStorage.setItem('mct_user', JSON.stringify(mapped))
-        sessionStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()))
-      } catch {
-        // ignore
+      sessionStorage.setItem(TAB_SESSION_KEY, '1')
+      if (response.remember_me) {
+        localStorage.setItem(REMEMBER_ME_KEY, '1')
+      } else {
+        localStorage.removeItem(REMEMBER_ME_KEY)
       }
     }
+
+    scheduleProactiveRefresh(response.access_token)
+    this.touchSessionActivity()
+
     return { success: true, token: response.access_token }
   },
 
@@ -489,6 +622,50 @@ export const authService = {
       }
     } catch (error) {
       throw error
+    }
+  },
+
+  /**
+   * Check login rate limit and OTP cooldown/lockout status from server (AC-9, AC-15, AC-19).
+   */
+  async getRateLimitStatus(email?: string): Promise<{
+    locked: boolean
+    retry_after: number
+    locked_until: string | null
+    cooldown_remaining: number
+    resend_locked: boolean
+    resend_retry_after: number
+  }> {
+    try {
+      const query = email ? `?email=${encodeURIComponent(email)}` : ''
+      const response = await fetch(`/api/v1/auth/rate-limit-status${query}`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      })
+      if (!response.ok) {
+        return {
+          locked: false,
+          retry_after: 0,
+          locked_until: null,
+          cooldown_remaining: 0,
+          resend_locked: false,
+          resend_retry_after: 0,
+        }
+      }
+      return await response.json()
+    } catch {
+      return {
+        locked: false,
+        retry_after: 0,
+        locked_until: null,
+        cooldown_remaining: 0,
+        resend_locked: false,
+        resend_retry_after: 0,
+      }
     }
   },
 }

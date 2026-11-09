@@ -3,27 +3,28 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.base import StrictBaseModel
 
 
-class PettyCashTopUpCreate(BaseModel):
+class PettyCashTopUpCreate(StrictBaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
     company_name: Optional[str] = Field(None, min_length=1, max_length=100)
     amount: Decimal = Field(..., ge=0, decimal_places=2)
     topup_date: date
     reference_no: Optional[str] = Field(None, max_length=100)
-    description: Optional[str] = None
-    status: Optional[str] = "Pending Finance Endorsement"
+    description: Optional[str] = Field(None, max_length=1000)
+    status: Optional[str] = Field("Pending Finance Endorsement", max_length=100)
     created_by: Optional[int] = None
-    bank_account_id: Optional[str] = None
-    finance_remark: Optional[str] = None
-    endorsement_remark: Optional[str] = None
-    request_type: Optional[str] = "topup"
-    paid_by: Optional[str] = None
-    receipt_url: Optional[str] = None
-    attachments: Optional[str] = None
-    items: Optional[str] = None
-    category: Optional[str] = None
+    bank_account_id: Optional[str] = Field(None, max_length=100)
+    finance_remark: Optional[str] = Field(None, max_length=1000)
+    endorsement_remark: Optional[str] = Field(None, max_length=1000)
+    request_type: Optional[str] = Field("topup", max_length=50)
+    paid_by: Optional[str] = Field(None, max_length=100)
+    receipt_url: Optional[str] = Field(None, max_length=2048)
+    attachments: Optional[str] = Field(None, max_length=2048)
+    items: Optional[str] = Field(None, max_length=4000)
+    category: Optional[str] = Field(None, max_length=100)
     total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
     company_funded_amount: Optional[Decimal] = Field(Decimal("0.00"), decimal_places=2)
     employee_out_of_pocket: Optional[Decimal] = Field(Decimal("0.00"), decimal_places=2)
@@ -54,14 +55,14 @@ class PettyCashTopUpCreate(BaseModel):
         return self
 
 
-class PettyCashTopUpUpdate(BaseModel):
+class PettyCashTopUpUpdate(StrictBaseModel):
     amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    description: Optional[str] = None
-    paid_by: Optional[str] = None
-    receipt_url: Optional[str] = None
-    attachments: Optional[str] = None
-    items: Optional[str] = None
-    category: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=1000)
+    paid_by: Optional[str] = Field(None, max_length=100)
+    receipt_url: Optional[str] = Field(None, max_length=2048)
+    attachments: Optional[str] = Field(None, max_length=2048)
+    items: Optional[str] = Field(None, max_length=4000)
+    category: Optional[str] = Field(None, max_length=100)
     total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
     company_funded_amount: Optional[Decimal] = Field(None, decimal_places=2)
     employee_out_of_pocket: Optional[Decimal] = Field(None, decimal_places=2)
@@ -271,9 +272,9 @@ class PettyCashLedgerEntry(BaseModel):
     transfer_received_by: Optional[str] = None
 
 
-class PettyCashCategoryCreate(BaseModel):
+class PettyCashCategoryCreate(StrictBaseModel):
     company_id: Optional[int] = None
-    company_name: Optional[str] = None
+    company_name: Optional[str] = Field(None, max_length=150)
     name: str = Field(..., min_length=1, max_length=100)
 
 
@@ -284,4 +285,13 @@ class PettyCashCategoryOut(BaseModel):
     company_id: int
     name: str
     created_at: Optional[datetime] = None
+
+
+class ReceiptUploadOut(BaseModel):
+    url: str
+    filename: Optional[str] = None
+    file_name: Optional[str] = None
+    file_size: int
+    mime_type: str
+    content_type: str
 

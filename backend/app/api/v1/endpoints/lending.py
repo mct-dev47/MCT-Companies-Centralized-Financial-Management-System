@@ -241,6 +241,7 @@ def get_transaction(
 
 @router.post(
     "/transactions",
+    response_model=LendingTransactionOut,
     status_code=status.HTTP_201_CREATED,
     summary="Record a lending transaction in the lending_transactions table",
 )
@@ -270,6 +271,7 @@ def create_transaction(
 
 @router.post(
     "/payments",
+    response_model=LendingTransactionOut,
     status_code=status.HTTP_201_CREATED,
     summary="Record a payment remittance",
 )

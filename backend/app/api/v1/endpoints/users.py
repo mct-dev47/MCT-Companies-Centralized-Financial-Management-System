@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import AdminUser, CurrentUser
+from app.core.network import get_trusted_client_ip
 from app.db.session import get_db
 from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.services.rate_limiter import check_invitation_rate_limit, record_invitation_attempt
 from app.services.user_service import (
     UserService,
     UserServiceError,
@@ -39,9 +41,19 @@ def get_user(user_id: int, _: AdminUser, db: Session = Depends(get_db)):
 
 # create a new user
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED, summary="Create an employee user")
-def create_user(user: UserCreate, _: AdminUser, db: Session = Depends(get_db)):
+def create_user(
+    user: UserCreate,
+    current_admin: AdminUser,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin_id = int(current_admin.get("user_id") or current_admin.get("auth_user_id") or 1)
+    client_ip = get_trusted_client_ip(request)
+    check_invitation_rate_limit(db, admin_id=admin_id, ip=client_ip)
     try:
-        return UserService(db).create_user(user)
+        res = UserService(db).create_user(user)
+        record_invitation_attempt(db, admin_id=admin_id, ip=client_ip)
+        return res
     except UserValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -180,9 +192,19 @@ def _service_http_error(error: UserServiceError) -> HTTPException:
 
 # re-invite an existing pending user
 @router.post("/{user_id}/reinvite", response_model=UserResponse, summary="Re-invite an existing pending employee user")
-def reinvite_user(user_id: int, _: AdminUser, db: Session = Depends(get_db)):
+def reinvite_user(
+    user_id: int,
+    current_admin: AdminUser,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    admin_id = int(current_admin.get("user_id") or current_admin.get("auth_user_id") or 1)
+    client_ip = get_trusted_client_ip(request)
+    check_invitation_rate_limit(db, admin_id=admin_id, ip=client_ip)
     try:
-        return UserService(db).reinvite_user(user_id)
+        res = UserService(db).reinvite_user(user_id)
+        record_invitation_attempt(db, admin_id=admin_id, ip=client_ip)
+        return res
     except UserValidationError as error:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,

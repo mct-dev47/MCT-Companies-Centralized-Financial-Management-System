@@ -2,6 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, List, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.base import StrictBaseModel
 
 
 def _coerce_bank_account_id(value: Any) -> Optional[str]:
@@ -11,13 +12,13 @@ def _coerce_bank_account_id(value: Any) -> Optional[str]:
     return text if text else None
 
 
-class ReceivablePaymentBase(BaseModel):
+class ReceivablePaymentBase(StrictBaseModel):
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     payment_date: Optional[date] = None
     payment_method: str = Field(default="Cash", max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=100)
     reference_no: Optional[str] = Field(None, max_length=100)
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
     received_by: Optional[str] = Field(None, max_length=100)
 
     @model_validator(mode="before")
@@ -55,10 +56,10 @@ class ReceivablePaymentOut(ReceivablePaymentBase):
     payment_date: date
     created_at: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
-class ReceivableBase(BaseModel):
+class ReceivableBase(StrictBaseModel):
     customer_name: str = Field(..., min_length=1, max_length=255)
     customer_type: str = Field(default="External", max_length=50)
     company_id: Optional[int] = None
@@ -67,7 +68,7 @@ class ReceivableBase(BaseModel):
     sale_line_index: Optional[int] = Field(None, ge=0)
     expense_id: Optional[int] = None
     transaction_date: Optional[date] = None
-    items_summary: str = Field(..., min_length=1)
+    items_summary: str = Field(..., min_length=1, max_length=1000)
     total_amount: Decimal = Field(..., ge=0, decimal_places=2)
     notes: Optional[str] = None
 
@@ -102,16 +103,16 @@ class ReceivableCreate(ReceivableBase):
         return data
 
 
-class ReceivableUpdate(BaseModel):
+class ReceivableUpdate(StrictBaseModel):
     customer_name: Optional[str] = Field(None, min_length=1, max_length=255)
     customer_type: Optional[str] = Field(None, max_length=50)
     transaction_date: Optional[date] = None
-    items_summary: Optional[str] = Field(None, min_length=1)
+    items_summary: Optional[str] = Field(None, min_length=1, max_length=1000)
     total_amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     payment_status: Optional[str] = Field(None, max_length=50)
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=100)
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
 
     @model_validator(mode="before")
     @classmethod
@@ -155,7 +156,7 @@ class ReceivableOut(ReceivableBase):
     updated_at: Optional[datetime] = None
     payments: List[ReceivablePaymentOut] = []
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class ReceivablesKPIsOut(BaseModel):
@@ -169,13 +170,21 @@ class ReceivablesKPIsOut(BaseModel):
     totalPeopleCount: int
 
 
-class PayrollDeductionRequest(BaseModel):
+class PayrollDeductionRequest(StrictBaseModel):
     customer_name: str = Field(..., min_length=1, max_length=255)
     company_id: Optional[int] = None
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
-class DebtorBatchUpdate(BaseModel):
+class PayrollSettlementOut(BaseModel):
+    success: bool = True
+    customer_name: str
+    total_deducted: float
+    settled_orders_count: int
+    message: str
+
+
+class DebtorBatchUpdate(StrictBaseModel):
     current_customer_name: str = Field(..., min_length=1, max_length=255)
     company_id: Optional[int] = None
     company_name: Optional[str] = Field(None, max_length=255)
@@ -199,7 +208,7 @@ class DebtorBatchUpdateOut(BaseModel):
     updated_count: int
 
 
-class DebtorBatchDelete(BaseModel):
+class DebtorBatchDelete(StrictBaseModel):
     customer_name: str = Field(..., min_length=1, max_length=255)
     company_id: Optional[int] = None
     company_name: Optional[str] = Field(None, max_length=255)

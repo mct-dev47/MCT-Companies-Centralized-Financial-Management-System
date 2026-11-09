@@ -7,13 +7,15 @@ from app.models.staff_credit import StaffCredit, StaffCreditRepayment
 from app.models.bills import Bill, BillPayment
 from app.models.lending import Borrower, LendingTransaction
 from app.models.tenant import TenantLease, TenantLeasePayment
-from app.models.security import RevokedToken, LoginRateLimit
+from app.models.security import RevokedToken, LoginRateLimit, RateLimit, LoginOtpChallenge, UserSession
 from app.models.notification import Notification, NotificationOutbox
 from app.models.bank import BankAccount, BankTransaction
 from app.models.receivable import Receivable, ReceivablePayment
 from app.models.invitation import UserInvitation, InvitationOutbox
 from app.models.particular import CompanyParticular
 from app.models.payment_method import CompanyPaymentMethod
+from app.models.intercompany_transfer import IntercompanyTransfer
+from app.models.petty_cash import PettyCashTopUp, PettyCashCategory
 
 # Alias for backward compatibility
 LendingFacility = Borrower
@@ -40,6 +42,9 @@ __all__ = [
     "TenantLeasePayment",
     "RevokedToken",
     "LoginRateLimit",
+    "RateLimit",
+    "LoginOtpChallenge",
+    "UserSession",
     "Notification",
     "NotificationOutbox",
     "BankAccount",
@@ -50,4 +55,7 @@ __all__ = [
     "InvitationOutbox",
     "CompanyParticular",
     "CompanyPaymentMethod",
+    "IntercompanyTransfer",
+    "PettyCashTopUp",
+    "PettyCashCategory",
 ]

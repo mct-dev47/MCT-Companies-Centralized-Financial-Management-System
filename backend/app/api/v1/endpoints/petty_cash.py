@@ -34,6 +34,7 @@ from app.schemas.petty_cash import (
     PettyCashTopUpOut,
     PettyCashTopUpUpdate,
     PettyCashWalletUpdate,
+    ReceiptUploadOut,
     TransferCancelIn,
     TransferReversalConfirmIn,
 )
@@ -455,7 +456,7 @@ def update_wallet(
     return summary
 
 
-@router.post("/receipts", summary="Upload receipt image (JPG, PNG, HEIC) or PDF")
+@router.post("/receipts", response_model=ReceiptUploadOut, summary="Upload receipt image (JPG, PNG, HEIC) or PDF")
 async def upload_receipt(
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(require_business_writer),

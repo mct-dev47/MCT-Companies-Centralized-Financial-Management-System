@@ -10,6 +10,7 @@ from app.core.dependencies import (
     check_company_access,
     get_authorized_company_scope,
 )
+from app.core.pagination import PaginationParams
 from app.db.session import get_db
 from app.models.receivable import ReceivablePayment
 from app.schemas.receivable import (
@@ -18,6 +19,7 @@ from app.schemas.receivable import (
     DebtorBatchUpdate,
     DebtorBatchUpdateOut,
     PayrollDeductionRequest,
+    PayrollSettlementOut,
     ReceivableCreate,
     ReceivableOut,
     ReceivablePaymentCreate,
@@ -58,8 +60,7 @@ def list_receivables(
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
     search: Optional[str] = Query(None),
-    limit: int = Query(100, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    pagination: PaginationParams = Depends(),
 ):
     """
     List receivables with company, debtor type, payment status, and date range filters.
@@ -77,8 +78,8 @@ def list_receivables(
         start_date=start_date,
         end_date=end_date,
         search=search,
-        limit=limit,
-        offset=offset,
+        limit=pagination.limit,
+        offset=pagination.offset,
     )
 
 
@@ -242,7 +243,7 @@ def record_payment(
     return service.record_payment(receivable_id, payment_data, actor_name=actor)
 
 
-@router.post("/settle-payroll")
+@router.post("/settle-payroll", response_model=PayrollSettlementOut)
 def settle_payroll(
     data: PayrollDeductionRequest,
     user: BusinessWriter,

@@ -110,6 +110,70 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0039_petty_cash_categories")
             logger.info("Migration 0039_petty_cash_categories applied successfully.")
 
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_user_token_version'")
+    ).first()
+
+    if not result_0040:
+        script_0040 = MIGRATIONS_DIR / "0040_user_token_version.postgres.sql"
+        if script_0040.exists():
+            with open(script_0040, "r", encoding="utf-8") as f:
+                sql_0040 = f.read()
+            clean_0040 = sql_0040.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0040))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0040_user_token_version')"))
+            applied.append("0040_user_token_version")
+            logger.info("Migration 0040_user_token_version applied successfully.")
+
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_user_invitations_purpose'")
+    ).first()
+
+    if not result_0041:
+        script_0041 = MIGRATIONS_DIR / "0041_user_invitations_purpose.postgres.sql"
+        if script_0041.exists():
+            with open(script_0041, "r", encoding="utf-8") as f:
+                sql_0041 = f.read()
+            clean_0041 = sql_0041.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0041))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0041_user_invitations_purpose')"))
+            applied.append("0041_user_invitations_purpose")
+            logger.info("Migration 0041_user_invitations_purpose applied successfully.")
+
+    # 8. Check if 0042 is applied
+    result_0042 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0042_secure_rate_limiting'")
+    ).first()
+
+    if not result_0042:
+        script_0042 = MIGRATIONS_DIR / "0042_secure_rate_limiting.postgres.sql"
+        if script_0042.exists():
+            with open(script_0042, "r", encoding="utf-8") as f:
+                sql_0042 = f.read()
+            clean_0042 = sql_0042.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0042))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0042_secure_rate_limiting')"))
+            applied.append("0042_secure_rate_limiting")
+            logger.info("Migration 0042_secure_rate_limiting applied successfully.")
+
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_user_sessions'")
+    ).first()
+
+    if not result_0043:
+        script_0043 = MIGRATIONS_DIR / "0043_user_sessions.postgres.sql"
+        if script_0043.exists():
+            with open(script_0043, "r", encoding="utf-8") as f:
+                sql_0043 = f.read()
+            clean_0043 = sql_0043.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0043))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0043_user_sessions')"))
+            applied.append("0043_user_sessions")
+            logger.info("Migration 0043_user_sessions applied successfully.")
+
     conn.commit()
     return applied
 
@@ -265,6 +329,95 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0039_petty_cash_categories")
         logger.info("SQLite migration 0039_petty_cash_categories applied successfully.")
+
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_user_token_version'")
+    ).first()
+
+    if not result_0040:
+        user_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        ).first()
+        if user_table_exists:
+            user_cols_res = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+            user_cols = {row[1] for row in user_cols_res}
+            if "token_version" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1"))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0040_user_token_version')")
+        )
+        applied.append("0040_user_token_version")
+        logger.info("SQLite migration 0040_user_token_version applied successfully.")
+
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_user_invitations_purpose'")
+    ).first()
+
+    if not result_0041:
+        inv_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitations'")
+        ).first()
+        if inv_table_exists:
+            inv_cols_res = conn.execute(text("PRAGMA table_info(user_invitations)")).fetchall()
+            inv_cols = {row[1] for row in inv_cols_res}
+            if "purpose" not in inv_cols:
+                conn.execute(
+                    text("ALTER TABLE user_invitations ADD COLUMN purpose VARCHAR(30) NOT NULL DEFAULT 'initial_password_setup'")
+                )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS idx_user_invitations_user_purpose ON user_invitations(user_id, purpose, status)")
+            )
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0041_user_invitations_purpose')")
+        )
+        applied.append("0041_user_invitations_purpose")
+        logger.info("SQLite migration 0041_user_invitations_purpose applied successfully.")
+
+    # 8. Check if 0042 is applied
+    result_0042 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0042_secure_rate_limiting'")
+    ).first()
+
+    if not result_0042:
+        script_0042 = MIGRATIONS_DIR / "0042_secure_rate_limiting.sqlite.sql"
+        if script_0042.exists():
+            with open(script_0042, "r", encoding="utf-8") as f:
+                for statement in f.read().split(";"):
+                    lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                    clean_stmt = "\n".join(lines).strip()
+                    if clean_stmt and "schema_migrations" not in clean_stmt:
+                        conn.execute(text(clean_stmt))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0042_secure_rate_limiting')")
+        )
+        applied.append("0042_secure_rate_limiting")
+        logger.info("SQLite migration 0042_secure_rate_limiting applied successfully.")
+
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_user_sessions'")
+    ).first()
+
+    if not result_0043:
+        script_0043 = MIGRATIONS_DIR / "0043_user_sessions.sqlite.sql"
+        if script_0043.exists():
+            with open(script_0043, "r", encoding="utf-8") as f:
+                for statement in f.read().split(";"):
+                    lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                    clean_stmt = "\n".join(lines).strip()
+                    if clean_stmt and "schema_migrations" not in clean_stmt:
+                        conn.execute(text(clean_stmt))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0043_user_sessions')")
+        )
+        applied.append("0043_user_sessions")
+        logger.info("SQLite migration 0043_user_sessions applied successfully.")
 
     conn.commit()
     return applied

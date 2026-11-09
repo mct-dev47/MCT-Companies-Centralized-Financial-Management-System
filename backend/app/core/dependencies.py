@@ -97,7 +97,24 @@ def get_current_user(
         user_status = str(getattr(db_user, "status", "ACTIVE") or "ACTIVE").upper()
         must_change_password = bool(getattr(db_user, "must_change_password", False))
 
+        # AC-12: verify token_version from token claims against DB token_version
+        if claims.get("token_version") is not None:
+            db_token_version = int(getattr(db_user, "token_version", 1) or 1)
+            token_version = int(claims.get("token_version", 1))
+            if token_version < db_token_version:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Access token has been revoked due to credential changes.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
     path = request.url.path if request and hasattr(request, "url") else ""
+
+    # AC-7: Qualifying user activity updates in-memory timestamp, excluding polling/health/refresh
+    from app.services.session_service import track_session_activity, INACTIVITY_EXEMPT_PATHS
+    sid = claims.get("sid") or (claims.get("app_metadata") or {}).get("sid")
+    if sid and path not in INACTIVITY_EXEMPT_PATHS and not any(path.startswith(p) for p in ("/api/v1/notifications", "/api/v1/health")):
+        track_session_activity(str(sid))
     is_whitelisted = path.endswith("/auth/me") or path.endswith("/auth/logout") or path.endswith("/auth/setup-password")
     if not is_whitelisted:
         if user_status == "LOCKED":
@@ -177,6 +194,23 @@ def require_auditor_user(user: CurrentUser) -> AuthenticatedUser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only Auditor accounts can perform this audit review action.",
+        )
+    return user
+
+
+def require_reauthentication(
+    request: Request,
+    user: CurrentUser,
+) -> AuthenticatedUser:
+    """AC-16: Enforce fresh password reauthentication proof for sensitive operations."""
+    from app.services.session_service import verify_reauth_token
+    reauth_token = request.headers.get("X-MCT-Reauth")
+    user_id = user.get("user_id")
+    if not user_id or not verify_reauth_token(reauth_token, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Reauthentication required for this sensitive action. Please confirm your password.",
+            headers={"X-Reason-Code": "REAUTH_REQUIRED"},
         )
     return user
 
