@@ -3,6 +3,8 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
+from app.models.bank import BankAccount
+from app.models.intercompany_transfer import IntercompanyTransfer
 
 
 class PettyCashTopUp(Base):

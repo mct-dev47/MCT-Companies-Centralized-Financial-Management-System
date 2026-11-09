@@ -58,3 +58,20 @@ class RetentionPurgeResponse(BaseModel):
     cutoff_date: str = Field(..., description="ISO 8601 cutoff timestamp (older records deleted)")
     message: str = Field(..., description="Human-readable status summary")
 
+
+class TimelineEventOut(BaseModel):
+    id: str
+    action: str
+    event_type: str = "general"  # created | edited | endorsed | audited | disbursed | status_change | payment
+    title: str
+    actor_name: str
+    actor_role: Optional[str] = None
+    timestamp: Optional[str] = None
+    description: str
+    changes: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+    status_badge: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+

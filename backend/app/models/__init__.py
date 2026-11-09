@@ -14,6 +14,8 @@ from app.models.receivable import Receivable, ReceivablePayment
 from app.models.invitation import UserInvitation, InvitationOutbox
 from app.models.particular import CompanyParticular
 from app.models.payment_method import CompanyPaymentMethod
+from app.models.petty_cash import PettyCashTopUp
+from app.models.intercompany_transfer import IntercompanyTransfer
 
 # Alias for backward compatibility
 LendingFacility = Borrower

@@ -15,6 +15,7 @@ import {
   Clock,
   ShieldCheck,
   UserCheck,
+  PlusCircle,
 } from 'lucide-react'
 import { UpdateLoanStatusModal } from './UpdateLoanStatusModal'
 import { parseParticulars } from '@/utils/particularsUtils'
@@ -46,6 +47,7 @@ import {
   type LoanItem,
 } from '@/services/loanService'
 import { tenantService } from '@/services/tenantService'
+import { activityLogService, type EntityTimelineEvent } from '@/services/activityLogService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { cn } from '@/lib/utils'
 import { formatRealName } from '@/utils/formatRealName'
@@ -158,6 +160,9 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [currentLoan, setCurrentLoan] = React.useState<LoanItem | null>(loan || null)
   const [isEditing, setIsEditing] = React.useState(false)
   const [isUpdateLoanStatusOpen, setIsUpdateLoanStatusOpen] = React.useState(false)
+
+  const [timelineEvents, setTimelineEvents] = React.useState<EntityTimelineEvent[]>([])
+  const [isLoadingTimeline, setIsLoadingTimeline] = React.useState(false)
 
   // Form states for editing
   const [date, setDate] = React.useState('')
@@ -309,6 +314,69 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const activeExpense = currentExpense || expense
   const activeLoan = currentLoan || loan
 
+  const resolvedTarget = React.useMemo(() => {
+    let type = 'transaction'
+    let id: string | number | undefined = undefined
+    let ref: string | undefined = undefined
+
+    if (activeSale || activeTx?.type === 'Sales') {
+      type = 'sale'
+      id = activeSale?.id || (activeTx?.id ? String(activeTx.id).replace('sale_', '') : undefined)
+      ref = activeSale?.refNo || activeTx?.refNo
+    } else if (activeExpense || activeTx?.type === 'Expense') {
+      type = 'expense'
+      id = activeExpense?.id || (activeTx?.id ? String(activeTx.id).replace('expense_', '') : undefined)
+      ref = activeExpense?.refNo || activeTx?.refNo
+    } else if (activeLoan || activeTx?.type === 'Loan') {
+      type = 'loan'
+      id = activeLoan?.id || (activeTx?.id ? String(activeTx.id).replace('loan_', '') : undefined)
+      ref = activeLoan?.refNo || activeTx?.refNo
+    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && String(activeTx.id).startsWith('pc_'))) {
+      type = 'petty_cash'
+      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').split(':')[0] : undefined
+      ref = activeTx?.refNo
+    } else if (activeTx?.id && String(activeTx.id).startsWith('tenant_')) {
+      type = 'tenant'
+      id = activeTx?.id ? String(activeTx.id).replace('tenant_lease_', '').replace('tenant_pmt_', '') : undefined
+      ref = activeTx?.refNo
+    }
+
+    return { type, id, ref }
+  }, [activeSale, activeExpense, activeLoan, activeTx])
+
+  React.useEffect(() => {
+    if (!open) {
+      setTimelineEvents([])
+      return
+    }
+    let isMounted = true
+    setIsLoadingTimeline(true)
+
+    activityLogService
+      .getEntityTimeline({
+        recordType: resolvedTarget.type,
+        recordId: resolvedTarget.id,
+        refNo: resolvedTarget.ref,
+      })
+      .then((events) => {
+        if (isMounted) {
+          setTimelineEvents(events)
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load entity timeline:', err)
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingTimeline(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [open, resolvedTarget.type, resolvedTarget.id, resolvedTarget.ref])
+
   const isExpense = Boolean(activeExpense || activeTx?.type === 'Expense')
   const isLoan = Boolean(activeLoan || activeTx?.type === 'Loan')
 
@@ -337,7 +405,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
   const displayCreatedBy =
-    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || (user?.fullName ? formatRealName(user.fullName, user.role || 'Staff') : 'Carlos Tan (Supervisor)')
+    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || (user?.fullName ? formatRealName(user.fullName, user.role || 'Staff') : undefined)
   const displayUpdatedAt =
     activeSale?.updatedAt || activeExpense?.updatedAt || activeLoan?.updatedAt || activeTx?.updatedAt
   const displayUpdatedBy =
@@ -1419,89 +1487,221 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 </div>
 
                 <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
-                  {/* Created Event */}
-                  <div className="min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-focus">
-                        Created by{' '}
-                        <span className="text-primary font-bold">
-                          {formatRealName(displayCreatedBy, 'Staff')}
-                        </span>
-                      </span>
-                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                        {formatTimelineDateTime(displayCreatedAt)}
-                      </span>
+                  {isLoadingTimeline ? (
+                    <div className="py-4 flex items-center justify-center gap-2 text-xs text-muted-fg">
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <span>Loading complete activity timeline...</span>
                     </div>
-                    <p className="text-[11px] text-muted-fg">
-                      Initial record added to {displayCompany} ledger
-                    </p>
-                  </div>
+                  ) : timelineEvents.length > 0 ? (
+                    <div className="space-y-3 relative before:absolute before:inset-0 before:left-3 before:w-0.5 before:bg-slate-200">
+                      {timelineEvents.map((event, idx) => {
+                        let iconColor = 'bg-blue-100 text-blue-600 border-blue-200'
+                        let IconComponent = FileText
+                        if (event.event_type === 'created') {
+                          iconColor = 'bg-blue-100 text-blue-600 border-blue-200'
+                          IconComponent = PlusCircle
+                        } else if (event.event_type === 'edited') {
+                          iconColor = 'bg-amber-100 text-amber-700 border-amber-200'
+                          IconComponent = Pencil
+                        } else if (event.event_type === 'endorsed') {
+                          iconColor = 'bg-indigo-100 text-indigo-700 border-indigo-200'
+                          IconComponent = UserCheck
+                        } else if (event.event_type === 'audited') {
+                          const isVer =
+                            event.status_badge === 'Verified' ||
+                            event.title.toLowerCase().includes('verified') ||
+                            event.title.toLowerCase().includes('approved')
+                          iconColor = isVer
+                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                            : 'bg-rose-100 text-rose-700 border-rose-200'
+                          IconComponent = ShieldCheck
+                        } else if (event.event_type === 'disbursed' || event.event_type === 'payment') {
+                          iconColor = 'bg-teal-100 text-teal-700 border-teal-200'
+                          IconComponent = CheckCircle2
+                        }
 
-                  {/* Modified Event (if updated) */}
-                  {displayUpdatedAt && displayUpdatedAt !== displayCreatedAt && (
-                    <div className="pt-2 border-t border-stroke/15 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-focus">
-                          Last modified
-                          {' '}by{' '}
-                          <span className="text-blue-600 font-bold">
-                            {formatRealName(displayUpdatedBy || user?.fullName || 'Carlos Tan (Supervisor)', user?.role || 'Supervisor')}
+                        return (
+                          <div key={event.id || idx} className="relative flex items-start gap-3 pl-1">
+                            <div className={cn('relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border shadow-2xs', iconColor)}>
+                              <IconComponent className="h-3 w-3" />
+                            </div>
+                            <div className="min-w-0 flex-1 rounded-xl border border-stroke/20 bg-white/90 p-2.5 text-xs shadow-2xs space-y-1">
+                              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-focus">{event.title}</span>
+                                  {event.status_badge && (
+                                    <span
+                                      className={cn(
+                                        'text-[10px] font-semibold px-1.5 py-0.5 rounded-full border',
+                                        event.status_badge === 'Verified' ||
+                                          event.status_badge === 'Approved' ||
+                                          event.status_badge === 'Paid' ||
+                                          event.status_badge === 'Settled'
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                          : event.status_badge === 'Flagged' ||
+                                            event.status_badge.toLowerCase().includes('disapproved')
+                                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                                      )}
+                                    >
+                                      {event.status_badge}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                                  {formatTimelineDateTime(event.timestamp)}
+                                </span>
+                              </div>
+
+                              <div className="text-[11px] text-muted-fg flex items-center gap-1.5 flex-wrap">
+                                <span>By</span>
+                                <span className="font-semibold text-focus">
+                                  {formatRealName(event.actor_name, event.actor_role || 'Staff')}
+                                </span>
+                                {event.actor_role && (
+                                  <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium border border-slate-200">
+                                    {event.actor_role}
+                                  </span>
+                                )}
+                              </div>
+
+                              {event.description && (
+                                <p className="text-[11px] text-slate-600 leading-relaxed">
+                                  {event.description}
+                                </p>
+                              )}
+
+                              {/* Changes Diff */}
+                              {event.changes && Object.keys(event.changes).length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-slate-100 space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                                    Changes Made:
+                                  </span>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {Object.entries(event.changes).map(([field, val]) => {
+                                      const fieldLabel = field.replace(/_/g, ' ')
+                                      let changeText = ''
+                                      if (typeof val === 'object' && val !== null) {
+                                        const fromVal = (val as any).from ?? (val as any).old
+                                        const toVal = (val as any).to ?? (val as any).new
+                                        changeText = fromVal !== undefined ? `${fromVal} → ${toVal}` : String(toVal)
+                                      } else {
+                                        changeText = String(val)
+                                      }
+                                      return (
+                                        <span
+                                          key={field}
+                                          className="inline-flex items-center gap-1 text-[10px] bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5"
+                                        >
+                                          <span className="font-semibold capitalize text-slate-700">{fieldLabel}:</span>
+                                          <span className="font-mono text-slate-600">{changeText}</span>
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Notes / Remarks */}
+                              {event.notes && (
+                                <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900 leading-relaxed">
+                                  <span className="font-semibold block text-[10px] uppercase text-amber-800">Remark / Note:</span>
+                                  <span className="whitespace-pre-wrap">{event.notes}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    /* Fallback Timeline */
+                    <>
+                      {/* Created Event */}
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            Created by{' '}
+                            <span className="text-primary font-bold">
+                              {formatRealName(displayCreatedBy || 'Authorized Staff', 'Staff')}
+                            </span>
                           </span>
-                        </span>
-                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                          {formatTimelineDateTime(displayUpdatedAt)}
-                        </span>
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(displayCreatedAt)}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-fg">
+                          Initial record added to {displayCompany} ledger
+                        </p>
                       </div>
-                      <p className="text-[11px] text-muted-fg">
-                        Transaction details or items modified
-                      </p>
-                    </div>
-                  )}
 
-                  {/* Audit Review Event */}
-                  <div className="pt-2 border-t border-stroke/15 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-focus">
-                        {currentAuditStatus === 'Verified' ? (
-                          <span className="text-emerald-700 font-bold">
-                            Audited & Verified
-                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
-                          </span>
-                        ) : currentAuditStatus === 'Flagged' ? (
-                          <span className="text-rose-700 font-bold">
-                            Flagged for Audit Review
-                            {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
-                          </span>
-                        ) : (
-                          <span className="text-amber-700 font-semibold">
-                            Pending Audit Review
-                          </span>
-                        )}
-                      </span>
-                      {displayAuditDate && (
-                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                          {formatTimelineDateTime(displayAuditDate)}
-                        </span>
+                      {/* Modified Event (if updated) */}
+                      {displayUpdatedAt && displayUpdatedAt !== displayCreatedAt && (
+                        <div className="pt-2 border-t border-stroke/15 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-focus">
+                              Last modified
+                              {' '}by{' '}
+                              <span className="text-blue-600 font-bold">
+                                {formatRealName(displayUpdatedBy || user?.fullName || 'Authorized Staff', user?.role || 'Supervisor')}
+                              </span>
+                            </span>
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(displayUpdatedAt)}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-fg">
+                            Transaction details or items modified
+                          </p>
+                        </div>
                       )}
-                    </div>
-                    {displayAuditNotes ? (
-                      <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs shadow-2xs">
-                        <strong className="text-rose-900 font-bold block mb-1 text-[11px] flex items-center gap-1.5">
-                          <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                          Auditor Remarks / Discrepancy Note:
-                        </strong>
-                        <p className="leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{displayAuditNotes}</p>
+
+                      {/* Audit Review Event */}
+                      <div className="pt-2 border-t border-stroke/15 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {currentAuditStatus === 'Verified' ? (
+                              <span className="text-emerald-700 font-bold">
+                                Audited & Verified
+                                {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : currentAuditStatus === 'Flagged' ? (
+                              <span className="text-rose-700 font-bold">
+                                Flagged for Audit Review
+                                {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">
+                                Pending Audit Review
+                              </span>
+                            )}
+                          </span>
+                          {displayAuditDate && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(displayAuditDate)}
+                            </span>
+                          )}
+                        </div>
+                        {displayAuditNotes ? (
+                          <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs shadow-2xs">
+                            <strong className="text-rose-900 font-bold block mb-1 text-[11px] flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              Auditor Remarks / Discrepancy Note:
+                            </strong>
+                            <p className="leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{displayAuditNotes}</p>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-muted-fg mt-0.5">
+                            {currentAuditStatus === 'Verified'
+                              ? 'Approved and verified by Internal Audit.'
+                              : currentAuditStatus === 'Flagged'
+                              ? 'Flagged for audit review.'
+                              : 'Pending review by Internal Audit team.'}
+                          </p>
+                        )}
                       </div>
-                    ) : (
-                      <p className="text-[11px] text-muted-fg mt-0.5">
-                        {currentAuditStatus === 'Verified'
-                          ? 'Approved and verified by Internal Audit.'
-                          : currentAuditStatus === 'Flagged'
-                          ? 'Flagged for audit review.'
-                          : 'Pending review by Internal Audit team.'}
-                      </p>
-                    )}
-                  </div>
+                    </>
+                  )}
 
                   {/* Reference / Cheque Remark */}
                   {displayChequeNo && displayChequeNo !== '—' && (

@@ -50,6 +50,27 @@ export interface PurgeExpiredResult {
   message: string
 }
 
+export interface EntityTimelineEvent {
+  id: string
+  action: string
+  event_type: 'created' | 'edited' | 'audited' | 'endorsed' | 'disbursed' | 'payment' | 'general'
+  title: string
+  actor_name: string
+  actor_role?: string | null
+  timestamp: string
+  description?: string | null
+  changes?: Record<string, unknown> | null
+  notes?: string | null
+  status_badge?: string | null
+}
+
+export interface EntityTimelineQueryParams {
+  recordType: string
+  recordId?: string | number
+  refNo?: string
+  companyId?: number
+}
+
 interface RawAuditLogRow {
   audit_log_id: number
   action: string
@@ -194,6 +215,40 @@ export const activityLogService = {
       return (await response.json()) as PurgeExpiredResult
     } catch (err) {
       throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to purge expired activity logs. Please try again.'))
+    }
+  },
+
+  /**
+   * Fetches the unified lifecycle timeline for any financial movement or record
+   * (Sales, Expenses, Petty Cash topups/reimbursements, Loans, etc.).
+   */
+  async getEntityTimeline(params: EntityTimelineQueryParams): Promise<EntityTimelineEvent[]> {
+    try {
+      const url = new URL('/api/v1/activity-logs/timeline', window.location.origin)
+      url.searchParams.set('record_type', params.recordType)
+      if (params.recordId !== undefined && params.recordId !== null) {
+        url.searchParams.set('record_id', String(params.recordId))
+      }
+      if (params.refNo) {
+        url.searchParams.set('ref_no', params.refNo)
+      }
+      if (params.companyId !== undefined && params.companyId !== null) {
+        url.searchParams.set('company_id', String(params.companyId))
+      }
+
+      const response = await fetch(url.toString(), {
+        cache: 'no-store',
+        headers: getAuthHeaders(),
+      })
+
+      if (!response.ok) {
+        throw new Error(await getApiError(response))
+      }
+
+      return (await response.json()) as EntityTimelineEvent[]
+    } catch (err) {
+      console.warn('Unable to load entity timeline:', err)
+      return []
     }
   },
 

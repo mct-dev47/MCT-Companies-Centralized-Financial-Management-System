@@ -169,23 +169,82 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
  *  - funded from the company's own bank account: a single Withdrawal, and no Deposit
  * Every petty cash row is a read only mirror (petty cash is audited on its own page).
  */
+/**
+ * One petty cash top up or reimbursement becomes:
+ *  - for top up: funded by another company: a Deposit for the requesting company, a Withdrawal for the funder
+ *  - for top up: funded from the company's own bank account: a single Withdrawal, and no Deposit
+ *  - for reimbursement: a Withdrawal for the company/funder reflecting employee payout or float disbursement
+ * Every petty cash row is a read only mirror (petty cash is audited on its own page).
+ */
 const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] => {
-  const awaitingAudit = isAwaitingAudit(m.status)
+  const reqType = (m.requestType || '').trim().toLowerCase()
+  const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
+  const statusLower = (m.status || '').trim().toLowerCase()
+  const awaitingAudit = isAwaitingAudit(m.status) || statusLower.includes('pending')
+  const isDisapproved = statusLower.includes('disapproved') || statusLower.includes('rejected')
+  const auditStatus: DashboardTransactionItem['auditStatus'] = awaitingAudit ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
+  const txStatus: DashboardTransactionItem['status'] = awaitingAudit ? 'Pending' : 'Paid'
+
   const base = {
     refNo: m.refNo,
     chequeNo: '',
     date: toLedgerDate(m.date),
     type: 'Petty Cash' as const,
     amount: m.amount,
-    category: 'Petty Cash' as any,
-    paymentMethod: 'Bank Transfer',
-    status: (awaitingAudit ? 'Pending' : 'Paid') as DashboardTransactionItem['status'],
+    category: (m.category || 'Petty Cash') as any,
+    paymentMethod: m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
+    status: txStatus,
     awaitingAudit,
-    // Internal Audit approving the top up is the audit, so an approved top up reads as audited.
-    auditStatus: (awaitingAudit ? 'Pending Audit' : 'Verified') as DashboardTransactionItem['auditStatus'],
+    auditStatus,
+    auditedBy: m.reviewedBy || undefined,
+    auditDate: m.reviewedAt ? toLedgerDate(m.reviewedAt) : undefined,
+    auditNotes: m.remark || m.financeRemark || undefined,
+    createdBy: m.createdByName || (m.createdBy ? String(m.createdBy) : undefined),
     createdAt: m.createdAt || m.date,
-    attachments: [],
+    attachments: m.receiptUrl ? [m.receiptUrl] : [],
     isMirrorRow: true,
+    paidAmount: m.amountReimbursed || m.amount,
+  }
+
+  if (isReimbursement) {
+    const claimant = m.paidBy || 'Employee'
+    const desc = m.description || `Petty cash reimbursement for ${claimant} (${m.refNo})`
+
+    if (m.isOwnAccount || !m.fundingCompanyId || m.fundingCompanyName === m.companyName) {
+      return [
+        {
+          ...base,
+          id: `pc_${m.topupId}:out`,
+          company: m.companyName,
+          description: desc,
+          particulars: desc,
+          deposit: 0,
+          withdrawal: m.amount,
+        },
+      ]
+    }
+
+    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName} (${m.refNo})`
+    return [
+      {
+        ...base,
+        id: `pc_${m.topupId}:exp`,
+        company: m.companyName,
+        description: desc,
+        particulars: desc,
+        deposit: 0,
+        withdrawal: m.amount,
+      },
+      {
+        ...base,
+        id: `pc_${m.topupId}:out`,
+        company: m.fundingCompanyName,
+        description: fundingDesc,
+        particulars: fundingDesc,
+        deposit: 0,
+        withdrawal: m.amount,
+      },
+    ]
   }
 
   if (m.isOwnAccount) {

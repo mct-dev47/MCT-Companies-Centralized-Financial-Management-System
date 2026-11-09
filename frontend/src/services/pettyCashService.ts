@@ -155,6 +155,28 @@ export interface PettyCashMovement {
   /** True when the funding bank belongs to the requesting company itself. */
   isOwnAccount: boolean
   createdAt: string | null
+  requestType?: string | null
+  paidBy?: string | null
+  category?: string | null
+  totalExpenses?: number | null
+  companyFundedAmount?: number | null
+  employeeOutOfPocket?: number | null
+  amountReimbursed?: number | null
+  endorsedBy?: string | null
+  endorsedAt?: string | null
+  financeRemark?: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
+  remark?: string | null
+  createdBy?: number | null
+  createdByName?: string | null
+  reimbursedBy?: string | null
+  reimbursedAt?: string | null
+  transferReceivedBy?: string | null
+  transferReceivedAt?: string | null
+  items?: string | null
+  attachments?: string | null
+  receiptUrl?: string | null
 }
 
 interface BackendMovement {
@@ -170,6 +192,28 @@ interface BackendMovement {
   funding_company_name?: string | null
   is_own_account?: boolean
   created_at?: string | null
+  request_type?: string | null
+  paid_by?: string | null
+  category?: string | null
+  total_expenses?: string | number | null
+  company_funded_amount?: string | number | null
+  employee_out_of_pocket?: string | number | null
+  amount_reimbursed?: string | number | null
+  endorsed_by?: string | null
+  endorsed_at?: string | null
+  finance_remark?: string | null
+  reviewed_by?: string | null
+  reviewed_at?: string | null
+  remark?: string | null
+  created_by?: number | null
+  created_by_name?: string | null
+  reimbursed_by?: string | null
+  reimbursed_at?: string | null
+  transfer_received_by?: string | null
+  transfer_received_at?: string | null
+  items?: string | null
+  attachments?: string | null
+  receipt_url?: string | null
 }
 
 export interface PettyCashPeriod {
@@ -447,6 +491,28 @@ export const pettyCashService = {
       fundingCompanyName: m.funding_company_name || 'Funding bank',
       isOwnAccount: Boolean(m.is_own_account),
       createdAt: m.created_at ?? null,
+      requestType: m.request_type || 'topup',
+      paidBy: m.paid_by ?? null,
+      category: m.category ?? null,
+      totalExpenses: m.total_expenses != null ? Number(m.total_expenses) : null,
+      companyFundedAmount: m.company_funded_amount != null ? Number(m.company_funded_amount) : 0,
+      employeeOutOfPocket: m.employee_out_of_pocket != null ? Number(m.employee_out_of_pocket) : 0,
+      amountReimbursed: m.amount_reimbursed != null ? Number(m.amount_reimbursed) : null,
+      endorsedBy: m.endorsed_by ?? null,
+      endorsedAt: m.endorsed_at ?? null,
+      financeRemark: m.finance_remark ?? null,
+      reviewedBy: m.reviewed_by ?? null,
+      reviewedAt: m.reviewed_at ?? null,
+      remark: m.remark ?? null,
+      createdBy: m.created_by ?? null,
+      createdByName: m.created_by_name ?? null,
+      reimbursedBy: m.reimbursed_by ?? null,
+      reimbursedAt: m.reimbursed_at ?? null,
+      transferReceivedBy: m.transfer_received_by ?? null,
+      transferReceivedAt: m.transfer_received_at ?? null,
+      items: m.items ?? null,
+      attachments: m.attachments ?? null,
+      receiptUrl: m.receipt_url ?? null,
     }))
   },
 

@@ -16,8 +16,10 @@ from app.models.company import Company
 from app.models.finance import Category, Expense
 from app.models.intercompany_transfer import IntercompanyTransfer
 from app.models.petty_cash import PettyCashTopUp, PettyCashWallet
+from app.models.user import User
 from app.schemas.bank import BankDepositWithdrawRequest
 from app.services.bank_service import BankService
+from app.services.audit_service import AuditAction, log_transaction
 from app.schemas.petty_cash import (
     IntercompanyTransferOut,
     PettyCashLedgerEntry,
@@ -31,7 +33,16 @@ from app.services.bills_service import _resolve_company
 
 PETTY_CASH_METHOD = "petty cash"
 
-LEDGER_MOVEMENT_STATUSES = {"pending audit approval", "approved"}
+LEDGER_MOVEMENT_STATUSES = {
+    "pending finance endorsement",
+    "pending finance approval",
+    "pending audit approval",
+    "approved",
+    "transfer in transit",
+    "transfer received",
+    "reimbursed",
+    "settled",
+}
 DEFAULT_LOW_BALANCE_THRESHOLD = Decimal("1000.00")
 ZERO = Decimal("0.00")
 
@@ -76,6 +87,8 @@ class PettyCashService:
     def _petty_cash_expenses(self, company_id: Optional[int] = None) -> List[dict]:
         """Expenses paid from petty cash or categorized as Petty Cash. Supabase first, local DB as fallback."""
         try:
+            if self.db.bind and self.db.bind.dialect.name == "sqlite":
+                raise RuntimeError("Use local SQLite DB")
             client = get_supabase_admin_client()
             cat_map: Dict[int, str] = {}
             petty_cat_ids = []
@@ -521,43 +534,59 @@ class PettyCashService:
 
     def list_movements(self, company: Optional[Company] = None) -> List[PettyCashMovementOut]:
         """
-        Top-ups for the Transaction page ledger 
+        Top-ups and reimbursements for the Transaction page ledger (spec 0013 & spec 0038).
         """
         topups = [
             t for t in self._topups(None)
             if (t.status or "").strip().lower() in LEDGER_MOVEMENT_STATUSES
-            and (t.bank_account_id or "").strip()
         ]
         if not topups:
             return []
 
         comp_names = {c.company_id: c.company_name for c in self.db.query(Company).all()}
         name_to_id = {(name or "").strip().lower(): cid for cid, name in comp_names.items()}
+        user_names = {u.user_id: u.name for u in self.db.query(User.user_id, User.name).all()}
 
-        banks = self._banks_by_id({t.bank_account_id for t in topups})
+        bank_ids = {t.bank_account_id for t in topups if (t.bank_account_id or "").strip()}
+        banks = self._banks_by_id(bank_ids)
 
         movements: List[PettyCashMovementOut] = []
         for t in topups:
-            funding = self._resolve_funding(t, banks, comp_names, name_to_id)
-            if funding is None:
-                # Funding bank cannot be found: nothing reliable to show for either side.
-                continue
+            requesting_name = comp_names.get(t.company_id) or f"Company #{t.company_id}"
+            req_type = (t.request_type or "topup").strip().lower()
 
-            bank = funding["bank"]
-            funding_company_id = funding["company_id"]
-            funding_company_name = funding["company_name"]
-            requesting_name = comp_names.get(t.company_id)
-            is_own_account = funding["is_own_account"]
+            funding = None
+            if (t.bank_account_id or "").strip():
+                funding = self._resolve_funding(t, banks, comp_names, name_to_id)
+
+            if funding:
+                funding_company_id = funding["company_id"]
+                funding_company_name = funding["company_name"]
+                is_own_account = funding["is_own_account"]
+            else:
+                funding_company_id = t.company_id
+                funding_company_name = requesting_name
+                is_own_account = True
 
             if company is not None and company.company_id not in (t.company_id, funding_company_id):
                 continue
+
+            # Amount to show for the movement
+            move_amt = _to_decimal(t.amount)
+            if req_type in ("reimbursement", "replenishment"):
+                if move_amt <= ZERO and t.company_funded_amount is not None and _to_decimal(t.company_funded_amount) > ZERO:
+                    move_amt = _to_decimal(t.company_funded_amount)
+                elif move_amt <= ZERO and t.total_expenses is not None:
+                    move_amt = _to_decimal(t.total_expenses)
+
+            creator_name = user_names.get(t.created_by) or t.paid_by or "Staff"
 
             movements.append(
                 PettyCashMovementOut(
                     topup_id=t.topup_id,
                     reference_no=t.reference_no,
                     topup_date=t.topup_date,
-                    amount=_to_decimal(t.amount),
+                    amount=move_amt,
                     description=t.description,
                     status=t.status,
                     company_id=t.company_id,
@@ -566,6 +595,28 @@ class PettyCashService:
                     funding_company_name=funding_company_name,
                     is_own_account=is_own_account,
                     created_at=t.created_at,
+                    request_type=req_type,
+                    paid_by=t.paid_by,
+                    category=t.category,
+                    total_expenses=t.total_expenses,
+                    company_funded_amount=t.company_funded_amount,
+                    employee_out_of_pocket=t.employee_out_of_pocket,
+                    amount_reimbursed=t.amount_reimbursed,
+                    endorsed_by=t.endorsed_by,
+                    endorsed_at=t.endorsed_at,
+                    finance_remark=t.finance_remark,
+                    reviewed_by=t.reviewed_by,
+                    reviewed_at=t.reviewed_at,
+                    remark=t.remark,
+                    created_by=t.created_by,
+                    created_by_name=creator_name,
+                    reimbursed_by=t.reimbursed_by,
+                    reimbursed_at=t.reimbursed_at,
+                    transfer_received_by=t.transfer_received_by,
+                    transfer_received_at=t.transfer_received_at,
+                    items=t.items,
+                    attachments=t.attachments,
+                    receipt_url=t.receipt_url,
                 )
             )
 
@@ -710,6 +761,25 @@ class PettyCashService:
         self.db.add(topup)
         self.db.commit()
         self.db.refresh(topup)
+        try:
+            actor_name = (current_user.get("full_name") or current_user.get("name") or current_user.get("email")) if current_user else (topup.paid_by or "Staff")
+            log_transaction(
+                self.db,
+                AuditAction.PETTY_CASH_TOPUP_CREATED,
+                user_id=topup.created_by,
+                company_id=topup.company_id,
+                ip_address="internal",
+                record_id=topup.topup_id,
+                record_type="petty_cash",
+                extra={
+                    "amount": float(topup.amount),
+                    "request_type": topup.request_type,
+                    "paid_by": topup.paid_by,
+                    "actor_name": actor_name,
+                },
+            )
+        except Exception:
+            pass
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
@@ -791,6 +861,27 @@ class PettyCashService:
 
         self.db.commit()
         self.db.refresh(topup)
+        try:
+            log_transaction(
+                self.db,
+                AuditAction.PETTY_CASH_WALLET_UPDATED,
+                user_id=None,
+                company_id=topup.company_id,
+                ip_address="internal",
+                record_id=topup.topup_id,
+                record_type="petty_cash",
+                extra={
+                    "action": "edit",
+                    "amount": float(topup.amount),
+                    "description": topup.description,
+                    "changes": {
+                        "amount": str(topup.amount),
+                        "description": topup.description or "",
+                    },
+                },
+            )
+        except Exception:
+            pass
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})

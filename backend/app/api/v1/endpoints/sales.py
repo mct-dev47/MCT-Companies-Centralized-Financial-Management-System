@@ -573,12 +573,19 @@ def create_sale(
             }
         )
 
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
             user_id=current_user.get("user_id"), company_id=target_company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=sb_sales_id, record_type="sale",
-            extra={"amount": float(sale_in.amount), "transaction_date": sale_in.transaction_date.isoformat()},
+            extra={
+                "amount": float(sale_in.amount),
+                "transaction_date": sale_in.transaction_date.isoformat(),
+                "particulars": parts,
+                "actor_name": actor_name,
+                "actor_role": current_user.get("role", "Staff"),
+            },
         )
 
         return SaleOut(
@@ -659,12 +666,19 @@ def create_sale(
             }
         )
 
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
             user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=sale.sales_id, record_type="sale",
-            extra={"amount": float(sale.amount), "transaction_date": sale_in.transaction_date.isoformat()},
+            extra={
+                "amount": float(sale.amount),
+                "transaction_date": sale_in.transaction_date.isoformat(),
+                "particulars": parts,
+                "actor_name": actor_name,
+                "actor_role": current_user.get("role", "Staff"),
+            },
         )
 
         return SaleOut(
@@ -1001,6 +1015,9 @@ def update_sale(
         except Exception:
             pass
 
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+    changes_dict = {k: str(v) for k, v in update_payload.items()}
+
     if updated_row:
         client = client or get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client)
@@ -1009,6 +1026,7 @@ def update_sale(
             user_id=current_user.get("user_id"), company_id=updated_row.get("company_id"),
             ip_address=request.client.host if request.client else "unknown",
             record_id=sales_id, record_type="sale",
+            extra={"changes": changes_dict, "actor_name": actor_name, "actor_role": current_user.get("role", "Staff")},
         )
         return SaleOut(
             sales_id=updated_row["sales_id"],
@@ -1036,6 +1054,7 @@ def update_sale(
         user_id=current_user.get("user_id"), company_id=sale.company_id,
         ip_address=request.client.host if request.client else "unknown",
         record_id=sales_id, record_type="sale",
+        extra={"changes": changes_dict, "actor_name": actor_name, "actor_role": current_user.get("role", "Staff")},
     )
     return SaleOut(
         sales_id=sale.sales_id,

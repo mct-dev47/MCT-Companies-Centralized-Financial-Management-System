@@ -487,11 +487,12 @@ def create_expense(
 
         # 3. Insert into Supabase
         payment_method_str = (expense_in.payment_method or "").strip() or None
+        creator_id = expense_in.created_by or current_user.get("user_id")
         sb_insert = client.table("expenses").insert({
             "company_id": target_company_id,
             "category_id": resolved_category_id,
             "payment_method": payment_method_str,
-            "created_by": expense_in.created_by,
+            "created_by": creator_id,
             "expense_date": expense_in.expense_date.isoformat(),
             "reference_no": ref,
             "cheque_number": cheque,
@@ -528,7 +529,7 @@ def create_expense(
                 company_id=target_company_id,
                 category_id=resolved_category_id,
                 payment_method=payment_method_str,
-                created_by=expense_in.created_by,
+                created_by=creator_id,
                 expense_date=expense_in.expense_date,
                 reference_no=ref,
                 cheque_no=cheque,
@@ -572,12 +573,13 @@ def create_expense(
             except Exception:
                 pass
 
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_CREATED,
-            user_id=None, company_id=target_company_id,
+            user_id=current_user.get("user_id"), company_id=target_company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=sb_expense_id, record_type="expense",
-            extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat()},
+            extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
         )
 
         try:
@@ -670,12 +672,13 @@ def create_expense(
 
         cat = db.query(Category).filter(Category.category_id == expense.category_id).first() if expense.category_id else None
 
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_CREATED,
-            user_id=None, company_id=target_company.company_id,
+            user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense.expense_id, record_type="expense",
-            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat()},
+            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
         )
 
         try:
@@ -898,11 +901,13 @@ def update_expense(
     if updated_row:
         client = get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client, db=db)
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_UPDATED,
             user_id=current_user.get("user_id"), company_id=updated_row.get("company_id"),
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense_id, record_type="expense",
+            extra={"changes": {k: str(v) for k, v in update_payload.items()}, "actor_name": actor_name},
         )
 
         try:
@@ -943,11 +948,13 @@ def update_expense(
     company = db.query(Company).filter(Company.company_id == expense.company_id).first()
     category = db.query(Category).filter(Category.category_id == expense.category_id).first() if expense.category_id else None
 
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
     log_transaction(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=expense.company_id,
         ip_address=request.client.host if request.client else "unknown",
         record_id=expense_id, record_type="expense",
+        extra={"changes": {k: str(v) for k, v in update_payload.items()}, "actor_name": actor_name},
     )
 
     try:

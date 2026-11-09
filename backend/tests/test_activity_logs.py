@@ -350,6 +350,18 @@ class TestAuditDiffAndIpExtraction(unittest.TestCase):
         self.assertIn("amount", item.changes)
         self.assertEqual(item.changes["amount"]["new"], 1200.0)
 
+    def test_get_entity_timeline_integration(self):
+        service = ActivityLogService()
+        # Test get_entity_timeline returns timeline events
+        events = service.get_entity_timeline(
+            record_type="sale",
+            record_id="9999",
+            ref_no="SAL-2026-9999",
+            company_id=1,
+        )
+        # Should return a list without error
+        self.assertIsInstance(events, list)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -201,7 +201,7 @@ class PettyCashSummaryOut(BaseModel):
 
 
 class PettyCashMovementOut(BaseModel):
-    """One petty cash top-up shown on the Transaction page ledger (spec 0013).
+    """One petty cash top-up or reimbursement shown on the Transaction page ledger (spec 0013 & spec 0038).
 
     Carries both sides of the money: the requesting company and the company that owns the
     funding bank, so the page can show a Deposit for one and a Withdrawal for the other.
@@ -219,6 +219,29 @@ class PettyCashMovementOut(BaseModel):
     funding_company_name: Optional[str] = None
     is_own_account: bool = False
     created_at: Optional[datetime] = None
+    request_type: Optional[str] = "topup"
+    paid_by: Optional[str] = None
+    category: Optional[str] = None
+    total_expenses: Optional[Decimal] = None
+    company_funded_amount: Optional[Decimal] = None
+    employee_out_of_pocket: Optional[Decimal] = None
+    amount_reimbursed: Optional[Decimal] = None
+    endorsed_by: Optional[str] = None
+    endorsed_at: Optional[datetime] = None
+    finance_remark: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    remark: Optional[str] = None
+    created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
+    reimbursed_by: Optional[str] = None
+    reimbursed_at: Optional[datetime] = None
+    transfer_received_by: Optional[str] = None
+    transfer_received_at: Optional[datetime] = None
+    items: Optional[str] = None
+    attachments: Optional[str] = None
+    receipt_url: Optional[str] = None
+
 
 
 class PettyCashLedgerEntry(BaseModel):

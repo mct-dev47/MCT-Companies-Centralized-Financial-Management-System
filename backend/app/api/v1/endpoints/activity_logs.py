@@ -14,7 +14,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import AdminUser
+from app.core.dependencies import AdminUser, AuthenticatedUser, require_business_reader, check_company_access
 from app.core.events import dispatch_activity_event
 from app.db.session import get_db
 from app.schemas.activity_log import (
@@ -22,10 +22,37 @@ from app.schemas.activity_log import (
     ActivityLogOut,
     PaginatedActivityLogs,
     RetentionPurgeResponse,
+    TimelineEventOut,
 )
 from app.services.activity_log_service import activity_log_service
 
 router = APIRouter(prefix="/activity-logs", tags=["Activity Logs"])
+
+
+@router.get("/timeline", response_model=List[TimelineEventOut], summary="Get chronological lifecycle and edit timeline for a record")
+def get_entity_timeline(
+    record_type: str = Query(..., description="Record type (sale, expense, loan, petty_cash, tenant)"),
+    record_id: Optional[str] = Query(None, description="Record ID"),
+    ref_no: Optional[str] = Query(None, description="Reference number"),
+    company_id: Optional[int] = Query(None, description="Company ID"),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+) -> List[TimelineEventOut]:
+    """
+    Returns an enriched lifecycle & edit timeline for any financial record
+    (Sales, Expenses, Loans, Petty Cash top-ups / reimbursements, Tenant collections).
+    Accessible to authorized staff, supervisors, finance, audit, and admin users.
+    """
+    if company_id:
+        check_company_access(current_user, company_id)
+    return activity_log_service.get_entity_timeline(
+        record_type=record_type,
+        record_id=record_id,
+        ref_no=ref_no,
+        company_id=company_id,
+        db=db,
+    )
+
 
 
 @router.get("", response_model=List[ActivityLogOut], summary="List activity logs (Admin only)")

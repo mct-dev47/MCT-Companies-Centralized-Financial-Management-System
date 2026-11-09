@@ -1977,6 +1977,54 @@ export const PettyCashPage: React.FC = () => {
                       </p>
                     )}
                   </div>
+
+                  {/* Transfer Received Event */}
+                  {(targetEntry.transferReceivedAt || targetEntry.transferReceivedBy) && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          Bank Transfer Received by{' '}
+                          <span className="text-teal-700 font-bold">
+                            {formatRealName(targetEntry.transferReceivedBy || 'Finance Officer', 'Finance Officer')}
+                          </span>
+                        </span>
+                        {targetEntry.transferReceivedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.transferReceivedAt)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        Intercompany funding transfer confirmed received by requesting company bank.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Reimbursement Disbursed / Float Settled Event */}
+                  {(targetEntry.reimbursedAt || targetEntry.reimbursedBy || targetEntry.status === 'Reimbursed' || targetEntry.status === 'Settled') && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          {targetEntry.status === 'Settled' ? (
+                            <span className="text-emerald-700 font-bold">Float Finalized & Settled</span>
+                          ) : (
+                            <span className="text-teal-700 font-bold">Reimbursement Payout Disbursed</span>
+                          )}
+                          {targetEntry.reimbursedBy ? ` by ${formatRealName(targetEntry.reimbursedBy, 'Finance Officer')}` : ''}
+                        </span>
+                        {targetEntry.reimbursedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.reimbursedAt)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        {targetEntry.status === 'Settled'
+                          ? 'Company float adjustment finalized and petty cash ledger updated.'
+                          : `Employee reimbursement disbursed to ${formatRealName(targetEntry.paidBy || 'Employee', 'Staff')}.`}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
