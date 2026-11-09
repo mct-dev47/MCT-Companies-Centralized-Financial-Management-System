@@ -316,18 +316,23 @@ def forgot_password(
 @router.post("/reset-password", response_model=MessageResponse, summary="Confirm Password Reset")
 def confirm_password_reset(
     request: PasswordResetConfirm,
+    req: Request,
     db: Session = Depends(get_db),
 ):
+    client_ip = get_trusted_client_ip(req)
     return reset_password(
         db=db,
         confirm_data=request,
+        ip_address=client_ip,
     )
 
 @router.post("/setup-password", response_model=MessageResponse, summary="Set Password from Invitation Token")
 def setup_password(
     data: SetupPasswordRequest,
+    req: Request,
     db: Session = Depends(get_db),
 ):
+    client_ip = get_trusted_client_ip(req)
     token = data.token
     new_password = data.new_password
     if data.encrypted_payload:
@@ -335,4 +340,4 @@ def setup_password(
         decrypted = decrypt_payload(data.encrypted_payload)
         token = decrypted.get("token", token)
         new_password = decrypted.get("new_password", new_password)
-    return setup_invitation_password(db=db, token=token, new_password=new_password)
+    return setup_invitation_password(db=db, token=token, new_password=new_password, ip_address=client_ip)

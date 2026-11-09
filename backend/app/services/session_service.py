@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.encryption import decrypt_payload, encrypt_payload
-from app.models.security import RevokedToken
+from app.models.security import RevokedToken, UserSession
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -170,6 +170,18 @@ def revoke_session(
                 db.add(RevokedToken(token_hash=th, user_id=user_id))
         except Exception:
             pass
+
+    if sid or family_id:
+        try:
+            q = db.query(UserSession)
+            if sid:
+                q = q.filter(UserSession.session_id == sid)
+            elif family_id:
+                q = q.filter(UserSession.family_id == family_id)
+            q.delete(synchronize_session=False)
+        except Exception:
+            pass
+
     try:
         db.commit()
     except Exception as exc:
@@ -414,4 +426,73 @@ def verify_reauth_token(reauth_token: Optional[str], expected_user_id: int) -> b
         return True
     except Exception:
         return False
+
+
+def register_user_session(
+    db: Session,
+    user_id: int,
+    sid: str,
+    family_id: str,
+    ip_address: str,
+    user_agent: Optional[str] = None,
+    max_concurrent: int = 3,
+) -> None:
+    """Enforces concurrent session limit (max 3 by default).
+    If active sessions >= max_concurrent, evicts the oldest session(s) via FIFO.
+    """
+    try:
+        active_sessions = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user_id)
+            .order_by(UserSession.last_activity_at.asc())
+            .all()
+        )
+        if len(active_sessions) >= max_concurrent:
+            evict_count = len(active_sessions) - max_concurrent + 1
+            sessions_to_evict = active_sessions[:evict_count]
+            for s in sessions_to_evict:
+                logger.info("Evicting oldest session %s for user %s to enforce concurrency limit", s.session_id, user_id)
+                revoke_session(db=db, sid=s.session_id, family_id=s.family_id, user_id=user_id)
+
+        new_sess = UserSession(
+            session_id=sid,
+            user_id=user_id,
+            family_id=family_id,
+            ip_address=ip_address,
+            user_agent=(user_agent[:255] if user_agent else None),
+            created_at=datetime.now(timezone.utc),
+            last_activity_at=datetime.now(timezone.utc),
+        )
+        db.merge(new_sess)
+        db.commit()
+    except Exception as exc:
+        logger.warning("Failed managing user session concurrency: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def delete_user_session(
+    db: Session,
+    sid: Optional[str] = None,
+    family_id: Optional[str] = None,
+) -> None:
+    if not sid and not family_id:
+        return
+    try:
+        q = db.query(UserSession)
+        if sid:
+            q = q.filter(UserSession.session_id == sid)
+        elif family_id:
+            q = q.filter(UserSession.family_id == family_id)
+        q.delete(synchronize_session=False)
+        db.commit()
+    except Exception as exc:
+        logger.warning("Failed deleting user session: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 

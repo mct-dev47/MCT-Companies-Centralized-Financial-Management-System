@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+os.environ["TESTING"] = "1"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+
 import collections
 import hashlib
 import hmac

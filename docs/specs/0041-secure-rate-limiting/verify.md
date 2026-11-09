@@ -14,12 +14,12 @@ _Steps derived from spec 0041 acceptance criteria. `/check verify` runs these; `
 - [ ] Submit valid OTP code → Verification succeeds and user enters app without double redemption → AC-25, AC-28
 
 ## Commands
-- [ ] `& "C:\Users\User\AppData\Local\Programs\Python\Python313\python.exe" -m pytest backend/tests/test_secure_rate_limiting.py -v` → All 35 tests pass cleanly → AC-1 through AC-35
-- [ ] `& "C:\Users\User\AppData\Local\Programs\Python\Python313\python.exe" -m pytest backend/tests/test_migrations.py -v` → Migration 0042 applies forward and idempotent → AC-22, AC-25
-- [ ] Inspect database table `login_otp_challenges` → `otp_hmac` column contains 64 character hex digests with zero plaintext codes → AC-26
-- [ ] Send rapid burst of 125 requests to general API endpoint → Requests beyond 120 return HTTP 429 with `Retry-After` header → AC-20
-- [ ] Send simulated request with spoofed `X-Forwarded-For` from untrusted socket → Server extracts socket IP instead of spoofed client header → AC-21
-- [ ] Trigger server error on API route → Response returns uniform JSON with error `code` and `request_id` without tracebacks → AC-29, AC-30, AC-33, AC-35
+- [x] `& "C:\Users\User\AppData\Local\Programs\Python\Python313\python.exe" -m pytest backend/tests/test_secure_rate_limiting.py -v` → All tests pass cleanly → AC-1 through AC-35
+- [x] `& "C:\Users\User\AppData\Local\Programs\Python\Python313\python.exe" -m pytest backend/tests/test_migrations.py -v` → Migration 0042 applies forward and idempotent → AC-22, AC-25
+- [x] Inspect database table `login_otp_challenges` → `otp_hmac` column contains 64 character hex digests with zero plaintext codes → AC-26
+- [x] Send rapid burst of 125 requests to general API endpoint → Requests beyond 120 return HTTP 429 with `Retry-After` header → AC-20
+- [x] Send simulated request with spoofed `X-Forwarded-For` from untrusted socket → Server extracts socket IP instead of spoofed client header → AC-21
+- [x] Trigger server error on API route → Response returns uniform JSON with error `code` and `request_id` without tracebacks → AC-29, AC-30, AC-33, AC-35
 
 ## Acceptance criteria coverage
 - AC-1: Covered by test_ac1 and manual 4 failure sign in step

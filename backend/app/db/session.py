@@ -12,6 +12,8 @@ Base = declarative_base()
 
 # Database connection setup
 db_url = settings.DATABASE_URL
+if os.environ.get("TESTING") == "1":
+    db_url = "sqlite:///:memory:"
 engine = None
 
 if db_url and db_url.strip() and not db_url.startswith("sqlite"):

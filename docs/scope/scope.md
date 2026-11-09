@@ -346,5 +346,5 @@
   - [x] Milestone 5: Centralized API rate limiting middleware with worker memory sliding windows and database heavy route limits (AC-20, AC-21, AC-23)
   - [x] Milestone 6: Frontend login and OTP live countdown timers, reload restoration, and error mapping (AC-3, AC-9, AC-11, AC-13, AC-19, AC-32, AC-34)
   - [x] Milestone 7: Comprehensive automated test suite verifying all 35 acceptance criteria (AC-1 through AC-35)
-- [ ] Verify it: /check verify secure-rate-limiting
-- [ ] Test it: /test secure-rate-limiting
+- [x] Verify it: /check verify secure-rate-limiting
+- [x] Test it: /test secure-rate-limiting

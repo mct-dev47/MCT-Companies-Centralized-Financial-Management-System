@@ -35,7 +35,7 @@ app.add_exception_handler(Exception, global_unhandled_exception_handler)
 
 # CORS Middleware setup
 
-# Cache prevention middleware for API endpoints to prevent disk and intermediary caching of financial records
+# Cache prevention & security headers middleware
 @app.middleware("http")
 async def add_security_cache_headers(request, call_next):
     response = await call_next(request)
@@ -43,6 +43,26 @@ async def add_security_cache_headers(request, call_next):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-XSS-Protection"] = "0"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self' ws: wss: https:; "
+        "frame-ancestors 'none';"
+    )
+
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    is_prod = str(getattr(settings, "ENVIRONMENT", "development")).lower() == "production"
+    if is_https or is_prod:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
     return response
 
 app.add_middleware(
@@ -107,6 +127,9 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.on_event("startup")
 def on_startup():
     setup_log_redaction()
+    import os
+    if os.environ.get("TESTING") == "1":
+        return
     from app.db.session import init_db
     init_db()
 

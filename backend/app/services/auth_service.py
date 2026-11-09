@@ -706,13 +706,22 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
         token_version_val = int(user.get("token_version", 1)) if user else 1
         sid = secrets.token_urlsafe(32)
 
-        from app.services.session_service import create_refresh_cookie_payload
-        refresh_cookie, _ = create_refresh_cookie_payload(
+        from app.services.session_service import create_refresh_cookie_payload, register_user_session
+        refresh_cookie, cookie_payload = create_refresh_cookie_payload(
             user_id=user_id_val,
             email=challenge["email"],
             token_version=token_version_val,
             remember_me=remember_me,
             sid=sid,
+        )
+
+        # Enforce session concurrency limits (Max 3 concurrent sessions, oldest evicted)
+        register_user_session(
+            db=session,
+            user_id=user_id_val,
+            sid=sid,
+            family_id=cookie_payload["family_id"],
+            ip_address=norm_ip,
         )
 
         access_token = create_jwt_token(
@@ -920,6 +929,60 @@ def request_password_reset(
     clean_ip = (ip_address or "unknown").strip()
     is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
 
+    # Persistent database-backed rate limiting (3 requests / 30 min per email+IP combo, 10 / 30 min per IP)
+    from app.services.rate_limiter import (
+        rate_limiter,
+        get_password_reset_combo_key,
+        get_password_reset_ip_key,
+    )
+    from app.core.errors import RateLimitException
+
+    combo_key, combo_type, combo_id = get_password_reset_combo_key(normalized_email, clean_ip)
+    ip_key, ip_type, ip_id = get_password_reset_ip_key(clean_ip)
+
+    is_combo_locked, combo_retry, combo_until = rate_limiter.check_rate_limit(db, combo_key)
+    if is_combo_locked:
+        _pad_duration(start_perf, floor_seconds)
+        raise RateLimitException(
+            code="AUTH_RATE_LIMITED",
+            detail="Too many password reset requests. Please try again later.",
+            retry_after=combo_retry,
+            locked_until=combo_until.isoformat() if combo_until else None,
+            scope="password_reset_lockout",
+        )
+
+    if not is_trusted_ip:
+        is_ip_locked, ip_retry, ip_until = rate_limiter.check_rate_limit(db, ip_key)
+        if is_ip_locked:
+            _pad_duration(start_perf, floor_seconds)
+            raise RateLimitException(
+                code="AUTH_IP_RATE_LIMITED",
+                detail="Too many requests from this network. Please try again later.",
+                retry_after=ip_retry,
+                locked_until=ip_until.isoformat() if ip_until else None,
+                scope="password_reset_ip_lockout",
+            )
+
+    rate_limiter.record_attempt(
+        db,
+        combo_key,
+        combo_type,
+        combo_id,
+        max_attempts=3,
+        window_minutes=30,
+        lockout_minutes=30,
+    )
+    if not is_trusted_ip:
+        rate_limiter.record_attempt(
+            db,
+            ip_key,
+            ip_type,
+            ip_id,
+            max_attempts=10,
+            window_minutes=30,
+            lockout_minutes=30,
+        )
+
     max_email = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_EMAIL_COUNT", 5)
     email_window = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_EMAIL_WINDOW_SECONDS", 900)
     max_ip = getattr(settings, "FORGOT_PASSWORD_RATE_LIMIT_IP_COUNT", 10)
@@ -1044,7 +1107,24 @@ def request_password_reset(
 def reset_password(
     db: Session,
     confirm_data: PasswordResetConfirm,
+    ip_address: str = "unknown",
 ) -> MessageResponse:
+    from app.services.rate_limiter import rate_limiter, get_password_reset_ip_key
+    from app.core.errors import RateLimitException
+
+    clean_ip = (ip_address or "unknown").strip()
+    is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
+    if not is_trusted_ip:
+        ip_key, ip_type, ip_id = get_password_reset_ip_key(clean_ip)
+        is_ip_locked, ip_retry, ip_until = rate_limiter.check_rate_limit(db, ip_key)
+        if is_ip_locked:
+            raise RateLimitException(
+                code="AUTH_IP_RATE_LIMITED",
+                detail="Too many reset attempts from this network. Please try again later.",
+                retry_after=ip_retry,
+                locked_until=ip_until.isoformat() if ip_until else None,
+                scope="password_reset_confirm_ip_lockout",
+            )
     raw_token_input = confirm_data.token
     new_password = confirm_data.new_password
 
@@ -1098,6 +1178,16 @@ def reset_password(
         .first()
     )
     if not invitation:
+        if not is_trusted_ip:
+            rate_limiter.record_attempt(
+                db,
+                ip_key,
+                ip_type,
+                ip_id,
+                max_attempts=10,
+                window_minutes=30,
+                lockout_minutes=30,
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reset link is invalid, expired, or has already been used.",
@@ -1282,11 +1372,27 @@ def reset_password(
     )
 
 
-def setup_invitation_password(db: Session, token: str, new_password: str) -> MessageResponse:
+def setup_invitation_password(db: Session, token: str, new_password: str, ip_address: str = "unknown") -> MessageResponse:
     """
     Concurrency-safe initial password setup with strict purpose enforcement,
     three-phase Supabase saga, and account activation to ACTIVE.
     """
+    from app.services.rate_limiter import rate_limiter, get_password_reset_ip_key
+    from app.core.errors import RateLimitException
+
+    clean_ip = (ip_address or "unknown").strip()
+    is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
+    if not is_trusted_ip:
+        ip_key, ip_type, ip_id = get_password_reset_ip_key(clean_ip)
+        is_ip_locked, ip_retry, ip_until = rate_limiter.check_rate_limit(db, ip_key)
+        if is_ip_locked:
+            raise RateLimitException(
+                code="AUTH_IP_RATE_LIMITED",
+                detail="Too many setup attempts from this network. Please try again later.",
+                retry_after=ip_retry,
+                locked_until=ip_until.isoformat() if ip_until else None,
+                scope="password_setup_ip_lockout",
+            )
     clean_token = (token or "").strip()
     if not clean_token:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation token is required.")
@@ -1330,6 +1436,16 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
         .first()
     )
     if not invitation:
+        if not is_trusted_ip:
+            rate_limiter.record_attempt(
+                db,
+                ip_key,
+                ip_type,
+                ip_id,
+                max_attempts=10,
+                window_minutes=30,
+                lockout_minutes=30,
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invitation link is invalid, expired, or has already been used.",

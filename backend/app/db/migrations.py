@@ -158,6 +158,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0042_secure_rate_limiting")
             logger.info("Migration 0042_secure_rate_limiting applied successfully.")
 
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_user_sessions'")
+    ).first()
+
+    if not result_0043:
+        script_0043 = MIGRATIONS_DIR / "0043_user_sessions.postgres.sql"
+        if script_0043.exists():
+            with open(script_0043, "r", encoding="utf-8") as f:
+                sql_0043 = f.read()
+            clean_0043 = sql_0043.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0043))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0043_user_sessions')"))
+            applied.append("0043_user_sessions")
+            logger.info("Migration 0043_user_sessions applied successfully.")
+
     conn.commit()
     return applied
 
@@ -381,6 +397,27 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0042_secure_rate_limiting")
         logger.info("SQLite migration 0042_secure_rate_limiting applied successfully.")
+
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_user_sessions'")
+    ).first()
+
+    if not result_0043:
+        script_0043 = MIGRATIONS_DIR / "0043_user_sessions.sqlite.sql"
+        if script_0043.exists():
+            with open(script_0043, "r", encoding="utf-8") as f:
+                for statement in f.read().split(";"):
+                    lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                    clean_stmt = "\n".join(lines).strip()
+                    if clean_stmt and "schema_migrations" not in clean_stmt:
+                        conn.execute(text(clean_stmt))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0043_user_sessions')")
+        )
+        applied.append("0043_user_sessions")
+        logger.info("SQLite migration 0043_user_sessions applied successfully.")
 
     conn.commit()
     return applied

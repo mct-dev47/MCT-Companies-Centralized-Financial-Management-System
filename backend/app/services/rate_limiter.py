@@ -49,6 +49,85 @@ def get_api_heavy_key(ip: str) -> Tuple[str, str, str]:
     return f"api:heavy:{ip}", "api_heavy", ip
 
 
+def get_password_reset_combo_key(email: str, ip: str) -> Tuple[str, str, str]:
+    email_hash = hash_email_identifier(email)
+    identifier = f"{email_hash}:{ip}"
+    return f"pwd_reset:combo:{identifier}", "pwd_reset_combo", identifier
+
+
+def get_password_reset_ip_key(ip: str) -> Tuple[str, str, str]:
+    return f"pwd_reset:ip:{ip}", "pwd_reset_ip", ip
+
+
+def get_invitation_admin_key(admin_id: int) -> Tuple[str, str, str]:
+    identifier = str(admin_id)
+    return f"invite:admin:{identifier}", "invite_admin", identifier
+
+
+def get_invitation_ip_key(ip: str) -> Tuple[str, str, str]:
+    return f"invite:ip:{ip}", "invite_ip", ip
+
+
+def check_invitation_rate_limit(db: Session, admin_id: int, ip: str) -> None:
+    from app.core.errors import RateLimitException
+
+    clean_ip = (ip or "unknown").strip()
+    is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
+
+    admin_key, _, _ = get_invitation_admin_key(admin_id)
+    is_admin_locked, retry_after, until = rate_limiter.check_rate_limit(db, admin_key)
+    if is_admin_locked:
+        raise RateLimitException(
+            code="INVITATION_RATE_LIMITED",
+            detail="Invitation limit reached (maximum 5 invitations per hour). Please try again later.",
+            retry_after=retry_after,
+            locked_until=until.isoformat() if until else None,
+            scope="invitation_admin_lockout",
+        )
+
+    if not is_trusted_ip:
+        ip_key, _, _ = get_invitation_ip_key(clean_ip)
+        is_ip_locked, ip_retry, ip_until = rate_limiter.check_rate_limit(db, ip_key)
+        if is_ip_locked:
+            raise RateLimitException(
+                code="INVITATION_IP_RATE_LIMITED",
+                detail="Too many invitation requests from this network. Please try again later.",
+                retry_after=ip_retry,
+                locked_until=ip_until.isoformat() if ip_until else None,
+                scope="invitation_ip_lockout",
+            )
+
+
+def record_invitation_attempt(db: Session, admin_id: int, ip: str) -> None:
+    clean_ip = (ip or "unknown").strip()
+    is_trusted_ip = clean_ip in ("127.0.0.1", "::1", "localhost", "unknown")
+
+    admin_key, admin_type, admin_id_str = get_invitation_admin_key(admin_id)
+    rate_limiter.record_attempt(
+        db,
+        admin_key,
+        admin_type,
+        admin_id_str,
+        max_attempts=5,
+        window_minutes=60,
+        lockout_minutes=60,
+    )
+
+    if not is_trusted_ip:
+        ip_key, ip_type, ip_str = get_invitation_ip_key(clean_ip)
+        rate_limiter.record_attempt(
+            db,
+            ip_key,
+            ip_type,
+            ip_str,
+            max_attempts=15,
+            window_minutes=60,
+            lockout_minutes=60,
+        )
+
+
+
+
 class RateLimiterService:
     def __init__(self):
         pass
