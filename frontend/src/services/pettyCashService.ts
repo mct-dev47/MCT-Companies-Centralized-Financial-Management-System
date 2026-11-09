@@ -23,10 +23,17 @@ export interface PettyCashSummary {
   isLow: boolean
 }
 
+export interface PettyCashCategory {
+  category_id: number
+  company_id: number
+  name: string
+  created_at?: string
+}
+
 export interface PettyCashLedgerEntry {
   id: string
   type: 'topup' | 'expense' | 'request'
-  requestType?: 'topup' | 'reimbursement' | string
+  requestType?: 'topup' | 'reimbursement' | 'replenishment_disbursement' | string
   paidBy?: string | null
   receiptUrl?: string | null
   attachments?: string | null
@@ -60,6 +67,20 @@ export interface PettyCashLedgerEntry {
   auditStatus?: 'Verified' | 'Pending Audit' | 'Flagged'
   auditDate?: string | null
   auditedBy?: string | null
+  totalExpenses?: number | null
+  companyFundedAmount?: number | null
+  employeeOutOfPocket?: number | null
+  existingExpenseId?: number | null
+  paymentMethodOption?: 'direct' | 'transfer_first' | null
+  destinationBankId?: string | null
+  destinationBankName?: string | null
+  intercompanyTransferId?: number | null
+  transferStatus?: string | null
+  settlementStatus?: string | null
+  reimbursedAt?: string | null
+  reimbursedBy?: string | null
+  transferReceivedAt?: string | null
+  transferReceivedBy?: string | null
 }
 
 export interface NewPettyCashTopUpInput {
@@ -78,6 +99,40 @@ export interface NewPettyCashTopUpInput {
   attachments?: string | null
   items?: string | null
   category?: string | null
+  total_expenses?: number | null
+  company_funded_amount?: number | null
+  employee_out_of_pocket?: number | null
+  existing_expense_id?: number | null
+}
+
+export interface IntercompanyTransfer {
+  transferId: number
+  sourceCompanyId: number
+  destinationCompanyId: number
+  sourceBankId: string
+  destinationBankId?: string | null
+  sourceBankTxId?: string | null
+  destinationBankTxId?: string | null
+  reversalBankTxId?: string | null
+  repaymentSourceBankTxId?: string | null
+  repaymentDestinationBankTxId?: string | null
+  linkedTopupId?: number | null
+  amount: number
+  transferType: string
+  referenceNo: string
+  transferStatus: string
+  settlementStatus: string
+  initiatedBy: string
+  initiatedAt: string
+  receivedBy?: string | null
+  receivedAt?: string | null
+  settledAt?: string | null
+  repaidBy?: string | null
+  notes?: string | null
+  sourceCompanyName?: string | null
+  destinationCompanyName?: string | null
+  sourceBankName?: string | null
+  destinationBankName?: string | null
 }
 
 /**
@@ -166,6 +221,20 @@ interface BackendLedgerEntry {
   receipt_url?: string | null
   attachments?: string | null
   items?: string | null
+  total_expenses?: string | number | null
+  company_funded_amount?: string | number | null
+  employee_out_of_pocket?: string | number | null
+  existing_expense_id?: number | null
+  payment_method_option?: string | null
+  destination_bank_id?: string | null
+  destination_bank_name?: string | null
+  intercompany_transfer_id?: number | null
+  transfer_status?: string | null
+  settlement_status?: string | null
+  reimbursed_at?: string | null
+  reimbursed_by?: string | null
+  transfer_received_at?: string | null
+  transfer_received_by?: string | null
 }
 
 function backendHeaders(): HeadersInit {
@@ -249,6 +318,20 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     receiptUrl: data.receipt_url,
     attachments: data.attachments,
     items: data.items,
+    totalExpenses: data.total_expenses != null ? Number(data.total_expenses) : null,
+    companyFundedAmount: data.company_funded_amount != null ? Number(data.company_funded_amount) : 0,
+    employeeOutOfPocket: data.employee_out_of_pocket != null ? Number(data.employee_out_of_pocket) : 0,
+    existingExpenseId: data.existing_expense_id ?? null,
+    paymentMethodOption: (data.payment_method_option as any) ?? null,
+    destinationBankId: data.destination_bank_id ?? null,
+    destinationBankName: data.destination_bank_name ?? null,
+    intercompanyTransferId: data.intercompany_transfer_id ?? null,
+    transferStatus: data.transfer_status ?? null,
+    settlementStatus: data.settlement_status ?? null,
+    reimbursedAt: data.reimbursed_at ?? null,
+    reimbursedBy: data.reimbursed_by ?? null,
+    transferReceivedAt: data.transfer_received_at ?? null,
+    transferReceivedBy: data.transfer_received_by ?? null,
   }
 }
 
@@ -316,6 +399,31 @@ export const pettyCashService = {
     return ((await response.json()) as BackendLedgerEntry[]).map(mapLedgerEntry)
   },
 
+  async getCompanyCategories(companyName?: string): Promise<PettyCashCategory[]> {
+    const query = buildQuery({ company_name: companyName && companyName !== 'All Companies' ? companyName : undefined })
+    const response = await fetch(`/api/v1/petty-cash/categories${query}`, { headers: backendHeaders() })
+    if (!response.ok) throw await getBackendError(response)
+    return (await response.json()) as PettyCashCategory[]
+  },
+
+  async createCompanyCategory(companyName: string, name: string): Promise<PettyCashCategory> {
+    const response = await fetch('/api/v1/petty-cash/categories', {
+      method: 'POST',
+      headers: backendHeaders(),
+      body: JSON.stringify({ company_name: companyName, name }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    return (await response.json()) as PettyCashCategory
+  },
+
+  async deleteCompanyCategory(categoryId: number): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/categories/${categoryId}`, {
+      method: 'DELETE',
+      headers: backendHeaders(),
+    })
+    if (!response.ok) throw await getBackendError(response)
+  },
+
   /**
    * Top-ups for the Transaction ledger (spec 0013): endorsed or approved, with a funding bank.
    * When a company is given, returns top-ups where it is the requesting or the funding company.
@@ -362,6 +470,10 @@ export const pettyCashService = {
         attachments: input.attachments || null,
         items: input.items || null,
         category: input.category || null,
+        total_expenses: input.total_expenses ?? null,
+        company_funded_amount: input.company_funded_amount ?? null,
+        employee_out_of_pocket: input.employee_out_of_pocket ?? null,
+        existing_expense_id: input.existing_expense_id ?? null,
       }),
     })
     if (!response.ok) throw await getBackendError(response)
@@ -388,6 +500,8 @@ export const pettyCashService = {
     action: 'endorse' | 'reject',
     remark: string,
     bankAccountId?: string | null,
+    paymentMethodOption?: 'direct' | 'transfer_first' | null,
+    destinationBankId?: string | null,
   ): Promise<void> {
     const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/endorse`, {
       method: 'POST',
@@ -396,7 +510,151 @@ export const pettyCashService = {
         action,
         remark,
         ...(bankAccountId ? { bank_account_id: bankAccountId } : {}),
+        ...(paymentMethodOption ? { payment_method_option: paymentMethodOption } : {}),
+        ...(destinationBankId ? { destination_bank_id: destinationBankId } : {}),
       }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async finalizeSettlement(recordId: number, notes?: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/finalize-settlement`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `finalize-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ notes: notes || null }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async reimburse(recordId: number, notes?: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/reimburse`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `reimb-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ notes: notes || null }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async initiateTransfer(recordId: number, notes?: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/transfer`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `transfer-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ notes: notes || null }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async confirmTransfer(recordId: number, notes?: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/confirm-transfer`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `confirm-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ notes: notes || null }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async cancelTransfer(recordId: number, reason: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/cancel-transfer`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `cancel-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ reason }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async confirmReversal(recordId: number, verificationNotes?: string): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/topups/${recordId}/confirm-reversal`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `reversal-${recordId}-${Date.now()}`,
+      },
+      body: JSON.stringify({ verification_notes: verificationNotes || null }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache()
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+  },
+
+  async getIntercompanyTransfers(companyId?: number, settlementStatus?: string): Promise<IntercompanyTransfer[]> {
+    const query = buildQuery({
+      company_id: companyId ? String(companyId) : null,
+      settlement_status: settlementStatus || null,
+    })
+    const response = await fetch(`/api/v1/petty-cash/intercompany-transfers${query}`, {
+      headers: backendHeaders(),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    const raw = await response.json()
+    return (raw || []).map((t: any) => ({
+      transferId: t.transfer_id,
+      sourceCompanyId: t.source_company_id,
+      destinationCompanyId: t.destination_company_id,
+      sourceBankId: t.source_bank_id,
+      destinationBankId: t.destination_bank_id,
+      sourceBankTxId: t.source_bank_tx_id,
+      destinationBankTxId: t.destination_bank_tx_id,
+      reversalBankTxId: t.reversal_bank_tx_id,
+      repaymentSourceBankTxId: t.repayment_source_bank_tx_id,
+      repaymentDestinationBankTxId: t.repayment_destination_bank_tx_id,
+      linkedTopupId: t.linked_topup_id,
+      amount: Number(t.amount || 0),
+      transferType: t.transfer_type,
+      referenceNo: t.reference_no,
+      transferStatus: t.transfer_status,
+      settlementStatus: t.settlement_status,
+      initiatedBy: t.initiated_by,
+      initiatedAt: t.initiated_at,
+      receivedBy: t.received_by,
+      receivedAt: t.received_at,
+      settledAt: t.settled_at,
+      repaidBy: t.repaid_by,
+      notes: t.notes,
+      sourceCompanyName: t.source_company_name,
+      destinationCompanyName: t.destination_company_name,
+      sourceBankName: t.source_bank_name,
+      destinationBankName: t.destination_bank_name,
+    }))
+  },
+
+  async settleIntercompanyTransfer(
+    transferId: number,
+    input: { source_bank_id: string; destination_bank_id: string; notes?: string }
+  ): Promise<void> {
+    const response = await fetch(`/api/v1/petty-cash/intercompany-transfers/${transferId}/settle`, {
+      method: 'POST',
+      headers: {
+        ...backendHeaders(),
+        'Idempotency-Key': `settle-${transferId}-${Date.now()}`,
+      },
+      body: JSON.stringify(input),
     })
     if (!response.ok) throw await getBackendError(response)
     this.invalidateCache()

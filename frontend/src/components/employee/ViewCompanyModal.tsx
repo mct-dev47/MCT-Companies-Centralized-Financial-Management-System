@@ -50,6 +50,32 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
+  const [currentCompany, setCurrentCompany] = React.useState<Company | null>(company)
+  const [isLoadingDetails, setIsLoadingDetails] = React.useState(false)
+
+  React.useEffect(() => {
+    if (open && company?.id) {
+      setCurrentCompany(company)
+      setIsLoadingDetails(true)
+      employeeService
+        .getCompany(company.id)
+        .then((fresh) => {
+          setCurrentCompany(fresh)
+        })
+        .catch((err) => {
+          console.warn('Could not refresh company details from database:', err)
+        })
+        .finally(() => {
+          setIsLoadingDetails(false)
+        })
+    } else if (!open) {
+      setCurrentCompany(null)
+      setIsLoadingDetails(false)
+    }
+  }, [open, company?.id])
+
+  const activeCompany = currentCompany || company
+
   const fileInputRef = React.useRef<HTMLInputElement>(null)
   const [profilePreview, setProfilePreview] = React.useState<string | null>(null)
   const [profileFile, setProfileFile] = React.useState<File | null>(null)
@@ -69,8 +95,9 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   })
 
   const handleStartEdit = () => {
-    if (company) {
-      const rawContact = (company.contactNumber || '').replace(/\D/g, '')
+    const targetComp = activeCompany || company
+    if (targetComp) {
+      const rawContact = (targetComp.contactNumber || '').replace(/\D/g, '')
       let initContact = rawContact
       if (!initContact.startsWith('09')) {
         if (initContact.startsWith('9')) {
@@ -84,15 +111,15 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       initContact = initContact.slice(0, 11)
 
       setFormData({
-        name: company.name,
-        address: company.address,
+        name: targetComp.name,
+        address: targetComp.address,
         contactNumber: initContact,
-        telephoneNumber: company.telephoneNumber || '',
-        startingBalance: company.startingBalance ?? 0,
-        pettyCash: company.pettyCash || 0,
-        logoUrl: company.logoUrl,
+        telephoneNumber: targetComp.telephoneNumber || '',
+        startingBalance: targetComp.startingBalance ?? 0,
+        pettyCash: targetComp.pettyCash ?? 0,
+        logoUrl: targetComp.logoUrl,
       })
-      setProfilePreview(company.logoUrl || null)
+      setProfilePreview(targetComp.logoUrl || null)
       setProfileFile(null)
       setRawImageForCrop(null)
       setIsCropperOpen(false)
@@ -156,7 +183,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     onOpenChange(nextOpen)
   }
 
-  if (!company) return null
+  if (!activeCompany) return null
 
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -176,14 +203,16 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   }
 
   const handleConfirmSave = async () => {
+    const targetId = activeCompany.id
     try {
       setIsSubmitting(true)
-      const updated = await employeeService.updateCompany(company.id, {
+      const updated = await employeeService.updateCompany(targetId, {
         ...formData,
-        startingBalance: Number(formData.startingBalance) || 0,
-        pettyCash: Number(formData.pettyCash) || 0,
+        startingBalance: formData.startingBalance === ('' as unknown as number) ? 0 : (Number(formData.startingBalance) || 0),
+        pettyCash: formData.pettyCash === ('' as unknown as number) ? 0 : (Number(formData.pettyCash) || 0),
         logoFile: profileFile || undefined,
       })
+      setCurrentCompany(updated)
       onUpdate?.(updated)
       setIsConfirmEditOpen(false)
       setIsEditing(false)
@@ -198,7 +227,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     }
   }
 
-  const isDeleteMatch = company ? deleteConfirmationName.trim() === company.name.trim() : false
+  const isDeleteMatch = activeCompany ? deleteConfirmationName.trim() === activeCompany.name.trim() : false
 
   const handleOpenDeleteConfirm = () => {
     setDeleteConfirmationName('')
@@ -215,13 +244,13 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   }
 
   const handleConfirmDelete = async () => {
-    if (!company) return
-    if (deleteConfirmationName.trim() !== company.name.trim()) return
+    if (!activeCompany) return
+    if (deleteConfirmationName.trim() !== activeCompany.name.trim()) return
 
     try {
       setIsSubmitting(true)
-      await employeeService.deleteCompany(company.id)
-      onDelete?.(company.id)
+      await employeeService.deleteCompany(activeCompany.id)
+      onDelete?.(activeCompany.id)
       setIsConfirmDeleteOpen(false)
       setDeleteConfirmationName('')
       onOpenChange(false)
@@ -241,7 +270,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
         <DialogContent className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
           <DialogTitle className="sr-only">
-            {company.name} Details
+            {activeCompany.name} Details
           </DialogTitle>
 
           {actionError && (
@@ -521,13 +550,13 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               {/* Centered Circular Logo/Profile Badge */}
               <div className="h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-primary flex items-center justify-center p-3 bg-white shadow-xs overflow-hidden">
                 <img
-                  src={company.logoUrl || logo2Url}
-                  alt={company.name}
+                  src={activeCompany.logoUrl || logo2Url}
+                  alt={activeCompany.name}
                   className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
                 />
               </div>
               <h2 className="text-xl sm:text-2xl font-bold text-focus mt-3.5 tracking-tight text-center">
-                {company.name}
+                {activeCompany.name}
               </h2>
 
               {/* Properly Aligned Key-Value Details */}
@@ -537,7 +566,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Address:
                   </span>
                   <span className="font-semibold text-focus text-right text-xs sm:text-sm leading-relaxed max-w-[240px]">
-                    {company.address || '—'}
+                    {activeCompany.address || '—'}
                   </span>
                 </div>
 
@@ -546,7 +575,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Contact Number:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {company.contactNumber || '—'}
+                    {activeCompany.contactNumber || '—'}
                   </span>
                 </div>
 
@@ -555,7 +584,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Telephone Number:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {company.telephoneNumber || '—'}
+                    {activeCompany.telephoneNumber || '—'}
                   </span>
                 </div>
 
@@ -564,7 +593,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Starting Balance:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {formatPHP(Number(company.startingBalance) || 0)}
+                    {formatPHP(Number(activeCompany.startingBalance) || 0)}
                   </span>
                 </div>
 
@@ -573,7 +602,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                     Petty Cash:
                   </span>
                   <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {formatPHP(Number(company.pettyCash) || 0)}
+                    {formatPHP(Number(activeCompany.pettyCash) || 0)}
                   </span>
                 </div>
               </div>
@@ -632,7 +661,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
         description={
           <span>
             Are you sure you want to permanently remove{' '}
-            <strong className="text-focus">{company.name}</strong> from the MCT
+            <strong className="text-focus">{activeCompany.name}</strong> from the MCT
             Group of Companies? This action cannot be undone.
           </span>
         }
