@@ -54,6 +54,10 @@ class Sale(Base):
     audit_remarks = Column(Text, nullable=True)
     # Operational remarks (spec 0040): supervisor and finance notes
     remarks = Column(Text, nullable=True)
+    # Bank account this sale is credited to (spec 0042)
+    bank_account_id = Column(String(100), nullable=True, index=True)
+    # Day the money reached the bank (spec 0043). transaction_date stays the day the sale happened.
+    deposit_date = Column(Date, nullable=True)
 
     category = relationship("Category", back_populates="sales")
 
@@ -84,6 +88,8 @@ class Expense(Base):
     audit_remarks = Column(Text, nullable=True)
     # Operational remarks (spec 0040): supervisor and finance notes
     remarks = Column(Text, nullable=True)
+    # Bank account this expense is paid from (spec 0042)
+    bank_account_id = Column(String(100), nullable=True, index=True)
     linked_topup_id = Column(Integer, ForeignKey("petty_cash_topups.topup_id", ondelete="SET NULL"), nullable=True, index=True)
 
     def __init__(self, **kwargs):

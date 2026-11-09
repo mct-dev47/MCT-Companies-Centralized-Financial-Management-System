@@ -31,6 +31,7 @@ import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { pettyCashService } from '@/services/pettyCashService'
 import { bankService } from '@/services/bankService'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 
 import { PREDEFINED_PETTY_CASH_CATEGORIES } from '@/pages/AddTransactionSheetPage'
 
@@ -105,7 +106,9 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [particulars, setParticulars] = React.useState('')
   const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
-  const [remarks, setRemarks] = React.useState('')
+  const [dayRemark, setDayRemark] = React.useState('')
+  const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('expense', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState(initialPaymentMethod || 'Cash')
   const [category, setCategory] = React.useState(
     (initialPaymentMethod || '').trim().toLowerCase() === 'petty cash'
@@ -243,7 +246,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       setPettyCashCategory('')
       setParticulars('')
       setAmount('')
-      setRemarks('')
+      setDayRemark('')
+      setDayRemarkTouched(false)
       const pm = initialPaymentMethod || 'Cash'
       setPaymentMethod(pm)
       if (pm.trim().toLowerCase() === 'petty cash') {
@@ -259,6 +263,11 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       setFieldErrors({})
     }
   }, [open, initialPaymentMethod])
+
+  // Prefill with the existing day remark for the chosen date (until the user edits it)
+  React.useEffect(() => {
+    if (open && !dayRemarkTouched) setDayRemark(getDayRemark(assignedCompany, date))
+  }, [open, date, assignedCompany, dayRemarkTouched, getDayRemark])
 
   // Pre-validate and show confirmation dialogue
   const handlePreSubmit = (e: React.FormEvent) => {
@@ -348,9 +357,17 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         paymentMethod: paymentMethod,
         company: assignedCompany,
         status: 'Paid',
-        remarks: remarks.trim() || undefined,
       }
       const created = await expenseService.addExpense(payload)
+
+      // Optional day remark: one note for the whole day, not per transaction
+      if (dayRemarkTouched && dayRemark.trim() !== getDayRemark(assignedCompany, payload.date).trim()) {
+        try {
+          await saveDayRemark(assignedCompany, payload.date, dayRemark)
+        } catch (e) {
+          console.warn('Could not save day remark:', e)
+        }
+      }
 
       if (finalParticulars && assignedCompany) {
         particularsService
@@ -737,16 +754,19 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               </div>
             )}
 
-            {/* Remarks */}
+            {/* Day remarks */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-focus flex items-center justify-between">
-                <span>Remarks (Optional)</span>
-                <span className="text-[11px] text-muted-fg font-normal">Supervisor / Finance notes</span>
+                <span>Day Remarks (Optional)</span>
+                <span className="text-[11px] text-muted-fg font-normal">Applies to all expenses on this date</span>
               </Label>
               <Input
-                placeholder="e.g. Approved receipt attached, voucher #..."
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="e.g. Approved receipts attached, vouchers #..."
+                value={dayRemark}
+                onChange={(e) => {
+                  setDayRemarkTouched(true)
+                  setDayRemark(e.target.value)
+                }}
                 maxLength={255}
                 className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
               />

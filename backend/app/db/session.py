@@ -124,6 +124,10 @@ def init_db():
             if "deposit_status" not in sales_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_status VARCHAR(50) DEFAULT 'Not Deposited'"))
+            if "deposit_date" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_date DATE NULL"))
+                    conn.execute(text("UPDATE sales SET deposit_date = transaction_date WHERE deposit_status = 'Deposited' AND deposit_date IS NULL"))
             # Safe backfill (AC-7)
             with engine.begin() as conn:
                 conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
@@ -135,6 +139,9 @@ def init_db():
             if "source_sale_id" not in bank_tx_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_sale_id INTEGER"))
+            if "source_expense_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER"))
 
         if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}

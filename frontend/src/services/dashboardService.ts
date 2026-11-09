@@ -57,6 +57,11 @@ export interface DashboardTransactionItem {
   remarks?: string
   depositStatus?: 'Deposited' | 'Not Deposited'
   deposit_status?: 'Deposited' | 'Not Deposited'
+  /** Day the money reached the bank (YYYY-MM-DD); only set for deposited sales. */
+  deposit_date?: string | null
+  depositDate?: string | null
+  /** Day of the sale itself (YYYY-MM-DD), kept alongside the deposit date. */
+  saleDate?: string
 }
 
 /**

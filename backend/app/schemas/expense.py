@@ -164,6 +164,7 @@ class ExpenseOut(BaseModel):
     audited_at: Optional[datetime] = None
     audit_remarks: Optional[str] = None
     remarks: Optional[str] = None
+    bank_account_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

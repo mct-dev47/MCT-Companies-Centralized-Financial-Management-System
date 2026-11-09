@@ -22,13 +22,13 @@ import {
   MoreVertical,
   Eye,
   Pencil,
+  Landmark,
   Lock,
   Loader2,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
@@ -41,18 +41,11 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import {
   DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
+import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -80,6 +73,8 @@ import { useNavigate } from 'react-router-dom'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 import { useCompany } from '@/context/CompanyContext'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from '@/components/dashboard/DayRemark'
 import { isCompanyMatch } from '@/utils/companyUtils'
 
 const DEFAULT_COMPANY_LIST = ['All Companies']
@@ -90,7 +85,7 @@ type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
-import { notifyError, notifySuccess, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { notifyError } from '@/utils/errorUtils'
 
 const ITEMS_PER_PAGE = 10
 
@@ -242,40 +237,6 @@ export const ExpensePage: React.FC = () => {
   const [highlightedExpenseId, setHighlightedExpenseId] = React.useState<
     string | null
   >(null)
-
-  // Quick Remarks modal state
-  const [quickRemarksExpense, setQuickRemarksExpense] = React.useState<ExpenseItem | null>(null)
-  const [quickRemarksInput, setQuickRemarksInput] = React.useState('')
-  const [isQuickRemarksOpen, setIsQuickRemarksOpen] = React.useState(false)
-  const [isSavingQuickRemarks, setIsSavingQuickRemarks] = React.useState(false)
-
-  const handleOpenRemarks = (expense: ExpenseItem) => {
-    setQuickRemarksExpense(expense)
-    setQuickRemarksInput(expense.remarks || '')
-    setIsQuickRemarksOpen(true)
-  }
-
-  const handleSaveQuickRemarks = async () => {
-    if (!quickRemarksExpense) return
-    setIsSavingQuickRemarks(true)
-    try {
-      const trimmed = quickRemarksInput.trim()
-      await expenseService.updateExpenseRemarks(quickRemarksExpense.id, trimmed)
-      setExpenses((prev) =>
-        prev.map((item) =>
-          item.id === quickRemarksExpense.id
-            ? { ...item, remarks: trimmed }
-            : item
-        )
-      )
-      notifySuccess('Remarks updated successfully.')
-      setIsQuickRemarksOpen(false)
-    } catch (err: any) {
-      notifyError(err, 'Failed to update remarks.')
-    } finally {
-      setIsSavingQuickRemarks(false)
-    }
-  }
 
   const handlePeriodChange = (period: PeriodOption) => {
     setSelectedPeriod(period)
@@ -431,6 +392,13 @@ export const ExpensePage: React.FC = () => {
   }, [])
 
   // 1. Base filtered expenses (independent of Deposit / Expense Record tab so KPIs above stay constant)
+  const {
+    available: bankOptions,
+    selectedId: selectedBankId,
+    setSelectedId: setSelectedBankId,
+    bankLabel,
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
+
   const baseFilteredExpenses = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
 
@@ -440,6 +408,11 @@ export const ExpensePage: React.FC = () => {
           targetCompany !== 'All Companies' &&
           !isCompanyMatch(item.company, targetCompany)
         ) {
+          return false
+        }
+
+        // Bank filter ('' = All Banks)
+        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
           return false
         }
 
@@ -507,6 +480,7 @@ export const ExpensePage: React.FC = () => {
     searchQuery,
     isCompanyScoped,
     assignedCompany,
+    selectedBankId,
   ])
 
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Expense Record')
@@ -534,6 +508,18 @@ export const ExpensePage: React.FC = () => {
     const start = (dailyPage - 1) * ITEMS_PER_PAGE
     return dailyExpenseGroups.slice(start, start + ITEMS_PER_PAGE)
   }, [dailyExpenseGroups, dailyPage])
+
+  // Day remarks: one note per company, per date (expense). Supervisors and Finance can edit.
+  const dayRemarkCompanies = React.useMemo(
+    () => paginatedDailyGroups.flatMap((g) => g.items.map((item) => item.company)),
+    [paginatedDailyGroups]
+  )
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    'expense',
+    dayRemarkCompanies
+  )
+  const canEditDayRemark =
+    isFinance || userRole === 'supervisor' || userRole === 'company'
 
   React.useEffect(() => {
     setCurrentPage(1)
@@ -568,6 +554,11 @@ export const ExpensePage: React.FC = () => {
     if (tableTab === 'Withdraw') return 'Paid'
     return 'All'
   }, [statusFilter, tableTab])
+
+  // Withdraw tab is paid by definition, so a leftover "Paid" filter is dropped
+  React.useEffect(() => {
+    if (tableTab === 'Withdraw' && statusFilter === 'Paid') setStatusFilter('All')
+  }, [tableTab, statusFilter])
 
   // Pagination
   const totalPages = Math.ceil(filteredExpenses.length / ITEMS_PER_PAGE) || 1
@@ -960,7 +951,9 @@ export const ExpensePage: React.FC = () => {
                       : 'absolute right-0 top-full mt-2 w-48'
                   )}
                 >
-                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const).map((st) => (
+                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const)
+                    .filter((st) => !(tableTab === 'Withdraw' && st === 'Paid'))
+                    .map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -1115,6 +1108,12 @@ export const ExpensePage: React.FC = () => {
                 )}
               </div>
             )}
+
+            <BankFilterSelect
+              accounts={bankOptions}
+              value={selectedBankId}
+              onChange={setSelectedBankId}
+            />
 
             {/* Tab Switcher: Withdraw / Expense Record */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
@@ -1330,14 +1329,15 @@ export const ExpensePage: React.FC = () => {
 
         {subTab === 'Daily Summary' ? (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
-            <Table className="w-full table-fixed min-w-[850px]">
+            <Table className="w-full table-fixed min-w-[1000px]">
               <colgroup>
-                <col style={{ width: '22%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '11%' }} />
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '17%' }} />
-                <col style={{ width: '10%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
@@ -1353,6 +1353,9 @@ export const ExpensePage: React.FC = () => {
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                     REALIZED CASH
                   </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DAY REMARK
+                  </TableHead>
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     AUDIT STATUS
                   </TableHead>
@@ -1364,14 +1367,14 @@ export const ExpensePage: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-xs text-muted-fg">
+                    <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-fg">
                       Loading daily expense summary...
                     </TableCell>
                   </TableRow>
                 ) : paginatedDailyGroups.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={7}
                       className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                     >
                       <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1416,6 +1419,24 @@ export const ExpensePage: React.FC = () => {
                           <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-rose-600 text-xs sm:text-sm">
                             {formatPHP(group.realizedCash)}
                           </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                            <DayRemarkCell
+                              companyNames={group.items.map((item) => item.company)}
+                              date={group.date}
+                              formattedDate={group.formattedDate}
+                              kindLabel="Expense"
+                              canEdit={canEditDayRemark}
+                              getRemark={getDayRemark}
+                              onSave={saveDayRemark}
+                              entries={group.items.map((e) => ({
+                                id: e.id,
+                                ref: e.chequeNo || e.refNo,
+                                particulars: e.particulars,
+                                amount: tableTab === 'Withdraw' ? getPaidDisbursementForExpense(e) : e.withdrawal,
+                                status: e.status,
+                              }))}
+                            />
+                          </TableCell>
                           <TableCell className="px-3.5 py-3.5 text-center">
                             <span
                               className={cn(
@@ -1453,7 +1474,7 @@ export const ExpensePage: React.FC = () => {
                         {/* Expandable Accordion Row */}
                         {isExpanded && (
                           <TableRow className="bg-slate-50/40 border-b border-slate-200">
-                            <TableCell colSpan={6} className="p-3 sm:p-4">
+                            <TableCell colSpan={7} className="p-3 sm:p-4">
                               <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
                                 <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                                   <div className="flex items-center gap-2">
@@ -1468,6 +1489,34 @@ export const ExpensePage: React.FC = () => {
                                     Inspect, edit, delete, or audit individual vouchers
                                   </div>
                                 </div>
+                                {(() => {
+                                  const byBank = new Map<string, { count: number; total: number }>()
+                                  group.items.forEach((it) => {
+                                    const key = String(it.bankAccountId || '')
+                                    const entry = byBank.get(key) || { count: 0, total: 0 }
+                                    entry.count += 1
+                                    entry.total += (tableTab === 'Withdraw' ? getPaidDisbursementForExpense(it) : it.withdrawal)
+                                    byBank.set(key, entry)
+                                  })
+                                  return (
+                                    <div className="px-4 py-3 border-b border-slate-200 bg-white">
+                                      <p className="text-2xs font-bold uppercase tracking-wider text-muted-fg mb-2">By bank</p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {Array.from(byBank.entries()).map(([key, v]) => (
+                                          <div
+                                            key={key || 'none'}
+                                            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs"
+                                          >
+                                            <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
+                                            <span className="font-semibold text-focus">{bankLabel(key)}</span>
+                                            <span className="text-muted-fg">{v.count} {v.count === 1 ? 'record' : 'records'}</span>
+                                            <span className="font-bold tabular-nums text-focus">{formatPHP(v.total)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-left text-xs">
                                     <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
@@ -1480,7 +1529,6 @@ export const ExpensePage: React.FC = () => {
                                         <th className="px-3 py-2 font-bold">Payment Method</th>
                                         <th className="px-3 py-2 font-bold text-right">Amount</th>
                                         <th className="px-3 py-2 font-bold text-center">Audit Status</th>
-                                        <th className="px-3 py-2 font-bold">Remarks</th>
                                         <th className="px-3 py-2 font-bold text-center">Actions</th>
                                       </tr>
                                     </thead>
@@ -1534,27 +1582,6 @@ export const ExpensePage: React.FC = () => {
                                             >
                                               {expense.auditStatus}
                                             </span>
-                                          </td>
-                                          <td
-                                            className="px-3 py-2 text-focus max-w-[160px]"
-                                            onClick={(e) => {
-                                              e.stopPropagation()
-                                              handleOpenRemarks(expense)
-                                            }}
-                                          >
-                                            <div
-                                              className="flex items-center justify-between gap-1.5 p-1 -m-1 rounded hover:bg-slate-100 cursor-pointer group"
-                                              title="Click to view or edit remarks"
-                                            >
-                                              <span className="truncate block font-normal text-slate-700 text-xs">
-                                                {expense.remarks ? (
-                                                  expense.remarks
-                                                ) : (
-                                                  <span className="text-muted-fg/40 italic">Add remarks…</span>
-                                                )}
-                                              </span>
-                                              <Pencil className="w-3 h-3 text-muted-fg/40 group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                            </div>
                                           </td>
                                           <td className="px-3 py-2 text-center">
                                             <div className="flex items-center justify-center gap-1">
@@ -1632,7 +1659,6 @@ export const ExpensePage: React.FC = () => {
               <col style={{ width: '10%' }} />
               <col style={{ width: '10%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: showCompanyColumn ? '11%' : '13%' }} />
               <col style={{ width: showCompanyColumn ? '8%' : '10%' }} />
             </colgroup>
             <TableHeader>
@@ -1660,9 +1686,6 @@ export const ExpensePage: React.FC = () => {
                 <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  REMARKS
-                </TableHead>
                 <TableHead className="w-[8%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
@@ -1671,11 +1694,11 @@ export const ExpensePage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={showCompanyColumn ? 9 : 8} />
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
               ) : paginatedExpenses.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showCompanyColumn ? 9 : 8}
+                    colSpan={showCompanyColumn ? 8 : 7}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1845,29 +1868,6 @@ export const ExpensePage: React.FC = () => {
                       {/* 7. Net Amount */}
                       <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
-                      </TableCell>
-
-                      {/* 7b. Remarks */}
-                      <TableCell
-                        className="px-3.5 py-3.5 text-xs text-focus/90 max-w-[160px]"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleOpenRemarks(expense)
-                        }}
-                      >
-                        <div
-                          className="flex items-center justify-between gap-1.5 p-1 -m-1 rounded-md hover:bg-slate-100 cursor-pointer group"
-                          title="Click to view or edit remarks"
-                        >
-                          <span className="truncate block font-normal text-slate-700">
-                            {expense.remarks ? (
-                              expense.remarks
-                            ) : (
-                              <span className="text-muted-fg/40 italic">Add remarks…</span>
-                            )}
-                          </span>
-                          <Pencil className="w-3 h-3 text-muted-fg/40 group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
                       </TableCell>
 
                       {/* 8. Actions */}
@@ -2069,69 +2069,6 @@ export const ExpensePage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* Quick Remarks Dialog */}
-      <Dialog open={isQuickRemarksOpen} onOpenChange={setIsQuickRemarksOpen}>
-        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <FileText className="w-5 h-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-bold text-focus leading-tight">
-                  Update Remarks
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  {quickRemarksExpense?.refNo ? `Ref No: ${quickRemarksExpense.refNo}` : 'Expense remarks'}
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <div className="py-4 space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-focus block">
-                Operational Remarks
-              </Label>
-              <textarea
-                rows={4}
-                value={quickRemarksInput}
-                onChange={(e) => setQuickRemarksInput(e.target.value)}
-                placeholder="Enter remarks or notes here…"
-                className="w-full rounded-xl border border-stroke/50 text-xs p-3 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSavingQuickRemarks}
-              onClick={() => setIsQuickRemarksOpen(false)}
-              className="h-8.5 px-3.5 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isSavingQuickRemarks}
-              onClick={handleSaveQuickRemarks}
-              className="h-8.5 px-4 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              {isSavingQuickRemarks ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Saving…</span>
-                </>
-              ) : (
-                <span>Save Remarks</span>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* 3-Dots Action Portal Menu */}
       {openMenuExpenseId &&
         activeMenuExpense &&
@@ -2162,22 +2099,6 @@ export const ExpensePage: React.FC = () => {
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                const exp = activeMenuExpense
-                setOpenMenuExpenseId(null)
-                setMenuPosition(null)
-                setActiveMenuExpense(null)
-                if (exp) handleOpenRemarks(exp)
-              }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
-            >
-              <FileText className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-              <span>Update Remarks</span>
             </button>
 
             {canAuditActions ? (

@@ -58,7 +58,6 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
   const [particulars, setParticulars] = React.useState('')
   const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
-  const [remarks, setRemarks] = React.useState('')
   const [category, setCategory] = React.useState('None')
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
@@ -78,7 +77,6 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
       setChequeNo(sale.chequeNo || '')
       setParticulars(sale.particulars || '')
       setAmount(String(sale.deposit || sale.netAmount || ''))
-      setRemarks(sale.remarks || '')
       setCategory(sale.category || 'None')
       setError('')
       setFieldErrors({})
@@ -160,7 +158,6 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
         particulars: particulars.trim(),
         amount: parsedAmount,
         category: category.trim() || 'None',
-        remarks: remarks.trim() || undefined,
       }
       const updated = await salesService.updateSale(sale.id, payload)
       if (particulars.trim() && sale.company) {
@@ -362,20 +359,6 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
               </div>
             </div>
 
-            {/* Remarks */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-focus flex items-center justify-between">
-                <span>Remarks (Optional)</span>
-                <span className="text-[11px] text-muted-fg font-normal">Supervisor / Finance notes</span>
-              </Label>
-              <Input
-                placeholder="e.g. Deposit slip verified..."
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
-                maxLength={255}
-                className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
-              />
-            </div>
           </div>
 
           <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">

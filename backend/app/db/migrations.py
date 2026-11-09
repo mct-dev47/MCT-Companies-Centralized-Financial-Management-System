@@ -126,6 +126,70 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0040_sales_expenses_remarks")
             logger.info("Migration 0040_sales_expenses_remarks applied successfully.")
 
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_daily_remarks'")
+    ).first()
+
+    if not result_0041:
+        script_0041 = MIGRATIONS_DIR / "0041_daily_remarks.postgres.sql"
+        if script_0041.exists():
+            with open(script_0041, "r", encoding="utf-8") as f:
+                sql_0041 = f.read()
+            clean_0041 = sql_0041.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0041))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0041_daily_remarks')"))
+            applied.append("0041_daily_remarks")
+            logger.info("Migration 0041_daily_remarks applied successfully.")
+
+    # 8. Check if 0042 is applied
+    result_0042 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0042_sales_expenses_bank_account'")
+    ).first()
+
+    if not result_0042:
+        script_0042 = MIGRATIONS_DIR / "0042_sales_expenses_bank_account.postgres.sql"
+        if script_0042.exists():
+            with open(script_0042, "r", encoding="utf-8") as f:
+                sql_0042 = f.read()
+            clean_0042 = sql_0042.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0042))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0042_sales_expenses_bank_account')"))
+            applied.append("0042_sales_expenses_bank_account")
+            logger.info("Migration 0042_sales_expenses_bank_account applied successfully.")
+
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_sales_deposit_date'")
+    ).first()
+
+    if not result_0043:
+        script_0043 = MIGRATIONS_DIR / "0043_sales_deposit_date.postgres.sql"
+        if script_0043.exists():
+            with open(script_0043, "r", encoding="utf-8") as f:
+                sql_0043 = f.read()
+            clean_0043 = sql_0043.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0043))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0043_sales_deposit_date')"))
+            applied.append("0043_sales_deposit_date")
+            logger.info("Migration 0043_sales_deposit_date applied successfully.")
+
+    # 10. Check if 0044 is applied
+    result_0044 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0044_bank_transactions_source_expense'")
+    ).first()
+
+    if not result_0044:
+        script_0044 = MIGRATIONS_DIR / "0044_bank_transactions_source_expense.postgres.sql"
+        if script_0044.exists():
+            with open(script_0044, "r", encoding="utf-8") as f:
+                sql_0044 = f.read()
+            clean_0044 = sql_0044.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0044))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0044_bank_transactions_source_expense')"))
+            applied.append("0044_bank_transactions_source_expense")
+            logger.info("Migration 0044_bank_transactions_source_expense applied successfully.")
+
     conn.commit()
     return applied
 
@@ -310,6 +374,102 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0040_sales_expenses_remarks")
         logger.info("SQLite migration 0040_sales_expenses_remarks applied successfully.")
+
+    # 7. Check if 0041 is applied
+    result_0041 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0041_daily_remarks'")
+    ).first()
+
+    if not result_0041:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS daily_remarks (
+                    daily_remark_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id INTEGER NOT NULL,
+                    remark_date DATE NOT NULL,
+                    kind VARCHAR(20) NOT NULL,
+                    remarks TEXT NOT NULL,
+                    updated_by VARCHAR(150) NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_daily_remarks_company_date_kind UNIQUE (company_id, remark_date, kind)
+                )
+                """
+            )
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_daily_remarks_company_id ON daily_remarks (company_id)")
+        )
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0041_daily_remarks')")
+        )
+        applied.append("0041_daily_remarks")
+        logger.info("SQLite migration 0041_daily_remarks applied successfully.")
+
+    # 8. Check if 0042 is applied
+    result_0042 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0042_sales_expenses_bank_account'")
+    ).first()
+
+    if not result_0042:
+        for table in ("sales", "expenses"):
+            table_exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": table}
+            ).first()
+            if table_exists:
+                cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+                if "bank_account_id" not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN bank_account_id VARCHAR(100) NULL"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0042_sales_expenses_bank_account')")
+        )
+        applied.append("0042_sales_expenses_bank_account")
+        logger.info("SQLite migration 0042_sales_expenses_bank_account applied successfully.")
+
+    # 9. Check if 0043 is applied
+    result_0043 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0043_sales_deposit_date'")
+    ).first()
+
+    if not result_0043:
+        table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='sales'")
+        ).first()
+        if table_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sales)")).fetchall()}
+            if "deposit_date" not in cols:
+                conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_date DATE NULL"))
+            conn.execute(
+                text(
+                    "UPDATE sales SET deposit_date = transaction_date "
+                    "WHERE deposit_status = 'Deposited' AND deposit_date IS NULL"
+                )
+            )
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0043_sales_deposit_date')")
+        )
+        applied.append("0043_sales_deposit_date")
+        logger.info("SQLite migration 0043_sales_deposit_date applied successfully.")
+
+    # 10. Check if 0044 is applied
+    result_0044 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0044_bank_transactions_source_expense'")
+    ).first()
+
+    if not result_0044:
+        table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if table_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "source_expense_id" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER NULL"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0044_bank_transactions_source_expense')")
+        )
+        applied.append("0044_bank_transactions_source_expense")
+        logger.info("SQLite migration 0044_bank_transactions_source_expense applied successfully.")
 
     conn.commit()
     return applied

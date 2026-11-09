@@ -447,7 +447,8 @@ class SalesReceivablesSyncService:
             particulars = pick("particulars", "particulars") or ""
             amount = pick("amount", "amount")
             company_id = pick("company_id", "company_id")
-            tx_date = pick("transaction_date", "transaction_date")
+            # The bank ledger is dated by the day the money arrived, not the day of the sale
+            tx_date = pick("deposit_date", "deposit_date") or pick("transaction_date", "transaction_date")
             cheque = reference_no or pick("cheque_number", "cheque_no")
 
             is_deposited = (str(deposit_status or "")).strip().lower() == "deposited"
@@ -472,7 +473,8 @@ class SalesReceivablesSyncService:
                 sale_id=sale_id,
                 target_amount=target,
                 company_name=company_name,
-                account_id=account_id,
+                # The sale's own bank wins; never fall back to "whichever account the company has first"
+                account_id=account_id or pick("bank_account_id", "bank_account_id"),
                 particulars=f"Sales Collection: {particulars}",
                 reference_no=cheque or None,
                 tx_date=tx_date.strftime("%m/%d/%y") if hasattr(tx_date, "strftime") else None,
@@ -743,6 +745,7 @@ class SalesReceivablesSyncService:
                 sb_payload["deposit_status"] = "Not Deposited"
                 if local_sale is not None:
                     local_sale.deposit_status = "Not Deposited"
+                    local_sale.deposit_date = None
 
             if client is not None:
                 try:
@@ -1042,6 +1045,8 @@ class SalesReceivablesSyncService:
                 local_sale.payment_status = derived_ps
                 if "deposit_status" in sync_payload:
                     local_sale.deposit_status = sync_payload["deposit_status"]
+                    if sync_payload["deposit_status"] == "Not Deposited":
+                        local_sale.deposit_date = None
                 self.db.commit()
 
         self.broadcast_sync_events(

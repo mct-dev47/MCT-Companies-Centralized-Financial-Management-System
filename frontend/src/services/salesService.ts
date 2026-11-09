@@ -26,6 +26,9 @@ export interface SalesItem {
   payment_status?: 'Paid' | 'Pending' | 'Unpaid'
   depositStatus?: 'Deposited' | 'Not Deposited'
   deposit_status?: 'Deposited' | 'Not Deposited'
+  /** Day the money reached the bank (YYYY-MM-DD). `rawDate` stays the day of the sale. */
+  deposit_date?: string | null
+  depositDate?: string | null
   auditStatus: 'Verified' | 'Pending Audit' | 'Flagged'
   auditedBy?: string
   auditNotes?: string
@@ -61,6 +64,8 @@ export interface NewSalesInput {
   payment_status?: 'Paid' | 'Pending' | 'Unpaid'
   depositStatus?: 'Deposited' | 'Not Deposited'
   deposit_status?: 'Deposited' | 'Not Deposited'
+  deposit_date?: string | null
+  depositDate?: string | null
   remarks?: string
   items?: ParticularItem[]
   bankAccountId?: string
@@ -132,6 +137,15 @@ function mapBackendSaleToItem(b: any): SalesItem {
     payment_status: resolvedPaymentStatus,
     depositStatus: resolvedDepositStatus,
     deposit_status: resolvedDepositStatus,
+    // A deposited sale with no recorded deposit date landed on the sale date
+    deposit_date:
+      resolvedDepositStatus === 'Deposited'
+        ? (b.deposit_date || b.depositDate || rawDate).slice(0, 10)
+        : null,
+    depositDate:
+      resolvedDepositStatus === 'Deposited'
+        ? (b.deposit_date || b.depositDate || rawDate).slice(0, 10)
+        : null,
     auditStatus: resolvedAuditStatus,
     auditedBy: b.audited_by || undefined,
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
@@ -277,6 +291,7 @@ export const salesService = {
       payment_method: input.paymentMethod || null,
       payment_status: input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status) || 'Paid',
       deposit_status: input.deposit_status || input.depositStatus || undefined,
+      deposit_date: input.deposit_date || input.depositDate || undefined,
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
       remarks: input.remarks || undefined,
@@ -405,6 +420,9 @@ export const salesService = {
     if (input.deposit_status !== undefined || input.depositStatus !== undefined) {
       payload.deposit_status = input.deposit_status || input.depositStatus
     }
+    if (input.deposit_date !== undefined || input.depositDate !== undefined) {
+      payload.deposit_date = input.deposit_date || input.depositDate || null
+    }
     if (input.remarks !== undefined) {
       payload.remarks = input.remarks
     }
@@ -496,7 +514,9 @@ export const salesService = {
 
   async updateSaleDepositStatus(
     id: string,
-    depositStatus: 'Deposited' | 'Not Deposited'
+    depositStatus: 'Deposited' | 'Not Deposited',
+    depositDate?: string,
+    bankAccountId?: string
   ): Promise<SalesItem> {
     this.invalidateCache()
     const token =
@@ -510,7 +530,11 @@ export const salesService = {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ deposit_status: depositStatus }),
+      body: JSON.stringify({
+        deposit_status: depositStatus,
+        deposit_date: depositStatus === 'Deposited' ? depositDate || undefined : undefined,
+        bank_account_id: bankAccountId || undefined,
+      }),
     })
 
     if (res.ok) {

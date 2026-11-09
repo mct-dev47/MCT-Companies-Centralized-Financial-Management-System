@@ -44,6 +44,8 @@ class BankTransaction(Base):
     net_amount = Column(Numeric(15, 2), nullable=False, default=0.00)
     # Links a bank entry to the sale it came from, so the bank can be reconciled with the sale.
     source_sale_id = Column(Integer, nullable=True, index=True)
+    # Same for an expense (spec 0044): the bank holds only the PAID part of an expense, kept in step on every edit.
+    source_expense_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")

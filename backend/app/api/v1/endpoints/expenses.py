@@ -23,6 +23,42 @@ from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.cache import get_cached, set_cached
 
+def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
+    """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
+    has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
+    Petty cash expenses never touch a bank."""
+    try:
+        from app.services.bank_service import BankService
+        from app.core.websocket import ws_manager
+
+        expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+        if expense is None:
+            return
+        is_petty = (expense.payment_method or "").strip().lower() == "petty cash"
+        target = (
+            Decimal("0.00")
+            if force_zero or is_petty
+            else compute_paid_amount_from_particulars(expense.description, expense.amount)
+        )
+        company = db.query(Company).filter(Company.company_id == expense.company_id).first()
+        company_name = company.company_name if company else None
+        exp_date = expense.expense_date
+        BankService(db).sync_expense_disbursement(
+            expense_id=expense_id,
+            target_amount=target,
+            company_name=company_name,
+            account_id=expense.bank_account_id,
+            particulars=f"Expense Disbursement: {expense.description}",
+            reference_no=expense.cheque_number or expense.cheque_no or expense.reference_no,
+            tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
+            legacy_particulars=expense.description,
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
+    except Exception as exc:  # never block saving an expense on a bank sync problem
+        import logging
+        logging.getLogger(__name__).warning("Bank reconcile skipped for expense %s: %s", expense_id, exc)
+
+
 def get_supabase_mappings(client=None, db: Optional[Session] = None):
     cached = get_cached("supabase_mappings")
     if cached:
@@ -503,6 +539,7 @@ def create_expense(
             "amount_paid": float(expense_in.amount_paid or 0.0),
             "description": parts,
             "remarks": expense_in.remarks,
+            "bank_account_id": expense_in.bank_account_id,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -542,6 +579,7 @@ def create_expense(
                 amount_paid=expense_in.amount_paid or Decimal("0.00"),
                 description=parts,
                 remarks=expense_in.remarks,
+                bank_account_id=expense_in.bank_account_id,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -552,31 +590,8 @@ def create_expense(
         except Exception:
             db.rollback()
 
-        # Auto-withdrawal from company bank account for settled expenses (unless Petty Cash)
-        if (payment_method_str or "").lower() != "petty cash":
-            try:
-                from app.services.bank_service import BankService
-                from app.core.websocket import ws_manager
-                bank_svc = BankService(db)
-                if expense_in.bank_account_id:
-                    bank_svc.record_withdrawal_by_account_id(
-                        account_id=expense_in.bank_account_id,
-                        amount=expense_in.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense_in.expense_date.strftime("%m/%d/%y") if hasattr(expense_in.expense_date, "strftime") else str(expense_in.expense_date),
-                    )
-                else:
-                    bank_svc.record_expense_cash_withdrawal(
-                        company_name=target_company_name,
-                        amount=expense_in.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense_in.expense_date.strftime("%m/%d/%y") if hasattr(expense_in.expense_date, "strftime") else str(expense_in.expense_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company_name}})
-            except Exception:
-                pass
+        # Debit the bank only for the PAID part (matches the Transactions ledger)
+        reconcile_expense_bank(db, expense_id=sb_expense_id)
 
         # Auto-save particulars to company library
         try:
@@ -651,6 +666,7 @@ def create_expense(
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
             remarks=expense_in.remarks,
+            bank_account_id=expense_in.bank_account_id,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,
@@ -660,31 +676,8 @@ def create_expense(
         db.commit()
         db.refresh(expense)
 
-        # Auto-withdrawal from company bank account for settled expenses (unless Petty Cash)
-        if (expense_in.payment_method or "").lower() != "petty cash":
-            try:
-                from app.services.bank_service import BankService
-                from app.core.websocket import ws_manager
-                bank_svc = BankService(db)
-                if expense_in.bank_account_id:
-                    bank_svc.record_withdrawal_by_account_id(
-                        account_id=expense_in.bank_account_id,
-                        amount=expense.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense.expense_date.strftime("%m/%d/%y") if hasattr(expense.expense_date, "strftime") else str(expense.expense_date),
-                    )
-                else:
-                    bank_svc.record_expense_cash_withdrawal(
-                        company_name=target_company.company_name,
-                        amount=expense.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense.expense_date.strftime("%m/%d/%y") if hasattr(expense.expense_date, "strftime") else str(expense.expense_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company.company_name}})
-            except Exception:
-                pass
+        # Debit the bank only for the PAID part (matches the Transactions ledger)
+        reconcile_expense_bank(db, expense_id=expense.expense_id)
 
         # Auto-save particulars to company library
         try:
@@ -930,6 +923,9 @@ def update_expense(
         db.commit()
         db.refresh(expense)
 
+    # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
+    reconcile_expense_bank(db, expense_id=expense_id)
+
     # Auto-save updated particulars to company library
     if parts:
         try:
@@ -1160,6 +1156,8 @@ def delete_expense(
             print(f"Supabase delete expense error: {e}")
 
     if expense:
+        # Undo the bank debit first, while the expense (and its bank entries) can still be found
+        reconcile_expense_bank(db, expense_id=expense_id, force_zero=True)
         db.delete(expense)
         db.commit()
 

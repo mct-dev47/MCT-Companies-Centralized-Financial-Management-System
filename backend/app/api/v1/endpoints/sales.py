@@ -167,6 +167,7 @@ def get_sales(
                 payment_method=row.get("payment_method"),
                 payment_status=row.get("payment_status") or "Paid",
                 deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
+                deposit_date=row.get("deposit_date"),
                 transaction_date=row.get("transaction_date"),
                 cheque_no=row.get("cheque_number") or row.get("cheque_no") or row.get("reference_no"),
                 amount=row.get("amount") or 0.0,
@@ -228,6 +229,7 @@ def get_sales(
                 payment_method=sale.payment_method,
                 payment_status=sale.payment_status or "Paid",
                 deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+                deposit_date=sale.deposit_date,
                 transaction_date=sale.transaction_date,
                 cheque_no=sale.cheque_no,
                 amount=sale.amount,
@@ -512,11 +514,13 @@ def create_sale(
             "payment_method": payment_method_str,
             "payment_status": sale_in.payment_status or "Paid",
             "deposit_status": sale_in.deposit_status or "Not Deposited",
+            "deposit_date": sale_in.deposit_date.isoformat() if sale_in.deposit_date else None,
             "transaction_date": sale_in.transaction_date.isoformat(),
             "cheque_number": cheque,
             "amount": float(sale_in.amount),
             "particulars": parts,
             "remarks": sale_in.remarks,
+            "bank_account_id": sale_in.bank_account_id,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -549,11 +553,13 @@ def create_sale(
                 payment_method=payment_method_str,
                 payment_status=sale_in.payment_status or "Paid",
                 deposit_status=sale_in.deposit_status or "Not Deposited",
+                deposit_date=sale_in.deposit_date,
                 transaction_date=sale_in.transaction_date,
                 cheque_no=cheque,
                 amount=sale_in.amount,
                 particulars=parts,
                 remarks=sale_in.remarks,
+                bank_account_id=sale_in.bank_account_id,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -612,6 +618,7 @@ def create_sale(
             payment_method=payment_method_str,
             payment_status=created_row.get("payment_status") or sale_in.payment_status or "Paid",
             deposit_status=created_row.get("deposit_status") or sale_in.deposit_status or "Not Deposited",
+            deposit_date=created_row.get("deposit_date") or sale_in.deposit_date,
             transaction_date=created_row.get("transaction_date"),
             cheque_no=created_row.get("cheque_number"),
             amount=created_row.get("amount"),
@@ -634,11 +641,13 @@ def create_sale(
             payment_method=(sale_in.payment_method or "").strip() or None,
             payment_status=sale_in.payment_status or "Paid",
             deposit_status=sale_in.deposit_status or "Not Deposited",
+            deposit_date=sale_in.deposit_date,
             transaction_date=sale_in.transaction_date,
             cheque_no=cheque,
             amount=sale_in.amount,
             particulars=parts,
             remarks=sale_in.remarks,
+            bank_account_id=sale_in.bank_account_id,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,
@@ -697,6 +706,7 @@ def create_sale(
             payment_method=sale.payment_method,
             payment_status=sale.payment_status or "Paid",
             deposit_status=sale.deposit_status or "Not Deposited",
+            deposit_date=sale.deposit_date,
             transaction_date=sale.transaction_date,
             cheque_no=sale.cheque_no,
             amount=sale.amount,
@@ -731,6 +741,7 @@ def get_sale(
                     payment_method=row.get("payment_method"),
                     payment_status=row.get("payment_status") or "Paid",
                     deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
+                    deposit_date=row.get("deposit_date"),
                     transaction_date=row.get("transaction_date"),
                     cheque_no=row.get("cheque_number") or row.get("cheque_no"),
                     amount=row.get("amount") or 0.0,
@@ -769,6 +780,7 @@ def get_sale(
         payment_method=sale.payment_method,
         payment_status=sale.payment_status or "Paid",
         deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+        deposit_date=sale.deposit_date,
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
@@ -909,6 +921,18 @@ def update_sale(
         "payment_status": new_payment_status,
         "deposit_status": new_deposit_status,
     }
+    # Deposit date follows the deposit status: cleared when not deposited, otherwise the supplied
+    # date, otherwise (newly deposited) the sale date.
+    if new_deposit_status != "Deposited":
+        update_payload["deposit_date"] = None
+    elif sale_in.deposit_date is not None:
+        update_payload["deposit_date"] = sale_in.deposit_date.isoformat()
+    elif (existing_deposit_status or "") != "Deposited" or (
+        existing_local is not None and existing_local.deposit_date is None
+    ):
+        fallback_date = sale_in.transaction_date or (existing_local.transaction_date if existing_local else None)
+        if fallback_date is not None:
+            update_payload["deposit_date"] = fallback_date.isoformat()
     if sale_in.transaction_date:
         update_payload["transaction_date"] = sale_in.transaction_date.isoformat()
     if sale_in.amount is not None:
@@ -980,6 +1004,9 @@ def update_sale(
             sale.payment_status = update_payload["payment_status"]
         if "deposit_status" in update_payload:
             sale.deposit_status = update_payload["deposit_status"]
+        if "deposit_date" in update_payload:
+            dd = update_payload["deposit_date"]
+            sale.deposit_date = date.fromisoformat(dd) if dd else None
         if "remarks" in update_payload:
             sale.remarks = update_payload["remarks"]
         db.commit()
@@ -1069,6 +1096,7 @@ def update_sale(
             payment_method=updated_row.get("payment_method"),
             payment_status=updated_row.get("payment_status") or new_payment_status,
             deposit_status=updated_row.get("deposit_status") or new_deposit_status,
+            deposit_date=updated_row.get("deposit_date"),
             transaction_date=updated_row.get("transaction_date"),
             cheque_no=updated_row.get("cheque_number") or updated_row.get("cheque_no"),
             amount=updated_row.get("amount"),
@@ -1097,6 +1125,7 @@ def update_sale(
         payment_method=sale.payment_method,
         payment_status=sale.payment_status or "Paid",
         deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+        deposit_date=sale.deposit_date,
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
@@ -1184,15 +1213,39 @@ def update_sale_deposit_status(
                     detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
                 )
 
-    # Persist update in Supabase
+    # Deposit date: only while Deposited. Default to the sale date when none is given.
+    target_deposit_date = None
+    if target_deposit_status == "Deposited":
+        target_deposit_date = deposit_in.deposit_date
+        if target_deposit_date is None and existing_local is not None:
+            target_deposit_date = existing_local.deposit_date or existing_local.transaction_date
+        if target_deposit_date is None:
+            target_deposit_date = date.today()
+        if existing_local is not None and existing_local.transaction_date and target_deposit_date < existing_local.transaction_date:
+            raise HTTPException(status_code=422, detail="Deposit date cannot be earlier than the sale date.")
+
+    sb_update = {
+        "deposit_status": target_deposit_status,
+        "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+    }
+    if deposit_in.bank_account_id:
+        sb_update["bank_account_id"] = deposit_in.bank_account_id
+
+    # Persist update in Supabase (retry without the new columns if the table predates them)
     if use_sb and client is not None:
         try:
-            client.table("sales").update({"deposit_status": target_deposit_status}).eq("sales_id", sales_id).execute()
-        except Exception as e:
-            pass
+            client.table("sales").update(sb_update).eq("sales_id", sales_id).execute()
+        except Exception:
+            try:
+                client.table("sales").update({"deposit_status": target_deposit_status}).eq("sales_id", sales_id).execute()
+            except Exception:
+                pass
 
     if existing_local:
         existing_local.deposit_status = target_deposit_status
+        existing_local.deposit_date = target_deposit_date
+        if deposit_in.bank_account_id:
+            existing_local.bank_account_id = deposit_in.bank_account_id
         db.commit()
         db.refresh(existing_local)
 
@@ -1200,7 +1253,12 @@ def update_sale_deposit_status(
         {
             "type": "SALES_UPDATED",
             "company_id": existing_company_id,
-            "payload": {"sale_id": sales_id, "action": "deposit_status_updated", "deposit_status": target_deposit_status},
+            "payload": {
+                "sale_id": sales_id,
+                "action": "deposit_status_updated",
+                "deposit_status": target_deposit_status,
+                "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+            },
         }
     )
 
@@ -1209,11 +1267,14 @@ def update_sale_deposit_status(
         user_id=current_user.get("user_id"), company_id=existing_company_id,
         ip_address=request.client.host if request.client else "unknown",
         record_id=sales_id, record_type="sale",
-        extra={"deposit_status": target_deposit_status},
+        extra={
+            "deposit_status": target_deposit_status,
+            "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+        },
     )
 
     # Marking Deposited credits the bank, un-marking reverses it, so the bank always matches the ledger
-    reconcile_sale_bank(db, sale_id=sales_id)
+    reconcile_sale_bank(db, sale_id=sales_id, bank_account_id=deposit_in.bank_account_id)
     return get_sale(sales_id, current_user, db)
 
 

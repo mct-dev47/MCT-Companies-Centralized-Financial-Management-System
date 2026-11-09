@@ -30,4 +30,6 @@ def audit_fields(source: Any) -> dict:
         "audited_by": get("audited_by", None),
         "audited_at": get("audited_at", None),
         "audit_remarks": get("audit_remarks", None),
+        # Not an audit value: carried here so every SaleOut / ExpenseOut also reports its bank account.
+        "bank_account_id": get("bank_account_id", None),
     }

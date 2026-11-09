@@ -23,6 +23,7 @@ import {
   MoreVertical,
   Eye,
   Pencil,
+  Landmark,
   Lock,
   Receipt,
 } from 'lucide-react'
@@ -33,15 +34,6 @@ import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Label } from '@/components/ui/label'
 import {
   Table,
   TableHeader,
@@ -56,10 +48,12 @@ import {
 } from '@/components/ui/DateRangePicker'
 import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
+import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { DepositDateDialog } from '@/components/dashboard/DepositDateDialog'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
 import { useReceivables } from '@/hooks/useReceivables'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
-import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { notifyError } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -71,6 +65,7 @@ import { formatPHP } from '@/lib/format'
 import {
   isDateInRange,
   normalizeDateToYYYYMMDD,
+  formatDisplayDate,
   formatToYYYYMMDD,
   formatCreatedAt,
 } from '@/utils/dateUtils'
@@ -82,6 +77,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useNavigate } from 'react-router-dom'
 import { useCompany } from '@/context/CompanyContext'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from '@/components/dashboard/DayRemark'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
@@ -321,40 +318,6 @@ export const SalesPage: React.FC = () => {
     }, 4500)
   }
 
-  // Quick Remarks modal state
-  const [quickRemarksSale, setQuickRemarksSale] = React.useState<SalesItem | null>(null)
-  const [quickRemarksInput, setQuickRemarksInput] = React.useState('')
-  const [isQuickRemarksOpen, setIsQuickRemarksOpen] = React.useState(false)
-  const [isSavingQuickRemarks, setIsSavingQuickRemarks] = React.useState(false)
-
-  const handleOpenRemarks = (sale: SalesItem) => {
-    setQuickRemarksSale(sale)
-    setQuickRemarksInput(sale.remarks || '')
-    setIsQuickRemarksOpen(true)
-  }
-
-  const handleSaveQuickRemarks = async () => {
-    if (!quickRemarksSale) return
-    setIsSavingQuickRemarks(true)
-    try {
-      const trimmed = quickRemarksInput.trim()
-      await salesService.updateSaleRemarks(quickRemarksSale.id, trimmed)
-      setSales((prev) =>
-        prev.map((item) =>
-          item.id === quickRemarksSale.id
-            ? { ...item, remarks: trimmed }
-            : item
-        )
-      )
-      showToast('Remarks updated successfully.', 'success')
-      setIsQuickRemarksOpen(false)
-    } catch (err: any) {
-      showToast(err?.message || 'Failed to update remarks.', 'error')
-    } finally {
-      setIsSavingQuickRemarks(false)
-    }
-  }
-
   const handleDepositStatusChange = async (sale: SalesItem, newStatus: 'Deposited' | 'Not Deposited') => {
     if (sale.auditStatus === 'Verified') {
       showToast('This sale has been Verified by an Auditor and is locked as read-only.', 'error')
@@ -377,12 +340,38 @@ export const SalesPage: React.FC = () => {
       }
     }
 
+    if (newStatus === 'Deposited') {
+      // Ask which bank and which day the money arrived before saving
+      setDepositDialogSale(sale)
+      return
+    }
+    await applyDepositStatus(sale, newStatus)
+  }
+
+  const applyDepositStatus = async (
+    sale: SalesItem,
+    newStatus: 'Deposited' | 'Not Deposited',
+    depositDate?: string,
+    bankAccountId?: string
+  ) => {
     try {
-      await salesService.updateSaleDepositStatus(sale.id, newStatus)
+      const updated = await salesService.updateSaleDepositStatus(
+        sale.id,
+        newStatus,
+        depositDate,
+        bankAccountId
+      )
       setSales((prev) =>
         prev.map((s) =>
           s.id === sale.id
-            ? { ...s, depositStatus: newStatus, deposit_status: newStatus }
+            ? {
+                ...s,
+                depositStatus: newStatus,
+                deposit_status: newStatus,
+                deposit_date: newStatus === 'Deposited' ? depositDate || updated.deposit_date || s.rawDate : null,
+                depositDate: newStatus === 'Deposited' ? depositDate || updated.depositDate || s.rawDate : null,
+                bankAccountId: bankAccountId || updated.bankAccountId || s.bankAccountId,
+              }
             : s
         )
       )
@@ -391,6 +380,8 @@ export const SalesPage: React.FC = () => {
       showToast(err?.message || 'Failed to update deposit status.', 'error')
     }
   }
+
+  const [depositDialogSale, setDepositDialogSale] = React.useState<SalesItem | null>(null)
 
   // Handlers for edit and delete
   const handleSaleUpdated = (updatedItem: SalesItem) => {
@@ -700,7 +691,7 @@ export const SalesPage: React.FC = () => {
         ...s,
         customer_name: linked.customer_name,
         customer_type:
-          linked.customer_type === 'Internal' ? 'Staff' : linked.customer_type,
+          (linked.customer_type as string) === 'Internal' ? 'Staff' : linked.customer_type,
         amount_paid: linked.amount_paid,
         balance: linked.balance,
         payment_status: linked.payment_status,
@@ -722,7 +713,17 @@ export const SalesPage: React.FC = () => {
   }, [mappedUtangSales, sales, receivablesBySaleId])
 
   // 1. Base filtered sales (independent of Deposit / Sales Record tab so KPIs above stay constant)
-  const baseFilteredSales = React.useMemo(() => {
+  const {
+    accounts: allBankAccounts,
+    available: bankOptions,
+    selectedId: selectedBankId,
+    setSelectedId: setSelectedBankId,
+    bankLabel,
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
+
+  // Everything except the date range, so the Sales Record tab can range by sale date and the
+  // Deposit tab by bank deposit date.
+  const preDateFilteredSales = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
 
     return combinedSales
@@ -735,14 +736,8 @@ export const SalesPage: React.FC = () => {
           return false
         }
 
-        // 2. Date range filter
-        if (
-          !isDateInRange(
-            item.rawDate || item.date,
-            dateRange.startDate,
-            dateRange.endDate
-          )
-        ) {
+        // Bank filter ('' = All Banks)
+        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
           return false
         }
 
@@ -791,39 +786,87 @@ export const SalesPage: React.FC = () => {
 
         return true
       })
-      .sort((a, b) => {
-        const dateA = a.rawDate || normalizeDateToYYYYMMDD(a.date)
-        const dateB = b.rawDate || normalizeDateToYYYYMMDD(b.date)
-        const cmp = dateB.localeCompare(dateA)
-        if (cmp !== 0) return cmp
-        return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      })
   }, [
     combinedSales,
     selectedCompany,
-    dateRange,
     statusFilter,
     searchQuery,
     isCompanyScoped,
     assignedCompany,
+    selectedBankId,
   ])
+
+  // Day the sale happened (Sales Record tab, KPIs)
+  const getSaleDay = (s: SalesItem) => s.rawDate || normalizeDateToYYYYMMDD(s.date)
+  // Day the money reached the bank (Deposit tab). Older rows without one fall back to the sale day.
+  const getDepositDay = (s: SalesItem) =>
+    s.deposit_date || s.depositDate || getSaleDay(s)
+
+  // Small line under the deposit badge: when and where the money landed, or that it is still in transit
+  const renderDepositInfo = (sale: SalesItem) => {
+    const isDeposited =
+      (sale.depositStatus || sale.deposit_status) === 'Deposited'
+    if (isDeposited) {
+      const bank = sale.bankName || (sale.bankAccountId ? bankLabel(sale.bankAccountId) : '')
+      return (
+        <span className="block mt-1 text-[10px] font-medium text-emerald-700">
+          {tableTab === 'Deposit' ? '' : 'Deposited '}
+          {formatDisplayDate(getDepositDay(sale))}
+          {bank && bank !== 'No bank' ? ` (${bank})` : ''}
+        </span>
+      )
+    }
+    // Paid but not yet in the bank (e.g. GCash waiting to be swept)
+    if (sale.payment_status === 'Paid') {
+      return <span className="block mt-1 text-[10px] font-medium text-amber-700">In transit</span>
+    }
+    return null
+  }
+
+  const sortNewestFirst = (list: SalesItem[], getDay: (s: SalesItem) => string) =>
+    [...list].sort((a, b) => {
+      const cmp = getDay(b).localeCompare(getDay(a))
+      if (cmp !== 0) return cmp
+      return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
+    })
+
+  const baseFilteredSales = React.useMemo(
+    () =>
+      sortNewestFirst(
+        preDateFilteredSales.filter((item) =>
+          isDateInRange(item.rawDate || item.date, dateRange.startDate, dateRange.endDate)
+        ),
+        getSaleDay
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [preDateFilteredSales, dateRange]
+  )
 
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Sales Record') for Table & Chart
   const filteredSales = React.useMemo(() => {
     if (tableTab === 'Deposit') {
-      return baseFilteredSales.filter((item) => getRealizedCash(item) > 0)
+      // Deposit tab follows the bank passbook: ranged, sorted and grouped by deposit date
+      return sortNewestFirst(
+        preDateFilteredSales.filter(
+          (item) =>
+            getRealizedCash(item) > 0 &&
+            isDateInRange(getDepositDay(item), dateRange.startDate, dateRange.endDate)
+        ),
+        getDepositDay
+      )
     }
     return baseFilteredSales
-  }, [baseFilteredSales, tableTab, getRealizedCash])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseFilteredSales, preDateFilteredSales, dateRange, tableTab, getRealizedCash])
 
   // Daily grouped sales for Daily Summary subtab view
   const dailySalesGroups = React.useMemo(() => {
     return groupTransactionsByDate(filteredSales, {
-      getDate: (s) => s.rawDate || s.date,
+      getDate: (s) => (tableTab === 'Deposit' ? getDepositDay(s) : s.rawDate || s.date),
       getGrossAmount: (s) => (tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit),
       getRealizedCash: (s) => getRealizedCashForSale(s),
       getAuditStatus: (s) => s.auditStatus,
-    })
+    }) // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredSales, tableTab])
 
   const totalDailyPages = Math.max(1, Math.ceil(dailySalesGroups.length / ITEMS_PER_PAGE))
@@ -831,6 +874,18 @@ export const SalesPage: React.FC = () => {
     const start = (dailyPage - 1) * ITEMS_PER_PAGE
     return dailySalesGroups.slice(start, start + ITEMS_PER_PAGE)
   }, [dailySalesGroups, dailyPage])
+
+  // Day remarks: one note per company, per date (sales). Supervisors and Finance can edit.
+  const dayRemarkCompanies = React.useMemo(
+    () => paginatedDailyGroups.flatMap((g) => g.items.map((item) => item.company)),
+    [paginatedDailyGroups]
+  )
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    'sales',
+    dayRemarkCompanies
+  )
+  const canEditDayRemark =
+    isFinance || userRole === 'supervisor' || userRole === 'company'
 
   // Reset to page 1 on filter change
   React.useEffect(() => {
@@ -868,6 +923,11 @@ export const SalesPage: React.FC = () => {
     if (tableTab === 'Deposit') return 'Paid'
     return 'All'
   }, [statusFilter, tableTab])
+
+  // Deposit tab is paid by definition, so a leftover "Paid" filter is dropped
+  React.useEffect(() => {
+    if (tableTab === 'Deposit' && statusFilter === 'Paid') setStatusFilter('All')
+  }, [tableTab, statusFilter])
 
   // Pagination calculation
   const totalPages = Math.ceil(filteredSales.length / ITEMS_PER_PAGE) || 1
@@ -1154,7 +1214,9 @@ export const SalesPage: React.FC = () => {
                       : 'absolute right-0 top-full mt-2 w-44'
                   )}
                 >
-                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const).map((st) => (
+                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const)
+                    .filter((st) => !(tableTab === 'Deposit' && st === 'Paid'))
+                    .map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -1324,6 +1386,12 @@ export const SalesPage: React.FC = () => {
                 )}
               </div>
             )}
+
+            <BankFilterSelect
+              accounts={bankOptions}
+              value={selectedBankId}
+              onChange={setSelectedBankId}
+            />
 
             {/* Dynamic Tab Switcher: Deposit / Sales Record (Drives Chart & Table below; KPIs above remain independent) */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
@@ -1522,14 +1590,15 @@ export const SalesPage: React.FC = () => {
 
         {subTab === 'Daily Summary' ? (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
-            <Table className="w-full table-fixed min-w-[850px]">
+            <Table className="w-full table-fixed min-w-[1000px]">
               <colgroup>
-                <col style={{ width: '22%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '11%' }} />
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '18%' }} />
-                <col style={{ width: '17%' }} />
-                <col style={{ width: '10%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
@@ -1545,6 +1614,9 @@ export const SalesPage: React.FC = () => {
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                     REALIZED CASH
                   </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DAY REMARK
+                  </TableHead>
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     AUDIT STATUS
                   </TableHead>
@@ -1555,11 +1627,11 @@ export const SalesPage: React.FC = () => {
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableSkeleton rows={5} columns={6} />
+                  <TableSkeleton rows={5} columns={7} />
                 ) : paginatedDailyGroups.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={6}
+                      colSpan={7}
                       className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                     >
                       <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1604,6 +1676,25 @@ export const SalesPage: React.FC = () => {
                           <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-emerald-600 text-xs sm:text-sm">
                             {formatPHP(group.realizedCash)}
                           </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                            <DayRemarkCell
+                              companyNames={group.items.map((item) => item.company)}
+                              date={group.date}
+                              formattedDate={group.formattedDate}
+                              kindLabel="Sales"
+                              canEdit={canEditDayRemark}
+                              getRemark={getDayRemark}
+                              onSave={saveDayRemark}
+                              entries={group.items.map((s) => ({
+                                id: s.id,
+                                ref: s.chequeNo || s.refNo,
+                                particulars: s.particulars,
+                                amount: tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit,
+                                status: s.status,
+                                depositStatus: s.depositStatus || s.deposit_status,
+                              }))}
+                            />
+                          </TableCell>
                           <TableCell className="px-3.5 py-3.5 text-center">
                             <span
                               className={cn(
@@ -1641,7 +1732,7 @@ export const SalesPage: React.FC = () => {
                         {/* Expandable Accordion Row */}
                         {isExpanded && (
                           <TableRow className="bg-slate-50/40 border-b border-slate-200">
-                            <TableCell colSpan={6} className="p-3 sm:p-4">
+                            <TableCell colSpan={7} className="p-3 sm:p-4">
                               <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
                                 <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
                                   <div className="flex items-center gap-2">
@@ -1656,6 +1747,34 @@ export const SalesPage: React.FC = () => {
                                     Inspect, edit, delete, or audit individual day records
                                   </div>
                                 </div>
+                                {(() => {
+                                  const byBank = new Map<string, { count: number; total: number }>()
+                                  group.items.forEach((it) => {
+                                    const key = String(it.bankAccountId || '')
+                                    const entry = byBank.get(key) || { count: 0, total: 0 }
+                                    entry.count += 1
+                                    entry.total += (tableTab === 'Deposit' ? getRealizedCashForSale(it) : it.deposit)
+                                    byBank.set(key, entry)
+                                  })
+                                  return (
+                                    <div className="px-4 py-3 border-b border-slate-200 bg-white">
+                                      <p className="text-2xs font-bold uppercase tracking-wider text-muted-fg mb-2">By bank</p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {Array.from(byBank.entries()).map(([key, v]) => (
+                                          <div
+                                            key={key || 'none'}
+                                            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs"
+                                          >
+                                            <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
+                                            <span className="font-semibold text-focus">{bankLabel(key)}</span>
+                                            <span className="text-muted-fg">{v.count} {v.count === 1 ? 'record' : 'records'}</span>
+                                            <span className="font-bold tabular-nums text-focus">{formatPHP(v.total)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-left text-xs">
                                     <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
@@ -1668,7 +1787,6 @@ export const SalesPage: React.FC = () => {
                                         <th className="px-3 py-2 font-bold">Payment Method</th>
                                         <th className="px-3 py-2 font-bold text-right">Amount</th>
                                         <th className="px-3 py-2 font-bold text-center">Audit Status</th>
-                                        <th className="px-3 py-2 font-bold">Remarks</th>
                                         <th className="px-3 py-2 font-bold text-center">Actions</th>
                                       </tr>
                                     </thead>
@@ -1734,6 +1852,7 @@ export const SalesPage: React.FC = () => {
                                                 {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
                                               </span>
                                             )}
+                                            {renderDepositInfo(sale)}
                                           </td>
                                           <td className="px-3 py-2 text-muted-fg font-medium">
                                             {sale.paymentMethod || 'Cash'}
@@ -1754,27 +1873,6 @@ export const SalesPage: React.FC = () => {
                                             >
                                               {sale.auditStatus}
                                             </span>
-                                          </td>
-                                          <td
-                                            className="px-3 py-2 text-focus max-w-[160px]"
-                                            onClick={(e) => {
-                                              e.stopPropagation()
-                                              handleOpenRemarks(sale)
-                                            }}
-                                          >
-                                            <div
-                                              className="flex items-center justify-between gap-1.5 p-1 -m-1 rounded hover:bg-slate-100 cursor-pointer group"
-                                              title="Click to view or edit remarks"
-                                            >
-                                              <span className="truncate block font-normal text-slate-700 text-xs">
-                                                {sale.remarks ? (
-                                                  sale.remarks
-                                                ) : (
-                                                  <span className="text-muted-fg/40 italic">Add remarks…</span>
-                                                )}
-                                              </span>
-                                              <Pencil className="w-3 h-3 text-muted-fg/40 group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                            </div>
                                           </td>
                                           <td className="px-3 py-2 text-center">
                                             <div className="flex items-center justify-center gap-1">
@@ -1813,9 +1911,10 @@ export const SalesPage: React.FC = () => {
                                               {canAuditActions && (
                                                 <button
                                                   type="button"
-                                                  onClick={() =>
-                                                    setAuditingTransaction(salesService.toDashboardTransaction(sale))
-                                                  }
+                                                  onClick={() => {
+                                                    setSelectedTx(salesService.toDashboardTransaction(sale))
+                                                    setIsAuditModalOpen(true)
+                                                  }}
                                                   className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
                                                   title="Audit Transaction"
                                                 >
@@ -1852,7 +1951,6 @@ export const SalesPage: React.FC = () => {
               <col style={{ width: '9%' }} />
               <col style={{ width: '9%' }} />
               <col style={{ width: '9%' }} />
-              <col style={{ width: showCompanyColumn ? '10%' : '12%' }} />
               <col style={{ width: showCompanyColumn ? '7%' : '9%' }} />
             </colgroup>
             <TableHeader>
@@ -1883,9 +1981,6 @@ export const SalesPage: React.FC = () => {
                 <TableHead className="w-[9%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
-                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  REMARKS
-                </TableHead>
                 <TableHead className="w-[7%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
@@ -1894,11 +1989,11 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={showCompanyColumn ? 10 : 9} />
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 9 : 8} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showCompanyColumn ? 10 : 9}
+                    colSpan={showCompanyColumn ? 9 : 8}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1959,7 +2054,9 @@ export const SalesPage: React.FC = () => {
                       <TableCell className="w-[12%] px-3.5 py-3.5 text-xs font-medium text-focus truncate text-left">
                         <div className="flex flex-col truncate">
                           <div className="flex items-center gap-1.5 truncate">
-                            <span>{sale.date}</span>
+                            <span>
+                              {tableTab === 'Deposit' ? formatDisplayDate(getDepositDay(sale)) : sale.date}
+                            </span>
                             {highlightedSaleId === sale.id && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#960C01] text-white shadow-xs animate-bounce shrink-0">
                                 NEW
@@ -1972,6 +2069,14 @@ export const SalesPage: React.FC = () => {
                               title={`Created at ${formatCreatedAt(sale.createdAt)}`}
                             >
                               {createdAtTime}
+                            </span>
+                          )}
+                          {tableTab === 'Deposit' && (
+                            <span
+                              className="text-[10px] text-muted-fg mt-0.5"
+                              title="The day the sale happened"
+                            >
+                              From {formatDisplayDate(getSaleDay(sale))} sales
                             </span>
                           )}
                           {sale.auditStatus &&
@@ -2120,6 +2225,7 @@ export const SalesPage: React.FC = () => {
                             {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
                           </span>
                         )}
+                        {renderDepositInfo(sale)}
                       </TableCell>
 
                       {/* 5. Deposit */}
@@ -2152,29 +2258,6 @@ export const SalesPage: React.FC = () => {
                       {/* 7. Net Amount */}
                       <TableCell className="w-[9%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
-                      </TableCell>
-
-                      {/* 7b. Remarks */}
-                      <TableCell
-                        className="px-3.5 py-3.5 text-xs text-focus/90 max-w-[160px]"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleOpenRemarks(sale)
-                        }}
-                      >
-                        <div
-                          className="flex items-center justify-between gap-1.5 p-1 -m-1 rounded-md hover:bg-slate-100 cursor-pointer group"
-                          title="Click to view or edit remarks"
-                        >
-                          <span className="truncate block font-normal text-slate-700">
-                            {sale.remarks ? (
-                              sale.remarks
-                            ) : (
-                              <span className="text-muted-fg/40 italic">Add remarks…</span>
-                            )}
-                          </span>
-                          <Pencil className="w-3 h-3 text-muted-fg/40 group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
                       </TableCell>
 
                       {/* 8. Actions (3-dots menu) */}
@@ -2312,6 +2395,18 @@ export const SalesPage: React.FC = () => {
       </Card>
 
 
+      {/* Deposit date + bank prompt when marking a sale as Deposited */}
+      <DepositDateDialog
+        sale={depositDialogSale}
+        accounts={allBankAccounts}
+        onClose={() => setDepositDialogSale(null)}
+        onConfirm={async (depositDate, bankAccountId) => {
+          if (!depositDialogSale) return
+          await applyDepositStatus(depositDialogSale, 'Deposited', depositDate, bankAccountId)
+          setDepositDialogSale(null)
+        }}
+      />
+
       {/* Add Sales Modal */}
       <AddSalesModal
         open={isAddModalOpen}
@@ -2363,69 +2458,6 @@ export const SalesPage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* Quick Remarks Dialog */}
-      <Dialog open={isQuickRemarksOpen} onOpenChange={setIsQuickRemarksOpen}>
-        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
-            <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                <FileText className="w-5 h-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-bold text-focus leading-tight">
-                  Update Remarks
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  {quickRemarksSale?.refNo ? `Ref No: ${quickRemarksSale.refNo}` : 'Sale remarks'}
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <div className="py-4 space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-focus block">
-                Operational Remarks
-              </Label>
-              <textarea
-                rows={4}
-                value={quickRemarksInput}
-                onChange={(e) => setQuickRemarksInput(e.target.value)}
-                placeholder="Enter remarks or notes here…"
-                className="w-full rounded-xl border border-stroke/50 text-xs p-3 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSavingQuickRemarks}
-              onClick={() => setIsQuickRemarksOpen(false)}
-              className="h-8.5 px-3.5 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isSavingQuickRemarks}
-              onClick={handleSaveQuickRemarks}
-              className="h-8.5 px-4 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs"
-            >
-              {isSavingQuickRemarks ? (
-                <>
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  <span>Saving…</span>
-                </>
-              ) : (
-                <span>Save Remarks</span>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       {/* 3-Dots Action Portal Menu */}
       {openMenuSaleId &&
         activeMenuSale &&
@@ -2456,22 +2488,6 @@ export const SalesPage: React.FC = () => {
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                const s = activeMenuSale
-                setOpenMenuSaleId(null)
-                setMenuPosition(null)
-                setActiveMenuSale(null)
-                if (s) handleOpenRemarks(s)
-              }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
-            >
-              <FileText className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-              <span>Update Remarks</span>
             </button>
 
             {canAuditActions ? (

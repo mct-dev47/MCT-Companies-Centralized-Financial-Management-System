@@ -30,6 +30,15 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import { salesService } from '@/services/salesService'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { expenseService } from '@/services/expenseService'
 import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
@@ -992,6 +1001,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       mounted = false
     }
   }, [])
+
+  // Day remarks (optional): asked for when the user clicks Save, one note per date in the sheet
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    isSales ? 'sales' : 'expense',
+    [isAuditor ? assignedCompany : selectedCompany]
+  )
+  const [isDayRemarkOpen, setIsDayRemarkOpen] = React.useState(false)
+  const [dayRemarkDates, setDayRemarkDates] = React.useState<string[]>([])
+  const [dayRemarkDrafts, setDayRemarkDrafts] = React.useState<Record<string, string>>({})
+  // Phones: which day's record list is expanded in the remarks dialog
+  const [dayRemarkListOpen, setDayRemarkListOpen] = React.useState<Record<string, boolean>>({})
+  const dayRemarkConfirmedRef = React.useRef(false)
+  const dayRemarkSkipRef = React.useRef(false)
 
   // Bank Accounts state for Deposit Bank
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>(() =>
@@ -2056,6 +2078,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Save handler
   const handleSave = async () => {
+    const remarkPromptConfirmed = dayRemarkConfirmedRef.current
+    dayRemarkConfirmedRef.current = false
+    const skipDayRemarks = dayRemarkSkipRef.current
+    dayRemarkSkipRef.current = false
     setErrorMessage(null)
     setRowValidationErrors([])
 
@@ -2179,6 +2205,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       }
     }
 
+    // Every new sale / expense must belong to a bank so records can be viewed per bank.
+    if (!isEditMode && availableBankAccounts.length > 0 && !selectedBankAccountId) {
+      setErrorMessage('Please select a bank account for this transaction.')
+      return
+    }
+
+    // Optional day remarks: ask once, right when the user saves, for every date in the sheet
+    if (!remarkPromptConfirmed) {
+      const dates = Array.from(
+        new Set(validRows.map((r) => normalizeDateToYYYYMMDD(r.date) || todayIso))
+      ).sort()
+      setDayRemarkDates(dates)
+      setDayRemarkDrafts(Object.fromEntries(dates.map((d) => [d, getDayRemark(companyToUse, d)])))
+      setIsDayRemarkOpen(true)
+      return
+    }
+
     setIsSubmitting(true)
     const effectiveBankId = selectedBankAccountId || undefined
     const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
@@ -2222,12 +2265,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
           // Synchronize receivables for unpaid / paid edit
           const saleIdNum = Number(editItem.id)
+          // Only an "utang-<id>" row id names a receivable. A plain numeric id is a SALE id and must
+          // never be used as a receivable id (that caused "Receivable with ID 81 not found").
           const recIdFromUtang =
             typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
               ? Number(editItem.id.replace('utang-', ''))
-              : !Number.isNaN(saleIdNum)
-                ? saleIdNum
-                : undefined
+              : undefined
 
           const existingRec = !Number.isNaN(saleIdNum)
             ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
@@ -2278,9 +2321,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               })
             }
           } else if (first.status === 'Paid' && targetRecId) {
-            await receivablesService.updateReceivable(targetRecId, {
-              payment_status: 'Paid',
-            })
+            try {
+              await receivablesService.updateReceivable(targetRecId, {
+                payment_status: 'Paid',
+              })
+            } catch (recErr) {
+              // The linked receivable may already be gone (e.g. deleted); the sale itself is saved.
+              if (!/not found/i.test(String((recErr as Error)?.message || recErr))) throw recErr
+            }
           }
         } else {
           await expenseService.updateExpense(editItem.id, {
@@ -2447,15 +2495,33 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
       // Invalidate particulars cache and persist row particulars for future autocomplete
       const txType = isSales ? 'Sales' : 'Expense'
-      for (const row of validRows) {
-        const pName = row.particulars?.trim()
-        if (pName) {
-          particularsService.addParticular(companyToUse, pName, txType).catch(() => {})
-        }
-      }
+      // Wait for the saves, then reload the list so the next entry remembers what was just typed
+      await Promise.allSettled(
+        validRows
+          .map((row) => row.particulars?.trim())
+          .filter((pName): pName is string => !!pName)
+          .map((pName) => particularsService.addParticular(companyToUse, pName, txType))
+      )
       particularsService.invalidateCache(companyToUse, txType)
       if (effectiveParticularsCompany && effectiveParticularsCompany !== companyToUse) {
         particularsService.invalidateCache(effectiveParticularsCompany, txType)
+      }
+      if (effectiveParticularsCompany) {
+        particularsService
+          .getParticulars(effectiveParticularsCompany, txType)
+          .then(setSavedParticulars)
+          .catch(() => {})
+      }
+
+      // Save the optional day remark for every date that was just recorded
+      for (const d of skipDayRemarks ? [] : dayRemarkDates) {
+        const text = (dayRemarkDrafts[d] || '').trim()
+        if (text === getDayRemark(companyToUse, d).trim()) continue
+        try {
+          await saveDayRemark(companyToUse, d, text)
+        } catch (e) {
+          console.warn('Could not save day remark:', e)
+        }
       }
 
       setSuccessBanner({
@@ -2840,7 +2906,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     </option>
                   ) : (
                     <>
-                      <option value="">None / Skip Bank Sync</option>
+                      <option value="" disabled>
+                        Select a bank account
+                      </option>
                       {availableBankAccounts.map((acc) => (
                         <option key={acc.id} value={acc.id}>
                           {acc.bankName} - {acc.accountName || acc.accountNumber}{' '}
@@ -3663,6 +3731,146 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           </Card>
         </div>
       )}
+
+      {/* Modal: optional day remarks, shown when the user clicks Save */}
+      <Dialog open={isDayRemarkOpen} onOpenChange={setIsDayRemarkOpen}>
+        <DialogContent className="max-w-[480px] md:max-w-[860px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <DialogTitle className="text-lg font-bold text-focus leading-tight">
+              Add day remarks?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg mt-0.5">
+              Optional. One note per day, shown in the {isSales ? 'Sales' : 'Expense'} Daily Summary. The
+              records you are saving for each day are listed so you know what to write.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-4 space-y-5 max-h-[60vh] overflow-y-auto">
+            {dayRemarkDates.map((d) => {
+              const dayRows = validRows.filter((r) => (normalizeDateToYYYYMMDD(r.date) || todayIso) === d)
+              const listOpen = !!dayRemarkListOpen[d]
+              return (
+                <div key={d} className="space-y-1.5">
+                  <label className="text-xs font-semibold text-focus block">
+                    {new Date(`${d}T00:00:00`).toLocaleDateString('en-US', {
+                      weekday: 'long',
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </label>
+                  <div className="md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] md:gap-4">
+                    <div className="mb-2 md:mb-0 min-w-0">
+                      {/* Phones: dropdown. md and up: always open beside the remark box. */}
+                      <button
+                        type="button"
+                        onClick={() => setDayRemarkListOpen((prev) => ({ ...prev, [d]: !prev[d] }))}
+                        aria-expanded={listOpen}
+                        className="md:hidden w-full flex items-center justify-between rounded-xl border border-stroke/50 bg-slate-50 px-3 py-2 text-xs font-semibold text-focus cursor-pointer"
+                      >
+                        <span>Records for this day ({dayRows.length})</span>
+                        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${listOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      <p className="hidden md:block text-[11px] font-semibold text-muted-fg mb-1">
+                        Records for this day ({dayRows.length})
+                      </p>
+                      <ul
+                        className={`mt-2 md:mt-0 max-h-48 overflow-y-auto rounded-xl border border-stroke/40 divide-y divide-slate-100 ${
+                          listOpen ? 'block' : 'hidden'
+                        } md:block`}
+                      >
+                        {dayRows.map((r) => (
+                          <li key={r.id}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setDayRemarkDrafts((prev) => {
+                                  const cur = (prev[d] || '').replace(/\s+$/, '')
+                                  const line = `${r.particulars.trim()} - ${formatPHP(r.rowTotal)}`
+                                  const next = cur ? `${cur}; ${line}` : line
+                                  return { ...prev, [d]: next.slice(0, 255) }
+                                })
+                              }
+                              title="Click to add this record to the remark"
+                              className="w-full text-left px-3 py-2 hover:bg-slate-50 cursor-pointer"
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="min-w-0 text-xs font-medium text-focus line-clamp-2 break-words">
+                                  {r.particulars.trim()}
+                                </span>
+                                <span className="shrink-0 text-xs font-bold tabular-nums text-focus">
+                                  {formatPHP(r.rowTotal)}
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-fg">
+                                {r.chequeNo?.trim() && <span className="font-mono">{r.chequeNo.trim()}</span>}
+                                <span className="font-semibold">{r.status}</span>
+                                {isSales && (
+                                  <span>
+                                    {r.depositStatus || (r.status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={dayRemarkDrafts[d] || ''}
+                      maxLength={255}
+                      onChange={(e) => setDayRemarkDrafts((prev) => ({ ...prev, [d]: e.target.value }))}
+                      placeholder={
+                        isSales
+                          ? 'e.g. Verified deposit slip, walk-in collection...'
+                          : 'e.g. Approved receipts attached, vouchers #...'
+                      }
+                      className="w-full px-3 py-2 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus resize-y min-w-0"
+                    />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <DialogFooter className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDayRemarkOpen(false)}
+              className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+            >
+              Back
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                // Skip = save the records with no new remarks
+                dayRemarkSkipRef.current = true
+                dayRemarkConfirmedRef.current = true
+                setIsDayRemarkOpen(false)
+                void handleSave()
+              }}
+              className="h-9 px-4 text-xs font-medium rounded-xl cursor-pointer"
+              variant="outline"
+            >
+              Skip &amp; Save
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                dayRemarkConfirmedRef.current = true
+                setIsDayRemarkOpen(false)
+                void handleSave()
+              }}
+              className="h-9 px-4 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+            >
+              Save {transactionType} {validRowsCount > 1 ? 'Records' : 'Record'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal: Add Custom Payment Method */}
       {isAddPaymentMethodModalOpen && (

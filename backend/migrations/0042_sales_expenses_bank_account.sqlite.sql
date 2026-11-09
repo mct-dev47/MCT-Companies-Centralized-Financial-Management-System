@@ -1,0 +1,5 @@
+-- 0042_sales_expenses_bank_account.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE sales ADD COLUMN bank_account_id VARCHAR(100) NULL;
+-- ALTER TABLE expenses ADD COLUMN bank_account_id VARCHAR(100) NULL;

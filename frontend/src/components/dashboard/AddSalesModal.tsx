@@ -33,6 +33,7 @@ import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 
 interface AddSalesModalProps {
   open: boolean
@@ -68,7 +69,9 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [particulars, setParticulars] = React.useState('')
   const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
-  const [remarks, setRemarks] = React.useState('')
+  const [dayRemark, setDayRemark] = React.useState('')
+  const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('sales', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState('Cash')
   const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
@@ -181,7 +184,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setChequeNo('')
       setParticulars('')
       setAmount('')
-      setRemarks('')
+      setDayRemark('')
+      setDayRemarkTouched(false)
       setPaymentMethod('Cash')
       setCategory(DEFAULT_SALES_CATEGORIES[0])
       setIsCategoryOpen(false)
@@ -195,6 +199,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setIsConfirmOpen(false)
     }
   }, [open])
+
+  // Prefill with the existing day remark for the chosen date (until the user edits it)
+  React.useEffect(() => {
+    if (open && !dayRemarkTouched) setDayRemark(getDayRemark(assignedCompany, date))
+  }, [open, date, assignedCompany, dayRemarkTouched, getDayRemark])
 
   // Step 1: Pre-validate and show confirmation dialogue
   const handlePreSubmit = (e: React.FormEvent) => {
@@ -275,9 +284,17 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         status: effectiveStatus as any,
         depositStatus: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
         deposit_status: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
-        remarks: remarks.trim() || undefined,
       }
       const created = await salesService.addSale(payload)
+
+      // Optional day remark: one note for the whole day, not per transaction
+      if (dayRemarkTouched && dayRemark.trim() !== getDayRemark(assignedCompany, payload.date).trim()) {
+        try {
+          await saveDayRemark(assignedCompany, payload.date, dayRemark)
+        } catch (e) {
+          console.warn('Could not save day remark:', e)
+        }
+      }
 
       if (particulars.trim() && assignedCompany) {
         particularsService
@@ -724,16 +741,19 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               )}
             </div>
 
-            {/* Remarks */}
+            {/* Day remarks */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-focus flex items-center justify-between">
-                <span>Remarks (Optional)</span>
-                <span className="text-[11px] text-muted-fg font-normal">Supervisor / Finance notes</span>
+                <span>Day Remarks (Optional)</span>
+                <span className="text-[11px] text-muted-fg font-normal">Applies to all sales on this date</span>
               </Label>
               <Input
                 placeholder="e.g. Verified deposit slip, walk-in collection..."
-                value={remarks}
-                onChange={(e) => setRemarks(e.target.value)}
+                value={dayRemark}
+                onChange={(e) => {
+                  setDayRemarkTouched(true)
+                  setDayRemark(e.target.value)
+                }}
                 maxLength={255}
                 className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
               />

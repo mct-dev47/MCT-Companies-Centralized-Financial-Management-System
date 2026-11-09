@@ -32,7 +32,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
-import { normalizeDateToYYYYMMDD, formatToYYYYMMDD } from '@/utils/dateUtils'
+import { normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatDisplayDate } from '@/utils/dateUtils'
+import { bankService } from '@/services/bankService'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from './DayRemark'
 import { notifyError } from '@/utils/errorUtils'
 import {
   salesService,
@@ -406,6 +409,43 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
   const displayDate =
     activeSale?.date || activeExpense?.date || activeLoan?.date || activeTx?.date || '—'
+  // Sale vs bank deposit (spec 0043): a sale keeps its own date; the deposit date and target bank show
+  // when the money cleared so the auditor can verify the sale-day record knowing the bank side.
+  const depositSource: any = activeSale || (activeTx?.type === 'Sales' ? activeTx : null)
+  const isDepositedSale =
+    !!depositSource && (depositSource.depositStatus || depositSource.deposit_status) === 'Deposited'
+  const depositDateRaw: string | null | undefined = depositSource?.deposit_date || depositSource?.depositDate
+  const depositBankLabel: string | undefined = depositSource
+    ? (() => {
+        const acc = depositSource.bankAccountId
+          ? bankService
+              .getCachedAccounts()
+              .find((a) => String(a.id) === String(depositSource.bankAccountId))
+          : undefined
+        if (acc) return `${acc.bankName}${acc.accountName ? ` - ${acc.accountName}` : ''}`
+        return depositSource.bankName || undefined
+      })()
+    : undefined
+  // Day remark (spec 0041): one note per company, per date, per kind. Sales and expense records only.
+  const dayRemarkKind: 'sales' | 'expense' | null = isLoan
+    ? null
+    : isExpense
+      ? 'expense'
+      : activeSale || activeTx?.type === 'Sales'
+        ? 'sales'
+        : null
+  const dayRemarkCompany = displayCompany === '—' ? '' : displayCompany
+  const dayRemarkDate =
+    activeSale?.rawDate ||
+    activeExpense?.rawDate ||
+    normalizeDateToYYYYMMDD(activeSale?.date || activeExpense?.date || activeTx?.date || '')
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    dayRemarkKind ?? 'sales',
+    dayRemarkKind && dayRemarkCompany ? [dayRemarkCompany] : []
+  )
+  const canEditDayRemark =
+    roleLower === 'finance' || roleLower === 'supervisor' || roleLower === 'company'
+
   const displayChequeNo =
     activeSale?.chequeNo || activeExpense?.chequeNo || activeLoan?.chequeNo || activeTx?.chequeNo || '—'
   const displayParticulars =
@@ -1306,12 +1346,29 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               {/* 1. Date */}
               <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
-                  Transaction Date:
+                  {depositSource ? 'Sale Date:' : 'Transaction Date:'}
                 </span>
                 <span className="text-xs font-semibold text-focus text-right">
                   {displayDate}
                 </span>
               </div>
+
+              {isDepositedSale && depositDateRaw && (
+                <>
+                  <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
+                    <span className="text-[11px] font-medium text-muted-fg shrink-0">Deposit Date:</span>
+                    <span className="text-xs font-semibold text-emerald-700 text-right">
+                      {formatDisplayDate(depositDateRaw)}
+                    </span>
+                  </div>
+                  {depositBankLabel && (
+                    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
+                      <span className="text-[11px] font-medium text-muted-fg shrink-0">Target Bank:</span>
+                      <span className="text-xs font-semibold text-focus text-right">{depositBankLabel}</span>
+                    </div>
+                  )}
+                </>
+              )}
 
               {/* 2. Cheque Number */}
               <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
@@ -1563,6 +1620,25 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
                 </Button>
               </div>
+
+              {/* Day Remark (one note for the whole day, separate from the transaction remark) */}
+              {dayRemarkKind && dayRemarkCompany && /^\d{4}-\d{2}-\d{2}$/.test(dayRemarkDate) && (
+                <div className="py-2 border-b border-stroke/10 min-w-0">
+                  <span className="text-[11px] font-medium text-muted-fg block mb-0.5">
+                    Day remark ({formatDisplayDate(dayRemarkDate)}):
+                  </span>
+                  <DayRemarkCell
+                    variant="block"
+                    companyNames={[dayRemarkCompany]}
+                    date={dayRemarkDate}
+                    formattedDate={formatDisplayDate(dayRemarkDate)}
+                    kindLabel={dayRemarkKind === 'expense' ? 'Expense' : 'Sales'}
+                    canEdit={canEditDayRemark}
+                    getRemark={getDayRemark}
+                    onSave={saveDayRemark}
+                  />
+                </div>
+              )}
 
               {/* Activity Timeline & Remarks Section */}
               <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">

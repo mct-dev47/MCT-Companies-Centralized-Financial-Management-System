@@ -22,6 +22,7 @@
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
 | Transactions Daily Summary and Remarks Refinements | in-progress | [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md) |
+| Daily Remarks for Sales and Expenses | in-progress | [0041](../specs/0041-daily-remarks.md) |
 
 ---
 
@@ -312,3 +313,17 @@
   - [x] Milestone 6: Filter toolbar and company dropdown clear filter button removal (AC-1)
 - [ ] Verify it: /check verify transactions-daily-summary-and-remarks-refinements
 - [ ] Test it: /test transactions-daily-summary-and-remarks-refinements
+
+### Daily Remarks for Sales and Expenses
+**Status**: in-progress
+**Spec**: [0041](../specs/0041-daily-remarks.md) (assumed decision, owes ratification)
+**Intent**: Let Supervisor and Finance add one remark for a whole day, per company and per kind (sales or expense), from the Sales and Expense Daily Summary tables and from the finance transaction modal.
+**Done when**: Sales and Expense Daily Summary tables show an editable Day Remark column, the finance modal shows and edits the day remark for the record's company and date, remarks are stored per company, date and kind, and they persist across reloads.
+
+- [x] Design it (spec): [0041](../specs/0041-daily-remarks.md) (assumed)
+- [x] Build it: /develop daily-remarks (code in `backend/app/api/v1/endpoints/daily_remarks.py`, `frontend/src/components/dashboard/DayRemark.tsx`)
+  - [x] Milestone 1: `daily_remarks` table, migration 0041, API, and backend tests (AC-4, AC-5)
+  - [x] Milestone 2: Service, hook, and shared Day Remark dialog and cell (AC-1, AC-2)
+  - [x] Milestone 3: Day Remark column on Sales and Expense Daily Summary, and Day remark row in the finance modal (AC-1, AC-2, AC-3)
+- [ ] Verify it: /check verify daily-remarks
+- [ ] Test it: /test daily-remarks

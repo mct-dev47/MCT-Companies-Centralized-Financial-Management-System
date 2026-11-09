@@ -1,0 +1,4 @@
+-- 0044_bank_transactions_source_expense.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER NULL;

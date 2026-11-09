@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timezone
 from sqlalchemy.orm import Session
@@ -345,6 +345,119 @@ class BankService:
         _, tx = self.deposit(account.id, req)
         return tx
 
+    def _post_linked_entry(
+        self,
+        account: BankAccount,
+        *,
+        link_attr: str,
+        link_id: int,
+        is_deposit: bool,
+        amount: Decimal,
+        particulars: str,
+        reference_no: Optional[str],
+        tx_date: Optional[str],
+        is_reversal: bool = False,
+    ) -> BankTransaction:
+        """Add one bank entry linked to its source record and move the account balance with it."""
+        label = particulars or "Bank entry"
+        tx = BankTransaction(
+            id=self._generate_transaction_id(),
+            bank_account_id=account.id,
+            transaction_date=tx_date or datetime.now().strftime("%m/%d/%y"),
+            cheque_no=reference_no,
+            particulars=f"Reversal: {label}" if is_reversal else label,
+            withdrawal=Decimal("0.00") if is_deposit else amount,
+            deposit=amount if is_deposit else Decimal("0.00"),
+            category="Cash",
+            net_amount=amount,
+        )
+        setattr(tx, link_attr, link_id)
+        account.current_balance = account.current_balance + (amount if is_deposit else -amount)
+        self.db.add(tx)
+        self.db.flush()
+        return tx
+
+    def _sync_linked_entries(
+        self,
+        *,
+        link_attr: str,
+        link_id: int,
+        credit: bool,
+        target_amount: Decimal,
+        company_name: Optional[str],
+        account_id: Optional[str],
+        particulars: Optional[str],
+        reference_no: Optional[str],
+        tx_date: Optional[str],
+        linked: List[BankTransaction],
+    ) -> Optional[BankTransaction]:
+        """
+        Make the bank net for one record equal `target_amount`, on the record's OWN bank account.
+        `credit=True` is a sale (money in), `credit=False` an expense (money out). Only the difference
+        is posted, so the bank always equals what the Transactions ledger counts for the record.
+        If entries sit on a different account than the record's bank, they are moved over.
+        """
+        target = Decimal(str(target_amount or 0)).quantize(Decimal("0.01"))
+        sign = Decimal("1") if credit else Decimal("-1")
+
+        def recognized(t: BankTransaction) -> Decimal:
+            return (Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))) * sign
+
+        # Which account should hold this record: its own bank, else where it already is, else the company's
+        account = self.get_account(account_id) if account_id else None
+        if not account and linked:
+            account = self.get_account(linked[0].bank_account_id)
+        if not account and company_name:
+            account = self.find_account_for_company(company_name)
+        if not account:
+            self.db.commit()
+            return None
+
+        # Move anything recorded on another account: offset it there, count it here instead
+        by_account: Dict[str, Decimal] = {}
+        for t in linked:
+            by_account[t.bank_account_id] = by_account.get(t.bank_account_id, Decimal("0")) + recognized(t)
+        for other_id, net in by_account.items():
+            if other_id == account.id or net == Decimal("0.00"):
+                continue
+            other = self.get_account(other_id)
+            if other is None:
+                continue
+            # Entries that recognized `net` there are undone by posting the opposite direction
+            undo_as_deposit = (net < 0) if credit else (net > 0)
+            self._post_linked_entry(
+                other,
+                link_attr=link_attr,
+                link_id=link_id,
+                is_deposit=undo_as_deposit,
+                amount=abs(net),
+                particulars=particulars or "Bank entry",
+                reference_no=reference_no,
+                tx_date=tx_date,
+                is_reversal=True,
+            )
+
+        current = sum((recognized(t) for t in linked if t.bank_account_id == account.id), Decimal("0.00"))
+        delta = (target - current).quantize(Decimal("0.01"))
+        tx = None
+        if delta != Decimal("0.00"):
+            more = delta > 0
+            tx = self._post_linked_entry(
+                account,
+                link_attr=link_attr,
+                link_id=link_id,
+                is_deposit=(more if credit else not more),
+                amount=abs(delta),
+                particulars=particulars or "Bank entry",
+                reference_no=reference_no,
+                tx_date=tx_date,
+                is_reversal=not more,
+            )
+        self.db.commit()
+        if tx is not None:
+            self.db.refresh(tx)
+        return tx
+
     def sync_sale_deposit(
         self,
         sale_id: int,
@@ -358,10 +471,8 @@ class BankService:
     ) -> Optional[BankTransaction]:
         """
         Make the bank net for one sale equal `target_amount` (the cash the ledger counts:
-        the paid amount while the sale is Deposited, otherwise 0). Posts only the difference,
-        so the bank and the Transactions ledger always match, and keeps the audit trail.
+        the paid amount while the sale is Deposited, otherwise 0), on the sale's own bank.
         """
-        target = Decimal(str(target_amount or 0)).quantize(Decimal("0.01"))
         linked = self.db.query(BankTransaction).filter(BankTransaction.source_sale_id == sale_id).all()
 
         # Adopt an older unlinked credit for this sale (made before linking existed), so it is not doubled.
@@ -381,45 +492,65 @@ class BankService:
                 legacy.source_sale_id = sale_id
                 linked = [legacy]
 
-        current = sum(
-            (Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0)) for t in linked),
-            Decimal("0.00"),
+        return self._sync_linked_entries(
+            link_attr="source_sale_id",
+            link_id=sale_id,
+            credit=True,
+            target_amount=target_amount,
+            company_name=company_name,
+            account_id=account_id,
+            particulars=particulars or "Sales Collection",
+            reference_no=reference_no,
+            tx_date=tx_date,
+            linked=linked,
         )
-        delta = (target - current).quantize(Decimal("0.01"))
-        if delta == Decimal("0.00"):
-            self.db.commit()
-            return None
 
-        account = None
-        if linked:
-            account = self.get_account(linked[0].bank_account_id)
-        if not account and account_id:
-            account = self.get_account(account_id)
-        if not account and company_name:
-            account = self.find_account_for_company(company_name)
-        if not account:
-            self.db.commit()
-            return None
+    def sync_expense_disbursement(
+        self,
+        expense_id: int,
+        target_amount: Decimal,
+        company_name: Optional[str] = None,
+        account_id: Optional[str] = None,
+        particulars: Optional[str] = None,
+        reference_no: Optional[str] = None,
+        tx_date: Optional[str] = None,
+        legacy_particulars: Optional[str] = None,
+    ) -> Optional[BankTransaction]:
+        """
+        Make the bank net for one expense equal `target_amount` (only the PAID part leaves the bank;
+        Pending and Unpaid lines do not), on the expense's own bank.
+        """
+        linked = self.db.query(BankTransaction).filter(BankTransaction.source_expense_id == expense_id).all()
 
-        amount = abs(delta)
-        is_credit = delta > 0
-        tx = BankTransaction(
-            id=self._generate_transaction_id(),
-            bank_account_id=account.id,
-            transaction_date=tx_date or datetime.now().strftime("%m/%d/%y"),
-            cheque_no=reference_no,
-            particulars=(particulars or "Sales Collection") if is_credit else f"Reversal: {particulars or 'Sales Collection'}",
-            withdrawal=Decimal("0.00") if is_credit else amount,
-            deposit=amount if is_credit else Decimal("0.00"),
-            category="Cash",
-            net_amount=amount,
-            source_sale_id=sale_id,
+        # Adopt an older unlinked disbursement for this expense (made before linking existed).
+        if not linked and legacy_particulars:
+            legacy = (
+                self.db.query(BankTransaction)
+                .filter(
+                    BankTransaction.source_expense_id.is_(None),
+                    BankTransaction.source_sale_id.is_(None),
+                    BankTransaction.withdrawal > 0,
+                    BankTransaction.particulars == f"Expense Disbursement: {legacy_particulars}",
+                )
+                .order_by(BankTransaction.created_at.desc())
+                .first()
+            )
+            if legacy:
+                legacy.source_expense_id = expense_id
+                linked = [legacy]
+
+        return self._sync_linked_entries(
+            link_attr="source_expense_id",
+            link_id=expense_id,
+            credit=False,
+            target_amount=target_amount,
+            company_name=company_name,
+            account_id=account_id,
+            particulars=particulars or "Expense Disbursement",
+            reference_no=reference_no,
+            tx_date=tx_date,
+            linked=linked,
         )
-        account.current_balance = account.current_balance + (amount if is_credit else -amount)
-        self.db.add(tx)
-        self.db.commit()
-        self.db.refresh(tx)
-        return tx
 
     def record_expense_cash_withdrawal(self, company_name: str, amount: Decimal, particulars: str, cheque_no: Optional[str] = None, tx_date: Optional[str] = None) -> Optional[BankTransaction]:
         account = self.find_account_for_company(company_name)

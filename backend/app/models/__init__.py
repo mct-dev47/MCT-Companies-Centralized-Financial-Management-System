@@ -16,6 +16,7 @@ from app.models.particular import CompanyParticular
 from app.models.payment_method import CompanyPaymentMethod
 from app.models.petty_cash import PettyCashTopUp
 from app.models.intercompany_transfer import IntercompanyTransfer
+from app.models.daily_remark import DailyRemark
 
 # Alias for backward compatibility
 LendingFacility = Borrower
