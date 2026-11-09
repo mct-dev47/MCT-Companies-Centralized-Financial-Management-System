@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Expense, Category
 from app.models.company import Company
-from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyExpenseSummaryOut
+from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyExpenseSummaryOut, RemarksUpdate
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -160,6 +160,7 @@ def get_expenses(
                 description=row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
             for row in rows
@@ -225,6 +226,7 @@ def get_expenses(
                 description=exp.description or "",
                 created_at=exp.created_at,
                 updated_at=exp.updated_at,
+                remarks=getattr(exp, "remarks", None),
                 **audit_fields(exp)
             )
             for exp, c_name, cat_name in rows
@@ -500,6 +502,7 @@ def create_expense(
             "amount": float(expense_in.amount),
             "amount_paid": float(expense_in.amount_paid or 0.0),
             "description": parts,
+            "remarks": expense_in.remarks,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -538,6 +541,7 @@ def create_expense(
                 amount=expense_in.amount,
                 amount_paid=expense_in.amount_paid or Decimal("0.00"),
                 description=parts,
+                remarks=expense_in.remarks,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -623,6 +627,7 @@ def create_expense(
             description=created_row.get("description"),
             created_at=created_row.get("created_at"),
             updated_at=created_row.get("updated_at"),
+            remarks=created_row.get("remarks"),
             **audit_fields(created_row)
         )
 
@@ -645,6 +650,7 @@ def create_expense(
             amount=expense_in.amount,
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
+            remarks=expense_in.remarks,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,
@@ -730,6 +736,7 @@ def create_expense(
             description=expense.description,
             created_at=expense.created_at,
             updated_at=expense.updated_at,
+            remarks=getattr(expense, "remarks", None),
             **audit_fields(expense)
         )
 
@@ -765,6 +772,7 @@ def get_expense(
                 description=row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
     except HTTPException:
@@ -805,6 +813,7 @@ def get_expense(
         description=exp.description or "",
         created_at=exp.created_at,
         updated_at=exp.updated_at,
+        remarks=getattr(exp, "remarks", None),
         **audit_fields(exp)
     )
 
@@ -859,6 +868,8 @@ def update_expense(
             update_payload["reference_no"] = chq_val
     elif expense_in.reference_no is not None:
         update_payload["reference_no"] = expense_in.reference_no.strip() if expense_in.reference_no.strip() else None
+    if expense_in.remarks is not None:
+        update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
     # Update in Supabase
     updated_row = None
@@ -914,6 +925,8 @@ def update_expense(
             expense.category_id = update_payload["category_id"]
         if "payment_method" in update_payload:
             expense.payment_method = update_payload["payment_method"]
+        if "remarks" in update_payload:
+            expense.remarks = update_payload["remarks"]
         db.commit()
         db.refresh(expense)
 
@@ -969,6 +982,7 @@ def update_expense(
             description=updated_row.get("description"),
             created_at=updated_row.get("created_at"),
             updated_at=updated_row.get("updated_at"),
+            remarks=updated_row.get("remarks"),
             **audit_fields(updated_row)
         )
 
@@ -1016,8 +1030,65 @@ def update_expense(
         description=expense.description,
         created_at=expense.created_at,
         updated_at=expense.updated_at,
+        remarks=getattr(expense, "remarks", None),
         **audit_fields(expense)
     )
+
+
+@router.patch("/{expense_id}/remarks", response_model=ExpenseOut, summary="Update operational remarks of an expense")
+def update_expense_remarks(
+    expense_id: int,
+    remarks_in: RemarksUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
+
+    current = _current_expense_row(db, expense_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Expense not found")
+
+    existing_company_id = current.get("company_id")
+    check_company_access(current_user, existing_company_id)
+
+    try:
+        client = get_supabase_admin_client()
+        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", expense_id).execute()
+    except Exception as e:
+        pass
+
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    if expense:
+        expense.remarks = target_remarks
+        db.commit()
+        db.refresh(expense)
+
+    try:
+        from app.core.websocket import ws_manager
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_UPDATED",
+            "payload": {
+                "expense_id": expense_id,
+                "company_id": existing_company_id,
+                "action": "remarks_updated",
+                "remarks": target_remarks,
+            }
+        })
+    except Exception:
+        pass
+
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+    log_transaction(
+        db, AuditAction.EXPENSE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=expense_id, record_type="expense",
+        extra={"remarks": target_remarks, "actor_name": actor_name},
+    )
+
+    return get_expense(expense_id, current_user, db)
+
 
 @router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Auditor only)")
 def review_expense_audit(

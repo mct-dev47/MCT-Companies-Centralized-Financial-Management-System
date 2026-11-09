@@ -110,6 +110,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0039_petty_cash_categories")
             logger.info("Migration 0039_petty_cash_categories applied successfully.")
 
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_sales_expenses_remarks'")
+    ).first()
+
+    if not result_0040:
+        script_0040 = MIGRATIONS_DIR / "0040_sales_expenses_remarks.postgres.sql"
+        if script_0040.exists():
+            with open(script_0040, "r", encoding="utf-8") as f:
+                sql_0040 = f.read()
+            clean_0040 = sql_0040.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0040))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0040_sales_expenses_remarks')"))
+            applied.append("0040_sales_expenses_remarks")
+            logger.info("Migration 0040_sales_expenses_remarks applied successfully.")
+
     conn.commit()
     return applied
 
@@ -265,6 +281,35 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0039_petty_cash_categories")
         logger.info("SQLite migration 0039_petty_cash_categories applied successfully.")
+
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_sales_expenses_remarks'")
+    ).first()
+
+    if not result_0040:
+        sales_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='sales'")
+        ).first()
+        expenses_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='expenses'")
+        ).first()
+
+        if sales_table_exists:
+            sales_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sales)")).fetchall()}
+            if "remarks" not in sales_cols:
+                conn.execute(text("ALTER TABLE sales ADD COLUMN remarks TEXT NULL"))
+
+        if expenses_table_exists:
+            expenses_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(expenses)")).fetchall()}
+            if "remarks" not in expenses_cols:
+                conn.execute(text("ALTER TABLE expenses ADD COLUMN remarks TEXT NULL"))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0040_sales_expenses_remarks')")
+        )
+        applied.append("0040_sales_expenses_remarks")
+        logger.info("SQLite migration 0040_sales_expenses_remarks applied successfully.")
 
     conn.commit()
     return applied

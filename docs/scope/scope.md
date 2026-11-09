@@ -21,6 +21,7 @@
 | Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
+| Transactions Daily Summary and Remarks Refinements | in-progress | [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md) |
 
 ---
 
@@ -294,3 +295,20 @@
   - [x] Milestone 5: Frontend reimbursement modal breakdown, employee top-up restriction, and ledger action controls (AC-1, AC-5, AC-7, AC-10)
 - [x] Verify it: /check verify petty-cash-excess-reimbursements
 - [ ] Test it: /test petty-cash-excess-reimbursements
+
+### Transactions Daily Summary and Remarks Refinements
+**Status**: in-progress
+**Spec**: [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md)
+**Intent**: Add a daily summary view per bank account alongside all transactions, add an editable remarks field for supervisors and finance staff, streamline table columns by removing company and type from the general transactions table, remove the clear filter buttons, eliminate the GCash fee, and ensure the deposit tab only displays records that are strictly deposited.
+**Done when**: In TransactionPage.tsx, users can toggle between Daily Summary per bank account and All Transactions; deposit tab strictly displays records with deposit_status === 'Deposited'; clear filter buttons are removed; company and type columns are removed from the transactions table; a remarks column with quick edit popover is present; AuditTransactionModal allows immediate remarks updates; sales and expenses persist remarks in database tables; cash sales default to deposited; and GCash sales omit fee inputs.
+
+- [x] Design it (spec): [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md)
+- [x] Build it: /develop transactions-daily-summary-and-remarks-refinements (code in `backend/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration and backend schemas/endpoints for remarks on sales and expenses (AC-6)
+  - [x] Milestone 2: Sales modals update removing GCash fee, defaulting Cash sales to Deposited, and adding remarks (AC-5, AC-6)
+  - [x] Milestone 3: Transactions table column cleanup, remarks column with quick edit popover, and Audit modal remarks button (AC-2, AC-3)
+  - [x] Milestone 4: Deposit tab strict filtering for deposited records only (AC-4)
+  - [x] Milestone 5: Daily summary per bank account view toggle and grouped presentation (AC-7)
+  - [x] Milestone 6: Filter toolbar and company dropdown clear filter button removal (AC-1)
+- [ ] Verify it: /check verify transactions-daily-summary-and-remarks-refinements
+- [ ] Test it: /test transactions-daily-summary-and-remarks-refinements

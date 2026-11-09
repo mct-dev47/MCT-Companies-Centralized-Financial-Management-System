@@ -34,6 +34,9 @@ export interface SalesItem {
   createdAt?: string
   updatedAt?: string
   updatedBy?: string
+  bankAccountId?: string
+  bankName?: string
+  remarks?: string
   type: 'Sales'
 }
 
@@ -58,6 +61,7 @@ export interface NewSalesInput {
   payment_status?: 'Paid' | 'Pending' | 'Unpaid'
   depositStatus?: 'Deposited' | 'Not Deposited'
   deposit_status?: 'Deposited' | 'Not Deposited'
+  remarks?: string
   items?: ParticularItem[]
   bankAccountId?: string
   createdBy?: string
@@ -136,6 +140,9 @@ function mapBackendSaleToItem(b: any): SalesItem {
     createdAt: b.created_at || new Date().toISOString(),
     updatedAt: b.updated_at || undefined,
     updatedBy: b.updated_by || b.updated_by_name || undefined,
+    bankAccountId: b.bank_account_id || b.bankAccountId || undefined,
+    bankName: b.bank_name || b.bankName || undefined,
+    remarks: b.remarks || undefined,
     type: 'Sales',
   }
 }
@@ -272,6 +279,7 @@ export const salesService = {
       deposit_status: input.deposit_status || input.depositStatus || undefined,
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
+      remarks: input.remarks || undefined,
     }
 
     try {
@@ -396,6 +404,9 @@ export const salesService = {
     }
     if (input.deposit_status !== undefined || input.depositStatus !== undefined) {
       payload.deposit_status = input.deposit_status || input.depositStatus
+    }
+    if (input.remarks !== undefined) {
+      payload.remarks = input.remarks
     }
 
     try {
@@ -526,6 +537,34 @@ export const salesService = {
         errorMsg = errData.message
       }
       throw new Error(errorMsg)
+    }
+  },
+
+  async updateSaleRemarks(id: string, remarks: string): Promise<SalesItem> {
+    this.invalidateCache()
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/sales/${id}/remarks`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ remarks }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendSaleToItem(updated)
+      inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Failed to update remarks.')
     }
   },
 

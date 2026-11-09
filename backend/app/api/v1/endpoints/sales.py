@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
 from app.models.company import Company
-from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate
+from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate, RemarksUpdate
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -34,6 +34,26 @@ from app.core.dependencies import (
 )
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.cache import get_cached, set_cached
+
+
+def reconcile_sale_bank(
+    db: Session,
+    *,
+    sale_id: int,
+    bank_account_id: Optional[str] = None,
+    reference_no: Optional[str] = None,
+    force_zero: bool = False,
+    legacy_particulars: Optional[str] = None,
+) -> None:
+    """Keep the bank equal to the Transactions ledger: a sale (including lines settled through a
+    receivable) counts as cash only while it is Deposited, so the bank holds that amount only then."""
+    SalesReceivablesSyncService(db).reconcile_sale_bank(
+        sale_id,
+        account_id=bank_account_id,
+        reference_no=reference_no,
+        force_zero=force_zero,
+        legacy_particulars=legacy_particulars,
+    )
 
 
 def get_supabase_mappings(client):
@@ -153,6 +173,7 @@ def get_sales(
                 particulars=row.get("particulars") or row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
             for row in rows
@@ -213,6 +234,7 @@ def get_sales(
                 particulars=sale.particulars or "",
                 created_at=sale.created_at,
                 updated_at=sale.updated_at,
+                remarks=getattr(sale, "remarks", None),
                 **audit_fields(sale)
             )
             for sale, c_name, cat_name in rows
@@ -494,6 +516,7 @@ def create_sale(
             "cheque_number": cheque,
             "amount": float(sale_in.amount),
             "particulars": parts,
+            "remarks": sale_in.remarks,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -530,6 +553,7 @@ def create_sale(
                 cheque_no=cheque,
                 amount=sale_in.amount,
                 particulars=parts,
+                remarks=sale_in.remarks,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -540,31 +564,12 @@ def create_sale(
         except Exception:
             db.rollback()
 
-        # Credit settled portion to bank account if specified or company account exists
-        try:
-            from app.services.bank_service import BankService
-            paid_portion = compute_paid_amount_from_particulars(parts, sale_in.amount)
-            if paid_portion > Decimal("0.00"):
-                bank_svc = BankService(db)
-                if sale_in.bank_account_id:
-                    bank_svc.record_deposit_by_account_id(
-                        account_id=sale_in.bank_account_id,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {parts}",
-                        reference_no=cheque,
-                        tx_date=sale_in.transaction_date.strftime("%m/%d/%y") if hasattr(sale_in.transaction_date, "strftime") else str(sale_in.transaction_date),
-                    )
-                elif target_company_name:
-                    bank_svc.record_sale_cash_deposit(
-                        company_name=target_company_name,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {parts}",
-                        reference_no=cheque,
-                        tx_date=sale_in.transaction_date.strftime("%m/%d/%y") if hasattr(sale_in.transaction_date, "strftime") else str(sale_in.transaction_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company_name}})
-        except Exception:
-            pass
+        # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
+        reconcile_sale_bank(
+            db,
+            sale_id=sb_sales_id, bank_account_id=sale_in.bank_account_id,
+            reference_no=cheque,
+        )
 
         ws_manager.broadcast_sync(
             {
@@ -633,6 +638,7 @@ def create_sale(
             cheque_no=cheque,
             amount=sale_in.amount,
             particulars=parts,
+            remarks=sale_in.remarks,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,
@@ -642,31 +648,13 @@ def create_sale(
         db.commit()
         db.refresh(sale)
 
-        # Auto-credit settled portion to company bank account
-        try:
-            from app.services.bank_service import BankService
-            paid_portion = compute_paid_amount_from_particulars(parts, sale.amount)
-            if paid_portion > Decimal("0.00"):
-                bank_svc = BankService(db)
-                if sale_in.bank_account_id:
-                    bank_svc.record_deposit_by_account_id(
-                        account_id=sale_in.bank_account_id,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {sale.particulars}",
-                        reference_no=cheque,
-                        tx_date=sale.transaction_date.strftime("%m/%d/%y") if hasattr(sale.transaction_date, "strftime") else str(sale.transaction_date),
-                    )
-                else:
-                    bank_svc.record_sale_cash_deposit(
-                        company_name=target_company.company_name,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {sale.particulars}",
-                        reference_no=cheque,
-                        tx_date=sale.transaction_date.strftime("%m/%d/%y") if hasattr(sale.transaction_date, "strftime") else str(sale.transaction_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company.company_name}})
-        except Exception:
-            pass
+        # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
+        reconcile_sale_bank(
+            db,
+            sale_id=sale.sales_id,
+            bank_account_id=sale_in.bank_account_id,
+            reference_no=cheque,
+        )
 
         ws_manager.broadcast_sync(
             {
@@ -749,6 +737,7 @@ def get_sale(
                     particulars=row.get("particulars") or "",
                     created_at=row.get("created_at"),
                     updated_at=row.get("updated_at"),
+                    remarks=row.get("remarks"),
                     **audit_fields(row)
                 )
         except HTTPException:
@@ -786,6 +775,7 @@ def get_sale(
         particulars=sale.particulars or "",
         created_at=sale.created_at,
         updated_at=sale.updated_at,
+        remarks=getattr(sale, "remarks", None),
         **audit_fields(sale)
     )
 
@@ -928,6 +918,8 @@ def update_sale(
         update_payload["particulars"] = parts.strip()
     if cheque is not None:
         update_payload["cheque_number"] = cheque.strip() if cheque.strip() else None
+    if sale_in.remarks is not None:
+        update_payload["remarks"] = sale_in.remarks.strip() if sale_in.remarks else None
 
     # Update in Supabase
     updated_row = None
@@ -988,6 +980,8 @@ def update_sale(
             sale.payment_status = update_payload["payment_status"]
         if "deposit_status" in update_payload:
             sale.deposit_status = update_payload["deposit_status"]
+        if "remarks" in update_payload:
+            sale.remarks = update_payload["remarks"]
         db.commit()
         db.refresh(sale)
 
@@ -1032,6 +1026,15 @@ def update_sale(
         old_amount=old_amount,
         company_id=existing_company_id,
         actor_name=actor_email,
+    )
+
+    # Keep the bank equal to the ledger after any edit to amount, particulars, payment or deposit status
+    reconcile_sale_bank(
+        db,
+        sale_id=sales_id,
+        bank_account_id=getattr(sale_in, "bank_account_id", None),
+        reference_no=new_cheque_no or None,
+        legacy_particulars=old_particulars,
     )
 
     if sale:
@@ -1209,6 +1212,72 @@ def update_sale_deposit_status(
         extra={"deposit_status": target_deposit_status},
     )
 
+    # Marking Deposited credits the bank, un-marking reverses it, so the bank always matches the ledger
+    reconcile_sale_bank(db, sale_id=sales_id)
+    return get_sale(sales_id, current_user, db)
+
+
+@router.patch("/{sales_id}/remarks", response_model=SaleOut, summary="Update operational remarks of a sale")
+def update_sale_remarks(
+    sales_id: int,
+    remarks_in: RemarksUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
+
+    existing_company_id = None
+    sync_svc = SalesReceivablesSyncService(db)
+    use_sb = sync_svc._use_supabase()
+    client = None
+
+    if use_sb:
+        try:
+            client = get_supabase_admin_client()
+            res = client.table("sales").select("company_id").eq("sales_id", sales_id).limit(1).execute()
+            if res.data:
+                existing_company_id = res.data[0].get("company_id")
+        except Exception:
+            pass
+
+    existing_local = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    if existing_local:
+        existing_company_id = existing_company_id or existing_local.company_id
+
+    if not existing_company_id and not existing_local:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    check_company_access(current_user, existing_company_id)
+
+    if use_sb:
+        try:
+            client = client or get_supabase_admin_client()
+            client.table("sales").update({"remarks": target_remarks}).eq("sales_id", sales_id).execute()
+        except Exception as e:
+            pass
+
+    if existing_local:
+        existing_local.remarks = target_remarks
+        db.commit()
+        db.refresh(existing_local)
+
+    ws_manager.broadcast_sync(
+        {
+            "type": "SALES_UPDATED",
+            "company_id": existing_company_id,
+            "payload": {"sale_id": sales_id, "action": "remarks_updated", "remarks": target_remarks},
+        }
+    )
+
+    log_transaction(
+        db, AuditAction.SALE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=sales_id, record_type="sale",
+        extra={"remarks": target_remarks},
+    )
+
     return get_sale(sales_id, current_user, db)
 
 
@@ -1289,6 +1358,9 @@ def delete_sale(
 
     # Cascade delete linked receivables and reverse bank deposits before removing parent sale
     sync_svc.sync_sale_deleted_to_receivables(sales_id, company_id=deleted_company_id)
+
+    # Reverse whatever the bank still holds for this sale (receivable reversals above are already counted)
+    reconcile_sale_bank(db, sale_id=sales_id, force_zero=True)
 
     if client:
         try:

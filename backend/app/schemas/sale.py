@@ -12,6 +12,7 @@ class SaleBase(BaseModel):
     particulars: Optional[str] = Field(None, description="Particulars / description")
     payment_status: Optional[str] = Field("Paid", description="Payment status: Paid, Pending, Unpaid")
     deposit_status: Optional[str] = Field(None, description="Deposit status: Deposited, Not Deposited")
+    remarks: Optional[str] = Field(None, description="Operational remarks by supervisor/finance")
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -123,6 +124,7 @@ class SaleUpdate(BaseModel):
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     particulars: Optional[str] = None
     description: Optional[str] = None
+    remarks: Optional[str] = None
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -193,6 +195,10 @@ class SaleUpdate(BaseModel):
 
         return self
 
+class RemarksUpdate(BaseModel):
+    remarks: Optional[str] = None
+
+
 class DepositStatusUpdate(BaseModel):
     deposit_status: str
 
@@ -225,6 +231,7 @@ class SaleOut(BaseModel):
     audited_by: Optional[str] = None
     audited_at: Optional[datetime] = None
     audit_remarks: Optional[str] = None
+    remarks: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

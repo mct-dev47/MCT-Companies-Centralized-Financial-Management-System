@@ -105,6 +105,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [particulars, setParticulars] = React.useState('')
   const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
+  const [remarks, setRemarks] = React.useState('')
   const [paymentMethod, setPaymentMethod] = React.useState(initialPaymentMethod || 'Cash')
   const [category, setCategory] = React.useState(
     (initialPaymentMethod || '').trim().toLowerCase() === 'petty cash'
@@ -242,6 +243,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       setPettyCashCategory('')
       setParticulars('')
       setAmount('')
+      setRemarks('')
       const pm = initialPaymentMethod || 'Cash'
       setPaymentMethod(pm)
       if (pm.trim().toLowerCase() === 'petty cash') {
@@ -346,6 +348,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         paymentMethod: paymentMethod,
         company: assignedCompany,
         status: 'Paid',
+        remarks: remarks.trim() || undefined,
       }
       const created = await expenseService.addExpense(payload)
 
@@ -733,6 +736,21 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 )}
               </div>
             )}
+
+            {/* Remarks */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus flex items-center justify-between">
+                <span>Remarks (Optional)</span>
+                <span className="text-[11px] text-muted-fg font-normal">Supervisor / Finance notes</span>
+              </Label>
+              <Input
+                placeholder="e.g. Approved receipt attached, voucher #..."
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                maxLength={255}
+                className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
+              />
+            </div>
 
             {/* Actions */}
             <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">

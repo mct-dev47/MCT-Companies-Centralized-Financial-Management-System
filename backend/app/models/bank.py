@@ -42,6 +42,8 @@ class BankTransaction(Base):
     deposit = Column(Numeric(15, 2), nullable=True, default=0.00)
     category = Column(String(100), nullable=False, default="Bank Transfer")
     net_amount = Column(Numeric(15, 2), nullable=False, default=0.00)
+    # Links a bank entry to the sale it came from, so the bank can be reconciled with the sale.
+    source_sale_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")

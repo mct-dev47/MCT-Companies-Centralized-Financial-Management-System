@@ -152,6 +152,8 @@ export interface PettyCashMovement {
   companyName: string
   fundingCompanyId: number | null
   fundingCompanyName: string
+  fundingBankId?: string | null
+  fundingBankName?: string | null
   /** True when the funding bank belongs to the requesting company itself. */
   isOwnAccount: boolean
   createdAt: string | null
@@ -190,6 +192,8 @@ interface BackendMovement {
   company_name?: string | null
   funding_company_id?: number | null
   funding_company_name?: string | null
+  funding_bank_id?: string | null
+  funding_bank_name?: string | null
   is_own_account?: boolean
   created_at?: string | null
   request_type?: string | null
@@ -489,6 +493,8 @@ export const pettyCashService = {
       companyName: m.company_name || `Company #${m.company_id}`,
       fundingCompanyId: m.funding_company_id ?? null,
       fundingCompanyName: m.funding_company_name || 'Funding bank',
+      fundingBankId: m.funding_bank_id ?? null,
+      fundingBankName: m.funding_bank_name ?? null,
       isOwnAccount: Boolean(m.is_own_account),
       createdAt: m.created_at ?? null,
       requestType: m.request_type || 'topup',

@@ -412,10 +412,98 @@ class SalesReceivablesSyncService:
                 amount=pay_amount,
                 particulars=f"Reversal of Food Receivable Payment - {customer_name}",
                 tx_date=date.today().strftime("%m/%d/%y"),
+                source_sale_id=getattr(getattr(pay, "receivable", None), "sale_id", None),
             )
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": pay.bank_account_id}})
         except Exception as exc:
             logger.warning("Bank withdrawal reversal skipped for account %s: %s", pay.bank_account_id, exc)
+
+    def reconcile_sale_bank(
+        self,
+        sale_id: int,
+        *,
+        account_id: Optional[str] = None,
+        reference_no: Optional[str] = None,
+        force_zero: bool = False,
+        legacy_particulars: Optional[str] = None,
+    ) -> None:
+        """
+        Make the bank match the Transactions ledger for one sale. The ledger counts a sale's
+        [Paid] lines (including lines settled through a receivable) only while the sale is
+        Deposited, so the bank holds exactly that amount, and 0 otherwise. Reads the sale's
+        current state, then posts only the difference (see BankService.sync_sale_deposit).
+        """
+        try:
+            sb_row, local_sale = self._fetch_authoritative_sale(sale_id)
+            if sb_row is None and local_sale is None:
+                return
+
+            def pick(key: str, local_attr: str) -> Any:
+                if sb_row is not None and sb_row.get(key) is not None:
+                    return sb_row.get(key)
+                return getattr(local_sale, local_attr, None) if local_sale is not None else None
+
+            deposit_status = pick("deposit_status", "deposit_status")
+            particulars = pick("particulars", "particulars") or ""
+            amount = pick("amount", "amount")
+            company_id = pick("company_id", "company_id")
+            tx_date = pick("transaction_date", "transaction_date")
+            cheque = reference_no or pick("cheque_number", "cheque_no")
+
+            is_deposited = (str(deposit_status or "")).strip().lower() == "deposited"
+            target = Decimal("0.00")
+            if is_deposited and not force_zero:
+                target = compute_paid_amount_from_particulars(particulars, amount)
+
+            company_name = None
+            if company_id:
+                from app.models.company import Company
+                comp = self.db.query(Company).filter(Company.company_id == company_id).first()
+                company_name = comp.company_name if comp else None
+
+            self._adopt_legacy_receivable_credits(sale_id)
+
+            if isinstance(tx_date, str):
+                try:
+                    tx_date = date.fromisoformat(tx_date[:10])
+                except ValueError:
+                    tx_date = None
+            BankService(self.db).sync_sale_deposit(
+                sale_id=sale_id,
+                target_amount=target,
+                company_name=company_name,
+                account_id=account_id,
+                particulars=f"Sales Collection: {particulars}",
+                reference_no=cheque or None,
+                tx_date=tx_date.strftime("%m/%d/%y") if hasattr(tx_date, "strftime") else None,
+                legacy_particulars=legacy_particulars or particulars,
+            )
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
+        except Exception as exc:
+            logger.warning("Bank reconcile skipped for sale %s: %s", sale_id, exc)
+
+    def _adopt_legacy_receivable_credits(self, sale_id: int) -> None:
+        """Link older receivable payment credits (made before bank entries carried the sale id)
+        to their sale, one per payment, so reconcile does not count that money twice."""
+        from app.models.bank import BankTransaction
+        recs = self.db.query(Receivable).filter(Receivable.sale_id == sale_id).all()
+        for rec in recs:
+            for pay in rec.payments or []:
+                if not pay.bank_account_id:
+                    continue
+                tx = (
+                    self.db.query(BankTransaction)
+                    .filter(
+                        BankTransaction.source_sale_id.is_(None),
+                        BankTransaction.bank_account_id == pay.bank_account_id,
+                        BankTransaction.particulars == f"Food Receivable Payment - {rec.customer_name}",
+                        BankTransaction.deposit == pay.amount,
+                    )
+                    .order_by(BankTransaction.created_at.desc())
+                    .first()
+                )
+                if tx:
+                    tx.source_sale_id = sale_id
 
     def _fetch_authoritative_sale(self, sale_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[Sale]]:
         local_sale = self.db.query(Sale).filter(Sale.sales_id == sale_id).first()
@@ -685,6 +773,10 @@ class SalesReceivablesSyncService:
                 except Exception:
                     pass
 
+        # A receivable payment changed the sale's [Paid] lines, so re-match the bank to the ledger.
+        self.db.flush()
+        self.reconcile_sale_bank(sale_id)
+
         if emit_ws:
             self.broadcast_sync_events(
                 company_id=rec.company_id,
@@ -862,6 +954,7 @@ class SalesReceivablesSyncService:
                                 amount=reduce_by,
                                 particulars=f"Adjustment Reversal on Receivable - {rec.customer_name}",
                                 tx_date=date.today().strftime("%m/%d/%y"),
+                                source_sale_id=rec.sale_id,
                             )
                             ws_manager.broadcast_sync(
                                 {"type": "BANK_UPDATED", "payload": {"account_id": pay.bank_account_id}}

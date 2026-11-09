@@ -53,6 +53,8 @@ export interface ExpenseItem {
   updatedBy?: string
   type: 'Expense'
   bankAccountId?: string
+  bankName?: string
+  remarks?: string
 }
 
 export interface DailyExpenseSummaryOut {
@@ -75,6 +77,7 @@ export interface NewExpenseInput {
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
   items?: ParticularItem[]
   bankAccountId?: string
+  remarks?: string
   createdBy?: string
   updatedBy?: string
   updatedAt?: string
@@ -144,6 +147,9 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     auditDate: exp.audited_at ? formatCreatedAt(exp.audited_at) : undefined,
     auditNotes: exp.audit_remarks || undefined,
     type: 'Expense',
+    bankAccountId: exp.bank_account_id || exp.bankAccountId || undefined,
+    bankName: exp.bank_name || exp.bankName || undefined,
+    remarks: exp.remarks || undefined,
     createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
     createdAt: exp.created_at || new Date().toISOString(),
     updatedAt: exp.updated_at || undefined,
@@ -367,6 +373,7 @@ export const expenseService = {
         cheque_no: input.chequeNo || null,
         reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
+        remarks: input.remarks || undefined,
       }
 
       const res = await fetch('/api/v1/expenses', {
@@ -497,6 +504,9 @@ export const expenseService = {
     }
     if (updates.chequeNo !== undefined) {
       payload.cheque_no = updates.chequeNo
+    }
+    if (updates.remarks !== undefined) {
+      payload.remarks = updates.remarks
     }
 
     try {
@@ -659,6 +669,38 @@ export const expenseService = {
     saveStoredExpenses(inMemoryExpenses)
     this.invalidateCache()
     return updated
+  },
+
+  async updateExpenseRemarks(id: string, remarks: string): Promise<ExpenseItem> {
+    this.invalidateCache()
+    const numericId = id.replace(/^exp_/, '')
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/expenses/${numericId}/remarks`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ remarks }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendExpenseToItem(updated)
+      inMemoryExpenses = inMemoryExpenses.map((e) =>
+        e.id === id || e.id === `exp_${numericId}` ? mapped : e
+      )
+      saveStoredExpenses(inMemoryExpenses)
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Failed to update remarks.')
+    }
   },
 
   async deleteExpense(id: string): Promise<boolean> {

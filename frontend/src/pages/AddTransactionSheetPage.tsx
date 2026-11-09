@@ -1702,13 +1702,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             }
           } else if (value === 'Paid') {
             const pm = (r.paymentMethod || '').trim().toLowerCase()
-            nextDepositStatus = pm === 'gcash' ? 'Not Deposited' : 'Deposited'
+            nextDepositStatus = pm === 'cash' ? 'Deposited' : (pm === 'gcash' ? 'Not Deposited' : 'Deposited')
           }
         } else if (field === 'paymentMethod' || field === 'chequeNo') {
           const pm = (field === 'paymentMethod' ? value : r.paymentMethod || '').trim().toLowerCase()
           const chq = (field === 'chequeNo' ? value : r.chequeNo || '').trim()
           if (r.status === 'Pending' && (pm !== 'cheque' || !chq)) {
             nextDepositStatus = 'Not Deposited'
+          } else if (field === 'paymentMethod' && pm === 'cash') {
+            nextDepositStatus = 'Deposited'
           } else if (field === 'paymentMethod' && pm === 'gcash') {
             nextDepositStatus = 'Not Deposited'
           }
@@ -1945,10 +1947,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const price = typeof r.unitPrice === 'number' ? r.unitPrice : parseFloat(String(r.unitPrice || '')) || 0
       const qty = typeof r.quantity === 'number' ? r.quantity : parseInt(String(r.quantity || '1'), 10) || 1
       const pmLower = (r.paymentMethod || '').trim().toLowerCase()
-      const isGCashOrCustom =
-        pmLower === 'gcash' ||
-        !['cash', 'cheque', 'petty cash'].includes(pmLower)
-      const serviceFee = isGCashOrCustom
+      const isFeeApplicable = isSales
+        ? pmLower !== 'gcash' && !['cash', 'cheque'].includes(pmLower)
+        : !['cash', 'cheque', 'petty cash'].includes(pmLower)
+      const serviceFee = isFeeApplicable
         ? typeof r.serviceFee === 'number'
           ? r.serviceFee
           : parseFloat(String(r.serviceFee || '0')) || 0
@@ -1965,7 +1967,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         ...r,
         numericPrice: price,
         numericQty: qty,
-        serviceFee: isGCashOrCustom ? serviceFee : 0,
+        serviceFee: isFeeApplicable ? serviceFee : 0,
         rowTotal: total,
         isEmpty,
         isValid,
@@ -3031,11 +3033,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     const rowErrors = rowValidationErrors.find(
                       (err) => err.rowId === row.id
                     )
-                    const isGCashOrCustom =
-                      (row.paymentMethod || '').toLowerCase() === 'gcash' ||
-                      !['cash', 'cheque', 'petty cash'].includes(
-                        (row.paymentMethod || '').toLowerCase()
-                      )
+                    const pmLower = (row.paymentMethod || '').trim().toLowerCase()
+                    const isFeeApplicable = isSales
+                      ? pmLower !== 'gcash' && !['cash', 'cheque'].includes(pmLower)
+                      : !['cash', 'cheque', 'petty cash'].includes(pmLower)
 
                     return (
                       <TableRow
@@ -3178,7 +3179,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               + Add custom method...
                             </option>
                           </select>
-                          {isGCashOrCustom && (
+                          {isFeeApplicable && (
                             <div className="mt-1 flex items-center gap-1 bg-amber-50/80 border border-amber-200/90 rounded-md px-1.5 py-0.5">
                               <span className="text-[10px] font-semibold text-amber-800 shrink-0">
                                 Fee: ₱

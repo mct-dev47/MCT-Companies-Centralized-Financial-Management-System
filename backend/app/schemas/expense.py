@@ -14,6 +14,7 @@ class ExpenseBase(BaseModel):
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
     particulars: Optional[str] = Field(None, description="Particulars / description")
     description: Optional[str] = None
+    remarks: Optional[str] = Field(None, description="Operational remarks by supervisor/finance")
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -85,6 +86,7 @@ class ExpenseUpdate(BaseModel):
     amount_paid: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     particulars: Optional[str] = None
     description: Optional[str] = None
+    remarks: Optional[str] = None
 
     @field_validator('amount', 'withdrawal', mode='before')
     @classmethod
@@ -135,6 +137,10 @@ class ExpenseUpdate(BaseModel):
 
         return self
 
+class RemarksUpdate(BaseModel):
+    remarks: Optional[str] = None
+
+
 class ExpenseOut(BaseModel):
     expense_id: int
     company_id: Optional[int] = None
@@ -157,6 +163,7 @@ class ExpenseOut(BaseModel):
     audited_by: Optional[str] = None
     audited_at: Optional[datetime] = None
     audit_remarks: Optional[str] = None
+    remarks: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

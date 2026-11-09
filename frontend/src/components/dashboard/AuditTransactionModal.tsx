@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   UserCheck,
   PlusCircle,
+  MessageSquare,
 } from 'lucide-react'
 import { UpdateLoanStatusModal } from './UpdateLoanStatusModal'
 import { parseParticulars } from '@/utils/particularsUtils'
@@ -175,7 +176,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
   const [newCategoryName, setNewCategoryName] = React.useState('')
   const [isCreatingCategory, setIsCreatingCategory] = React.useState(false)
+  const [remarks, setRemarks] = React.useState('')
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+
+  // Immediate Remarks Modal states for Finance and Supervisor
+  const [isRemarksModalOpen, setIsRemarksModalOpen] = React.useState(false)
+  const [remarksInput, setRemarksInput] = React.useState('')
+  const [isSubmittingRemarks, setIsSubmittingRemarks] = React.useState(false)
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -235,6 +242,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeSale.deposit || activeSale.netAmount || ''))
         setCategory(activeSale.category || 'General')
         setPaymentMethod(activeSale.paymentMethod || 'Cash')
+        setRemarks(activeSale.remarks || '')
       } else if (activeExpense) {
         setDate(activeExpense.rawDate || normalizeDateToYYYYMMDD(activeExpense.date))
         setChequeNo(activeExpense.chequeNo || '')
@@ -242,6 +250,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeExpense.withdrawal || activeExpense.netAmount || ''))
         setCategory(activeExpense.category || 'General')
         setPaymentMethod(activeExpense.paymentMethod || 'Cash')
+        setRemarks(activeExpense.remarks || '')
       } else if (activeLoan) {
         setDate(activeLoan.rawDate || normalizeDateToYYYYMMDD(activeLoan.date))
         setChequeNo(activeLoan.chequeNo || '')
@@ -249,6 +258,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeLoan.amount || ''))
         setCategory(activeLoan.category || 'General')
         setPaymentMethod('Cash')
+        setRemarks('')
       } else if (activeTx) {
         setDate(normalizeDateToYYYYMMDD(activeTx.date))
         setChequeNo(activeTx.chequeNo || '')
@@ -262,6 +272,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(txAmount))
         setCategory(activeTx.category || 'General')
         setPaymentMethod(activeTx.paymentMethod || 'Cash')
+        setRemarks(activeTx.remarks || '')
       }
     } else {
       setIsEditing(false)
@@ -412,6 +423,37 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     activeSale?.updatedBy || activeExpense?.updatedBy || activeLoan?.updatedBy || activeTx?.updatedBy
   const displayAuditNotes =
     activeSale?.auditNotes || activeExpense?.auditNotes || activeLoan?.auditNotes || activeTx?.auditNotes
+  const displayRemarks =
+    activeSale?.remarks || activeExpense?.remarks || activeTx?.remarks || ''
+
+  const handleSaveImmediateRemarks = async () => {
+    const targetId = activeSale?.id || activeExpense?.id || activeTx?.id
+    if (!targetId) return
+    setIsSubmittingRemarks(true)
+    try {
+      const trimmed = remarksInput.trim()
+      if (isExpense || activeTx?.type === 'Expense') {
+        const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
+        setCurrentExpense(updatedExpense)
+        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        setCurrentTx(tx)
+        if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
+        if (onTransactionUpdated) onTransactionUpdated(tx)
+      } else {
+        const updatedSale = await salesService.updateSaleRemarks(targetId, trimmed)
+        setCurrentSale(updatedSale)
+        const tx = salesService.toDashboardTransaction(updatedSale)
+        setCurrentTx(tx)
+        if (onSaleUpdated) onSaleUpdated(updatedSale)
+        if (onTransactionUpdated) onTransactionUpdated(tx)
+      }
+      setIsRemarksModalOpen(false)
+    } catch (err: any) {
+      notifyError(err?.message || 'Failed to update remarks')
+    } finally {
+      setIsSubmittingRemarks(false)
+    }
+  }
 
   const withdrawalVal = isExpense
     ? (activeExpense?.withdrawal ?? activeTx?.withdrawal ?? 0)
@@ -809,12 +851,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           netAmount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          remarks: remarks.trim(),
           updatedBy: modifierName,
           updatedAt: nowIso,
         })
         if (!updatedExpenseItem) throw new Error('Expense item not found.')
         const mergedExpense = {
           ...updatedExpenseItem,
+          remarks: remarks.trim(),
           updatedBy: modifierName,
           updatedAt: nowIso,
         }
@@ -858,6 +902,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           amount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          remarks: remarks.trim(),
           updatedBy: modifierName,
           updatedAt: nowIso,
         }
@@ -865,6 +910,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const updatedSaleItem = await salesService.updateSale(targetId, payload)
         const mergedSale = {
           ...updatedSaleItem,
+          remarks: remarks.trim(),
           updatedBy: modifierName,
           updatedAt: nowIso,
         }
@@ -1158,6 +1204,20 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               </div>
             </div>
             )}
+
+            {/* Remarks (Supervisor and Finance Notes) */}
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks (Optional)
+              </Label>
+              <textarea
+                rows={2}
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="Add operational notes or remarks…"
+                className="w-full rounded-xl border border-stroke/50 text-xs p-2.5 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
+              />
+            </div>
 
             {/* Read-only Context (Company) */}
             <div className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
@@ -1474,6 +1534,36 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 </div>
               </div>
 
+              {/* Remarks (Supervisor and Finance Notes) */}
+              <div className="flex items-start justify-between gap-3 py-2 border-b border-stroke/10 min-w-0">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] font-medium text-muted-fg block">
+                    Remarks:
+                  </span>
+                  <p className="text-xs font-medium text-focus mt-0.5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                    {displayRemarks ? (
+                      displayRemarks
+                    ) : (
+                      <span className="text-muted-fg/60 italic font-normal">No remarks provided</span>
+                    )}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRemarksInput(displayRemarks || '')
+                    setIsRemarksModalOpen(true)
+                  }}
+                  className="h-7 px-2.5 text-[11px] font-semibold rounded-lg border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary flex items-center gap-1 shrink-0 cursor-pointer"
+                  title="Add or update remarks"
+                >
+                  <MessageSquare className="w-3 h-3 text-primary" />
+                  <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+                </Button>
+              </div>
+
               {/* Activity Timeline & Remarks Section */}
               <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
                 <div className="flex items-center justify-between pb-1">
@@ -1784,44 +1874,120 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               </div>
             )}
 
-            {/* View Mode Footer: Strictly read-only until the user clicks the Edit button */}
-            {isEditable && (
-              <div className="flex items-center justify-end gap-2.5 pt-3 mt-2 border-t border-stroke/20">
-                {isLoan ? (
-                  <Button
-                    type="button"
-                    onClick={() => setIsEditing(true)}
-                    className="h-9 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-white" />
-                    <span>Edit</span>
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    onClick={handleEditInSheet}
-                    className="h-9 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                    title="Edit transaction in Excel Sheet"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-white" />
-                    <span>Edit</span>
-                  </Button>
+            {/* Operational Remarks Button and Edit Actions Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setRemarksInput(displayRemarks || '')
+                  setIsRemarksModalOpen(true)
+                }}
+                className="h-9 px-3.5 text-xs font-semibold rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                title="Immediately add or edit operational remarks"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary" />
+                <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+              </Button>
+
+              <div className="flex items-center gap-2">
+                {isEditable && (
+                  isLoan ? (
+                    <Button
+                      type="button"
+                      onClick={() => setIsEditing(true)}
+                      className="h-9 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-white" />
+                      <span>Edit</span>
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={handleEditInSheet}
+                      className="h-9 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                      title="Edit transaction in Excel Sheet"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-white" />
+                      <span>Edit</span>
+                    </Button>
+                  )
+                )}
+
+                {isAudited && !isAdmin && (
+                  <span className="text-xs font-medium text-muted-fg bg-slate-100/90 px-3 py-1.5 rounded-xl flex items-center gap-1.5 border border-stroke/30">
+                    <Lock className="w-3 h-3 text-slate-500 shrink-0" />
+                    <span>Audited</span>
+                  </span>
                 )}
               </div>
-            )}
-
-            {/* If transaction has already been audited, operational user can no longer edit */}
-            {isAudited && !isAdmin && (
-              <div className="flex items-center justify-end gap-2 pt-3 mt-2 border-t border-stroke/20">
-                <span className="text-xs font-medium text-muted-fg bg-slate-100/90 px-3.5 py-2 rounded-xl flex items-center gap-2 border border-stroke/30">
-                  <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>This transaction has already been audited and can no longer be edited.</span>
-                </span>
-              </div>
-            )}
+            </div>
           </div>
         )}
       </DialogContent>
+
+      {/* Immediate Remarks Dialog for Finance / Supervisor */}
+      <Dialog open={isRemarksModalOpen} onOpenChange={setIsRemarksModalOpen}>
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold text-focus leading-tight">
+                  Update Remarks
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter operational remarks for supervisor and finance records.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks
+              </Label>
+              <textarea
+                rows={4}
+                value={remarksInput}
+                onChange={(e) => setRemarksInput(e.target.value)}
+                placeholder="Enter remarks or notes here…"
+                className="w-full rounded-xl border border-stroke/50 text-xs p-3 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/15">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingRemarks}
+                onClick={() => setIsRemarksModalOpen(false)}
+                className="h-8.5 px-3.5 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSubmittingRemarks}
+                onClick={handleSaveImmediateRemarks}
+                className="h-8.5 px-4 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                {isSubmittingRemarks ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Save Remarks</span>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Embedded Update Loan Status Modal when opened from transaction details */}
       {activeLoan && (

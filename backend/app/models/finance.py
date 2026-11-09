@@ -52,6 +52,8 @@ class Sale(Base):
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
+    # Operational remarks (spec 0040): supervisor and finance notes
+    remarks = Column(Text, nullable=True)
 
     category = relationship("Category", back_populates="sales")
 
@@ -80,6 +82,8 @@ class Expense(Base):
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
+    # Operational remarks (spec 0040): supervisor and finance notes
+    remarks = Column(Text, nullable=True)
     linked_topup_id = Column(Integer, ForeignKey("petty_cash_topups.topup_id", ondelete="SET NULL"), nullable=True, index=True)
 
     def __init__(self, **kwargs):

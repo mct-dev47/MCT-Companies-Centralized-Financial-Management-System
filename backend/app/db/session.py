@@ -130,6 +130,12 @@ def init_db():
                 conn.execute(text("UPDATE sales SET deposit_status = 'Deposited' WHERE payment_status = 'Paid' AND (deposit_status IS NULL OR deposit_status = '' OR deposit_status = 'Not Deposited')"))
                 conn.execute(text("UPDATE sales SET deposit_status = 'Not Deposited' WHERE payment_status IN ('Unpaid', 'Pending')"))
 
+        if "bank_transactions" in table_names:
+            bank_tx_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+            if "source_sale_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_sale_id INTEGER"))
+
         if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}
             if "balance" not in existing_cols:

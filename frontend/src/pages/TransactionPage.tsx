@@ -3,9 +3,6 @@ import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
   Search,
-  ChevronLeft,
-  ChevronRight,
-  Download,
   RotateCw,
   ArrowUpDown,
   FilterX,
@@ -20,6 +17,8 @@ import {
   Eye,
   MoreVertical,
   Loader2,
+  Landmark,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,6 +48,7 @@ import { expenseService } from '@/services/expenseService'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
 import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
+import { bankService, type BankAccount } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
@@ -61,6 +61,7 @@ import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import { websocketService } from '@/services/websocketService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
+import { useDropdownPosition } from '@/hooks/useDropdownPosition'
 import { cn } from '@/lib/utils'
 
 // ── Loan and petty cash rows (spec 0013) ─────────────────────────────────────────────────────
@@ -130,6 +131,7 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
     createdAt: l.createdAt || l.rawDate,
     updatedAt: l.updatedAt,
     attachments: [],
+    bankAccountId: l.bankAccountId,
   }
 
   const rows: DashboardTransactionItem[] = [
@@ -204,6 +206,8 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
     attachments: m.receiptUrl ? [m.receiptUrl] : [],
     isMirrorRow: true,
     paidAmount: m.amountReimbursed || m.amount,
+    bankAccountId: m.fundingBankId || undefined,
+    bankName: m.fundingBankName || undefined,
   }
 
   if (isReimbursement) {
@@ -286,19 +290,516 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   ]
 }
 
+interface CompanyFilterDropdownProps {
+  selectedCompany: string
+  companyList: string[]
+  onSelectCompany: (company: string) => void
+  onResetCompany: () => void
+  canClearFilter?: boolean
+}
+
+const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
+  selectedCompany,
+  companyList,
+  onSelectCompany,
+  onResetCompany,
+  canClearFilter = true,
+}) => {
+  const [isOpen, setIsOpen] = React.useState(false)
+  const [search, setSearch] = React.useState('')
+  const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const pos = useDropdownPosition(dropdownRef, isOpen)
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const filteredList = React.useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return companyList
+    return companyList.filter((c) => c.toLowerCase().includes(q))
+  }, [search, companyList])
+
+  return (
+    <div ref={dropdownRef} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className={cn(
+          'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+          isOpen && 'ring-2 ring-slate-100 border-slate-300'
+        )}
+        aria-label="Filter transactions by company"
+      >
+        <span className="font-semibold text-focus/90 truncate max-w-[150px]">
+          {selectedCompany}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+      </button>
+
+      {isOpen && (
+        <div
+          style={pos.isMobile ? pos.style : undefined}
+          className={cn(
+            'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            pos.isMobile
+              ? 'w-[min(calc(100vw-32px),320px)]'
+              : 'absolute right-0 top-full mt-2 w-68'
+          )}
+        >
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
+              Filter By Company
+            </span>
+          </div>
+
+          <div className="relative mb-2 px-1">
+            <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search company…"
+              className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
+            {filteredList.length === 0 ? (
+              <div className="py-4 text-center text-xs text-muted-fg">
+                No matching companies
+              </div>
+            ) : (
+              filteredList.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    onSelectCompany(c)
+                    setIsOpen(false)
+                    setSearch('')
+                  }}
+                  className={cn(
+                    'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                    selectedCompany === c
+                      ? 'bg-primary/10 text-primary font-semibold'
+                      : 'text-focus/80 hover:bg-slate-50'
+                  )}
+                >
+                  <span className="truncate">{c}</span>
+                  {selectedCompany === c && (
+                    <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAccount): boolean => {
+  // 1. Direct bankAccountId match
+  if (tx.bankAccountId && String(tx.bankAccountId) === String(account.id)) {
+    return true
+  }
+
+  // 2. Direct bankName match
+  if (tx.bankName && account.bankName) {
+    if (tx.bankName.trim().toLowerCase() === account.bankName.trim().toLowerCase()) {
+      return true
+    }
+  }
+
+  // 3. Match against account direct transactions
+  if (account.transactions && account.transactions.length > 0) {
+    const matchedInAccount = account.transactions.some((bt) => {
+      if (String(bt.id) === String(tx.id)) return true
+      if (tx.chequeNo && bt.chequeNo && tx.chequeNo.trim().toLowerCase() === bt.chequeNo.trim().toLowerCase()) return true
+      if (tx.refNo && bt.chequeNo && tx.refNo.trim().toLowerCase() === bt.chequeNo.trim().toLowerCase()) return true
+      if (tx.refNo && bt.particulars && bt.particulars.toLowerCase().includes(tx.refNo.toLowerCase())) return true
+      return false
+    })
+    if (matchedInAccount) return true
+  }
+
+  // 4. Payment method, description, or particulars match on bank name
+  const bankNameLower = (account.bankName || '').trim().toLowerCase()
+  if (bankNameLower && bankNameLower.length >= 3) {
+    const pMethod = (tx.paymentMethod || '').toLowerCase()
+    const desc = (tx.description || '').toLowerCase()
+    const part = (tx.particulars || '').toLowerCase()
+    if (pMethod.includes(bankNameLower) || desc.includes(bankNameLower) || part.includes(bankNameLower)) {
+      return true
+    }
+  }
+
+  // 5. Account number match (last 4 digits or full number)
+  const accNum = (account.accountNumber || '').replace(/\D/g, '')
+  if (accNum.length >= 4) {
+    const last4 = accNum.slice(-4)
+    const combinedText = `${tx.particulars || ''} ${tx.description || ''} ${tx.chequeNo || ''} ${tx.refNo || ''}`
+    if (combinedText.includes(accNum) || combinedText.includes(last4)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+interface BankAccountFilterDropdownProps {
+  selectedAccountId: string
+  bankAccounts: BankAccount[]
+  onSelectAccount: (accountId: string) => void
+}
+
+const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
+  selectedAccountId,
+  bankAccounts,
+  onSelectAccount,
+}) => {
+  const [isOpen, setIsOpen] = React.useState(false)
+  const [search, setSearch] = React.useState('')
+  const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const pos = useDropdownPosition(dropdownRef, isOpen)
+
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const selectedAcc = React.useMemo(() => {
+    return (
+      bankAccounts.find((a) => String(a.id) === String(selectedAccountId)) ||
+      bankAccounts[0]
+    )
+  }, [bankAccounts, selectedAccountId])
+
+  const filteredAccounts = React.useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return bankAccounts
+    return bankAccounts.filter((a) => {
+      return (
+        a.bankName.toLowerCase().includes(q) ||
+        a.accountName.toLowerCase().includes(q) ||
+        (a.accountNumber && a.accountNumber.toLowerCase().includes(q)) ||
+        (a.companyName && a.companyName.toLowerCase().includes(q))
+      )
+    })
+  }, [search, bankAccounts])
+
+  const triggerLabel = selectedAcc
+    ? `${selectedAcc.bankName} - ${selectedAcc.accountType}${
+        selectedAcc.accountNumber ? ` (•••• ${selectedAcc.accountNumber.slice(-4)})` : ''
+      }`
+    : 'Select Bank Account'
+
+  return (
+    <div ref={dropdownRef} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className={cn(
+          'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+          isOpen && 'ring-2 ring-slate-100 border-slate-300'
+        )}
+        aria-label="Select bank account"
+      >
+        <Landmark className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+        <span className="font-semibold text-focus/90 truncate max-w-[180px]">
+          {triggerLabel}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+      </button>
+
+      {isOpen && (
+        <div
+          style={pos.isMobile ? pos.style : undefined}
+          className={cn(
+            'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            pos.isMobile
+              ? 'w-[min(calc(100vw-32px),360px)]'
+              : 'absolute right-0 top-full mt-2 w-80'
+          )}
+        >
+          <div className="pb-2 mb-2 border-b border-stroke/20 px-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
+              Select Bank Account
+            </span>
+          </div>
+
+          {bankAccounts.length >= 4 && (
+            <div className="relative mb-2 px-1">
+              <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search bank or account..."
+                className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+            {filteredAccounts.length === 0 ? (
+              <div className="py-4 text-center text-xs text-muted-fg">
+                No matching bank accounts
+              </div>
+            ) : (
+              filteredAccounts.map((acc) => {
+                const isSelected = selectedAcc ? String(selectedAcc.id) === String(acc.id) : false
+                return (
+                  <button
+                    key={acc.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectAccount(String(acc.id))
+                      setIsOpen(false)
+                      setSearch('')
+                    }}
+                    className={cn(
+                      'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                      isSelected
+                        ? 'bg-primary/10 text-primary font-semibold'
+                        : 'text-focus/80 hover:bg-slate-50'
+                    )}
+                  >
+                    <div className="flex flex-col min-w-0 pr-2">
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span className="font-semibold truncate">{acc.bankName}</span>
+                        <span className="text-[10px] text-muted-fg">· {acc.accountType}</span>
+                      </div>
+                      <span className="text-[10px] text-muted-fg truncate">
+                        {acc.companyName} {acc.accountNumber ? `(•••• ${acc.accountNumber.slice(-4)})` : ''}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 text-right">
+                      <div className="flex flex-col text-right">
+                        <span className="text-[11px] font-semibold text-focus">
+                          {formatPHP(acc.startingBalance)}
+                        </span>
+                        <span className="text-[9px] text-muted-fg">start bal</span>
+                      </div>
+                      {isSelected && (
+                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
+                      )}
+                    </div>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const TransactionPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole.includes('audit')
-  const isFinance = userRole === 'finance'
-  const isAdmin = userRole === 'admin'
-  const isCompanyScoped = isStrictlyCompanyScoped
-  const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const isFinance = userRole.includes('finance')
+  const isAdmin = userRole === 'admin' || userRole === 'owner'
+  const isSupervisor = userRole.includes('supervisor') || userRole === 'company'
+
+  // Crucial requirement: Only Audit and Finance (and Admin) can choose "All Companies", not the supervisor!
+  const canSelectAllCompanies = isAudit || isFinance || isAdmin
+
+  // Resolve all assigned company names for a supervisor
+  const supervisorCompanies = React.useMemo(() => {
+    const list: string[] = []
+    if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+      list.push(user.assignedCompany)
+    }
+    if (Array.isArray(user?.companyNames)) {
+      user.companyNames.forEach((c) => {
+        if (c && c !== 'All Companies' && !list.includes(c)) list.push(c)
+      })
+    }
+    if (Array.isArray(user?.assignedCompanies)) {
+      user.assignedCompanies.forEach((c) => {
+        if (c && c !== 'All Companies' && !list.includes(c)) list.push(c)
+      })
+    }
+    if (list.length === 0 && activeCompany && activeCompany !== 'All Companies') {
+      list.push(activeCompany)
+    }
+    return list
+  }, [user, activeCompany])
+
+  const defaultSupervisorCompany = supervisorCompanies[0] || 'MCTolentino Hospitality Business Corporation'
+
+  const isCompanyScoped = !canSelectAllCompanies && supervisorCompanies.length <= 1
+
+  // Dynamic company list loaded from CompanyContext
+  const [companyList, setCompanyList] = React.useState<string[]>(() => {
+    if (allCompanies && allCompanies.length > 0) return allCompanies
+    return ['All Companies']
+  })
+
+  React.useEffect(() => {
+    if (allCompanies && allCompanies.length > 0) {
+      setCompanyList(allCompanies)
+    }
+  }, [allCompanies])
+
+  // Company options displayed in dropdown:
+  // - Audit/Finance: "All Companies" + all registered companies
+  // - Supervisor: strictly their assigned companies (never "All Companies")
+  const availableCompanyOptions = React.useMemo(() => {
+    if (!canSelectAllCompanies) {
+      return supervisorCompanies.length > 0 ? supervisorCompanies : [defaultSupervisorCompany]
+    }
+    const list = companyList.filter((c) => c !== 'All Companies')
+    return ['All Companies', ...list]
+  }, [canSelectAllCompanies, supervisorCompanies, defaultSupervisorCompany, companyList])
+
+  // Selected company state
+  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
+    if (!canSelectAllCompanies) {
+      if (activeCompany && activeCompany !== 'All Companies' && supervisorCompanies.includes(activeCompany)) {
+        return activeCompany
+      }
+      return defaultSupervisorCompany
+    }
+    if (activeCompany) return activeCompany
+    return 'All Companies'
+  })
+
+  // Ensure supervisor NEVER gets stuck on 'All Companies'
+  React.useEffect(() => {
+    if (!canSelectAllCompanies) {
+      if (
+        !selectedCompany ||
+        selectedCompany === 'All Companies' ||
+        (supervisorCompanies.length > 0 && !supervisorCompanies.includes(selectedCompany))
+      ) {
+        setSelectedCompany(defaultSupervisorCompany)
+      }
+    }
+  }, [canSelectAllCompanies, selectedCompany, supervisorCompanies, defaultSupervisorCompany])
+
+  React.useEffect(() => {
+    if (activeCompany) {
+      if (canSelectAllCompanies || (supervisorCompanies.includes(activeCompany) && activeCompany !== 'All Companies')) {
+        setSelectedCompany(activeCompany)
+      }
+    }
+  }, [activeCompany, canSelectAllCompanies, supervisorCompanies])
+
+  // Effective company for data fetching and filtering:
+  // - For Audit/Finance: specific company name, or undefined for "All Companies"
+  // - For Supervisor: always their specific selected/assigned company, NEVER undefined!
+  const effectiveTargetCompany = React.useMemo(() => {
+    if (!canSelectAllCompanies) {
+      return selectedCompany && selectedCompany !== 'All Companies' ? selectedCompany : defaultSupervisorCompany
+    }
+    return selectedCompany !== 'All Companies' ? selectedCompany : undefined
+  }, [canSelectAllCompanies, selectedCompany, defaultSupervisorCompany])
+
+  const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
+
+  const handleSelectCompany = (c: string) => {
+    if (!canSelectAllCompanies && c === 'All Companies') return
+    setSelectedCompany(c)
+    setActiveCompany(c)
+    setSelectedBankAccountId('')
+    setDepositCurrentPage(1)
+    setSalesCurrentPage(1)
+  }
+
+  const handleResetCompany = () => {
+    if (!canSelectAllCompanies) {
+      setSelectedCompany(defaultSupervisorCompany)
+      setActiveCompany(defaultSupervisorCompany)
+    } else {
+      setSelectedCompany('All Companies')
+      setActiveCompany('All Companies')
+    }
+    setSelectedBankAccountId('')
+    setDepositCurrentPage(1)
+    setSalesCurrentPage(1)
+  }
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
+  const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
   const [loading, setLoading] = React.useState(true)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
+
+  // Bank accounts filtered by company scope
+  const availableBankAccounts = React.useMemo(() => {
+    if (effectiveTargetCompany) {
+      return bankAccounts.filter((a) => isCompanyMatch(a.companyName, effectiveTargetCompany))
+    }
+    return bankAccounts
+  }, [bankAccounts, effectiveTargetCompany])
+
+  // Automatically keep selectedBankAccountId set to a valid account (default to first available)
+  React.useEffect(() => {
+    if (availableBankAccounts.length > 0) {
+      const exists = availableBankAccounts.some((a) => String(a.id) === String(selectedBankAccountId))
+      if (!exists) {
+        setSelectedBankAccountId(String(availableBankAccounts[0].id))
+      }
+    } else {
+      setSelectedBankAccountId('')
+    }
+  }, [availableBankAccounts, selectedBankAccountId])
+
+  const selectedBankAccount = React.useMemo(() => {
+    if (!selectedBankAccountId) {
+      return availableBankAccounts[0]
+    }
+    return availableBankAccounts.find((a) => String(a.id) === String(selectedBankAccountId)) || availableBankAccounts[0]
+  }, [availableBankAccounts, selectedBankAccountId])
+
+  // Starting balances from registered bank accounts grouped by company
+  const getStartingBalanceForCompany = React.useCallback(
+    (companyName: string): number => {
+      let total = 0
+      bankAccounts.forEach((acc) => {
+        if (isCompanyMatch(acc.companyName, companyName)) {
+          total += Number(acc.startingBalance) || 0
+        }
+      })
+      return Math.round(total * 100) / 100
+    },
+    [bankAccounts]
+  )
 
   const isOwner = userRole === 'owner'
   const canAudit = (isAdmin || isAudit) && !isOwner
@@ -373,6 +874,47 @@ export const TransactionPage: React.FC = () => {
 
   const itemsPerPage = 12
 
+  // View mode for All Transactions tab: 'all' (records table) vs 'daily_summary' (grouped by date per bank)
+  const [salesViewMode, setSalesViewMode] = React.useState<'all' | 'daily_summary'>('all')
+
+  // Quick Remarks Popover / Modal state
+  const [quickRemarksTx, setQuickRemarksTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [quickRemarksInput, setQuickRemarksInput] = React.useState('')
+  const [isQuickRemarksOpen, setIsQuickRemarksOpen] = React.useState(false)
+  const [isSavingQuickRemarks, setIsSavingQuickRemarks] = React.useState(false)
+
+  const handleOpenRemarks = (tx: DashboardTransactionItem) => {
+    setQuickRemarksTx(tx)
+    setQuickRemarksInput(tx.remarks || '')
+    setIsQuickRemarksOpen(true)
+  }
+
+  const handleSaveQuickRemarks = async () => {
+    if (!quickRemarksTx) return
+    setIsSavingQuickRemarks(true)
+    try {
+      const trimmed = quickRemarksInput.trim()
+      const tx = quickRemarksTx
+      if (tx.type === 'Expense') {
+        await expenseService.updateExpenseRemarks(tx.id, trimmed)
+      } else {
+        await salesService.updateSaleRemarks(tx.id, trimmed)
+      }
+      setTransactions((prev) =>
+        prev.map((item) =>
+          item.id === tx.id && item.type === tx.type
+            ? { ...item, remarks: trimmed }
+            : item
+        )
+      )
+      setIsQuickRemarksOpen(false)
+    } catch (err: any) {
+      notifyError(err?.message || 'Failed to update remarks')
+    } finally {
+      setIsSavingQuickRemarks(false)
+    }
+  }
+
   // Modal inspection
   const [selectedTx, setSelectedTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -400,13 +942,9 @@ export const TransactionPage: React.FC = () => {
   const fetchAllTransactions = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
     try {
-      const targetCompany = isCompanyScoped
-        ? assignedCompany
-        : activeCompany !== 'All Companies'
-        ? activeCompany
-        : undefined
+      const targetCompany = effectiveTargetCompany
       const shouldFetchTenants = !targetCompany || isCompanyMatch(TENANT_COMPANY_NAME, targetCompany)
-      const [salesData, expenseData, loanData, pettyCashData, tenantLeases] = await Promise.all([
+      const [salesData, expenseData, loanData, pettyCashData, tenantLeases, bankAccountsData] = await Promise.all([
         salesService.getSales(targetCompany),
         expenseService.getExpenses({ company: targetCompany }),
         loanService.getLoans({ company: targetCompany }),
@@ -415,6 +953,7 @@ export const TransactionPage: React.FC = () => {
         shouldFetchTenants
           ? tenantService.listLeases().catch(() => [] as TenantLease[])
           : Promise.resolve([] as TenantLease[]),
+        bankService.getAccounts(targetCompany).catch(() => [] as BankAccount[]),
       ])
 
       const unifiedSales: DashboardTransactionItem[] = salesData.map((s) => ({
@@ -442,6 +981,11 @@ export const TransactionPage: React.FC = () => {
         attachments: [],
         items: s.items,
         paidAmount: getPaidDepositForSale(s),
+        depositStatus: s.depositStatus || (s as any).deposit_status || 'Pending',
+        deposit_status: s.depositStatus || (s as any).deposit_status || 'Pending',
+        remarks: s.remarks || '',
+        bankAccountId: (s as any).bankAccountId || (s as any).bank_account_id,
+        bankName: (s as any).bankName || (s as any).bank_name,
       }))
 
       const unifiedExpenses: DashboardTransactionItem[] = expenseData.map((e) => ({
@@ -469,6 +1013,11 @@ export const TransactionPage: React.FC = () => {
         attachments: [],
         items: e.items,
         paidAmount: getPaidDisbursementForExpense(e),
+        depositStatus: 'Deposited',
+        deposit_status: 'Deposited',
+        remarks: e.remarks || '',
+        bankAccountId: (e as any).bankAccountId || (e as any).bank_account_id,
+        bankName: (e as any).bankName || (e as any).bank_name,
       }))
 
       // Spec 0013: each loan and petty cash top up shows each company's own side of the money.
@@ -536,11 +1085,12 @@ export const TransactionPage: React.FC = () => {
 
       const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants]
       setTransactions(combined)
+      setBankAccounts(bankAccountsData)
     } finally {
       setLoading(false)
       setIsRefreshing(false)
     }
-  }, [isCompanyScoped, assignedCompany, activeCompany])
+  }, [effectiveTargetCompany])
 
   React.useEffect(() => {
     fetchAllTransactions(false)
@@ -559,6 +1109,7 @@ export const TransactionPage: React.FC = () => {
         expenseService.invalidateCache()
         loanService.invalidateCache()
         pettyCashService.invalidateCache()
+        bankService.invalidateCache()
         void fetchAllTransactions(true)
       }, 250)
     }
@@ -596,16 +1147,20 @@ export const TransactionPage: React.FC = () => {
     // (Sales, Rental Income, Loan deposit to borrower, Petty Cash top up received) is included.
     let list = transactions
       .filter((t) => {
-        // Any record with an explicit deposit > 0 must be in the deposit ledger
-        if ((t.deposit || 0) > 0) return true
+        // Spec 0040: Sales must strictly have deposit_status === 'Deposited' to appear in Deposit tab.
+        // Pending, Unpaid, and Paid-but-undeposited sales remain in All Transactions only.
+        if (t.type === 'Sales') {
+          const isDeposited = t.depositStatus === 'Deposited' || t.deposit_status === 'Deposited'
+          return isDeposited && ((t.deposit || 0) > 0 || (t.paidAmount || 0) > 0 || (t.amount || 0) > 0)
+        }
         // All tenant rental collections / income are deposits
         if (t.type === 'Income') return true
-        // Sales are in deposit ledger if paidAmount > 0 or deposit > 0
-        if (t.type === 'Sales' && ((t.paidAmount || 0) > 0 || (t.deposit || 0) > 0)) return true
         // Expenses are cash ledger withdrawals if paidAmount > 0 or withdrawal > 0
         if (t.type === 'Expense') return (t.paidAmount || 0) > 0 || (t.withdrawal || 0) > 0
         // Loans and petty cash movements are included once approved (not awaiting audit)
         if (t.type === 'Loan' || t.type === 'Petty Cash') return !t.awaitingAudit
+        // Any other record with explicit deposit > 0
+        if ((t.deposit || 0) > 0) return true
         return false
       })
       .map((t): DashboardTransactionItem => {
@@ -625,17 +1180,16 @@ export const TransactionPage: React.FC = () => {
       })
 
     // Company scope
-    if (isCompanyScoped) {
-      list = list.filter((t) => isCompanyMatch(t.company, assignedCompany))
-    } else if (activeCompany && activeCompany !== 'All Companies') {
-      list = list.filter((t) => isCompanyMatch(t.company, activeCompany))
+    if (effectiveTargetCompany) {
+      list = list.filter((t) => isCompanyMatch(t.company, effectiveTargetCompany))
     }
-    return list
-  }, [transactions, isCompanyScoped, assignedCompany, activeCompany])
 
-  // Running balance per company (deposits minus withdrawals, oldest first). It is worked out over
-  // the whole company scoped ledger, before the search, direction and date filters, so a filter
-  // never restarts it. Keyed by record type and id.
+    return list
+  }, [transactions, effectiveTargetCompany])
+
+  // Running balance per company or selected bank account (deposits minus withdrawals, oldest first, seeded from bank starting balances).
+  // It is worked out over the whole company scoped ledger, before the search, direction and date filters,
+  // so a filter never restarts it. Keyed by record type and id.
   const depositBalanceByKey = React.useMemo(() => {
     const ordered = [...depositBaseList].sort((a, b) => {
       const byDate = normalizeDateToYYYYMMDD(a.date).localeCompare(normalizeDateToYYYYMMDD(b.date))
@@ -645,13 +1199,23 @@ export const TransactionPage: React.FC = () => {
     const running = new Map<string, number>()
     const balances = new Map<string, number>()
     ordered.forEach((t) => {
-      const companyKey = (t.company || '').toLowerCase().trim()
-      const next = Math.round(((running.get(companyKey) || 0) + (t.deposit || 0) - (t.withdrawal || 0)) * 100) / 100
-      running.set(companyKey, next)
+      const groupKey = selectedBankAccount
+        ? String(selectedBankAccount.id)
+        : (t.company || '').toLowerCase().trim()
+
+      if (!running.has(groupKey)) {
+        const seedBalance = selectedBankAccount
+          ? (Number(selectedBankAccount.startingBalance) || 0)
+          : getStartingBalanceForCompany(t.company)
+        running.set(groupKey, seedBalance)
+      }
+      const prev = running.get(groupKey)!
+      const next = Math.round((prev + (t.deposit || 0) - (t.withdrawal || 0)) * 100) / 100
+      running.set(groupKey, next)
       balances.set(`${t.type}:${t.id}`, next)
     })
     return balances
-  }, [depositBaseList])
+  }, [depositBaseList, selectedBankAccount, getStartingBalanceForCompany])
 
   const filteredDepositTransactions = React.useMemo(() => {
     let list = depositBaseList
@@ -716,10 +1280,8 @@ export const TransactionPage: React.FC = () => {
     let list = transactions.slice()
 
     // Company scope
-    if (isCompanyScoped) {
-      list = list.filter((t) => isCompanyMatch(t.company, assignedCompany))
-    } else if (activeCompany && activeCompany !== 'All Companies') {
-      list = list.filter((t) => isCompanyMatch(t.company, activeCompany))
+    if (effectiveTargetCompany) {
+      list = list.filter((t) => isCompanyMatch(t.company, effectiveTargetCompany))
     }
 
     // Record-type filter: All | Sales | Expense | Loan | Petty Cash
@@ -772,9 +1334,7 @@ export const TransactionPage: React.FC = () => {
     return list
   }, [
     transactions,
-    isCompanyScoped,
-    assignedCompany,
-    activeCompany,
+    effectiveTargetCompany,
     salesTypeFilter,
     salesStatusFilter,
     salesSearchQuery,
@@ -787,36 +1347,6 @@ export const TransactionPage: React.FC = () => {
     const start = (salesCurrentPage - 1) * itemsPerPage
     return filteredSalesTransactions.slice(start, start + itemsPerPage)
   }, [filteredSalesTransactions, salesCurrentPage, itemsPerPage])
-
-  // Active dataset & clear filters check
-  const activeDataset = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
-  // Non-narrowed copy for use inside the per-tab toolbar branches, where TypeScript
-  // otherwise narrows `activeTab` to a single literal and flags the switcher comparisons.
-  const currentTab: 'deposit' | 'all' = activeTab
-  const hasDepositActiveFilters =
-    depositSearchQuery.trim().length > 0 ||
-    (depositDateRange.startDate !== null && depositDateRange.endDate !== null)
-
-  const hasSalesActiveFilters =
-    salesSearchQuery.trim().length > 0 ||
-    salesStatusFilter !== 'All' ||
-    salesTypeFilter !== 'All' ||
-    (salesDateRange.startDate !== null && salesDateRange.endDate !== null)
-
-  const handleClearDepositFilters = () => {
-    setDepositSearchQuery('')
-    setDepositDirectionFilter('All')
-    setDepositDateRange({ startDate: null, endDate: null, label: 'All Dates' })
-    setDepositCurrentPage(1)
-  }
-
-  const handleClearSalesFilters = () => {
-    setSalesSearchQuery('')
-    setSalesStatusFilter('All')
-    setSalesTypeFilter('All')
-    setSalesDateRange({ startDate: null, endDate: null, label: 'All Dates' })
-    setSalesCurrentPage(1)
-  }
 
   // Resolve a row into bank-statement style deposit (money in) / withdrawal (money out) amounts.
   // Loan and petty cash rows carry their own direction (Deposit for the receiving company,
@@ -842,6 +1372,129 @@ export const TransactionPage: React.FC = () => {
     []
   )
 
+  // Daily Summary per bank grouping for All Transactions tab
+  const dailySummaryGroups = React.useMemo(() => {
+    const groupsMap = new Map<
+      string,
+      Map<
+        string,
+        {
+          date: string
+          bankKey: string
+          bankName: string
+          accountNumber?: string
+          totalDeposit: number
+          totalWithdrawal: number
+          netMovement: number
+          transactionCount: number
+          transactions: DashboardTransactionItem[]
+        }
+      >
+    >()
+
+    filteredSalesTransactions.forEach((tx) => {
+      const dateKey = normalizeDateToYYYYMMDD(tx.date) || tx.date || 'Unknown Date'
+      if (!groupsMap.has(dateKey)) {
+        groupsMap.set(dateKey, new Map())
+      }
+      const banksMap = groupsMap.get(dateKey)!
+
+      let matchedBank: BankAccount | undefined
+      if (tx.bankAccountId) {
+        matchedBank = bankAccounts.find((a) => String(a.id) === String(tx.bankAccountId))
+      }
+      if (!matchedBank && tx.bankName) {
+        matchedBank = bankAccounts.find((a) => a.bankName.toLowerCase() === tx.bankName!.toLowerCase())
+      }
+      if (!matchedBank) {
+        matchedBank = bankAccounts.find((a) => isTxMatchingBankAccount(tx, a))
+      }
+
+      const bankKey = matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
+      const bankName = matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
+      const accountNumber = matchedBank?.accountNumber
+
+      if (!banksMap.has(bankKey)) {
+        banksMap.set(bankKey, {
+          date: dateKey,
+          bankKey,
+          bankName,
+          accountNumber,
+          totalDeposit: 0,
+          totalWithdrawal: 0,
+          netMovement: 0,
+          transactionCount: 0,
+          transactions: [],
+        })
+      }
+
+      const item = banksMap.get(bankKey)!
+      const { deposit, withdrawal } = getRowAmounts(tx)
+      item.totalDeposit = Math.round((item.totalDeposit + deposit) * 100) / 100
+      item.totalWithdrawal = Math.round((item.totalWithdrawal + withdrawal) * 100) / 100
+      item.netMovement = Math.round((item.totalDeposit - item.totalWithdrawal) * 100) / 100
+      item.transactionCount += 1
+      item.transactions.push(tx)
+    })
+
+    const sortedDates = Array.from(groupsMap.keys()).sort((a, b) => b.localeCompare(a))
+
+    return sortedDates.map((dateKey) => {
+      const banksMap = groupsMap.get(dateKey)!
+      const banks = Array.from(banksMap.values()).sort((a, b) => a.bankName.localeCompare(b.bankName))
+      const dayTotalDeposit = Math.round(banks.reduce((acc, b) => acc + b.totalDeposit, 0) * 100) / 100
+      const dayTotalWithdrawal = Math.round(banks.reduce((acc, b) => acc + b.totalWithdrawal, 0) * 100) / 100
+      const dayNetMovement = Math.round((dayTotalDeposit - dayTotalWithdrawal) * 100) / 100
+      const dayTransactionCount = banks.reduce((acc, b) => acc + b.transactionCount, 0)
+
+      return {
+        date: dateKey,
+        banks,
+        dayTotalDeposit,
+        dayTotalWithdrawal,
+        dayNetMovement,
+        dayTransactionCount,
+      }
+    })
+  }, [filteredSalesTransactions, bankAccounts])
+
+  // Active dataset & clear filters check
+  const activeDataset = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
+  // Non-narrowed copy for use inside the per-tab toolbar branches, where TypeScript
+  // otherwise narrows `activeTab` to a single literal and flags the switcher comparisons.
+  const currentTab: 'deposit' | 'all' = activeTab
+  const hasDepositActiveFilters =
+    depositSearchQuery.trim().length > 0 ||
+    (canSelectAllCompanies && selectedCompany !== 'All Companies') ||
+    (!canSelectAllCompanies && supervisorCompanies.length > 1 && selectedCompany !== defaultSupervisorCompany) ||
+    depositDirectionFilter !== 'All' ||
+    (depositDateRange.startDate !== null && depositDateRange.endDate !== null)
+
+  const hasSalesActiveFilters =
+    salesSearchQuery.trim().length > 0 ||
+    (canSelectAllCompanies && selectedCompany !== 'All Companies') ||
+    (!canSelectAllCompanies && supervisorCompanies.length > 1 && selectedCompany !== defaultSupervisorCompany) ||
+    salesStatusFilter !== 'All' ||
+    salesTypeFilter !== 'All' ||
+    (salesDateRange.startDate !== null && salesDateRange.endDate !== null)
+
+  const handleClearDepositFilters = () => {
+    setDepositSearchQuery('')
+    setDepositDirectionFilter('All')
+    setDepositDateRange({ startDate: null, endDate: null, label: 'All Dates' })
+    handleResetCompany()
+    setDepositCurrentPage(1)
+  }
+
+  const handleClearSalesFilters = () => {
+    setSalesSearchQuery('')
+    setSalesStatusFilter('All')
+    setSalesTypeFilter('All')
+    setSalesDateRange({ startDate: null, endDate: null, label: 'All Dates' })
+    handleResetCompany()
+    setSalesCurrentPage(1)
+  }
+
   // Totals of the rows that match the current filters on the active tab (spec 0016)
   const activeTotals = React.useMemo(() => {
     let deposits = 0
@@ -855,6 +1508,24 @@ export const TransactionPage: React.FC = () => {
     withdrawals = Math.round(withdrawals * 100) / 100
     return { deposits, withdrawals, net: Math.round((deposits - withdrawals) * 100) / 100 }
   }, [activeDataset, getRowAmounts])
+
+  // Sum of starting balances for the active company or selected bank account
+  const activeStartingBalance = React.useMemo(() => {
+    if (selectedBankAccount) {
+      return Number(selectedBankAccount.startingBalance) || 0
+    }
+    if (effectiveTargetCompany) {
+      return getStartingBalanceForCompany(effectiveTargetCompany)
+    }
+    return Math.round(
+      bankAccounts.reduce((sum, acc) => sum + (Number(acc.startingBalance) || 0), 0) * 100
+    ) / 100
+  }, [selectedBankAccount, effectiveTargetCompany, getStartingBalanceForCompany, bankAccounts])
+
+  // Active ending balance on Deposit tab taking into account starting balance
+  const activeEndingBalance = React.useMemo(() => {
+    return Math.round((activeStartingBalance + activeTotals.deposits - activeTotals.withdrawals) * 100) / 100
+  }, [activeStartingBalance, activeTotals.deposits, activeTotals.withdrawals])
 
   const handleRowClick = (tx: DashboardTransactionItem) => {
     // The cash ledger tab shows only the paid part of a record. The detail window needs the full record.
@@ -956,42 +1627,6 @@ export const TransactionPage: React.FC = () => {
       notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
-    }
-  }
-
-  const handleMarkTxAudited = (tx: DashboardTransactionItem, e: React.MouseEvent) => {
-    e.stopPropagation()
-    // Never save a verification against a mirrored row (it could land on the wrong company),
-    // and loans are audited by Audit's approval (spec 0014, AC-8).
-    if (tx.isMirrorRow || tx.type === 'Loan') return
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-    })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
-
-    const updatedTx: DashboardTransactionItem = {
-      ...tx,
-      auditStatus: 'Verified',
-      auditedBy: auditorName,
-      auditDate: today,
-    }
-
-    setTransactions((prev) =>
-      prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t))
-    )
-
-    // Spec 0014: the server saves the review. If it fails, tell the user and reload the real status.
-    // Loans and petty cash are audited by Audit's approval, so they have no verify button here.
-    const failed = (err: unknown) => {
-      reportAuditSaveFailure(err)
-      fetchAllTransactions()
-    }
-    if (tx.type === 'Sales') {
-      salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName).catch(failed)
-    } else if (tx.type === 'Expense') {
-      expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName).catch(failed)
     }
   }
 
@@ -1110,10 +1745,10 @@ export const TransactionPage: React.FC = () => {
             })
             .join('')
 
-    const displayedTitle = isCompanyScoped
-      ? assignedCompany
-      : activeCompany !== 'All Companies'
-      ? activeCompany
+    const displayedTitle = !canSelectAllCompanies
+      ? (effectiveTargetCompany || 'Assigned Subsidiary')
+      : selectedCompany !== 'All Companies'
+      ? selectedCompany
       : 'All Subsidiaries'
 
     printWindow.document.write(`
@@ -1159,6 +1794,8 @@ export const TransactionPage: React.FC = () => {
           </table>
           <div class="summary">
             <div><strong>Total Records:</strong> ${records.length}</div>
+            ${isDeposit ? `<div><strong>Starting Balance:</strong> ${fmtSigned(activeStartingBalance)}</div>` : ''}
+            ${isDeposit ? `<div><strong>Ending Balance:</strong> ${fmtSigned(activeEndingBalance)}</div>` : ''}
           </div>
           <script>
             window.onload = function() {
@@ -1181,10 +1818,10 @@ export const TransactionPage: React.FC = () => {
             Transactions
           </h1>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {isCompanyScoped
-              ? `Financial transaction ledger for ${assignedCompany}`
-              : activeCompany !== 'All Companies'
-              ? `Financial transaction ledger for ${activeCompany}`
+            {!canSelectAllCompanies
+              ? `Financial transaction ledger for ${effectiveTargetCompany}`
+              : selectedCompany !== 'All Companies'
+              ? `Financial transaction ledger for ${selectedCompany}`
               : 'Bank cash ledger and the full record of sales, expenses, and loans'}
           </p>
         </div>
@@ -1287,7 +1924,31 @@ export const TransactionPage: React.FC = () => {
 
           {/* Right Controls: Date Range Picker, Clear Button, and Tab Switcher */}
           <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
+            {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
+              <CompanyFilterDropdown
+                selectedCompany={selectedCompany}
+                companyList={availableCompanyOptions}
+                onSelectCompany={handleSelectCompany}
+                onResetCompany={handleResetCompany}
+                canClearFilter={canSelectAllCompanies}
+              />
+            ) : (
+              <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
+                <span className="truncate max-w-[180px]">{effectiveTargetCompany}</span>
+              </div>
+            )}
 
+            {availableBankAccounts.length > 0 && (
+              <BankAccountFilterDropdown
+                selectedAccountId={selectedBankAccountId}
+                bankAccounts={availableBankAccounts}
+                onSelectAccount={(id) => {
+                  setSelectedBankAccountId(id)
+                  setDepositCurrentPage(1)
+                  setSalesCurrentPage(1)
+                }}
+              />
+            )}
 
             <DateRangePicker
               value={depositDateRange}
@@ -1296,19 +1957,6 @@ export const TransactionPage: React.FC = () => {
                 setDepositCurrentPage(1)
               }}
             />
-
-            {hasDepositActiveFilters && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleClearDepositFilters}
-                className="h-10 px-3 rounded-full text-xs font-semibold text-muted-fg hover:text-focus hover:bg-surface flex items-center gap-1.5 cursor-pointer"
-              >
-                <FilterX className="h-3.5 w-3.5" />
-                <span>Clear</span>
-              </Button>
-            )}
 
             {/* Tab Switcher: Deposit / All Transactions (Right Side, matching Sales & Expense page) */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
@@ -1375,8 +2023,22 @@ export const TransactionPage: React.FC = () => {
             />
           </div>
 
-          {/* Right Controls: Type Filter, Status Filter (Paid/Unpaid/Pending), Date Range Picker & Clear Button */}
+          {/* Right Controls: Company Filter Dropdown, Type Filter, Status Filter (Paid/Unpaid/Pending), Date Range Picker & Clear Button */}
           <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+            {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
+              <CompanyFilterDropdown
+                selectedCompany={selectedCompany}
+                companyList={availableCompanyOptions}
+                onSelectCompany={handleSelectCompany}
+                onResetCompany={handleResetCompany}
+                canClearFilter={canSelectAllCompanies}
+              />
+            ) : (
+              <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
+                <span className="truncate max-w-[180px]">{effectiveTargetCompany}</span>
+              </div>
+            )}
+
             {/* Type Filter Dropdown (All / Sales / Expense / Loan) */}
             <div ref={salesTypeDropdownRef} className="relative inline-block">
               <button
@@ -1496,18 +2158,33 @@ export const TransactionPage: React.FC = () => {
               }}
             />
 
-            {hasSalesActiveFilters && (
-              <Button
+            {/* View Mode Toggle: All Transactions vs Daily Summary */}
+            <div className="flex items-center bg-slate-100/90 rounded-full border border-stroke/40 p-1 gap-1">
+              <button
                 type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handleClearSalesFilters}
-                className="h-10 px-3 rounded-full text-xs font-semibold text-muted-fg hover:text-focus hover:bg-surface flex items-center gap-1.5 cursor-pointer"
+                onClick={() => setSalesViewMode('all')}
+                className={cn(
+                  'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
+                  salesViewMode === 'all'
+                    ? 'bg-[#960C01] text-white shadow-2xs'
+                    : 'text-focus/70 hover:text-focus hover:bg-white/60'
+                )}
               >
-                <FilterX className="h-3.5 w-3.5" />
-                <span>Clear</span>
-              </Button>
-            )}
+                All Transactions
+              </button>
+              <button
+                type="button"
+                onClick={() => setSalesViewMode('daily_summary')}
+                className={cn(
+                  'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
+                  salesViewMode === 'daily_summary'
+                    ? 'bg-[#960C01] text-white shadow-2xs'
+                    : 'text-focus/70 hover:text-focus hover:bg-white/60'
+                )}
+              >
+                Daily Summary
+              </button>
+            </div>
 
             {/* Tab Switcher: Deposit / All Transactions (Right Side) */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
@@ -1558,27 +2235,128 @@ export const TransactionPage: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Table Card Rendering Based on Active Tab */}
+      {/* 4. Table / Daily Summary Card Rendering Based on Active Tab & View Mode */}
       <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs">
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        {activeTab === 'all' && salesViewMode === 'daily_summary' ? (
+          <div className="space-y-4">
+            {loading ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2 text-sm text-muted-fg">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                <span>Loading daily summary…</span>
+              </div>
+            ) : dailySummaryGroups.length === 0 ? (
+              <TableEmptyState
+                colSpan={12}
+                title="No daily summary records found"
+                message="No transactions match the selected company and filters."
+              />
+            ) : (
+              dailySummaryGroups.map((group) => (
+                <div key={group.date} className="rounded-2xl border border-stroke/30 bg-white overflow-hidden shadow-2xs">
+                  {/* Day Header */}
+                  <div className="bg-slate-50/90 px-5 py-3.5 border-b border-stroke/20 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-bold text-sm text-focus">{group.date}</span>
+                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-200/80 text-focus/80 font-semibold">
+                        {group.dayTransactionCount} transaction{group.dayTransactionCount === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4 text-xs font-semibold">
+                      <span className="text-emerald-700">
+                        Inflow: <strong className="font-bold">{formatPHP(group.dayTotalDeposit)}</strong>
+                      </span>
+                      <span className="text-rose-700">
+                        Outflow: <strong className="font-bold">{formatPHP(group.dayTotalWithdrawal)}</strong>
+                      </span>
+                      <span
+                        className={cn(
+                          'px-2.5 py-1 rounded-lg border font-bold',
+                          group.dayNetMovement >= 0
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : 'bg-rose-50 text-rose-800 border-rose-200'
+                        )}
+                      >
+                        Net: {group.dayNetMovement < 0 ? `-${formatPHP(Math.abs(group.dayNetMovement))}` : formatPHP(group.dayNetMovement)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Banks Breakdown Table */}
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-b border-slate-100 bg-white hover:bg-white text-[11px] font-bold text-muted-fg uppercase tracking-wider">
+                          <TableHead className="px-5 py-2.5">Bank / Account</TableHead>
+                          <TableHead className="px-4 py-2.5 text-center">Transactions</TableHead>
+                          <TableHead className="px-4 py-2.5 text-right">Deposits (In)</TableHead>
+                          <TableHead className="px-4 py-2.5 text-right">Withdrawals (Out)</TableHead>
+                          <TableHead className="px-5 py-2.5 text-right">Net Movement</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {group.banks.map((b) => (
+                          <TableRow key={b.bankKey} className="border-b border-slate-50 hover:bg-slate-50/50">
+                            <TableCell className="px-5 py-3 font-semibold text-xs text-focus">
+                              <div className="flex items-center gap-2">
+                                <Landmark className="w-4 h-4 text-primary shrink-0" />
+                                <div>
+                                  <div className="text-focus">{b.bankName}</div>
+                                  {b.accountNumber && (
+                                    <div className="text-[10px] text-muted-fg font-mono">{b.accountNumber}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-center text-xs text-focus/80">
+                              <span className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700">
+                                {b.transactionCount}
+                              </span>
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-right text-xs font-bold text-emerald-600 tabular-nums">
+                              {b.totalDeposit > 0 ? formatPHP(b.totalDeposit) : '—'}
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-right text-xs font-bold text-rose-600 tabular-nums">
+                              {b.totalWithdrawal > 0 ? formatPHP(b.totalWithdrawal) : '—'}
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                'px-5 py-3 text-right text-xs font-bold tabular-nums',
+                                b.netMovement < 0 ? 'text-rose-600' : 'text-focus'
+                              )}
+                            >
+                              {b.netMovement < 0 ? `-${formatPHP(Math.abs(b.netMovement))}` : formatPHP(b.netMovement)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   DATE
                 </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  COMPANY
-                </TableHead>
-                {/* Type (Sales, Expense, Loan, Petty Cash, Rental Income) shows on both tabs */}
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  TYPE
-                </TableHead>
                 {activeTab === 'deposit' && (
                   <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                    CHEQUE NO.
+                    COMPANY
                   </TableHead>
                 )}
+                {/* Type shows on deposit tab */}
+                {activeTab === 'deposit' && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+                    TYPE
+                  </TableHead>
+                )}
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+                  CHEQUE NO.
+                </TableHead>
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                   PARTICULARS
                 </TableHead>
@@ -1591,18 +2369,17 @@ export const TransactionPage: React.FC = () => {
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   WITHDRAWAL
                 </TableHead>
-                {!isAudit && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                    {activeTab === 'deposit' ? 'BALANCE' : 'NET AMOUNT'}
-                  </TableHead>
-                )}
-                {activeTab === 'all' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    STATUS
-                  </TableHead>
-                )}
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  {activeTab === 'deposit' ? 'BALANCE' : 'NET AMOUNT'}
+                </TableHead>
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  STATUS
+                </TableHead>
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   AUDIT STATUS
+                </TableHead>
+                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+                  REMARKS
                 </TableHead>
                 <TableHead className="w-12 px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTION
@@ -1615,22 +2392,21 @@ export const TransactionPage: React.FC = () => {
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i} className="border-b border-slate-100">
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
                     {activeTab === 'deposit' && (
-                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
                     )}
+                    {activeTab === 'deposit' && (
+                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                    )}
+                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-48 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    {!isAudit && (
-                      <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    )}
-                    {activeTab === 'all' && (
-                      <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    )}
+                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
                     <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
+                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
                     <TableCell className="px-3 py-3.5 text-center">
                       <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
                     </TableCell>
@@ -1638,11 +2414,7 @@ export const TransactionPage: React.FC = () => {
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={
-                    activeTab === 'deposit'
-                      ? 7 + (isAudit ? 0 : 1) + 1 + 1
-                      : 6 + (isAudit ? 0 : 1) + 1 + 1 + 1
-                  }
+                  colSpan={activeTab === 'deposit' ? 13 : 11}
                   title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -1663,39 +2435,41 @@ export const TransactionPage: React.FC = () => {
                         {tx.date}
                       </TableCell>
 
-                      {/* 2. Company */}
-                      <TableCell className="px-4 py-3.5 text-xs font-medium text-focus/90 truncate max-w-[160px]" title={tx.company}>
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200/60 max-w-full truncate">
-                          {tx.company || '—'}
-                        </span>
-                      </TableCell>
-
-                      {/* 2b. Type (both tabs): Sales, Expense, Loan or Petty Cash */}
-                      <TableCell className="px-4 py-3.5 whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border',
-                            tx.type === 'Sales'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : tx.type === 'Expense'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : tx.type === 'Loan'
-                              ? 'bg-sky-50 text-sky-700 border-sky-200'
-                              : tx.type === 'Petty Cash'
-                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                              : 'bg-slate-100 text-slate-700 border-slate-200'
-                          )}
-                        >
-                          {tx.type}
-                        </span>
-                      </TableCell>
-
-                      {/* 3. Cheque No (Deposit tab only) */}
+                      {/* 2. Company (Deposit tab only) */}
                       {activeTab === 'deposit' && (
-                        <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
-                          {tx.chequeNo || '—'}
+                        <TableCell className="px-4 py-3.5 text-xs font-medium text-focus/90 truncate max-w-[160px]" title={tx.company}>
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200/60 max-w-full truncate">
+                            {tx.company || '—'}
+                          </span>
                         </TableCell>
                       )}
+
+                      {/* 2b. Type (Deposit tab only): Sales, Expense, Loan or Petty Cash */}
+                      {activeTab === 'deposit' && (
+                        <TableCell className="px-4 py-3.5 whitespace-nowrap">
+                          <span
+                            className={cn(
+                              'inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border',
+                              tx.type === 'Sales'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : tx.type === 'Expense'
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : tx.type === 'Loan'
+                                ? 'bg-sky-50 text-sky-700 border-sky-200'
+                                : tx.type === 'Petty Cash'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-slate-100 text-slate-700 border-slate-200'
+                            )}
+                          >
+                            {tx.type}
+                          </span>
+                        </TableCell>
+                      )}
+
+                      {/* 3. Cheque No */}
+                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
+                        {tx.chequeNo || '—'}
+                      </TableCell>
 
                       {/* 4. Particulars */}
                       <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-normal max-w-xs" title={tx.particulars || tx.description}>
@@ -1745,10 +2519,10 @@ export const TransactionPage: React.FC = () => {
                       </TableCell>
 
                       {/* 7b. Balance (Deposit tab: running total per company) or Net Amount (All tab: deposit minus withdrawal) */}
-                      {!isAudit && (() => {
+                      {(() => {
                         const shown =
                           activeTab === 'deposit'
-                            ? depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0
+                            ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0
                             : Math.round((depositAmt - withdrawalAmt) * 100) / 100
                         return (
                           <TableCell
@@ -1762,28 +2536,26 @@ export const TransactionPage: React.FC = () => {
                         )
                       })()}
 
-                      {/* 8. Status (All Transactions tab only: Paid, Unpaid, Pending, On hold) */}
-                      {activeTab === 'all' && (
-                        <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
-                          {tx.status === 'Paid' ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                              Paid
-                            </span>
-                          ) : tx.status === 'Pending' ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                              Pending
-                            </span>
-                          ) : tx.status === 'On hold' ? (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 text-stone-700 border border-stone-200">
-                              On hold
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                              Unpaid
-                            </span>
-                          )}
-                        </TableCell>
-                      )}
+                      {/* 8. Status */}
+                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
+                        {tx.status === 'Paid' || (!tx.status && activeTab === 'deposit') ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Paid
+                          </span>
+                        ) : tx.status === 'Pending' ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                            Pending
+                          </span>
+                        ) : tx.status === 'On hold' ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 text-stone-700 border border-stone-200">
+                            On hold
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                            {tx.status || 'Unpaid'}
+                          </span>
+                        )}
+                      </TableCell>
 
                       {/* 8. Audit Status Badge (Visible for all roles) */}
                       <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
@@ -1803,6 +2575,29 @@ export const TransactionPage: React.FC = () => {
                             <span>Pending</span>
                           </span>
                         )}
+                      </TableCell>
+
+                      {/* 8b. Remarks */}
+                      <TableCell
+                        className="px-4 py-3.5 text-xs text-focus/90 max-w-[200px]"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleOpenRemarks(tx)
+                        }}
+                      >
+                        <div
+                          className="flex items-center justify-between gap-1.5 p-1 -m-1 rounded-md hover:bg-slate-100 cursor-pointer group"
+                          title="Click to view or edit remarks"
+                        >
+                          <span className="truncate block font-normal text-slate-700">
+                            {tx.remarks ? (
+                              tx.remarks
+                            ) : (
+                              <span className="text-muted-fg/40 italic">Add remarks…</span>
+                            )}
+                          </span>
+                          <Pencil className="w-3 h-3 text-muted-fg/40 group-hover:text-primary shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
                       </TableCell>
 
                       {/* 9. Actions: 3 dots action button */}
@@ -1848,22 +2643,81 @@ export const TransactionPage: React.FC = () => {
             </TableBody>
           </Table>
         </div>
+      )}
 
         {/* 4b. Totals for the rows that match the current filters (spec 0016) */}
-        <div
-          className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs"
-          aria-label="Totals for the filtered rows"
-          data-testid="ledger-totals"
-        >
-          <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
-            <span className="font-semibold text-emerald-800">Total Deposits</span>
-            <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
+        {salesViewMode === 'daily_summary' && activeTab === 'all' ? null : activeTab === 'deposit' ? (
+          <div
+            className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs"
+            aria-label="Totals for the filtered deposit rows"
+            data-testid="ledger-totals"
+          >
+            <div
+              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-sky-200/70 bg-sky-50/60"
+              title={
+                selectedBankAccount
+                  ? `${selectedBankAccount.bankName} (${selectedBankAccount.accountType}) starting balance`
+                  : `Consolidated starting balance (${availableBankAccounts.length} bank account${availableBankAccounts.length === 1 ? '' : 's'})`
+              }
+            >
+              <div className="flex flex-col min-w-0 pr-1">
+                <span className="font-semibold text-sky-800 truncate">Starting Balance</span>
+                {selectedBankAccount && (
+                  <span className="text-[10px] text-sky-600 truncate font-normal">
+                    {selectedBankAccount.bankName}
+                  </span>
+                )}
+              </div>
+              <span className="font-bold tabular-nums text-sky-700 shrink-0">{formatPHP(activeStartingBalance)}</span>
+            </div>
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
+              <span className="font-semibold text-emerald-800">Total Deposits</span>
+              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
+            </div>
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
+              <span className="font-semibold text-rose-800">Total Withdrawals</span>
+              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
+            </div>
+            <div
+              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50"
+              title={
+                selectedBankAccount
+                  ? `${selectedBankAccount.bankName} ending balance`
+                  : 'Starting balance + net deposits'
+              }
+            >
+              <div className="flex flex-col min-w-0 pr-1">
+                <span className="font-semibold text-focus truncate">Ending Balance</span>
+                {selectedBankAccount && (
+                  <span className="text-[10px] text-muted-fg truncate font-normal">
+                    {selectedBankAccount.bankName}
+                  </span>
+                )}
+              </div>
+              <span
+                className={cn(
+                  'font-bold tabular-nums shrink-0',
+                  activeEndingBalance < 0 ? 'text-rose-600' : 'text-focus'
+                )}
+              >
+                {activeEndingBalance < 0 ? `-${formatPHP(Math.abs(activeEndingBalance))}` : formatPHP(activeEndingBalance)}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
-            <span className="font-semibold text-rose-800">Total Withdrawals</span>
-            <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
-          </div>
-          {!isAudit && (
+        ) : (
+          <div
+            className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs"
+            aria-label="Totals for the filtered rows"
+            data-testid="ledger-totals"
+          >
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
+              <span className="font-semibold text-emerald-800">Total Deposits</span>
+              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
+            </div>
+            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
+              <span className="font-semibold text-rose-800">Total Withdrawals</span>
+              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
+            </div>
             <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
               <span className="font-semibold text-focus">Net Amount</span>
               <span
@@ -1875,28 +2729,30 @@ export const TransactionPage: React.FC = () => {
                 {activeTotals.net < 0 ? `-${formatPHP(Math.abs(activeTotals.net))}` : formatPHP(activeTotals.net)}
               </span>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 5. Pagination Footer */}
-        <TablePagination
-          currentPage={activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage}
-          totalPages={activeTab === 'deposit' ? depositTotalPages : salesTotalPages}
-          totalRecords={activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length}
-          startIndex={((activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) - 1) * itemsPerPage}
-          endIndex={Math.min(
-            (activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) * itemsPerPage,
-            activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length
-          )}
-          itemLabel={activeTab === 'deposit' ? 'deposit records' : 'transaction records'}
-          onPageChange={(p) => {
-            if (activeTab === 'deposit') {
-              setDepositCurrentPage(p)
-            } else {
-              setSalesCurrentPage(p)
-            }
-          }}
-        />
+        {(salesViewMode === 'all' || activeTab === 'deposit') && (
+          <TablePagination
+            currentPage={activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage}
+            totalPages={activeTab === 'deposit' ? depositTotalPages : salesTotalPages}
+            totalRecords={activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length}
+            startIndex={((activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) - 1) * itemsPerPage}
+            endIndex={Math.min(
+              (activeTab === 'deposit' ? depositCurrentPage : salesCurrentPage) * itemsPerPage,
+              activeTab === 'deposit' ? filteredDepositTransactions.length : filteredSalesTransactions.length
+            )}
+            itemLabel={activeTab === 'deposit' ? 'deposit records' : 'transaction records'}
+            onPageChange={(p) => {
+              if (activeTab === 'deposit') {
+                setDepositCurrentPage(p)
+              } else {
+                setSalesCurrentPage(p)
+              }
+            }}
+          />
+        )}
       </div>
 
       {/* 6. Transaction Details Modal (If audited, editing is locked; if not audited, provides edit in Excel sheet) */}
@@ -1953,6 +2809,18 @@ export const TransactionPage: React.FC = () => {
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                handleOpenRemarks(activeMenuTx)
+                setOpenMenuTxId(null)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+            >
+              <FileText className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>Update Remarks</span>
             </button>
           </div>,
           document.body
@@ -2026,6 +2894,69 @@ export const TransactionPage: React.FC = () => {
                     <AlertCircle className="w-3.5 h-3.5 text-white" />
                     <span>Flag Discrepancy</span>
                   </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 9. Quick Remarks Dialog for supervisor and finance */}
+      <Dialog open={isQuickRemarksOpen} onOpenChange={setIsQuickRemarksOpen}>
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold text-focus leading-tight">
+                  Update Remarks
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  {quickRemarksTx?.refNo ? `Ref No: ${quickRemarksTx.refNo}` : 'Transaction remarks'}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Operational Remarks
+              </Label>
+              <textarea
+                rows={4}
+                value={quickRemarksInput}
+                onChange={(e) => setQuickRemarksInput(e.target.value)}
+                placeholder="Enter remarks or notes here…"
+                className="w-full rounded-xl border border-stroke/50 text-xs p-3 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/15">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSavingQuickRemarks}
+                onClick={() => setIsQuickRemarksOpen(false)}
+                className="h-8.5 px-3.5 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSavingQuickRemarks}
+                onClick={handleSaveQuickRemarks}
+                className="h-8.5 px-4 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                {isSavingQuickRemarks ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Save Remarks</span>
                 )}
               </Button>
             </div>
