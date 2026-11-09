@@ -3,9 +3,10 @@ from decimal import Decimal
 from typing import Any, List, Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from app.schemas.base import StrictBaseModel
 
 
-class BillBase(BaseModel):
+class BillBase(StrictBaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
     bill_name: str = Field(..., min_length=1, max_length=255)
@@ -23,7 +24,7 @@ class BillBase(BaseModel):
         ge=0,
         description="Number of days before the due date to send a reminder",
     )
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
     status: Literal["unpaid", "paid", "overdue", "due soon", "partially paid"] = Field(
         default="unpaid",
         description="unpaid, paid, overdue, due soon, or partially paid",
@@ -33,10 +34,14 @@ class BillBase(BaseModel):
     @classmethod
     def populate_bill_name(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            if "bill_name" not in data and "vendor_name" in data:
-                data["bill_name"] = data["vendor_name"]
-            elif "bill_name" not in data and "name" in data:
-                data["bill_name"] = data["name"]
+            if "bill_name" not in data:
+                if "vendor_name" in data:
+                    data["bill_name"] = data.pop("vendor_name")
+                elif "name" in data:
+                    data["bill_name"] = data.pop("name")
+            else:
+                data.pop("vendor_name", None)
+                data.pop("name", None)
             if "status" in data and isinstance(data["status"], str):
                 s = data["status"].strip().lower()
                 if s in ("due", "pending", "unpaid"):
@@ -62,25 +67,25 @@ class BillCreate(BillBase):
     pass
 
 
-class BillUpdate(BaseModel):
+class BillUpdate(StrictBaseModel):
     company_id: Optional[int] = None
     company: Optional[str] = Field(None, min_length=1, max_length=100)
     bill_name: Optional[str] = Field(None, min_length=1, max_length=255)
     amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    recurring: Optional[Literal["daily", "monthly", "yearly"]] = None
+    recurring: Optional[Literal["daily", "monthly", "yearly", "one-time"]] = None
     due_date: Optional[date] = None
     due_date_reminder: Optional[int] = Field(None, ge=0)
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
-class BillPaymentCreate(BaseModel):
-    period_key: Optional[str] = None
+class BillPaymentCreate(StrictBaseModel):
+    period_key: Optional[str] = Field(None, max_length=50)
     payment_date: date
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     billed_amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     payment_method: str = Field(..., min_length=1, max_length=50)
     reference_no: Optional[str] = Field(None, max_length=100)
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
 
 
 class BillPaymentOut(BillPaymentCreate):
@@ -92,7 +97,7 @@ class BillPaymentOut(BillPaymentCreate):
     def payment_id(self) -> int:
         return self.bill_payment_id
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
 class BillPeriodOut(BaseModel):
@@ -118,6 +123,8 @@ class BillOut(BillBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     payments: List[BillPaymentOut] = []
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
     next_period_key: Optional[str] = None
     next_period_label: Optional[str] = None
     next_period_date: Optional[date] = None

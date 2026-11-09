@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.company_resolver import resolve_company
+from app.core.pagination import PaginationParams
 from app.core.dependencies import (
     AuthenticatedUser,
     BusinessReader,
@@ -63,10 +64,17 @@ def list_bills(
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
     company: Optional[str] = Query(None),
+    pagination: PaginationParams = Depends(),
     db: Session = Depends(get_db),
 ):
     cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
-    return BillsService(db).list_bills(company_id=cid, company_name=cname, company_ids=cids)
+    return BillsService(db).list_bills(
+        company_id=cid,
+        company_name=cname,
+        company_ids=cids,
+        limit=pagination.limit,
+        offset=pagination.offset,
+    )
 
 
 @router.post("", response_model=BillOut, status_code=status.HTTP_201_CREATED, summary="Create a company bill")

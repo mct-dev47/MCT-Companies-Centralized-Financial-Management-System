@@ -15,6 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from app.core.logging_filter import setup_log_redaction
 from app.middleware.correlation import RequestCorrelationMiddleware
 from app.middleware.rate_limit_middleware import RateLimitingMiddleware
+from app.middleware.request_limits import RequestSizeLimitMiddleware, RequestTimeoutMiddleware
 
 setup_log_redaction()
 
@@ -72,6 +73,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestTimeoutMiddleware)
+app.add_middleware(RequestSizeLimitMiddleware)
 app.add_middleware(RateLimitingMiddleware)
 app.add_middleware(RequestCorrelationMiddleware)
 
