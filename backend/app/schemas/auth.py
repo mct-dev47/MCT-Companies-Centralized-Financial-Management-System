@@ -5,6 +5,7 @@ from app.schemas.user import UserResponse
 class LoginRequest(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
+    remember_me: Optional[bool] = False
     encrypted_payload: Optional[str] = None
 
 class TokenResponse(BaseModel):
@@ -49,3 +50,12 @@ class SetupPasswordRequest(BaseModel):
     token: Optional[str] = None
     new_password: Optional[str] = None
     encrypted_payload: Optional[str] = None
+
+class ReauthenticateRequest(BaseModel):
+    password: Optional[str] = None
+    encrypted_payload: Optional[str] = None
+
+class ReauthenticateResponse(BaseModel):
+    reauth_token: str
+    expires_in: int
+    success: bool = True

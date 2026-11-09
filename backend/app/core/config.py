@@ -61,7 +61,13 @@ class Settings(BaseSettings):
     OTP_RESEND_LIMIT: int = 5
     OTP_RESEND_INTERVAL_SECONDS: int = 120
     OTP_EXPIRES_SECONDS: int = 180
-    SESSION_IDLE_TIMEOUT_SECONDS: int = 7200
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = 300
+    SESSION_IDLE_TIMEOUT_SECONDS: int = 1800
+    SESSION_ABSOLUTE_LIFETIME_SECONDS: int = 28800
+    REFRESH_GRACE_PERIOD_SECONDS: int = 15
+    REAUTH_TOKEN_EXPIRE_SECONDS: int = 300
+    REFRESH_COOKIE_NAME: str = "mct_refresh_token"
+    REFRESH_COOKIE_PATH: str = "/api/v1/auth"
 
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod

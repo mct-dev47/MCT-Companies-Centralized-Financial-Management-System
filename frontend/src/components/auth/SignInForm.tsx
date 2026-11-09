@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { Mail, Loader2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -21,9 +21,32 @@ import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 
 export const SignInForm: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const { signIn } = useSession()
   const [serverError, setServerError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
+
+  const reasonParam = React.useMemo(() => {
+    try {
+      const params = new URLSearchParams(location.search)
+      return params.get('reason')
+    } catch {
+      return null
+    }
+  }, [location.search])
+
+  const expirationNotice = React.useMemo(() => {
+    if (reasonParam === 'inactivity') {
+      return 'Your session has ended due to 30 minutes of inactivity. Please sign in again.'
+    }
+    if (reasonParam === 'max_duration') {
+      return 'Your session reached the maximum duration of 8 hours. Please sign in again.'
+    }
+    if (reasonParam === 'revoked') {
+      return 'Your session was invalidated due to a security update or password change. Please sign in again.'
+    }
+    return null
+  }, [reasonParam])
 
   const form = useForm<SignInFormValues>({
     resolver: zodResolver(signInSchema),
@@ -94,6 +117,18 @@ export const SignInForm: React.FC = () => {
           Sign in to access MCT Financial Management System
         </p>
       </div>
+
+      {/* Session Expiration Notice Alert Banner (AC-13) */}
+      {expirationNotice && !serverError && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-4 sm:mb-6 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 sm:p-4 text-xs sm:text-sm text-amber-800 dark:text-amber-200"
+        >
+          <AlertCircle className="h-4 sm:h-5 w-4 sm:w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>{expirationNotice}</span>
+        </div>
+      )}
 
       {/* Server Error Alert Banner */}
       {serverError && (

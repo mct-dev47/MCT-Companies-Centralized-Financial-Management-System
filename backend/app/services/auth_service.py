@@ -111,6 +111,7 @@ def _get_application_user(*, email: str | None = None, user_id: int | None = Non
                 "role": u_role,
                 "status": getattr(u, "status", "ACTIVE") or "ACTIVE",
                 "must_change_password": bool(getattr(u, "must_change_password", False)),
+                "token_version": int(getattr(u, "token_version", 1) or 1),
                 "company_id": u.company_id,
                 "photo_url": getattr(u, "photo_url", None),
                 "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -347,12 +348,15 @@ def create_jwt_token(
     company_ids: Optional[list[int]] = None,
     role: Optional[str] = None,
     expires_delta_seconds: int | None = None,
+    sid: Optional[str] = None,
+    token_version: Optional[int] = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     if expires_delta_seconds is None:
-        expires_delta_seconds = settings.SESSION_IDLE_TIMEOUT_SECONDS
+        expires_delta_seconds = settings.ACCESS_TOKEN_EXPIRE_SECONDS
     expiration = now + timedelta(seconds=expires_delta_seconds)
     user_role = str(role or ("admin" if is_admin else "company")).lower()
+    resolved_version = token_version or 1
 
     payload = {
         "sub": str(user_id),
@@ -362,12 +366,16 @@ def create_jwt_token(
         "iat": int(now.timestamp()),
         "exp": int(expiration.timestamp()),
         "jti": secrets.token_urlsafe(24),
+        "sid": sid,
+        "token_version": resolved_version,
         "app_metadata": {
             "is_admin": is_admin,
             "role": user_role,
             "company_id": company_id,
             "company_ids": company_ids or ([company_id] if company_id else []),
             "provider": "email",
+            "token_version": resolved_version,
+            "sid": sid,
         },
         "user_metadata": {
             "name": email.split("@")[0],
@@ -415,12 +423,15 @@ def login_user(db: Optional[Session], login_data: LoginRequest, ip_address: str)
     _ensure_ip_available(db, ip_address)
     email = login_data.email
     password = login_data.password
+    remember_me = bool(getattr(login_data, "remember_me", False))
 
     # Decrypt encrypted_payload if provided over network
     if login_data.encrypted_payload:
         decrypted = decrypt_payload(login_data.encrypted_payload)
         email = decrypted.get("email", email)
         password = decrypted.get("password", password)
+        if "remember_me" in decrypted:
+            remember_me = bool(decrypted["remember_me"])
 
     if not email or not password:
         raise HTTPException(
@@ -495,6 +506,7 @@ def login_user(db: Optional[Session], login_data: LoginRequest, ip_address: str)
         "expires_at": (now + timedelta(seconds=settings.OTP_EXPIRES_SECONDS)).timestamp(),
         "last_sent_at": now.timestamp(),
         "resend_count": 0,
+        "remember_me": remember_me,
     })
     _send_login_otp(normalized_email, otp)
 
@@ -510,7 +522,7 @@ def login_user(db: Optional[Session], login_data: LoginRequest, ip_address: str)
     ), challenge_cookie
 
 
-def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_address: str, cookie_value: str | None) -> TokenResponse:
+def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_address: str, cookie_value: str | None) -> tuple[TokenResponse, str, bool]:
     if not cookie_value:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login verification session not found.")
     challenge = decrypt_payload(cookie_value)
@@ -551,13 +563,30 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
     user_role = str(user.get("role") or ("admin" if user.get("is_admin") else "company")).lower() if user else "company"
     is_admin_flag = bool(user["is_admin"]) if user else False
 
+    remember_me = bool(challenge.get("remember_me", False))
+    user_id_val = int(user["user_id"]) if user else 1
+    token_version_val = int(user.get("token_version", 1)) if user else 1
+    sid = secrets.token_urlsafe(32)
+
+    from app.services.session_service import create_refresh_cookie_payload
+    refresh_cookie, _ = create_refresh_cookie_payload(
+        user_id=user_id_val,
+        email=challenge["email"],
+        token_version=token_version_val,
+        remember_me=remember_me,
+        sid=sid,
+    )
+
     access_token = create_jwt_token(
-        user_id=int(user["user_id"]) if user else 1,
+        user_id=user_id_val,
         email=challenge["email"],
         is_admin=is_admin_flag,
         company_id=int(user["company_id"]) if user and user["company_id"] is not None else None,
         company_ids=user_info.company_ids,
         role=user_role,
+        expires_delta_seconds=settings.ACCESS_TOKEN_EXPIRE_SECONDS,
+        sid=sid,
+        token_version=token_version_val,
     )
 
     # Audit: OTP verified + login success
@@ -569,7 +598,7 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
     except Exception:
         pass
 
-    return TokenResponse(access_token=access_token, user=user_info)
+    return TokenResponse(access_token=access_token, user=user_info), refresh_cookie, remember_me
 
 
 def resend_login_otp(db: Optional[Session], ip_address: str, cookie_value: str | None) -> tuple[OtpResponse, str]:
@@ -724,6 +753,7 @@ def reset_password(
 
     user = db.query(User).filter(User.email == normalized_email).first()
     if user:
+        user.token_version = int(getattr(user, "token_version", 1) or 1) + 1
         user.updated_at = datetime.now(timezone.utc)
         db.add(user)
         db.commit()
@@ -882,6 +912,7 @@ def setup_invitation_password(db: Session, token: str, new_password: str) -> Mes
     try:
         user.status = "ACTIVE"
         user.must_change_password = False
+        user.token_version = int(getattr(user, "token_version", 1) or 1) + 1
         user.updated_at = now
         db.query(UserInvitation).filter(
             UserInvitation.invitation_id == invitation.invitation_id

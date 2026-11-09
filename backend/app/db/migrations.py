@@ -110,6 +110,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0039_petty_cash_categories")
             logger.info("Migration 0039_petty_cash_categories applied successfully.")
 
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_user_token_version'")
+    ).first()
+
+    if not result_0040:
+        script_0040 = MIGRATIONS_DIR / "0040_user_token_version.postgres.sql"
+        if script_0040.exists():
+            with open(script_0040, "r", encoding="utf-8") as f:
+                sql_0040 = f.read()
+            clean_0040 = sql_0040.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            conn.execute(text(clean_0040))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0040_user_token_version')"))
+            applied.append("0040_user_token_version")
+            logger.info("Migration 0040_user_token_version applied successfully.")
+
     conn.commit()
     return applied
 
@@ -265,6 +281,27 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0039_petty_cash_categories")
         logger.info("SQLite migration 0039_petty_cash_categories applied successfully.")
+
+    # 6. Check if 0040 is applied
+    result_0040 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0040_user_token_version'")
+    ).first()
+
+    if not result_0040:
+        user_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        ).first()
+        if user_table_exists:
+            user_cols_res = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+            user_cols = {row[1] for row in user_cols_res}
+            if "token_version" not in user_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1"))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0040_user_token_version')")
+        )
+        applied.append("0040_user_token_version")
+        logger.info("SQLite migration 0040_user_token_version applied successfully.")
 
     conn.commit()
     return applied

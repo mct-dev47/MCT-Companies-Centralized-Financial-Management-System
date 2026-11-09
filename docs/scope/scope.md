@@ -21,6 +21,7 @@
 | Tenant Audit Tags and Table Refinements | in-progress | [0034](../specs/0034-tenant-audit-tags-and-table-refinements/index.md) |
 | Tenant Audit Review and Lease Refinements | in-progress | [0035](../specs/0035-tenant-audit-review-and-lease-refinements/index.md) |
 | Petty Cash Excess Reimbursements and Intercompany Funding | in-progress | [0038](../specs/0038-petty-cash-excess-reimbursements.md) |
+| Secure Remember Me Authentication and Session Management | in-progress | [0039](../specs/0039-secure-remember-me-authentication/index.md) |
 
 ---
 
@@ -294,3 +295,19 @@
   - [x] Milestone 5: Frontend reimbursement modal breakdown, employee top-up restriction, and ledger action controls (AC-1, AC-5, AC-7, AC-10)
 - [x] Verify it: /check verify petty-cash-excess-reimbursements
 - [ ] Test it: /test petty-cash-excess-reimbursements
+
+### Secure Remember Me Authentication and Session Management
+**Status**: in-progress
+**Spec**: [0039](../specs/0039-secure-remember-me-authentication/index.md)
+**Intent**: Implement persistent and session based refresh credentials via secure cookies, enforce a thirty minute idle timeout and eight hour absolute session lifetime, keep access tokens strictly in client memory, and provide instant session revocation upon logout, password reset, or account lock.
+**Done when**: Remember Me checkbox controls cookie persistence across browser restarts, access tokens live only in JavaScript memory with proactive and reactive refresh, the backend rejects refresh requests after thirty minutes of qualifying inactivity or eight hours of total session age, token rotation with a fifteen second grace period prevents false reuse errors, logout and password resets immediately revoke active sessions, and expired sessions redirect users to `/login` with an explanatory alert banner.
+
+- [x] Design it (spec): [0039](../specs/0039-secure-remember-me-authentication/index.md)
+- [x] Build it: /develop remember-me-auth (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Database migration adding token_version to users table, model updates, and security configuration (AC-3, AC-5, AC-6, AC-12, AC-15)
+  - [x] Milestone 2: Backend refresh cookie issuance, token rotation, idle and absolute timeout verification, and CSRF protection (AC-1, AC-2, AC-4, AC-7, AC-8, AC-9, AC-11)
+  - [x] Milestone 3: Session revocation on logout, password reset, and account lock, reauthentication guard, and qualifying activity tracking (AC-5, AC-7, AC-10, AC-12, AC-14, AC-16)
+  - [x] Milestone 4: Frontend in memory access token management, silent session bootstrap, proactive and reactive refresh, and session expiration banners (AC-3, AC-4, AC-13, AC-15, AC-17)
+  - [x] Milestone 5: Automated test suite covering cookie attributes, rotation, idle timeout, absolute lifetime, concurrency, password safety, reauthentication, and revocation (AC-1 through AC-17)
+- [ ] Verify it: /check verify remember-me-auth
+- [ ] Test it: /test remember-me-auth

@@ -372,6 +372,7 @@ class UserService:
                     self.db.add(UserCompany(user_id=user_id, company_id=cid))
 
         auth_changes = {}
+        should_revoke_sessions = False
         if "email" in update_data:
             self._ensure_email_available(update_data["email"], excluding_user_id=user_id)
             auth_changes["email"] = update_data["email"]
@@ -380,6 +381,13 @@ class UserService:
             auth_changes["user_metadata"] = {"name": update_data["name"]}
         if "password" in update_data:
             auth_changes["password"] = update_data.pop("password")
+            should_revoke_sessions = True
+        if "status" in update_data and str(update_data["status"]).upper() in ("LOCKED", "SUSPENDED"):
+            should_revoke_sessions = True
+        if "role" in update_data and update_data["role"] != user.role:
+            should_revoke_sessions = True
+        if should_revoke_sessions:
+            user.token_version = int(getattr(user, "token_version", 1) or 1) + 1
         if auth_changes:
             self._update_auth_user(user.email, auth_changes)
 
