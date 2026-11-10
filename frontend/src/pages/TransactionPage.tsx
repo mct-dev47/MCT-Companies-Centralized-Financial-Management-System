@@ -51,7 +51,7 @@ import { expenseService } from '@/services/expenseService'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
 import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
@@ -805,7 +805,7 @@ export const TransactionPage: React.FC = () => {
   // Bank accounts filtered by company scope
   const availableBankAccounts = React.useMemo(() => {
     if (effectiveTargetCompany) {
-      return bankAccounts.filter((a) => isCompanyMatch(a.companyName, effectiveTargetCompany))
+      return bankAccounts.filter((a) => isAccountOwnedBy(a, effectiveTargetCompany))
     }
     return bankAccounts
   }, [bankAccounts, effectiveTargetCompany])
@@ -850,7 +850,7 @@ export const TransactionPage: React.FC = () => {
     (companyName: string): number => {
       let total = 0
       bankAccounts.forEach((acc) => {
-        if (isCompanyMatch(acc.companyName, companyName)) {
+        if (isAccountOwnedBy(acc, companyName)) {
           total += Number(acc.startingBalance) || 0
         }
       })
@@ -1472,14 +1472,18 @@ export const TransactionPage: React.FC = () => {
     >()
 
     const sourceTransactions = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
+    const groupMeta = new Map<string, { date: string; company: string }>()
     sourceTransactions.forEach((tx) => {
       const dateKey = normalizeDateToYYYYMMDD(tx.date) || tx.date || 'Unknown Date'
-      if (!groupsMap.has(dateKey)) {
-        groupsMap.set(dateKey, new Map())
-      }
-      const banksMap = groupsMap.get(dateKey)!
-
       const matchedBank = resolveTxBank(tx)
+      // A bank owned by several companies gets its own day row per company; single-owner banks stay one row per day.
+      const company = isSharedAccount(matchedBank) ? (tx.company || '').trim() || 'Unassigned' : ''
+      const groupId = company ? `${dateKey}||${company.toLowerCase()}` : dateKey
+      if (!groupsMap.has(groupId)) {
+        groupsMap.set(groupId, new Map())
+        groupMeta.set(groupId, { date: dateKey, company })
+      }
+      const banksMap = groupsMap.get(groupId)!
 
       const bankKey = matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
       const bankName = matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
@@ -1508,10 +1512,16 @@ export const TransactionPage: React.FC = () => {
       item.transactions.push(tx)
     })
 
-    const sortedDates = Array.from(groupsMap.keys()).sort((a, b) => b.localeCompare(a))
+    const sortedDates = Array.from(groupsMap.keys()).sort((a, b) => {
+      const ma = groupMeta.get(a)!
+      const mb = groupMeta.get(b)!
+      const byDate = mb.date.localeCompare(ma.date)
+      return byDate !== 0 ? byDate : ma.company.localeCompare(mb.company)
+    })
 
-    return sortedDates.map((dateKey) => {
-      const banksMap = groupsMap.get(dateKey)!
+    return sortedDates.map((groupId) => {
+      const { date: dateKey, company } = groupMeta.get(groupId)!
+      const banksMap = groupsMap.get(groupId)!
       const banks = Array.from(banksMap.values()).sort((a, b) => a.bankName.localeCompare(b.bankName))
       const dayTotalDeposit = Math.round(banks.reduce((acc, b) => acc + b.totalDeposit, 0) * 100) / 100
       const dayTotalWithdrawal = Math.round(banks.reduce((acc, b) => acc + b.totalWithdrawal, 0) * 100) / 100
@@ -1519,7 +1529,9 @@ export const TransactionPage: React.FC = () => {
       const dayTransactionCount = banks.reduce((acc, b) => acc + b.transactionCount, 0)
 
       return {
+        id: groupId,
         date: dateKey,
+        company,
         banks,
         dayTotalDeposit,
         dayTotalWithdrawal,
@@ -1528,6 +1540,10 @@ export const TransactionPage: React.FC = () => {
       }
     })
   }, [activeTab, filteredDepositTransactions, filteredSalesTransactions, resolveTxBank])
+
+  // The By Day table gets a Company column only when a shared (multi-company) bank is in view
+  const showDayCompanyColumn = dailySummaryGroups.some((g) => !!g.company)
+  const dayColCount = showDayCompanyColumn ? 9 : 8
 
   // Active dataset & clear filters check
   const activeDataset = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
@@ -2395,18 +2411,16 @@ export const TransactionPage: React.FC = () => {
           <div className="overflow-x-auto rounded-xl border border-slate-100">
             <Table className="w-full table-fixed min-w-[900px]">
               <colgroup>
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '12%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '8%' }} />
+                {(showDayCompanyColumn ? [11, 13, 10, 13, 13, 13, 11, 8, 8] : [14, 12, 15, 15, 15, 12, 9, 8]).map((w, i) => (
+                  <col key={i} style={{ width: `${w}%` }} />
+                ))}
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
+                  {showDayCompanyColumn && (
+                    <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
+                  )}
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">TOTAL DEPOSITS</TableHead>
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">TOTAL WITHDRAWALS</TableHead>
@@ -2419,26 +2433,26 @@ export const TransactionPage: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-12 text-center text-sm text-muted-fg">
+                    <TableCell colSpan={dayColCount} className="py-12 text-center text-sm text-muted-fg">
                       <Loader2 className="w-6 h-6 animate-spin text-primary inline-block" />
                     </TableCell>
                   </TableRow>
                 ) : dailySummaryGroups.length === 0 ? (
                   <TableEmptyState
-                    colSpan={8}
+                    colSpan={dayColCount}
                     title="No daily records found"
                     message="No transactions match the selected company and filters."
                   />
                 ) : (
                   dailySummaryGroups.map((group) => {
-                    const isExpanded = expandedDates.has(group.date)
+                    const isExpanded = expandedDates.has(group.id)
                     const parsed = new Date(`${group.date}T00:00:00`)
                     const validDate = !isNaN(parsed.getTime())
                     const dayTxs = group.banks.flatMap((b) => b.transactions)
                     return (
-                      <React.Fragment key={group.date}>
+                      <React.Fragment key={group.id}>
                         <TableRow
-                          onClick={() => toggleDateExpansion(group.date)}
+                          onClick={() => toggleDateExpansion(group.id)}
                           className={cn(
                             'border-b border-slate-100 transition-colors cursor-pointer select-none',
                             isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
@@ -2453,6 +2467,20 @@ export const TransactionPage: React.FC = () => {
                               </span>
                             </div>
                           </TableCell>
+                          {showDayCompanyColumn && (
+                            <TableCell className="px-3.5 py-3.5 text-left">
+                              {group.company ? (
+                                <span
+                                  className="inline-flex max-w-full items-center px-2 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-slate-800 border border-slate-200"
+                                  title={group.company}
+                                >
+                                  <span className="truncate">{group.company}</span>
+                                </span>
+                              ) : (
+                                <span className="text-muted-fg">—</span>
+                              )}
+                            </TableCell>
+                          )}
                           <TableCell className="px-3.5 py-3.5 text-center">
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
                               {group.dayTransactionCount} {group.dayTransactionCount === 1 ? 'record' : 'records'}
@@ -2502,7 +2530,7 @@ export const TransactionPage: React.FC = () => {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                toggleDateExpansion(group.date)
+                                toggleDateExpansion(group.id)
                               }}
                               className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
                             >
@@ -2517,13 +2545,13 @@ export const TransactionPage: React.FC = () => {
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                if (dayMenu?.date === group.date) {
+                                if (dayMenu?.date === group.id) {
                                   setDayMenu(null)
                                 } else {
                                   const rect = e.currentTarget.getBoundingClientRect()
                                   const openUpward = rect.bottom + 120 > window.innerHeight
                                   setDayMenu({
-                                    date: group.date,
+                                    date: group.id,
                                     top: openUpward ? rect.top - 6 : rect.bottom + 6,
                                     right: Math.max(12, window.innerWidth - rect.right),
                                     openUpward,
@@ -2541,10 +2569,10 @@ export const TransactionPage: React.FC = () => {
 
                         {isExpanded && (
                           <TableRow className="bg-slate-50/40 border-b border-slate-200">
-                            <TableCell colSpan={8} className="p-3 sm:p-4">
+                            <TableCell colSpan={dayColCount} className="p-3 sm:p-4">
                               <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
                                 <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-xs font-bold text-focus">
-                                  Transactions on {group.date}{' '}
+                                  Transactions on {group.date}{group.company ? ` · ${group.company}` : ''}{' '}
                                   <span className="text-2xs text-muted-fg font-medium">({dayTxs.length} total)</span>
                                   {canAudit && dayTxs.some((t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged') && (
                                     <button
@@ -3099,7 +3127,7 @@ export const TransactionPage: React.FC = () => {
 
       {/* 6b. By Day row menu (acts on the whole day) */}
       {dayMenu && typeof document !== 'undefined' && (() => {
-        const dayGroup = dailySummaryGroups.find((g) => g.date === dayMenu.date)
+        const dayGroup = dailySummaryGroups.find((g) => g.id === dayMenu.date)
         const dayTxs = dayGroup ? dayGroup.banks.flatMap((b) => b.transactions) : []
         const auditable = dayTxs.filter(
           (t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged'
@@ -3123,7 +3151,7 @@ export const TransactionPage: React.FC = () => {
                   disabled={auditable.length === 0}
                   onClick={() => {
                     close()
-                    handleAuditWholeDay(dayMenu.date, dayTxs)
+                    handleAuditWholeDay(dayGroup?.date ?? dayMenu.date, dayTxs)
                   }}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >

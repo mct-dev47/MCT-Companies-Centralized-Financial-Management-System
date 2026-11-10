@@ -69,7 +69,7 @@ import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { loanService } from '@/services/loanService'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import {
   pettyCashService,
   type PettyCashLedgerEntry,
@@ -557,7 +557,7 @@ export const PettyCashPage: React.FC = () => {
     // exists (Finance may change it to an outside funder). Otherwise leave it unchosen.
     if (action === 'endorse') {
       const ownAccount = bankAccounts.find((acc) =>
-        isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
+        isAccountOwnedBy(acc, targetEntry?.companyName || '')
       )
       setSelectedFundingBankId(ownAccount ? ownAccount.id : '')
       setSelectedPaymentMethod('direct')
@@ -587,7 +587,7 @@ export const PettyCashPage: React.FC = () => {
     }
 
     const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
-    const isCrossCompanyBank = selectedBank && !isCompanyMatch(selectedBank.companyName || '', targetEntry.companyName || '')
+    const isCrossCompanyBank = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry.companyName || '')
 
     if (reviewAction === 'endorse' && isCrossCompanyBank) {
       if (selectedPaymentMethod === 'transfer_first' && !selectedDestinationBankId) {
@@ -2316,7 +2316,7 @@ export const PettyCashPage: React.FC = () => {
                         Choose the bank that funds this request...
                       </option>
                       {bankAccounts.map((acc) => {
-                        const isOwn = isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
+                        const isOwn = isAccountOwnedBy(acc, targetEntry?.companyName || '')
                         return (
                           <option key={acc.id} value={acc.id}>
                             {acc.bankName} ({acc.accountName}) [{acc.companyName}]
@@ -2337,7 +2337,7 @@ export const PettyCashPage: React.FC = () => {
                 {/* Affiliate Bank Funding Method (Spec 0038 AC-6, AC-7) */}
                 {(() => {
                   const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
-                  const isCrossCompany = selectedBank && !isCompanyMatch(selectedBank.companyName || '', targetEntry?.companyName || '')
+                  const isCrossCompany = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry?.companyName || '')
                   if (!isCrossCompany) return null
 
                   return (
@@ -2418,7 +2418,7 @@ export const PettyCashPage: React.FC = () => {
                                 Select {targetEntry?.companyName}'s receiving bank...
                               </option>
                               {bankAccounts
-                                .filter((acc) => isCompanyMatch(acc.companyName || '', targetEntry?.companyName || ''))
+                                .filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || ''))
                                 .map((acc) => (
                                   <option key={acc.id} value={acc.id}>
                                     {acc.bankName} ({acc.accountName})

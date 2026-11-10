@@ -27,7 +27,7 @@ import { BackButton, ConfirmModal, RowActionsMenu } from '@/components/common'
 import { formatPHP } from '@/lib/format'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import type {
   CustomerType,
   PaymentStatus,
@@ -118,7 +118,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
     const filterForCompany = (list: BankAccount[]) => {
       if (!saleCompany || saleCompany === 'All Companies') return list
-      const matched = list.filter((a) => isCompanyMatch(a.companyName, saleCompany))
+      const matched = list.filter((a) => isAccountOwnedBy(a, saleCompany))
       if (matched.length > 0) return matched
       return list.filter(
         (a) =>

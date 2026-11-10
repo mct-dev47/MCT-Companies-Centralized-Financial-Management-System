@@ -1439,6 +1439,14 @@ def delete_sale(
         db.delete(sale)
         db.commit()
 
+    # The sale is gone, so none of its bank entries (originals or reversals) should remain
+    try:
+        from app.services.bank_service import BankService
+        BankService(db).purge_linked_entries(link_attr="source_sale_id", link_id=sales_id)
+    except Exception as e:
+        db.rollback()
+        print(f"Bank entry purge error on sale delete: {e}")
+
     try:
         log_transaction(
             db, AuditAction.SALE_DELETED,

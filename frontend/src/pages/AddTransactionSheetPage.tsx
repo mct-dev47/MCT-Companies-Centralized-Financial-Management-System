@@ -56,7 +56,7 @@ import {
 } from '@/utils/particularsUtils'
 import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import {
   particularsService,
@@ -1062,7 +1062,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const targetComp = isAuditor ? assignedCompany : selectedCompany
     if (!targetComp || targetComp === 'All Companies') return bankAccounts
     const matching = bankAccounts.filter((a) =>
-      isCompanyMatch(a.companyName, targetComp)
+      isAccountOwnedBy(a, targetComp)
     )
     if (matching.length > 0) return matching
     const general = bankAccounts.filter(

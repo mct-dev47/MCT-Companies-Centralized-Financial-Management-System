@@ -656,6 +656,12 @@ class SalesReceivablesSyncService:
                         logger.warning("Failed deleting parent sale %s in Supabase: %s", sale_id, exc)
                 if local_sale is not None:
                     self.db.delete(local_sale)
+                    self.db.flush()
+                    try:
+                        from app.services.bank_service import BankService
+                        BankService(self.db).purge_linked_entries(link_attr="source_sale_id", link_id=sale_id)
+                    except Exception as exc:
+                        logger.warning("Failed purging bank entries of sale %s: %s", sale_id, exc)
             else:
                 new_particulars = format_sale_lines(lines)
                 if client is not None:

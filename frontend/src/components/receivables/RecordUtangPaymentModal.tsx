@@ -28,7 +28,7 @@ import type {
   UtangSale,
   PaymentMethod,
 } from '@/services/receivablesStore'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 
 export interface RecordUtangPaymentModalProps {
   open: boolean
@@ -130,7 +130,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
 
     const filterForCompany = (list: BankAccount[]) => {
       if (!targetCompany || targetCompany === 'All Companies') return list
-      const matched = list.filter((a) => isCompanyMatch(a.companyName, targetCompany))
+      const matched = list.filter((a) => isAccountOwnedBy(a, targetCompany))
       if (matched.length > 0) return matched
       return list.filter(
         (a) =>

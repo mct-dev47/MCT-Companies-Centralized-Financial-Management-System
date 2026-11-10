@@ -26,6 +26,7 @@ import {
   EyeOff,
 
   Pencil,
+  Trash2,
 
   ArrowUpRight,
 
@@ -98,7 +99,7 @@ import { formatPHP } from '@/lib/format'
 
 import { cn } from '@/lib/utils'
 
-import { bankService, type BankAccount, type BankTransaction } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction } from '@/services/bankService'
 
 import { websocketService, type ConnectionStatus } from '@/services/websocketService'
 
@@ -138,6 +139,45 @@ export function getAccountCardLabel(acc: BankAccount): string {
 
   return bank || 'Corporate Bank Account'
 
+}
+
+/** Checklist to pick one or more owner companies for a bank account. */
+const CompanyOwnerChecklist: React.FC<{
+  options: string[]
+  selected: string[]
+  onChange: (next: string[]) => void
+  disabled?: boolean
+}> = ({ options, selected, onChange, disabled }) => {
+  const toggle = (name: string) => {
+    const has = selected.some((s) => s.toLowerCase() === name.toLowerCase())
+    onChange(has ? selected.filter((s) => s.toLowerCase() !== name.toLowerCase()) : [...selected, name])
+  }
+  return (
+    <div className="rounded-xl border border-stroke/60 bg-white max-h-40 overflow-y-auto divide-y divide-slate-100">
+      {options.length === 0 && <p className="px-3 py-2 text-xs text-muted-fg">No companies available.</p>}
+      {options.map((c) => {
+        const checked = selected.some((s) => s.toLowerCase() === c.toLowerCase())
+        return (
+          <label
+            key={c}
+            className={cn(
+              'flex items-center gap-2.5 px-3 py-2 text-xs sm:text-sm text-focus select-none',
+              disabled ? 'opacity-60' : 'cursor-pointer hover:bg-slate-50'
+            )}
+          >
+            <input
+              type="checkbox"
+              disabled={disabled}
+              checked={checked}
+              onChange={() => toggle(c)}
+              className="h-4 w-4 rounded border-stroke accent-[#960C01]"
+            />
+            <span className="truncate">{c}</span>
+          </label>
+        )
+      })}
+    </div>
+  )
 }
 
 const ITEMS_PER_PAGE = 8
@@ -434,7 +474,9 @@ export const BankManagementPage: React.FC = () => {
 
     cardLabel: '',
 
-    companyName: isCompanyScoped ? assignedCompany : (selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : '')),
+    companyNames: [
+      isCompanyScoped ? assignedCompany : (selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : '')),
+    ].filter(Boolean) as string[],
 
     accountType: 'Checking' as BankAccount['accountType'],
 
@@ -475,6 +517,9 @@ export const BankManagementPage: React.FC = () => {
     category: 'Cheque',
 
   })
+
+  // Which owner a new deposit/withdrawal is for (shared accounts only)
+  const [txCompany, setTxCompany] = React.useState('')
 
   // Click outside listener for dropdowns
 
@@ -518,7 +563,7 @@ export const BankManagementPage: React.FC = () => {
 
       return accounts.filter((a) =>
 
-        isCompanyMatch(a.companyName, assignedCompany)
+        isAccountOwnedBy(a, assignedCompany)
 
       )
 
@@ -528,7 +573,7 @@ export const BankManagementPage: React.FC = () => {
 
       return accounts.filter((a) =>
 
-        isCompanyMatch(a.companyName, selectedCompany)
+        isAccountOwnedBy(a, selectedCompany)
 
       )
 
@@ -578,6 +623,8 @@ export const BankManagementPage: React.FC = () => {
 
     notes: '',
 
+    companyNames: [] as string[],
+
   })
 
   React.useEffect(() => {
@@ -585,6 +632,8 @@ export const BankManagementPage: React.FC = () => {
     if (activeAccount) {
 
       setEditAccountForm({
+
+        companyNames: activeAccount.companyNames?.length ? activeAccount.companyNames : [activeAccount.companyName].filter(Boolean),
 
         accountName: activeAccount.accountName,
 
@@ -602,17 +651,57 @@ export const BankManagementPage: React.FC = () => {
 
   }, [activeAccount])
 
+  // Hard delete is restricted to the Finance role only
+  const [accountToDelete, setAccountToDelete] = React.useState<BankAccount | null>(null)
+  const [isDeletingAccount, setIsDeletingAccount] = React.useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = React.useState('')
+  const deleteConfirmTarget = accountToDelete
+    ? [accountToDelete.bankName, accountToDelete.companyName].filter(Boolean).join(' - ').trim()
+    : ''
+  const isDeleteConfirmed = !!deleteConfirmTarget && deleteConfirmText.trim() === deleteConfirmTarget
+
+  React.useEffect(() => {
+    setDeleteConfirmText('')
+  }, [accountToDelete])
+
+  const handleConfirmDeleteAccount = async () => {
+    if (!isFinance || !accountToDelete || isDeletingAccount || !isDeleteConfirmed) return
+    setIsDeletingAccount(true)
+    try {
+      await bankService.deleteAccount(accountToDelete.id, user?.role)
+      saveAccounts(accounts.filter((a) => a.id !== accountToDelete.id))
+      websocketService.emitLocal('BANK_UPDATED', { accountId: accountToDelete.id })
+      if (selectedAccountId === accountToDelete.id) setSelectedAccountId('')
+      setAccountToDelete(null)
+    } catch (err: any) {
+      notifyError(err, 'Failed to delete bank account.')
+    } finally {
+      setIsDeletingAccount(false)
+    }
+  }
+
   const handleSaveEditAccount = async (e: React.FormEvent) => {
 
     e.preventDefault()
 
     if (!canManageBank || !activeAccount || isSubmittingEdit) return
 
+    if (editAccountForm.companyNames.length === 0) {
+
+      notifyWarning('Select at least one owner company.')
+
+      return
+
+    }
+
     setIsSubmittingEdit(true)
 
     try {
 
       const updatedAccount = await bankService.updateAccount(activeAccount.id, {
+
+        // Only admins/finance can change owners; company-scoped users keep the existing list.
+        ...(isCompanyScoped ? {} : { companyNames: editAccountForm.companyNames }),
 
         accountName: editAccountForm.accountName.trim(),
 
@@ -704,9 +793,19 @@ export const BankManagementPage: React.FC = () => {
 
     const targetComp = activeAccount.companyName.toLowerCase().trim()
 
-    return accounts.filter((a) => a.companyName.toLowerCase().trim() === targetComp)
+
+    return accounts.filter((a) => (a.companyNames?.length ? a.companyNames : [a.companyName]).some((n) => n.toLowerCase().trim() === targetComp))
 
   }, [accounts, activeAccount])
+
+  // The Company column only exists for banks owned by more than one company
+  const showCompanyColumn = isAggregatedView
+    ? roleScopedAccounts.some((a) => isSharedAccount(a))
+    : isSharedAccount(activeAccount)
+
+  React.useEffect(() => {
+    setTxCompany('')
+  }, [activeAccount?.id])
 
   // Double-click and tap listeners for ATM Card
 
@@ -784,7 +883,7 @@ export const BankManagementPage: React.FC = () => {
 
             runningBalance: current,
 
-            companyName: acc.companyName || 'Corporate',
+            companyName: tx.companyName || acc.companyName || 'Corporate',
 
             bankName: acc.bankName || 'Corporate Bank',
 
@@ -830,7 +929,7 @@ export const BankManagementPage: React.FC = () => {
 
         runningBalance: current,
 
-        companyName: activeAccount.companyName || 'Corporate',
+        companyName: tx.companyName || activeAccount.companyName || 'Corporate',
 
         bankName: activeAccount.bankName || 'Corporate Bank',
 
@@ -958,15 +1057,11 @@ export const BankManagementPage: React.FC = () => {
 
       ...prev,
 
-      companyName: isCompanyScoped
-
-        ? assignedCompany
-
+      companyNames: isCompanyScoped
+        ? [assignedCompany]
         : selectedCompany !== 'All Companies'
-
-          ? selectedCompany
-
-          : prev.companyName || '',
+          ? [selectedCompany]
+          : prev.companyNames,
 
     }))
 
@@ -982,7 +1077,9 @@ export const BankManagementPage: React.FC = () => {
 
     const startingNum = parseFloat(addBankForm.startingBalance) || 0
 
-    const companyAssigned = addBankForm.companyName.trim() || 'General Treasury / Unassigned'
+    const chosenOwners = addBankForm.companyNames.map((c) => c.trim()).filter(Boolean)
+
+    const companyAssigned = chosenOwners[0] || 'General Treasury / Unassigned'
 
     const chosenBankName = addBankForm.bankName === 'Others' ? customBankName.trim() : addBankForm.bankName.trim()
 
@@ -1018,6 +1115,8 @@ export const BankManagementPage: React.FC = () => {
 
         companyName: companyAssigned,
 
+        companyNames: chosenOwners,
+
         cardLabel: computedCardLabel,
 
         accountType: addBankForm.accountType,
@@ -1044,7 +1143,7 @@ export const BankManagementPage: React.FC = () => {
 
         selectedCompany !== 'All Companies' &&
 
-        !isCompanyMatch(newAccount.companyName, selectedCompany)
+        !isAccountOwnedBy(newAccount, selectedCompany)
 
       ) {
 
@@ -1108,7 +1207,7 @@ export const BankManagementPage: React.FC = () => {
 
           cardLabel: '',
 
-          companyName: isCompanyScoped ? assignedCompany : (selectedCompany !== 'All Companies' ? selectedCompany : ''),
+          companyNames: isCompanyScoped ? [assignedCompany] : (selectedCompany !== 'All Companies' ? [selectedCompany] : []),
 
           accountType: 'Checking',
 
@@ -1175,6 +1274,8 @@ export const BankManagementPage: React.FC = () => {
         category: depositForm.category,
 
         referenceNo: depositForm.referenceNo.trim(),
+
+        companyName: isSharedAccount(activeAccount) ? (txCompany || activeAccount.companyName) : undefined,
 
       }, user?.role)
 
@@ -1252,6 +1353,8 @@ export const BankManagementPage: React.FC = () => {
 
         chequeNo: withdrawForm.chequeNo.trim(),
 
+        companyName: isSharedAccount(activeAccount) ? (txCompany || activeAccount.companyName) : undefined,
+
       }, user?.role)
 
       const updated = accounts.map((a) => (a.id === updatedAccount.id ? updatedAccount : a))
@@ -1296,13 +1399,13 @@ export const BankManagementPage: React.FC = () => {
 
     if (!activeAccount && !isAggregatedView) return
 
-    const headers = ['Date', ...(isAggregatedView ? ['Company'] : []), 'Cheque No.', 'Particulars', 'Withdrawal', 'Deposit', 'Category', 'Current Balance']
+    const headers = ['Date', ...(showCompanyColumn ? ['Company'] : []), 'Cheque No.', 'Particulars', 'Withdrawal', 'Deposit', 'Category', 'Current Balance']
 
     const rows = filteredTransactions.map((t) => [
 
       t.date,
 
-      ...(isAggregatedView ? [`"${((t as any).companyName || '').replace(/"/g, '""')}"`] : []),
+      ...(showCompanyColumn ? [`"${((t as any).companyName || '').replace(/"/g, '""')}"`] : []),
 
       t.chequeNo || '—',
 
@@ -1821,7 +1924,7 @@ export const BankManagementPage: React.FC = () => {
 
                               if (c !== 'All Companies') {
 
-                                const matched = accounts.filter((a) => isCompanyMatch(a.companyName, c))
+                                const matched = accounts.filter((a) => isAccountOwnedBy(a, c))
 
                                 if (matched.length > 0) {
 
@@ -2019,10 +2122,15 @@ export const BankManagementPage: React.FC = () => {
 
                   {(isAggregatedView || activeAccount?.companyName) && (
 
-                    <span className="text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full bg-white/20 text-white backdrop-blur-xs">
-
-                      {isAggregatedView ? 'All Companies' : activeAccount?.companyName}
-
+                    <span
+                      className="text-[10px] sm:text-xs font-bold px-2 py-0.5 rounded-full bg-white/20 text-white backdrop-blur-xs max-w-[240px] sm:max-w-[320px] truncate"
+                      title={isAggregatedView ? undefined : (activeAccount?.companyNames || []).join(', ')}
+                    >
+                      {isAggregatedView
+                        ? 'All Companies'
+                        : isSharedAccount(activeAccount)
+                          ? `${activeAccount!.companyName} +${activeAccount!.companyNames.length - 1} more`
+                          : activeAccount?.companyName}
                     </span>
 
                   )}
@@ -2101,7 +2209,22 @@ export const BankManagementPage: React.FC = () => {
 
             {canManageBank && (
 
-              <div className="flex items-center justify-end relative z-10">
+              <div className="flex items-center justify-end gap-2 relative z-10">
+
+                {isFinance && activeAccount && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setAccountToDelete(activeAccount)
+                    }}
+                    className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-white text-red-600 hover:bg-red-50 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                    title="Delete Bank Account"
+                    aria-label="Delete Bank Account"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
 
                 <button
 
@@ -2341,7 +2464,22 @@ export const BankManagementPage: React.FC = () => {
 
                 {canManageBank && (
 
-                  <div className="flex items-center justify-end relative z-10">
+                  <div className="flex items-center justify-end gap-2 relative z-10">
+
+                    {isFinance && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setAccountToDelete(acc)
+                        }}
+                        className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-white text-red-600 hover:bg-red-50 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                        title="Delete Bank Account"
+                        aria-label="Delete Bank Account"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
 
                     <button
 
@@ -2587,7 +2725,22 @@ export const BankManagementPage: React.FC = () => {
 
                   {canManageBank && (
 
-                    <div className="flex items-center justify-end relative z-10">
+                    <div className="flex items-center justify-end gap-2 relative z-10">
+
+                      {isFinance && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setAccountToDelete(acc)
+                          }}
+                          className="h-8 w-8 sm:h-9 sm:w-9 rounded-full bg-white text-red-600 hover:bg-red-50 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer"
+                          title="Delete Bank Account"
+                          aria-label="Delete Bank Account"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
 
                       <button
 
@@ -3029,7 +3182,7 @@ export const BankManagementPage: React.FC = () => {
 
                 </TableHead>
 
-                {isAggregatedView && (
+                {showCompanyColumn && (
 
                   <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[14%]">
 
@@ -3089,7 +3242,7 @@ export const BankManagementPage: React.FC = () => {
 
                     <TableCell className="px-4 py-3.5"><div className="h-4 w-20 bg-slate-200 rounded" /></TableCell>
 
-                    {isAggregatedView && (
+                    {showCompanyColumn && (
 
                       <TableCell className="px-4 py-3.5"><div className="h-4 w-24 bg-slate-200 rounded" /></TableCell>
 
@@ -3115,7 +3268,7 @@ export const BankManagementPage: React.FC = () => {
 
                 <TableRow>
 
-                  <TableCell colSpan={isAggregatedView ? 8 : 7} className="h-44 text-center py-8">
+                  <TableCell colSpan={showCompanyColumn ? 8 : 7} className="h-44 text-center py-8">
 
                     <div className="flex flex-col items-center justify-center text-muted-fg">
 
@@ -3203,7 +3356,7 @@ export const BankManagementPage: React.FC = () => {
 
                     {/* Company Name (Aggregated View) */}
 
-                    {isAggregatedView && (
+                    {showCompanyColumn && (
 
                       <TableCell className="px-4 py-3.5 font-medium text-xs text-focus whitespace-nowrap">
 
@@ -3595,39 +3748,22 @@ export const BankManagementPage: React.FC = () => {
 
               <label className="text-xs font-semibold text-focus block mb-1">
 
-                Company Owner <span className="text-xs text-muted-fg font-normal">(Optional)</span>
+                Company Owner(s) <span className="text-xs text-muted-fg font-normal">(Optional · tick every company that owns this account)</span>
 
               </label>
 
-              <select
-
+              <CompanyOwnerChecklist
                 disabled={isCompanyScoped}
+                options={companyOptions.filter((c) => c !== 'All Companies')}
+                selected={addBankForm.companyNames}
+                onChange={(next) => setAddBankForm({ ...addBankForm, companyNames: next })}
+              />
 
-                value={addBankForm.companyName}
-
-                onChange={(e) => setAddBankForm({ ...addBankForm, companyName: e.target.value })}
-
-                className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-
-              >
-
-                <option value="">None / Unassigned (General Treasury)</option>
-
-                {companyOptions
-
-                  .filter((c) => c !== 'All Companies')
-
-                  .map((c) => (
-
-                    <option key={c} value={c}>
-
-                      {c}
-
-                    </option>
-
-                  ))}
-
-              </select>
+              {addBankForm.companyNames.length === 0 ? (
+                <p className="mt-1 text-[11px] text-muted-fg">None selected: saved as General Treasury / Unassigned.</p>
+              ) : addBankForm.companyNames.length > 1 ? (
+                <p className="mt-1 text-[11px] text-muted-fg">Shared account: transactions will be tracked per company ({addBankForm.companyNames[0]} is the primary owner).</p>
+              ) : null}
 
             </div>
 
@@ -3818,6 +3954,24 @@ export const BankManagementPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleDeposit} className="space-y-3.5 mt-2">
+
+            {isSharedAccount(activeAccount) && (
+              <div>
+                <label className="text-xs font-semibold text-focus block mb-1">
+                  Company <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={txCompany || activeAccount?.companyName || ''}
+                  onChange={(e) => setTxCompany(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
+                >
+                  {activeAccount?.companyNames.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
 
@@ -4034,6 +4188,24 @@ export const BankManagementPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleWithdraw} className="space-y-3.5 mt-2">
+
+            {isSharedAccount(activeAccount) && (
+              <div>
+                <label className="text-xs font-semibold text-focus block mb-1">
+                  Company <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={txCompany || activeAccount?.companyName || ''}
+                  onChange={(e) => setTxCompany(e.target.value)}
+                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
+                >
+                  {activeAccount?.companyNames.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div>
 
@@ -4379,6 +4551,41 @@ export const BankManagementPage: React.FC = () => {
 
       </Dialog>
 
+      {/* Modal: Confirm hard delete of bank account (Finance only) */}
+      <Dialog open={isFinance && !!accountToDelete} onOpenChange={(open) => { if (!open && !isDeletingAccount) setAccountToDelete(null) }}>
+        <DialogContent className="sm:max-w-[440px] bg-white rounded-[24px] p-6 shadow-2xl">
+          <DialogHeader className="space-y-1.5">
+            <DialogTitle className="text-lg font-bold text-focus">Delete Bank Account</DialogTitle>
+            <DialogDescription className="text-sm text-muted-fg">
+              Permanently delete {accountToDelete?.bankName} ({accountToDelete?.accountNumber})? This also deletes all of its transactions and cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5 mt-2">
+            <label htmlFor="delete-bank-confirm" className="text-xs text-muted-fg">
+              Type <span className="font-bold text-focus select-all">{deleteConfirmTarget}</span> to confirm.
+            </label>
+            <input
+              id="delete-bank-confirm"
+              type="text"
+              autoComplete="off"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && isDeleteConfirmed) handleConfirmDeleteAccount() }}
+              disabled={isDeletingAccount}
+              className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button type="button" variant="outline" disabled={isDeletingAccount} onClick={() => setAccountToDelete(null)}>
+              Cancel
+            </Button>
+            <Button type="button" disabled={isDeletingAccount || !isDeleteConfirmed} onClick={handleConfirmDeleteAccount} className="bg-red-600 hover:bg-red-700 text-white">
+              {isDeletingAccount ? 'Deleting...' : 'Delete'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Modal E: Edit Bank Account Details */}
 
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
@@ -4435,6 +4642,23 @@ export const BankManagementPage: React.FC = () => {
 
                 className="h-10 text-xs sm:text-sm rounded-xl font-medium"
 
+              />
+
+            </div>
+
+            <div>
+
+              <label className="text-xs font-semibold text-focus block mb-1">
+
+                Company Owner(s) <span className="text-xs text-muted-fg font-normal">(tick every company that owns this account)</span>
+
+              </label>
+
+              <CompanyOwnerChecklist
+                disabled={isCompanyScoped}
+                options={Array.from(new Set([...companyOptions.filter((c) => c !== 'All Companies'), ...editAccountForm.companyNames]))}
+                selected={editAccountForm.companyNames}
+                onChange={(next) => setEditAccountForm({ ...editAccountForm, companyNames: next })}
               />
 
             </div>

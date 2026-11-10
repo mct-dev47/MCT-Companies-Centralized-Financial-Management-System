@@ -1,3 +1,4 @@
+import json
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timezone
@@ -8,9 +9,33 @@ from app.models.bank import BankAccount, BankTransaction
 from app.schemas.bank import BankAccountCreate, BankAccountUpdate, BankDepositWithdrawRequest
 
 
+def _clean_owners(primary: Optional[str], names: Optional[List[str]]) -> List[str]:
+    """De-duplicated owner list (case-insensitive), primary owner first."""
+    out: List[str] = []
+    seen = set()
+    for n in [primary] + list(names or []):
+        n = (n or "").strip()
+        if n and n.lower() not in seen:
+            seen.add(n.lower())
+            out.append(n)
+    return out
+
+
 class BankService:
     def __init__(self, db: Session):
         self.db = db
+
+    @staticmethod
+    def resolve_tx_company(account: BankAccount, requested: Optional[str]) -> Optional[str]:
+        """Which owner an entry on `account` belongs to: the requested owner when it matches, else the primary."""
+        owners = account.company_names
+        req = (requested or "").strip().lower()
+        if req:
+            for o in owners:
+                ol = o.lower()
+                if ol == req or ol in req or req in ol:
+                    return o
+        return owners[0] if owners else None
 
     def seed_initial_accounts_if_empty(self):
         """No-op. Seeded dummy accounts removed so only real user-created accounts exist."""
@@ -49,6 +74,7 @@ class BankService:
             conditions = [BankAccount.company_id == company_id]
             if aliases:
                 conditions.extend([func.lower(BankAccount.company_name).contains(a) for a in aliases])
+                conditions.extend([func.lower(BankAccount.company_names_json).contains(a) for a in aliases])
             query = query.filter(or_(*conditions))
             return query.order_by(BankAccount.id.asc()).all()
 
@@ -73,6 +99,7 @@ class BankService:
             aliases = [a for a in set(aliases) if a]
 
             conditions = [func.lower(BankAccount.company_name).contains(a) for a in aliases]
+            conditions.extend([func.lower(BankAccount.company_names_json).contains(a) for a in aliases])
             if resolved_cid:
                 conditions.append(BankAccount.company_id == resolved_cid)
             query = query.filter(or_(*conditions))
@@ -115,7 +142,8 @@ class BankService:
         # Idempotency check: prevent duplicate account creation within 10 seconds or identical unedited record
         bank_clean = data.bank_name.strip()
         acct_clean = data.account_name.strip()
-        comp_clean = data.company_name.strip()
+        owners = _clean_owners(data.company_name, data.company_names)
+        comp_clean = owners[0] if owners else data.company_name.strip()
         start_bal = data.starting_balance or Decimal("0.00")
 
         existing_match = (
@@ -160,6 +188,7 @@ class BankService:
             account_number=acc_num,
             company_name=comp_clean,
             company_id=resolved_cid,
+            company_names_json=json.dumps(owners) if len(owners) > 1 else None,
             card_label=label,
             account_type=data.account_type or "Checking",
             branch=data.branch.strip() if data.branch else "Central Corporate Branch",
@@ -180,6 +209,31 @@ class BankService:
 
         if data.account_name is not None:
             account.account_name = data.account_name.strip()
+        if data.company_names is not None:
+            owners = _clean_owners(None, data.company_names)
+            if not owners:
+                raise ValueError("A bank account needs at least one owner company.")
+            removed = {o.lower() for o in account.company_names} - {o.lower() for o in owners}
+            if removed:
+                in_use = (
+                    self.db.query(BankTransaction.id)
+                    .filter(
+                        BankTransaction.bank_account_id == account.id,
+                        func.lower(BankTransaction.company_name).in_(removed),
+                    )
+                    .first()
+                )
+                if in_use:
+                    raise ValueError("Cannot remove an owner company that already has transactions on this bank account.")
+            account.company_name = owners[0]
+            account.company_names_json = json.dumps(owners) if len(owners) > 1 else None
+            try:
+                from app.core.company_resolver import resolve_company
+                c = resolve_company(self.db, company_name=owners[0])
+                if c and c.company_id:
+                    account.company_id = c.company_id
+            except Exception:
+                pass
         if data.branch is not None:
             account.branch = data.branch.strip()
         if data.notes is not None:
@@ -218,6 +272,7 @@ class BankService:
             category=tx_category,
             net_amount=amount,
             source_sale_id=source_sale_id,
+            company_name=self.resolve_tx_company(account, data.company_name),
         )
         account.current_balance = account.current_balance + amount
 
@@ -256,6 +311,7 @@ class BankService:
             category=tx_category,
             net_amount=amount,
             source_sale_id=source_sale_id,
+            company_name=self.resolve_tx_company(account, data.company_name),
         )
         account.current_balance = account.current_balance - amount
 
@@ -269,7 +325,14 @@ class BankService:
         if not company_name:
             return None
         norm = company_name.strip().lower()
-        found = self.db.query(BankAccount).filter(func.lower(BankAccount.company_name).contains(norm)).first()
+        found = (
+            self.db.query(BankAccount)
+            .filter(or_(
+                func.lower(BankAccount.company_name).contains(norm),
+                func.lower(BankAccount.company_names_json).contains(norm),
+            ))
+            .first()
+        )
         if found:
             return found
         from app.services.bills_service import KNOWN_COMPANY_ALIASES
@@ -357,10 +420,12 @@ class BankService:
         reference_no: Optional[str],
         tx_date: Optional[str],
         is_reversal: bool = False,
+        company_name: Optional[str] = None,
     ) -> BankTransaction:
         """Add one bank entry linked to its source record and move the account balance with it."""
         label = particulars or "Bank entry"
         tx = BankTransaction(
+            company_name=self.resolve_tx_company(account, company_name),
             id=self._generate_transaction_id(),
             bank_account_id=account.id,
             transaction_date=tx_date or datetime.now().strftime("%m/%d/%y"),
@@ -435,6 +500,7 @@ class BankService:
                 reference_no=reference_no,
                 tx_date=tx_date,
                 is_reversal=True,
+                company_name=next((t.company_name for t in linked if t.bank_account_id == other_id and t.company_name), None),
             )
 
         current = sum((recognized(t) for t in linked if t.bank_account_id == account.id), Decimal("0.00"))
@@ -452,11 +518,36 @@ class BankService:
                 reference_no=reference_no,
                 tx_date=tx_date,
                 is_reversal=not more,
+                company_name=company_name or next((t.company_name for t in linked if t.bank_account_id == account.id and t.company_name), None),
             )
         self.db.commit()
         if tx is not None:
             self.db.refresh(tx)
         return tx
+
+    def purge_linked_entries(self, *, link_attr: str, link_id: int) -> int:
+        """
+        Delete every bank entry linked to a deleted sale/expense (`source_sale_id` / `source_expense_id`).
+        Each account's balance is corrected by the net of the entries removed, so balances stay right
+        even if the offsetting reversal was never posted. Returns how many entries were removed.
+        """
+        if link_attr not in ("source_sale_id", "source_expense_id"):
+            raise ValueError("Unsupported link attribute.")
+        linked = self.db.query(BankTransaction).filter(getattr(BankTransaction, link_attr) == link_id).all()
+        if not linked:
+            return 0
+        net_by_account: Dict[str, Decimal] = {}
+        for t in linked:
+            net = Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))
+            net_by_account[t.bank_account_id] = net_by_account.get(t.bank_account_id, Decimal("0")) + net
+        for account_id, net in net_by_account.items():
+            account = self.get_account(account_id)
+            if account is not None and net != Decimal("0"):
+                account.current_balance = account.current_balance - net
+        for t in linked:
+            self.db.delete(t)
+        self.db.commit()
+        return len(linked)
 
     def sync_sale_deposit(
         self,

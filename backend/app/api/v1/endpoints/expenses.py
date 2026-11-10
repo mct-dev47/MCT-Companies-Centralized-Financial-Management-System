@@ -1163,6 +1163,13 @@ def delete_expense(
         reconcile_expense_bank(db, expense_id=expense_id, force_zero=True)
         db.delete(expense)
         db.commit()
+        # The expense is gone, so none of its bank entries (originals or reversals) should remain
+        try:
+            from app.services.bank_service import BankService
+            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
+        except Exception as e:
+            db.rollback()
+            print(f"Bank entry purge error on expense delete: {e}")
 
     try:
         log_transaction(

@@ -2,7 +2,7 @@ from datetime import date
 from typing import Optional
 from sqlalchemy import Column, BigInteger, Integer, String, Text, Numeric, Date, DateTime, ForeignKey
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, backref
 
 from app.db.session import Base
 
@@ -20,7 +20,7 @@ class Receivable(Base):
     company_name = Column(String(255), nullable=False, index=True)
     customer_name = Column(String(255), nullable=False, index=True)
     customer_type = Column(String(50), nullable=False, default="External")  # 'Internal' or 'External'
-    sale_id = Column(Integer, ForeignKey("sales.sales_id", ondelete="SET NULL"), nullable=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.sales_id", ondelete="CASCADE"), nullable=True, index=True)
     sale_line_index = Column(Integer, nullable=True)
     expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True, index=True)
     transaction_date = Column(Date, nullable=False)
@@ -39,7 +39,7 @@ class Receivable(Base):
         cascade="all, delete-orphan",
         order_by="desc(ReceivablePayment.payment_date), desc(ReceivablePayment.payment_id)",
     )
-    sale = relationship("Sale", foreign_keys=[sale_id], backref="receivables")
+    sale = relationship("Sale", foreign_keys=[sale_id], backref=backref("receivables", cascade="all, delete", passive_deletes=True))
     expense = relationship("Expense", foreign_keys=[expense_id], backref="receivables")
 
 

@@ -74,8 +74,8 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
     if (!loan) return bankAccounts
     const borrowerNorm = (loan.borrower || '').trim().toLowerCase()
     return bankAccounts.filter((acc) => {
-      const cNorm = (acc.companyName || '').trim().toLowerCase()
-      return cNorm !== borrowerNorm
+      const owners = (acc.companyNames?.length ? acc.companyNames : [acc.companyName]).map((n) => (n || '').trim().toLowerCase())
+      return !owners.includes(borrowerNorm)
     })
   }, [bankAccounts, loan])
 

@@ -254,6 +254,38 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0048_bank_transactions_source_expense")
             logger.info("Migration 0048_bank_transactions_source_expense applied successfully.")
 
+    # 15. Check if 0049 is applied
+    result_0049 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0049_bank_shared_owners'")
+    ).first()
+
+    if not result_0049:
+        script_0049 = MIGRATIONS_DIR / "0049_bank_shared_owners.postgres.sql"
+        if script_0049.exists():
+            with open(script_0049, "r", encoding="utf-8") as f:
+                sql_0049 = f.read()
+            for stmt in sql_0049.replace("BEGIN;", "").replace("COMMIT;", "").split(";"):
+                body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                if body:
+                    conn.execute(text(body))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0049_bank_shared_owners')"))
+            applied.append("0049_bank_shared_owners")
+            logger.info("Migration 0049_bank_shared_owners applied successfully.")
+
+    # 16. Check if 0050 is applied
+    result_0050 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0050_receivables_sale_cascade'")
+    ).first()
+
+    if not result_0050:
+        script_0050 = MIGRATIONS_DIR / "0050_receivables_sale_cascade.postgres.sql"
+        if script_0050.exists():
+            # One DO block: run it whole (it must not be split on semicolons)
+            conn.exec_driver_sql(script_0050.read_text(encoding="utf-8"))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0050_receivables_sale_cascade')"))
+            applied.append("0050_receivables_sale_cascade")
+            logger.info("Migration 0050_receivables_sale_cascade applied successfully.")
+
     conn.commit()
     return applied
 
@@ -623,6 +655,42 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0048_bank_transactions_source_expense")
         logger.info("SQLite migration 0048_bank_transactions_source_expense applied successfully.")
+
+    # 15. Check if 0049 is applied
+    result_0049 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0049_bank_shared_owners'")
+    ).first()
+
+    if not result_0049:
+        acct_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_accounts'")
+        ).first()
+        if acct_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_accounts)")).fetchall()}
+            if "company_names" not in cols:
+                conn.execute(text("ALTER TABLE bank_accounts ADD COLUMN company_names TEXT NULL"))
+        tx_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if tx_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "company_name" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN company_name VARCHAR(255) NULL"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0049_bank_shared_owners')")
+        )
+        applied.append("0049_bank_shared_owners")
+        logger.info("SQLite migration 0049_bank_shared_owners applied successfully.")
+
+    # 16. 0050: SQLite cannot alter a foreign key; the ORM-level cascade covers it, so just record the version.
+    result_0050 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0050_receivables_sale_cascade'")
+    ).first()
+    if not result_0050:
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0050_receivables_sale_cascade')")
+        )
+        applied.append("0050_receivables_sale_cascade")
 
     conn.commit()
     return applied

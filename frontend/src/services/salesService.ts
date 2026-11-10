@@ -607,18 +607,19 @@ export const salesService = {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       })
-      if (res.ok) {
+      // 404 = already gone on the server, which is what the caller wants
+      if (res.ok || res.status === 404) {
         inMemorySales = inMemorySales.filter((s) => s.id !== id)
         this.invalidateCache()
         return true
       }
-    } catch (err) {
-      console.warn('Backend delete sale failed, deleting locally:', err)
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(
+        typeof errData.detail === 'string' ? errData.detail : `Failed to delete sale (status ${res.status}).`
+      )
+    } finally {
+      this.invalidateCache()
     }
-
-    inMemorySales = inMemorySales.filter((s) => s.id !== id)
-    this.invalidateCache()
-    return true
   },
 
   async updateSaleAuditStatus(

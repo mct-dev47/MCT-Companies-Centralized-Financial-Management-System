@@ -28,6 +28,30 @@ from app.core.websocket import ws_manager
 router = APIRouter()
 
 
+def _check_any_owner_access(db: Session, current_user, account) -> None:
+    """Allow access when the user may access ANY owner company of the account; re-raise the last denial otherwise."""
+    owners = [n for n in (account.company_names or [account.company_name]) if n and str(n).strip()]
+    if not owners:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: account has no associated company.",
+        )
+    last_exc: Optional[HTTPException] = None
+    for name in owners:
+        try:
+            comp = resolve_company(db, company_name=name)
+            check_company_access(current_user, comp.company_id)
+            return
+        except HTTPException as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied to bank account.",
+    )
+
+
 @router.get("", response_model=List[BankAccountOut], summary="List corporate bank accounts")
 def list_bank_accounts(
     company_name: Optional[str] = Query(None, description="Filter by company name"),
@@ -57,7 +81,7 @@ def list_bank_accounts(
     }
     return [
         a for a in accounts
-        if (getattr(a, "company_name", None) or getattr(a, "company", "") or "").lower() in assigned_names
+        if any(n.lower() in assigned_names for n in (a.company_names or [getattr(a, "company", "") or ""]))
     ]
 
 
@@ -75,8 +99,7 @@ def get_bank_account(
     user_role = (current_user.get("role") or "").lower()
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if user_role not in ("finance", "audit", "auditor") and comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
 
     return account
 
@@ -108,7 +131,11 @@ def update_bank_account(
     db: Session = Depends(get_db),
 ):
     service = BankService(db)
-    account = service.update_account(account_id, data)
+    try:
+        account = service.update_account(account_id, data)
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
     ws_manager.broadcast_sync({
@@ -160,8 +187,10 @@ def deposit_to_bank_account(
         raise HTTPException(status_code=404, detail="Bank account not found.")
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
+    if req.company_name:
+        req_comp = resolve_company(db, company_name=req.company_name)
+        check_company_access(current_user, req_comp.company_id)
 
     try:
         updated_account, tx = service.deposit(account_id, req)
@@ -192,8 +221,10 @@ def withdraw_from_bank_account(
         raise HTTPException(status_code=404, detail="Bank account not found.")
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
+    if req.company_name:
+        req_comp = resolve_company(db, company_name=req.company_name)
+        check_company_access(current_user, req_comp.company_id)
 
     try:
         updated_account, tx = service.withdraw(account_id, req)

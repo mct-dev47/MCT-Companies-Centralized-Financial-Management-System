@@ -91,7 +91,7 @@ type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
 import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
-import type { UtangSale } from '@/services/receivablesStore'
+import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
 const ITEMS_PER_PAGE = 10
@@ -403,7 +403,15 @@ export const SalesPage: React.FC = () => {
     if (!deleteConfirmSale || isAdmin) return
     setIsDeleting(true)
     try {
-      await salesService.deleteSale(deleteConfirmSale.id)
+      if (deleteConfirmSale.id.startsWith('utang-')) {
+        // A receivable with no sale behind it: delete it from receivables, not from sales
+        const result = await receivablesStore.deleteSale(deleteConfirmSale.id.slice('utang-'.length))
+        if (!result.success) throw new Error(result.message)
+        await refreshReceivablesFromBackend()
+      } else {
+        await salesService.deleteSale(deleteConfirmSale.id)
+        await refreshReceivablesFromBackend()
+      }
       setSales((prev) => prev.filter((s) => s.id !== deleteConfirmSale.id))
       setDeleteConfirmSale(null)
     } catch (err) {
