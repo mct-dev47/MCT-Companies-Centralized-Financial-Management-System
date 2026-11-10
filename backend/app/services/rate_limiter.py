@@ -426,24 +426,61 @@ class RateLimiterService:
                 detail="Authentication service temporarily unavailable. Please try again.",
             )
 
-    def cleanup_expired_records(self, db: Session, retention_days: int = 30) -> int:
+    def cleanup_expired_records(
+        self,
+        db: Session,
+        retention_days: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> int:
         """
-        Deletes expired rate limit records older than retention_days.
+        Deletes expired rate limit records older than retention_days (default 7 days) in batches.
         Active lockouts are never pruned.
         """
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=retention_days)
+        from sqlalchemy import delete, or_, select
+
+        if now is None:
+            now = datetime.now(timezone.utc)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        resolved_days = (
+            retention_days
+            if retention_days is not None
+            else getattr(settings, "RATE_LIMITS_RETENTION_DAYS", 7)
+        )
+        resolved_batch = (
+            batch_size
+            if batch_size is not None
+            else getattr(settings, "RETENTION_PURGE_BATCH_SIZE", 1000)
+        )
+        cutoff = now - timedelta(days=resolved_days)
+        total_deleted = 0
         try:
-            deleted = db.query(RateLimit).filter(
-                RateLimit.last_attempt_at < cutoff,
-                (RateLimit.locked_until == None) | (RateLimit.locked_until < now),
-            ).delete(synchronize_session=False)
-            db.commit()
-            return deleted
+            while True:
+                keys = db.scalars(
+                    select(RateLimit.key)
+                    .where(
+                        RateLimit.last_attempt_at < cutoff,
+                        or_(RateLimit.locked_until.is_(None), RateLimit.locked_until < now),
+                    )
+                    .limit(resolved_batch)
+                ).all()
+                if not keys:
+                    break
+                res = db.execute(
+                    delete(RateLimit).where(RateLimit.key.in_(keys))
+                )
+                db.commit()
+                deleted = res.rowcount or 0
+                total_deleted += deleted
+                if deleted < resolved_batch:
+                    break
+            return total_deleted
         except Exception as exc:
             db.rollback()
             logger.warning("Failed to prune rate_limits: %s", exc)
-            return 0
+            return total_deleted
 
 
 rate_limiter = RateLimiterService()

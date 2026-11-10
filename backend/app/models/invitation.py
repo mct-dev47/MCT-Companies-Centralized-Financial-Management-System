@@ -24,7 +24,7 @@ class UserInvitation(Base):
     user_id = Column(
         Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
     )
-    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_hash = Column(String(64), nullable=True, unique=True, index=True)
     status = Column(String(20), nullable=False, default="PENDING", index=True)
     purpose = Column(
         String(30),

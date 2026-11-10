@@ -6,6 +6,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 
@@ -227,7 +228,7 @@ class OtpService:
 
         if dispatch_success:
             # Phase 2a: Confirmation Transaction (AC-27)
-            # Invalidate prior active OTPs with 'superseded_by_resend'
+            # Invalidate prior active OTPs with 'superseded_by_resend' and scrub otp_hmac
             db.query(LoginOtpChallenge).filter(
                 LoginOtpChallenge.challenge_id == challenge_id,
                 LoginOtpChallenge.otp_id != new_otp_id,
@@ -235,6 +236,7 @@ class OtpService:
             ).update(
                 {
                     "status": "invalidated",
+                    "otp_hmac": None,
                     "invalidated_at": now,
                     "invalidation_reason": "superseded_by_resend",
                     "updated_at": now,
@@ -272,6 +274,7 @@ class OtpService:
             # Prior active OTP remains active and accepted!
             pending_challenge.status = "delivery_failed"
             pending_challenge.delivery_outcome = "failed"
+            pending_challenge.otp_hmac = None
             pending_challenge.updated_at = now
             db.commit()
             raise HTTPException(
@@ -318,6 +321,7 @@ class OtpService:
 
         if now > exp:
             challenge.status = "expired"
+            challenge.otp_hmac = None
             challenge.updated_at = now
             db.commit()
             raise HTTPException(
@@ -327,6 +331,7 @@ class OtpService:
 
         if challenge.attempts >= challenge.max_attempts:
             challenge.status = "invalidated"
+            challenge.otp_hmac = None
             challenge.invalidation_reason = "max_attempts_exceeded"
             challenge.invalidated_at = now
             challenge.updated_at = now
@@ -337,11 +342,12 @@ class OtpService:
             )
 
         submitted_hmac = compute_otp_hmac(submitted_otp)
-        if not hmac.compare_digest(challenge.otp_hmac, submitted_hmac):
+        if not challenge.otp_hmac or not hmac.compare_digest(challenge.otp_hmac, submitted_hmac):
             challenge.attempts += 1
             challenge.updated_at = now
             if challenge.attempts >= challenge.max_attempts:
                 challenge.status = "invalidated"
+                challenge.otp_hmac = None
                 challenge.invalidation_reason = "max_attempts_exceeded"
                 challenge.invalidated_at = now
                 db.commit()
@@ -355,8 +361,9 @@ class OtpService:
                 detail="The code is invalid or has expired. Request a new code if needed.",
             )
 
-        # Correct code: atomically consume (AC-28)
+        # Correct code: atomically consume and scrub otp_hmac (AC-28)
         challenge.status = "used"
+        challenge.otp_hmac = None
         challenge.consumed_at = now
         challenge.updated_at = now
         db.commit()
@@ -402,28 +409,108 @@ class OtpService:
             "resend_retry_after": retry_after if is_locked else 0,
         }
 
-    def cleanup_expired_challenges(self, db: Session, retention_days: int = 30) -> int:
+    def cleanup_expired_challenges(
+        self,
+        db: Session,
+        retention_days: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        now: Optional[datetime] = None,
+    ) -> int:
         """
-        Prunes OTP challenges older than retention_days (30 days).
-        Active challenges are NEVER deleted (AC-24).
+        1. Transitions expired active/pending_delivery challenges (expires_at <= now) to 'expired'
+           and scrubs otp_hmac = None.
+        2. Prunes non-active OTP challenges older than retention_days in batches.
+           Active (unexpired) challenges are NEVER deleted (AC-24).
         """
-        now = datetime.now(timezone.utc)
-        cutoff = now - timedelta(days=retention_days)
+        if now is None:
+            now = datetime.now(timezone.utc)
+        elif now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        resolved_days = (
+            retention_days
+            if retention_days is not None
+            else getattr(settings, "OTP_CHALLENGES_RETENTION_DAYS", 30)
+        )
+        resolved_batch = (
+            batch_size
+            if batch_size is not None
+            else getattr(settings, "RETENTION_PURGE_BATCH_SIZE", 1000)
+        )
+        cutoff = now - timedelta(days=resolved_days)
+        total_deleted = 0
+
         try:
-            deleted = (
-                db.query(LoginOtpChallenge)
-                .filter(
-                    LoginOtpChallenge.created_at < cutoff,
-                    LoginOtpChallenge.status != "active",
+            # Step 1: Transition expired active/pending rows and scrub otp_hmac in batches
+            while True:
+                exp_ids = db.scalars(
+                    select(LoginOtpChallenge.otp_id)
+                    .where(
+                        LoginOtpChallenge.status.in_(["active", "pending_delivery"]),
+                        LoginOtpChallenge.expires_at <= now,
+                    )
+                    .limit(resolved_batch)
+                ).all()
+                if not exp_ids:
+                    break
+                db.query(LoginOtpChallenge).filter(
+                    LoginOtpChallenge.otp_id.in_(exp_ids)
+                ).update(
+                    {"status": "expired", "otp_hmac": None, "updated_at": now},
+                    synchronize_session=False,
                 )
-                .delete(synchronize_session=False)
-            )
-            db.commit()
-            return deleted
+                db.commit()
+                if len(exp_ids) < resolved_batch:
+                    break
+
+            # Scrub any remaining terminal rows that still have a non-null otp_hmac
+            while True:
+                unscrubbed_ids = db.scalars(
+                    select(LoginOtpChallenge.otp_id)
+                    .where(
+                        LoginOtpChallenge.status != "active",
+                        LoginOtpChallenge.otp_hmac.isnot(None),
+                    )
+                    .limit(resolved_batch)
+                ).all()
+                if not unscrubbed_ids:
+                    break
+                db.query(LoginOtpChallenge).filter(
+                    LoginOtpChallenge.otp_id.in_(unscrubbed_ids)
+                ).update(
+                    {"otp_hmac": None, "updated_at": now},
+                    synchronize_session=False,
+                )
+                db.commit()
+                if len(unscrubbed_ids) < resolved_batch:
+                    break
+
+            # Step 2: Delete non-active challenges older than retention_days in batches
+            while True:
+                del_ids = db.scalars(
+                    select(LoginOtpChallenge.otp_id)
+                    .where(
+                        LoginOtpChallenge.created_at < cutoff,
+                        LoginOtpChallenge.status != "active",
+                    )
+                    .limit(resolved_batch)
+                ).all()
+                if not del_ids:
+                    break
+                res = db.execute(
+                    delete(LoginOtpChallenge).where(LoginOtpChallenge.otp_id.in_(del_ids))
+                )
+                db.commit()
+                deleted = res.rowcount or 0
+                total_deleted += deleted
+                if deleted < resolved_batch:
+                    break
+
+            return total_deleted
         except Exception as exc:
             db.rollback()
             logger.warning("Failed to prune login_otp_challenges: %s", exc)
-            return 0
+            return total_deleted
 
 
 otp_service = OtpService()

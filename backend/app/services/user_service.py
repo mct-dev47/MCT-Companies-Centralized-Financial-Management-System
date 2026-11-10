@@ -270,7 +270,7 @@ class UserService:
             UserInvitation.user_id == user_id,
             UserInvitation.status.in_(["PENDING", "CLAIMED"]),
             UserInvitation.purpose == "initial_password_setup",
-        ).update({"status": "REVOKED"}, synchronize_session=False)
+        ).update({"status": "REVOKED", "token_hash": None}, synchronize_session=False)
 
         # Cancel pending outbox jobs
         self.db.query(InvitationOutbox).filter(

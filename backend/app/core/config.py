@@ -1,7 +1,7 @@
 from typing import List, Union, Optional
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 import json
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -65,7 +65,17 @@ class Settings(BaseSettings):
     OTP_RESEND_INTERVAL_SECONDS: int = 120
     OTP_RESEND_LOCKOUT_MINUTES: int = 15
     OTP_EXPIRES_SECONDS: int = 180
-    OTP_AUDIT_RETENTION_DAYS: int = 30
+    # Per-table data retention settings
+    RATE_LIMITS_RETENTION_DAYS: int = 7
+    OTP_CHALLENGES_RETENTION_DAYS: int = 30
+    INVITATION_OUTBOX_RETENTION_DAYS: int = 60
+    RETENTION_PURGE_BATCH_SIZE: int = 1000
+    RETENTION_PURGE_INTERVAL_SECONDS: int = 21600
+    # Deprecated alias kept for backwards compatibility; use OTP_CHALLENGES_RETENTION_DAYS instead
+    OTP_AUDIT_RETENTION_DAYS: int = Field(
+        default=30,
+        deprecated="Deprecated: use OTP_CHALLENGES_RETENTION_DAYS instead; scheduled for removal.",
+    )
     OTP_HMAC_SECRET: SecretStr = SecretStr("")
     API_RATE_LIMIT_PER_MINUTE: int = 120
     HEAVY_API_RATE_LIMIT_PER_MINUTE: int = 30

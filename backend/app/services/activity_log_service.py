@@ -386,6 +386,46 @@ class ActivityLogService:
 
         return purged_count
 
+    def cleanup_expired_logs_batched(
+        self,
+        db: Session,
+        retention_days: int = 180,
+        batch_size: int = 1000,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """
+        Batched local database purge of AuditLog rows older than retention_days.
+        Avoids unbatched table locks and synchronous external HTTP calls.
+        """
+        from sqlalchemy import delete, select
+
+        resolved_now = now if now is not None else datetime.now(timezone.utc)
+        if resolved_now.tzinfo is None:
+            resolved_now = resolved_now.replace(tzinfo=timezone.utc)
+        cutoff = resolved_now - timedelta(days=retention_days)
+        total_deleted = 0
+        try:
+            while True:
+                ids = db.scalars(
+                    select(AuditLog.audit_log_id)
+                    .where(AuditLog.created_at < cutoff)
+                    .limit(batch_size)
+                ).all()
+                if not ids:
+                    break
+                res = db.execute(
+                    delete(AuditLog).where(AuditLog.audit_log_id.in_(ids))
+                )
+                db.commit()
+                deleted = res.rowcount or 0
+                total_deleted += deleted
+                if deleted < batch_size:
+                    break
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Batched local audit_logs retention purge failed: %s", exc)
+        return total_deleted
+
     def _enrich_logs(self, rows: List[dict], db: Optional[Session] = None) -> List[ActivityLogOut]:
         """
         Enrich raw audit rows with readable user names, company names,

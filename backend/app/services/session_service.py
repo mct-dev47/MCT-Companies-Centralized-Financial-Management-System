@@ -5,11 +5,12 @@ import logging
 import secrets
 import threading
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Callable, Optional
 from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Concurrency locks and in-memory caches
 _session_lock = threading.RLock()
 _session_activity: dict[str, float] = {}
-_revoked_families: set[str] = set()
+_revoked_families: dict[str, float] = {}
 _rotated_tokens: dict[str, dict[str, Any]] = {}
 
 # Paths that do not update session activity (AC-7)
@@ -162,15 +163,42 @@ def verify_csrf_header(request: Request) -> None:
 verify_csrf_protection = verify_csrf_header
 
 
-def _revoke_session_family(db: Session, family_id: str, user_id: Optional[int] = None) -> None:
+def _resolve_session_expiry(
+    created_at: Optional[float] = None,
+    expires_at: Optional[datetime] = None,
+    now_ts: Optional[float] = None,
+) -> tuple[datetime, float]:
+    resolved_now = now_ts if now_ts is not None else _current_timestamp()
+    if expires_at is not None:
+        exp_dt = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
+        return exp_dt, exp_dt.timestamp()
+    base_ts = float(created_at) if (created_at is not None and float(created_at) > 0) else resolved_now
+    exp_ts = base_ts + float(settings.SESSION_ABSOLUTE_LIFETIME_SECONDS)
+    return datetime.fromtimestamp(exp_ts, tz=timezone.utc), exp_ts
+
+
+def _revoke_session_family(
+    db: Session,
+    family_id: str,
+    user_id: Optional[int] = None,
+    created_at: Optional[float] = None,
+    expires_at: Optional[datetime] = None,
+) -> None:
+    exp_dt, exp_ts = _resolve_session_expiry(created_at=created_at, expires_at=expires_at)
     with _session_lock:
-        _revoked_families.add(family_id)
+        _revoked_families[family_id] = exp_ts
     try:
         family_hash = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
         existing = db.query(RevokedToken).filter(RevokedToken.token_hash == family_hash).first()
         if not existing:
-            db.add(RevokedToken(token_hash=family_hash, user_id=user_id))
-            db.commit()
+            db.add(RevokedToken(token_hash=family_hash, user_id=user_id, expires_at=exp_dt))
+        elif existing.expires_at is None:
+            existing.expires_at = exp_dt
+        try:
+            db.query(UserSession).filter(UserSession.family_id == family_id).delete(synchronize_session=False)
+        except Exception:
+            pass
+        db.commit()
     except Exception as exc:
         logger.warning(f"Failed to record family revocation in database: {exc}")
 
@@ -181,12 +209,15 @@ def revoke_session(
     family_id: Optional[str] = None,
     nonce: Optional[str] = None,
     user_id: Optional[int] = None,
+    created_at: Optional[float] = None,
+    expires_at: Optional[datetime] = None,
 ) -> None:
+    exp_dt, exp_ts = _resolve_session_expiry(created_at=created_at, expires_at=expires_at)
     with _session_lock:
         if sid:
             _session_activity.pop(sid, None)
         if family_id:
-            _revoked_families.add(family_id)
+            _revoked_families[family_id] = exp_ts
 
     hashes_to_revoke = []
     if nonce:
@@ -198,7 +229,9 @@ def revoke_session(
         try:
             existing = db.query(RevokedToken).filter(RevokedToken.token_hash == th).first()
             if not existing:
-                db.add(RevokedToken(token_hash=th, user_id=user_id))
+                db.add(RevokedToken(token_hash=th, user_id=user_id, expires_at=exp_dt))
+            elif existing.expires_at is None:
+                existing.expires_at = exp_dt
         except Exception:
             pass
 
@@ -247,28 +280,41 @@ def verify_refresh_cookie(
     last_activity = float(payload.get("last_activity", created_at))
 
     now = _current_timestamp()
+    now_utc = datetime.fromtimestamp(now, tz=timezone.utc)
 
-    # 1. Family revocation check
+    # 1. Family revocation check (in-memory & database with expires_at enforcement)
     with _session_lock:
-        if family_id in _revoked_families:
+        fam_exp = _revoked_families.get(family_id)
+        if fam_exp is not None:
+            if fam_exp > now:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session family has been revoked.",
+                )
+            _revoked_families.pop(family_id, None)
+
+    nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest() if nonce else ""
+    family_hash = hashlib.sha256(family_id.encode("utf-8")).hexdigest() if family_id else ""
+
+    if family_hash:
+        family_revoked = (
+            db.query(RevokedToken)
+            .filter(
+                RevokedToken.token_hash == family_hash,
+                or_(
+                    RevokedToken.expires_at.is_(None),
+                    RevokedToken.expires_at > now_utc,
+                ),
+            )
+            .first()
+        )
+        if family_revoked is not None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Session family has been revoked.",
+                detail="Session credential has been revoked.",
             )
 
-    # 2. Database revoked check
-    nonce_hash = hashlib.sha256(nonce.encode("utf-8")).hexdigest()
-    family_hash = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
-    is_revoked = db.query(RevokedToken).filter(
-        RevokedToken.token_hash.in_([nonce_hash, family_hash])
-    ).first()
-    if is_revoked:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Session credential has been revoked.",
-        )
-
-    # 3. Concurrency grace period & reuse detection (AC-8, AC-9)
+    # 2. Concurrency grace period & reuse detection (AC-8, AC-9)
     with _session_lock:
         _prune_rotated_tokens(now)
         if nonce in _rotated_tokens:
@@ -287,11 +333,58 @@ def verify_refresh_cookie(
                     family_id,
                     user_id,
                 )
-                _revoke_session_family(db, family_id, user_id)
+                _revoke_session_family(db, family_id, user_id, created_at=created_at)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Security violation: Token reuse detected. Session revoked.",
                     headers={"X-Reason-Code": "TOKEN_REUSE_DETECTED"},
+                )
+
+    # 3. Database nonce revocation / cross-worker rotation replay check
+    if nonce_hash:
+        nonce_revoked = (
+            db.query(RevokedToken)
+            .filter(
+                RevokedToken.token_hash == nonce_hash,
+                or_(
+                    RevokedToken.expires_at.is_(None),
+                    RevokedToken.expires_at > now_utc,
+                ),
+            )
+            .first()
+        )
+        if nonce_revoked is not None:
+            if family_id:
+                # Guard against cross-worker false positives within the 15s concurrency grace window:
+                # if Worker A just rotated this nonce <= REFRESH_GRACE_PERIOD_SECONDS ago and Worker B
+                # receives a concurrent tab request without Worker A's in-memory _rotated_tokens cache,
+                # do not destroy the session family.
+                rev_created = nonce_revoked.created_at
+                if rev_created is not None:
+                    rev_created_utc = (
+                        rev_created.replace(tzinfo=timezone.utc)
+                        if rev_created.tzinfo is None
+                        else rev_created
+                    )
+                    if (now - rev_created_utc.timestamp()) <= settings.REFRESH_GRACE_PERIOD_SECONDS:
+                        nonce_revoked = None
+
+            if nonce_revoked is not None:
+                if family_id:
+                    logger.warning(
+                        "Persisted rotated token reuse detected for family %s, user %s.",
+                        family_id,
+                        user_id,
+                    )
+                    _revoke_session_family(db, family_id, user_id, created_at=created_at)
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Security violation: Token reuse detected. Session revoked.",
+                        headers={"X-Reason-Code": "TOKEN_REUSE_DETECTED"},
+                    )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Session credential has been revoked.",
                 )
 
     # 4. User account & token version verification (AC-12)
@@ -426,6 +519,37 @@ def rotate_refresh_token(
             "cached_result": cached_result,
         }
 
+    # Persist rotated nonce hash in RevokedToken so replay is caught even after in-memory grace pruning or across workers
+    if old_nonce:
+        try:
+            now_dt = datetime.fromtimestamp(now, tz=timezone.utc)
+            exp_dt, _ = _resolve_session_expiry(created_at=created_at, now_ts=now)
+            old_nonce_hash = hashlib.sha256(old_nonce.encode("utf-8")).hexdigest()
+            existing_rev = db.query(RevokedToken).filter(RevokedToken.token_hash == old_nonce_hash).first()
+            if not existing_rev:
+                db.add(
+                    RevokedToken(
+                        token_hash=old_nonce_hash,
+                        user_id=user.user_id,
+                        expires_at=exp_dt,
+                        created_at=now_dt,
+                    )
+                )
+            try:
+                db.query(UserSession).filter(UserSession.session_id == sid).update(
+                    {"last_activity_at": datetime.fromtimestamp(now, tz=timezone.utc)},
+                    synchronize_session=False,
+                )
+            except Exception:
+                pass
+            db.commit()
+        except Exception as exc:
+            logger.warning("Failed persisting rotated refresh nonce to revoked_tokens: %s", exc)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
     return new_cookie_value, access_token, user_info
 
 
@@ -483,7 +607,18 @@ def register_user_session(
             sessions_to_evict = active_sessions[:evict_count]
             for s in sessions_to_evict:
                 logger.info("Evicting oldest session %s for user %s to enforce concurrency limit", s.session_id, user_id)
-                revoke_session(db=db, sid=s.session_id, family_id=s.family_id, user_id=user_id)
+                s_created_ts = (
+                    s.created_at.replace(tzinfo=timezone.utc).timestamp()
+                    if s.created_at and s.created_at.tzinfo is None
+                    else (s.created_at.timestamp() if s.created_at else None)
+                )
+                revoke_session(
+                    db=db,
+                    sid=s.session_id,
+                    family_id=s.family_id,
+                    user_id=user_id,
+                    created_at=s_created_ts,
+                )
 
         new_sess = UserSession(
             session_id=sid,
@@ -525,5 +660,86 @@ def delete_user_session(
             db.rollback()
         except Exception:
             pass
+
+
+def cleanup_expired_revoked_tokens(
+    db: Session,
+    batch_size: int = 1000,
+    now: Optional[datetime] = None,
+) -> int:
+    """Deletes expired rows from revoked_tokens in batches where expires_at < now."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    total_deleted = 0
+    try:
+        while True:
+            subq = (
+                select(RevokedToken.token_hash)
+                .where(
+                    RevokedToken.expires_at.isnot(None),
+                    RevokedToken.expires_at < now,
+                )
+                .limit(batch_size)
+            )
+            expired_hashes = db.scalars(subq).all()
+            if not expired_hashes:
+                break
+
+            res = db.execute(
+                delete(RevokedToken).where(RevokedToken.token_hash.in_(expired_hashes))
+            )
+            db.commit()
+            deleted = res.rowcount or 0
+            total_deleted += deleted
+            if deleted < batch_size:
+                break
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to prune revoked_tokens: %s", exc)
+
+    return total_deleted
+
+
+def cleanup_expired_user_sessions(
+    db: Session,
+    batch_size: int = 1000,
+    now: Optional[datetime] = None,
+) -> int:
+    """Deletes abandoned user_sessions rows that have exceeded SESSION_ABSOLUTE_LIFETIME_SECONDS."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    cutoff = now - timedelta(seconds=settings.SESSION_ABSOLUTE_LIFETIME_SECONDS)
+    total_deleted = 0
+    try:
+        while True:
+            subq = (
+                select(UserSession.session_id)
+                .where(UserSession.created_at < cutoff)
+                .limit(batch_size)
+            )
+            expired_sids = db.scalars(subq).all()
+            if not expired_sids:
+                break
+
+            res = db.execute(
+                delete(UserSession).where(UserSession.session_id.in_(expired_sids))
+            )
+            db.commit()
+            deleted = res.rowcount or 0
+            total_deleted += deleted
+            if deleted < batch_size:
+                break
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to prune expired user_sessions: %s", exc)
+
+    return total_deleted
+
 
 

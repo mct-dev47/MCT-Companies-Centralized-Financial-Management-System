@@ -32,7 +32,7 @@ from app.db.session import Base
 from app.main import app
 from app.middleware.correlation import RequestCorrelationMiddleware, get_current_request_id
 from app.middleware.rate_limit_middleware import RateLimitingMiddleware, _worker_sliding_windows
-from app.models.security import RateLimit, LoginOtpChallenge, LoginRateLimit
+from app.models.security import RateLimit, LoginOtpChallenge
 from app.models.user import User, UserCompany
 from app.schemas.auth import LoginRequest, VerifyOtpRequest
 from app.services.auth_service import login_user, verify_login_otp, resend_login_otp
@@ -62,7 +62,6 @@ class TestSecureRateLimiting(unittest.TestCase):
                 LoginOtpChallenge.__table__,
                 User.__table__,
                 UserCompany.__table__,
-                LoginRateLimit.__table__,
             ],
         )
         SessionTest = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
@@ -635,7 +634,7 @@ class TestSecureRateLimiting(unittest.TestCase):
         email = "twophase@mct.com"
         ip = "192.168.1.11"
         now = datetime.now(timezone.utc)
-        cid, code1, _ = otp_service.create_login_challenge(self.db, email, ip, now=now - timedelta(seconds=130))
+        cid, code1, otp_id1 = otp_service.create_login_challenge(self.db, email, ip, now=now - timedelta(seconds=130))
 
         # Send failure: code 1 is still active
         with self.assertRaises(HTTPException):
@@ -645,14 +644,15 @@ class TestSecureRateLimiting(unittest.TestCase):
         self.assertIsNotNone(c1)
         self.assertEqual(c1.otp_hmac, compute_otp_hmac(code1))
 
-        # Send success: code 1 invalidated, code 2 active
+        # Send success: code 1 invalidated (and otp_hmac scrubbed to None), code 2 active
         res, code2 = otp_service.resend_otp(self.db, cid, ip, lambda e, c: True, now=now)
         c2 = self.db.query(LoginOtpChallenge).filter(LoginOtpChallenge.challenge_id == cid, LoginOtpChallenge.status == "active").first()
         self.assertIsNotNone(c2)
         self.assertEqual(c2.otp_hmac, compute_otp_hmac(code2))
 
-        c1_old = self.db.query(LoginOtpChallenge).filter(LoginOtpChallenge.otp_hmac == compute_otp_hmac(code1)).first()
+        c1_old = self.db.query(LoginOtpChallenge).filter(LoginOtpChallenge.otp_id == otp_id1).first()
         self.assertEqual(c1_old.status, "invalidated")
+        self.assertIsNone(c1_old.otp_hmac)
         self.assertEqual(c1_old.invalidation_reason, "superseded_by_resend")
 
     # AC-28: Atomic OTP verification and redemption prevents double consumption

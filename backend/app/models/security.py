@@ -10,21 +10,8 @@ class RevokedToken(Base):
 
     token_hash = Column(String(64), primary_key=True, index=True)
     user_id = Column(Integer, nullable=True, index=True)
-    expires_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-
-class LoginRateLimit(Base):
-    __tablename__ = "login_rate_limits"
-
-    ip_address = Column(String(45), primary_key=True, index=True)
-    failed_attempts = Column(Integer, default=0, nullable=False)
-    locked_until = Column(DateTime(timezone=True), nullable=True)
-    last_attempt_at = Column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
@@ -63,7 +50,7 @@ class LoginOtpChallenge(Base):
     email = Column(String(255), nullable=False, index=True)
     purpose = Column(String(50), default="login_2fa", nullable=False)
     ip_address = Column(String(45), nullable=False)
-    otp_hmac = Column(String(64), nullable=False)
+    otp_hmac = Column(String(64), nullable=True)
     status = Column(String(30), default="pending_delivery", nullable=False)
     attempts = Column(Integer, default=0, nullable=False)
     max_attempts = Column(Integer, default=5, nullable=False)

@@ -339,71 +339,6 @@ def _resolve_session(db: Optional[Session]):
             session.close()
 
 
-def _record_failed_login(db: Optional[Session], ip_address: str, email: str = "") -> None:
-    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
-        return
-    now = datetime.now(timezone.utc)
-    from app.models.security import LoginRateLimit
-    with _resolve_session(db) as session:
-        rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
-        if not rate_row:
-            rate_row = LoginRateLimit(ip_address=ip_address, failed_attempts=0, last_attempt_at=now)
-            session.add(rate_row)
-            session.commit()
-
-        if rate_row.locked_until and rate_row.locked_until > now:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
-            )
-        if rate_row.locked_until and rate_row.locked_until <= now:
-            rate_row.failed_attempts = 0
-            rate_row.locked_until = None
-
-        rate_row.failed_attempts += 1
-        rate_row.last_attempt_at = now
-        if rate_row.failed_attempts >= settings.LOGIN_MAX_ATTEMPTS:
-            rate_row.locked_until = now + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
-            try:
-                log_account_locked(session, ip_address=ip_address, email=email)
-            except Exception:
-                pass
-        session.commit()
-
-
-def _ensure_ip_available(db: Optional[Session], ip_address: str) -> None:
-    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
-        return
-    now = datetime.now(timezone.utc)
-    from app.models.security import LoginRateLimit
-    with _resolve_session(db) as session:
-        rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
-        if rate_row and rate_row.locked_until and rate_row.locked_until > now:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"This device is temporarily locked. Try again in {settings.LOGIN_LOCKOUT_MINUTES} minutes.",
-            )
-        if rate_row and rate_row.locked_until and rate_row.locked_until <= now:
-            rate_row.failed_attempts = 0
-            rate_row.locked_until = None
-            session.commit()
-
-
-def _reset_ip_attempts(db: Optional[Session], ip_address: str) -> None:
-    if ip_address in ("127.0.0.1", "::1", "localhost", "unknown"):
-        return
-    try:
-        from app.models.security import LoginRateLimit
-        with _resolve_session(db) as session:
-            rate_row = session.query(LoginRateLimit).filter(LoginRateLimit.ip_address == ip_address).first()
-            if rate_row:
-                rate_row.failed_attempts = 0
-                rate_row.locked_until = None
-                session.commit()
-    except Exception:
-        pass
-
-
 def _get_jwt_secret() -> str:
     from app.core.config import unwrap_secret
     secret = unwrap_secret(settings.SUPABASE_JWT_SECRET) or settings.SUPABASE_KEY
@@ -924,9 +859,9 @@ def validate_invitation_token(db: Session, token: str) -> TokenValidateResponse:
         exp = exp.replace(tzinfo=timezone.utc)
 
     if exp <= now or invitation.status == "EXPIRED":
-        if invitation.status != "EXPIRED":
+        if invitation.status != "EXPIRED" or invitation.token_hash is not None:
             db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
-                {"status": "EXPIRED"}, synchronize_session=False
+                {"status": "EXPIRED", "token_hash": None}, synchronize_session=False
             )
             db.commit()
         raise HTTPException(
@@ -1088,12 +1023,12 @@ def request_password_reset(
     with _forgot_pwd_lock:
         _forgot_pwd_last_sent[normalized_email] = now_ts
 
-    # Revoke previous pending or claimed reset tokens for this user (AC-4)
+    # Revoke previous pending or claimed reset tokens for this user and scrub token_hash (AC-4)
     db.query(UserInvitation).filter(
         UserInvitation.user_id == user.user_id,
         UserInvitation.purpose == "password_reset",
         UserInvitation.status.in_(["PENDING", "CLAIMED"]),
-    ).update({"status": "REVOKED"}, synchronize_session=False)
+    ).update({"status": "REVOKED", "token_hash": None}, synchronize_session=False)
 
     # Cancel previous pending or failed reset outbox jobs for this user
     db.query(InvitationOutbox).filter(
@@ -1269,7 +1204,7 @@ def reset_password(
         exp = exp.replace(tzinfo=timezone.utc)
     if exp <= now:
         db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
-            {"status": "EXPIRED"}, synchronize_session=False
+            {"status": "EXPIRED", "token_hash": None}, synchronize_session=False
         )
         db.commit()
         raise HTTPException(
@@ -1345,7 +1280,7 @@ def reset_password(
         db.query(UserInvitation).filter(
             UserInvitation.invitation_id == invitation.invitation_id
         ).update(
-            {"status": "ACCEPTED", "accepted_at": now},
+            {"status": "ACCEPTED", "accepted_at": now, "token_hash": None},
             synchronize_session=False,
         )
 
@@ -1353,13 +1288,28 @@ def reset_password(
             UserInvitation.user_id == user.user_id,
             UserInvitation.purpose == "password_reset",
             UserInvitation.status == "PENDING",
-        ).update({"status": "REVOKED"}, synchronize_session=False)
+        ).update({"status": "REVOKED", "token_hash": None}, synchronize_session=False)
 
-        # Clear login rate limit lockout (AC-13)
+        # Clear login rate limit lockout on RateLimit table scoped strictly to this user (AC-13)
         try:
-            from app.models.security import LoginRateLimit
-            db.query(LoginRateLimit).filter(LoginRateLimit.locked_until <= now).update(
-                {"failed_attempts": 0, "locked_until": None}, synchronize_session=False
+            from app.models.security import RateLimit
+            from app.core.company_resolver import normalize_email
+            from sqlalchemy import or_
+            norm_user_email = normalize_email(str(user.email).strip().lower())
+            escaped_email = (
+                norm_user_email.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_")
+            )
+            db.query(RateLimit).filter(
+                or_(
+                    (RateLimit.rate_type == "login_email") & (RateLimit.identifier == norm_user_email),
+                    (RateLimit.rate_type == "login_combo")
+                    & RateLimit.identifier.like(f"{escaped_email}:%", escape="\\"),
+                )
+            ).update(
+                {"attempts": 0, "locked_until": None, "updated_at": now},
+                synchronize_session=False,
             )
         except Exception:
             pass
@@ -1528,7 +1478,7 @@ def setup_invitation_password(db: Session, token: str, new_password: str, ip_add
         exp = exp.replace(tzinfo=timezone.utc)
     if exp <= now:
         db.query(UserInvitation).filter(UserInvitation.invitation_id == invitation.invitation_id).update(
-            {"status": "EXPIRED"}, synchronize_session=False
+            {"status": "EXPIRED", "token_hash": None}, synchronize_session=False
         )
         db.commit()
         raise HTTPException(
@@ -1608,16 +1558,16 @@ def setup_invitation_password(db: Session, token: str, new_password: str, ip_add
         db.query(UserInvitation).filter(
             UserInvitation.invitation_id == invitation.invitation_id
         ).update(
-            {"status": "ACCEPTED", "accepted_at": now},
+            {"status": "ACCEPTED", "accepted_at": now, "token_hash": None},
             synchronize_session=False,
         )
 
-        # Invalidate any other pending setup tokens for this user (AC-4)
+        # Invalidate any other pending setup tokens for this user and scrub token_hash (AC-4)
         db.query(UserInvitation).filter(
             UserInvitation.user_id == user.user_id,
             UserInvitation.purpose == "initial_password_setup",
             UserInvitation.status == "PENDING",
-        ).update({"status": "REVOKED"}, synchronize_session=False)
+        ).update({"status": "REVOKED", "token_hash": None}, synchronize_session=False)
 
         db.commit()
         logger.info("Successfully activated user_id=%s via invitation redemption.", user.user_id)

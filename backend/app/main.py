@@ -250,29 +250,9 @@ def on_startup():
     except Exception:
         pass
 
-    # Data retention policy: asynchronously purge activity logs older than 6 months (180 days)
-    # and rate limit / OTP audit records older than 30 days (AC-24, AC-28)
-    def _run_retention_purge():
-        try:
-            from app.services.activity_log_service import activity_log_service
-            activity_log_service.cleanup_expired_logs(retention_days=180)
-        except Exception:
-            pass
-
-        try:
-            from app.db.session import SessionLocal
-            from app.services.rate_limiter import rate_limiter
-            from app.services.otp_service import otp_service
-            session = SessionLocal()
-            try:
-                rate_limiter.cleanup_expired_records(session, retention_days=settings.OTP_AUDIT_RETENTION_DAYS)
-                otp_service.cleanup_expired_challenges(session, retention_days=settings.OTP_AUDIT_RETENTION_DAYS)
-            finally:
-                session.close()
-        except Exception:
-            pass
-
-    threading.Thread(target=_run_retention_purge, daemon=True, name="activity-retention-purge").start()
+    # Recurring data retention scheduler (guarded by Postgres advisory lock)
+    from app.tasks.retention_purge import start_periodic_retention_scheduler
+    start_periodic_retention_scheduler()
 
 @app.get("/", tags=["Root"])
 def root():

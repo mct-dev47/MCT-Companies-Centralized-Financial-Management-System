@@ -286,6 +286,23 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0050_receivables_sale_cascade")
             logger.info("Migration 0050_receivables_sale_cascade applied successfully.")
 
+    # 17. Check if 0051 is applied
+    result_0051 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0051_auth_data_retention'")
+    ).first()
+
+    if not result_0051:
+        script_0051 = MIGRATIONS_DIR / "0051_auth_data_retention.postgres.sql"
+        if script_0051.exists():
+            sql_0051 = script_0051.read_text(encoding="utf-8")
+            for stmt in sql_0051.replace("BEGIN;", "").replace("COMMIT;", "").split(";"):
+                body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                if body:
+                    conn.execute(text(body))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0051_auth_data_retention')"))
+            applied.append("0051_auth_data_retention")
+            logger.info("Migration 0051_auth_data_retention applied successfully.")
+
     conn.commit()
     return applied
 
@@ -692,5 +709,179 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0050_receivables_sale_cascade")
 
+    # 17. Check if 0051 is applied
+    result_0051 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0051_auth_data_retention'")
+    ).first()
+    if not result_0051:
+        script_0051 = MIGRATIONS_DIR / "0051_auth_data_retention.sqlite.sql"
+        if script_0051.exists():
+            for statement in script_0051.read_text(encoding="utf-8").split(";"):
+                lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                clean_stmt = "\n".join(lines).strip()
+                if clean_stmt and "schema_migrations" not in clean_stmt:
+                    conn.execute(text(clean_stmt))
+
+        # Rebuild login_otp_challenges if otp_hmac has NOT NULL constraint in SQLite
+        otp_table = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='login_otp_challenges'")
+        ).first()
+        if otp_table:
+            otp_cols = conn.execute(text("PRAGMA table_info(login_otp_challenges)")).fetchall()
+            otp_hmac_notnull = any(row[1] == "otp_hmac" and row[3] == 1 for row in otp_cols)
+            if otp_hmac_notnull:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE login_otp_challenges_new (
+                            otp_id VARCHAR(36) PRIMARY KEY,
+                            challenge_id VARCHAR(36) NOT NULL,
+                            user_id INTEGER NULL,
+                            email VARCHAR(255) NOT NULL,
+                            purpose VARCHAR(50) NOT NULL DEFAULT 'login_2fa',
+                            ip_address VARCHAR(45) NOT NULL,
+                            otp_hmac VARCHAR(64) NULL,
+                            status VARCHAR(30) NOT NULL DEFAULT 'pending_delivery',
+                            attempts INTEGER NOT NULL DEFAULT 0,
+                            max_attempts INTEGER NOT NULL DEFAULT 5,
+                            resend_count INTEGER NOT NULL DEFAULT 0,
+                            last_sent_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            expires_at DATETIME NOT NULL,
+                            consumed_at DATETIME NULL,
+                            invalidated_at DATETIME NULL,
+                            invalidation_reason VARCHAR(100) NULL,
+                            delivery_outcome VARCHAR(50) NULL,
+                            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO login_otp_challenges_new SELECT "
+                        "otp_id, challenge_id, user_id, email, purpose, ip_address, otp_hmac, status, "
+                        "attempts, max_attempts, resend_count, last_sent_at, expires_at, consumed_at, "
+                        "invalidated_at, invalidation_reason, delivery_outcome, created_at, updated_at "
+                        "FROM login_otp_challenges"
+                    )
+                )
+                conn.execute(text("DROP TABLE login_otp_challenges"))
+                conn.execute(text("ALTER TABLE login_otp_challenges_new RENAME TO login_otp_challenges"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_otp_challenges_session ON login_otp_challenges (challenge_id, status)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_otp_challenges_email_ip ON login_otp_challenges (email, ip_address)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_otp_challenges_expires ON login_otp_challenges (expires_at)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_otp_challenges_retention ON login_otp_challenges (created_at, status)")
+                )
+
+            conn.execute(
+                text(
+                    "UPDATE login_otp_challenges SET otp_hmac = NULL "
+                    "WHERE status IN ('used', 'expired', 'invalidated', 'delivery_failed') AND otp_hmac IS NOT NULL"
+                )
+            )
+
+        # Rebuild user_invitations if token_hash has NOT NULL constraint in SQLite
+        inv_table = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='user_invitations'")
+        ).first()
+        if inv_table:
+            inv_cols = conn.execute(text("PRAGMA table_info(user_invitations)")).fetchall()
+            token_hash_notnull = any(row[1] == "token_hash" and row[3] == 1 for row in inv_cols)
+            if token_hash_notnull:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE user_invitations_new (
+                            invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                            token_hash VARCHAR(64) NULL UNIQUE,
+                            status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+                            purpose VARCHAR(30) NOT NULL DEFAULT 'initial_password_setup',
+                            expires_at DATETIME NOT NULL,
+                            claimed_at DATETIME NULL,
+                            accepted_at DATETIME NULL,
+                            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            created_by_user_id INTEGER NULL REFERENCES users(user_id) ON DELETE SET NULL,
+                            CONSTRAINT chk_invitation_status CHECK (status IN ('PENDING', 'CLAIMED', 'ACCEPTED', 'EXPIRED', 'REVOKED')),
+                            CONSTRAINT chk_invitation_purpose CHECK (purpose IN ('initial_password_setup', 'password_reset'))
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        "INSERT INTO user_invitations_new "
+                        "(invitation_id, user_id, token_hash, status, purpose, expires_at, claimed_at, accepted_at, created_at, created_by_user_id) "
+                        "SELECT invitation_id, user_id, token_hash, status, "
+                        "COALESCE(purpose, 'initial_password_setup'), expires_at, claimed_at, accepted_at, created_at, created_by_user_id "
+                        "FROM user_invitations"
+                    )
+                )
+                conn.execute(text("DROP TABLE user_invitations"))
+                conn.execute(text("ALTER TABLE user_invitations_new RENAME TO user_invitations"))
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_user_invitations_token_status ON user_invitations(token_hash, status)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_user_invitations_user_purpose ON user_invitations(user_id, purpose, status)")
+                )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS idx_user_invitations_user ON user_invitations(user_id)")
+                )
+
+            conn.execute(
+                text(
+                    "UPDATE user_invitations SET token_hash = NULL "
+                    "WHERE status IN ('ACCEPTED', 'EXPIRED', 'REVOKED') AND token_hash IS NOT NULL"
+                )
+            )
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0051_auth_data_retention')")
+        )
+        applied.append("0051_auth_data_retention")
+        logger.info("SQLite migration 0051_auth_data_retention applied successfully.")
+
     conn.commit()
     return applied
+
+
+def rollback_migration_0051(engine: Engine) -> None:
+    """Reversible downgrade for migration 0051_auth_data_retention."""
+    dialect = engine.dialect.name
+    with engine.connect() as conn:
+        if dialect == "postgresql":
+            down_script = MIGRATIONS_DIR / "0051_auth_data_retention.down.postgres.sql"
+            if down_script.exists():
+                for stmt in down_script.read_text(encoding="utf-8").split(";"):
+                    body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                    if body:
+                        conn.execute(text(body))
+        else:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS login_rate_limits (
+                        ip_address VARCHAR(45) PRIMARY KEY,
+                        failed_attempts INTEGER NOT NULL DEFAULT 0,
+                        locked_until DATETIME NULL,
+                        last_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            conn.execute(text("DROP INDEX IF EXISTS ix_revoked_tokens_expires_at"))
+            conn.execute(text("DROP INDEX IF EXISTS idx_rate_limits_retention"))
+            conn.execute(text("DROP INDEX IF EXISTS idx_outbox_retention"))
+            conn.execute(text("DROP INDEX IF EXISTS idx_user_sessions_created_at"))
+            conn.execute(text("DELETE FROM schema_migrations WHERE version = '0051_auth_data_retention'"))
+        conn.commit()
+

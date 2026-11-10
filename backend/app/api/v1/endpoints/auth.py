@@ -211,6 +211,7 @@ def logout(
     family_id = None
     nonce = None
     user_id = None
+    created_at = None
 
     if cookie_value:
         try:
@@ -220,11 +221,24 @@ def logout(
             family_id = payload.get("family_id")
             nonce = payload.get("nonce")
             user_id = payload.get("user_id")
+            raw_created_at = payload.get("created_at")
+            if raw_created_at is not None and not isinstance(raw_created_at, bool):
+                try:
+                    created_at = float(raw_created_at)
+                except (ValueError, TypeError):
+                    created_at = None
         except Exception:
             pass
 
     # Revoke session in session_service and revoked_tokens table (AC-10)
-    revoke_session(db=db, sid=sid, family_id=family_id, nonce=nonce, user_id=user_id)
+    revoke_session(
+        db=db,
+        sid=sid,
+        family_id=family_id,
+        nonce=nonce,
+        user_id=user_id,
+        created_at=created_at,
+    )
     clear_refresh_cookie(response)
 
     # If Bearer token is provided, revoke it as well
@@ -232,7 +246,7 @@ def logout(
     if auth_header and auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
         try:
-            revoke_access_token(token, db=db)
+            revoke_access_token(token, db=db, user_id=user_id)
         except Exception:
             pass
 

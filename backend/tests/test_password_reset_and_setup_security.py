@@ -44,7 +44,7 @@ from app.core.encryption import decrypt_payload, encrypt_payload, encrypt_invita
 from app.db.session import Base
 from app.models.company import Company
 from app.models.invitation import InvitationOutbox, UserInvitation
-from app.models.security import LoginRateLimit
+from app.models.security import RateLimit
 from app.models.user import User, UserCompany
 from app.schemas.auth import (
     PasswordResetConfirm,
@@ -180,9 +180,10 @@ class TestPasswordResetAndSetupSecurity(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 400)
         self.assertIn("expired", ctx.exception.detail.lower())
 
-        # 2. Token status became EXPIRED
+        # 2. Token status became EXPIRED and token_hash was scrubbed
         self.db.refresh(inv)
         self.assertEqual(inv.status, "EXPIRED")
+        self.assertIsNone(inv.token_hash)
 
         # 3. User remains PROVISIONED
         user = self.db.query(User).filter(User.user_id == 3).first()
@@ -224,6 +225,7 @@ class TestPasswordResetAndSetupSecurity(unittest.TestCase):
         self.db.refresh(old_inv)
         self.db.refresh(job)
         self.assertEqual(old_inv.status, "REVOKED")
+        self.assertIsNone(old_inv.token_hash)
         self.assertEqual(job.status, "CANCELLED")
 
         # New pending invitation exists with purpose initial_password_setup
@@ -353,11 +355,16 @@ class TestPasswordResetAndSetupSecurity(unittest.TestCase):
         user = self.db.query(User).filter(User.user_id == 2).first()
         initial_version = user.token_version
 
-        # Seed locked rate limit row
-        rate_lock = LoginRateLimit(
-            ip_address="198.51.100.77",
-            failed_attempts=5,
-            locked_until=datetime.now(timezone.utc) - timedelta(minutes=1),
+        # Seed locked rate limit row on RateLimit
+        now_utc = datetime.now(timezone.utc)
+        rate_lock = RateLimit(
+            key="login:combo:active@mct.com:198.51.100.77",
+            rate_type="login_combo",
+            identifier="active@mct.com:198.51.100.77",
+            attempts=5,
+            window_start=now_utc - timedelta(minutes=5),
+            locked_until=now_utc + timedelta(minutes=10),
+            last_attempt_at=now_utc - timedelta(minutes=1),
         )
         self.db.add(rate_lock)
         self.db.commit()
@@ -369,6 +376,9 @@ class TestPasswordResetAndSetupSecurity(unittest.TestCase):
 
         self.db.refresh(user)
         self.assertEqual(user.token_version, initial_version + 1)
+        self.db.refresh(rate_lock)
+        self.assertEqual(rate_lock.attempts, 0)
+        self.assertIsNone(rate_lock.locked_until)
 
     # AC-14: Explicit login required (no auto-authentication)
     def test_ac14_no_auto_login_on_completion(self):

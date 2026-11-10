@@ -108,12 +108,22 @@ class InvitationDispatcher:
         now = datetime.now(timezone.utc)
         claim_token = job.claim_token
 
-        # 1. Verify parent invitation is still valid and PENDING
+        # 1. Verify parent invitation is still valid, unexpired, and PENDING
         parent_invitation = (
             self.db.query(UserInvitation)
             .filter(UserInvitation.invitation_id == job.invitation_id)
             .first()
         )
+        parent_exp = parent_invitation.expires_at if parent_invitation else None
+        if parent_exp is not None and parent_exp.tzinfo is None:
+            parent_exp = parent_exp.replace(tzinfo=timezone.utc)
+        if parent_invitation and parent_exp is not None and parent_exp <= now and parent_invitation.status in ("PENDING", "CLAIMED"):
+            self.db.query(UserInvitation).filter(
+                UserInvitation.invitation_id == parent_invitation.invitation_id
+            ).update({"status": "EXPIRED", "token_hash": None}, synchronize_session=False)
+            self.db.commit()
+            parent_invitation.status = "EXPIRED"
+
         if not parent_invitation or parent_invitation.status in ("ACCEPTED", "REVOKED", "EXPIRED"):
             logger.info(
                 "Cancelling outbox job %s: Parent invitation status is %s.",
@@ -500,3 +510,115 @@ def process_pending_outbox_batch(batch_size: int = 10) -> int:
         return processed_count
     finally:
         db.close()
+
+
+def cleanup_invitation_tables(
+    db: Session,
+    retention_days: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, int]:
+    """
+    1. Marks expired PENDING/CLAIMED UserInvitation rows as EXPIRED and scrubs token_hash = None in batches.
+    2. Scrubs token_hash = None on any terminal UserInvitation rows (ACCEPTED, EXPIRED, REVOKED).
+    3. Deletes DISPATCHED_TO_PROVIDER and CANCELLED InvitationOutbox rows older than retention_days in batches.
+       Unresolved DEAD_LETTER rows and active (PENDING, CLAIMED, FAILED) rows are NEVER deleted.
+    """
+    from sqlalchemy import delete, select
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    resolved_days = (
+        retention_days
+        if retention_days is not None
+        else getattr(settings, "INVITATION_OUTBOX_RETENTION_DAYS", 60)
+    )
+    resolved_batch = (
+        batch_size
+        if batch_size is not None
+        else getattr(settings, "RETENTION_PURGE_BATCH_SIZE", 1000)
+    )
+    cutoff = now - timedelta(days=resolved_days)
+    invitations_scrubbed = 0
+    outbox_deleted = 0
+
+    try:
+        # 1. Transition expired PENDING/CLAIMED invitations and scrub token_hash
+        while True:
+            exp_ids = db.scalars(
+                select(UserInvitation.invitation_id)
+                .where(
+                    UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+                    UserInvitation.expires_at <= now,
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not exp_ids:
+                break
+            updated = (
+                db.query(UserInvitation)
+                .filter(UserInvitation.invitation_id.in_(exp_ids))
+                .update(
+                    {"status": "EXPIRED", "token_hash": None},
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            invitations_scrubbed += updated or 0
+            if len(exp_ids) < resolved_batch:
+                break
+
+        # 2. Scrub any terminal invitations that still have a non-null token_hash
+        while True:
+            unscrubbed_ids = db.scalars(
+                select(UserInvitation.invitation_id)
+                .where(
+                    UserInvitation.status.in_(["ACCEPTED", "EXPIRED", "REVOKED"]),
+                    UserInvitation.token_hash.isnot(None),
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not unscrubbed_ids:
+                break
+            updated = (
+                db.query(UserInvitation)
+                .filter(UserInvitation.invitation_id.in_(unscrubbed_ids))
+                .update({"token_hash": None}, synchronize_session=False)
+            )
+            db.commit()
+            invitations_scrubbed += updated or 0
+            if len(unscrubbed_ids) < resolved_batch:
+                break
+
+        # 3. Delete resolved InvitationOutbox rows older than retention_days in batches
+        while True:
+            job_ids = db.scalars(
+                select(InvitationOutbox.job_id)
+                .where(
+                    InvitationOutbox.status.in_(["DISPATCHED_TO_PROVIDER", "CANCELLED"]),
+                    InvitationOutbox.updated_at < cutoff,
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not job_ids:
+                break
+            res = db.execute(
+                delete(InvitationOutbox).where(InvitationOutbox.job_id.in_(job_ids))
+            )
+            db.commit()
+            deleted = res.rowcount or 0
+            outbox_deleted += deleted
+            if deleted < resolved_batch:
+                break
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to cleanup invitation tables: %s", exc)
+
+    return {
+        "user_invitations_scrubbed": invitations_scrubbed,
+        "invitation_outbox_deleted": outbox_deleted,
+    }
+
