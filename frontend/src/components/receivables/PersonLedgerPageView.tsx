@@ -25,7 +25,6 @@ import {
 } from '@/components/ui/dialog'
 import { BackButton, ConfirmModal, RowActionsMenu } from '@/components/common'
 import { formatPHP } from '@/lib/format'
-import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import type {

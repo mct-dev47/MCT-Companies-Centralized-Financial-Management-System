@@ -107,6 +107,26 @@ if not enable_open_docs:
 
 # CORS Middleware setup
 
+# Save timing (speed plan, phase 0): every API write reports how long it took, in a
+# Server-Timing header (visible in the browser's Network tab) and a log line, so slow saves can be measured.
+import logging as _logging
+import time as _time
+
+_timing_logger = _logging.getLogger("app.timing")
+
+
+@app.middleware("http")
+async def report_write_timing(request, call_next):
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE") or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    started = _time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (_time.perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={elapsed_ms:.1f}"
+    _timing_logger.info("%s %s -> %s in %.0f ms", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
+
+
 # Cache prevention & security headers middleware
 @app.middleware("http")
 async def add_security_cache_headers(request, call_next):

@@ -18,6 +18,7 @@ import {
   Eye,
   Pencil,
   MoreVertical,
+  Info,
   Loader2,
   Landmark,
   X,
@@ -94,6 +95,18 @@ const getDepositBadgeText = (tx: DashboardTransactionItem): string | null => {
       ? bankService.getCachedAccounts().find((a) => String(a.id) === String(tx.bankAccountId))?.bankName
       : undefined) || tx.bankName
   return `Deposited ${formatDisplayDate(day)}${bank ? ` (${bank})` : ''}`
+}
+
+/**
+ * The day a sale's money was deposited, as MM/DD/YY (same format as the row date).
+ * Null when the record is not a sale or the sale has not been deposited yet.
+ */
+const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
+  if (tx.type !== 'Sales') return null
+  if ((tx.depositStatus || tx.deposit_status) !== 'Deposited') return null
+  const day = String(tx.deposit_date || tx.depositDate || '').slice(0, 10)
+  const [y, m, d] = day.split('-')
+  return y && m && d ? `${m}/${d}/${y.slice(2)}` : null
 }
 
 /** Deposited / Not Deposited for a sale; null for records that are not sales (no deposit step). */
@@ -1201,7 +1214,12 @@ export const TransactionPage: React.FC = () => {
       .map((t): DashboardTransactionItem => {
         if (t.type === 'Sales') {
           const depositVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.deposit || t.amount || 0)
-          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+          // Deposit tab = cash ledger: the row sits on the day the money was DEPOSITED (By Day groups on it too).
+          // The sale date stays on `saleDate`; a deposited sale with no deposit date keeps its sale date.
+          const depDay = String(t.deposit_date || t.depositDate || '').slice(0, 10)
+          const [y, m, d] = depDay.split('-')
+          const depositDisplayDate = y && m && d ? `${m}/${d}/${y.slice(2)}` : t.date
+          return { ...t, date: depositDisplayDate, amount: depositVal, deposit: depositVal, withdrawal: 0 }
         }
         if (t.type === 'Income') {
           const depositVal = (t.deposit || 0) > 0 ? t.deposit : (t.amount || t.paidAmount || 0)
@@ -1822,8 +1840,8 @@ export const TransactionPage: React.FC = () => {
   const handleExportCsv = () => {
     const isDeposit = activeTab === 'deposit'
     const headers = isDeposit
-      ? ['DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
-      : ['DATE', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
+      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
+      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
 
     const rows = (isDeposit ? filteredDepositTransactions : filteredSalesTransactions).map((t) => {
       const { deposit, withdrawal } = getRowAmounts(t)
@@ -1843,6 +1861,7 @@ export const TransactionPage: React.FC = () => {
       }
       return [
         csvCell(t.date),
+        csvCell(getDepositDayShort(t) || ''),
         csvCell(t.company),
         csvCell(t.type),
         csvCell(t.refNo || '—'),
@@ -1888,7 +1907,7 @@ export const TransactionPage: React.FC = () => {
 
     const rowsHtml =
       records.length === 0
-        ? `<tr><td colspan="${isDeposit ? 10 : 11}" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No ${isDeposit ? 'deposit' : 'transaction'} records found for this selection.</td></tr>`
+        ? `<tr><td colspan="${isDeposit ? 10 : 12}" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No ${isDeposit ? 'deposit' : 'transaction'} records found for this selection.</td></tr>`
         : records
             .map((tx) => {
               const { deposit, withdrawal } = getRowAmounts(tx)
@@ -1911,6 +1930,7 @@ export const TransactionPage: React.FC = () => {
               return `
         <tr>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.date)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(getDepositDayShort(tx) || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.company || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.type)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${escapeHtml(tx.refNo || '—')}</td>
@@ -1956,7 +1976,8 @@ export const TransactionPage: React.FC = () => {
           <table>
             <thead>
               <tr>
-                <th>Date</th>
+                <th>${isDeposit ? 'Deposit Date' : 'Sales Date'}</th>
+                ${!isDeposit ? '<th>Deposit Day</th>' : ''}
                 <th>Company</th>
                 <th>Type</th>
                 <th>${isDeposit ? 'Cheque No.' : 'Ref No.'}</th>
@@ -2407,6 +2428,22 @@ export const TransactionPage: React.FC = () => {
               : `${activeDataset.length} ${activeDataset.length === 1 ? 'record' : 'records'} shown`}
           </span>
         </div>
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-600">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+          {activeTab === 'deposit' ? (
+            <p>
+              <strong className="text-focus">Deposit tab uses the deposit date.</strong> A sale appears on the day its money was
+              deposited, and By Day totals are grouped by that deposit day. Sales that are Pending, Unpaid or not yet
+              deposited do not appear here until they are deposited; find them in All Transactions.
+            </p>
+          ) : (
+            <p>
+              <strong className="text-focus">All Transactions uses the sales date.</strong> Every record is listed and grouped
+              By Day on the day it was made, including Pending and Unpaid sales that have not been deposited yet. The
+              Deposit Day column shows when each sale's money was deposited, and stays empty until it is.
+            </p>
+          )}
+        </div>
         {salesViewMode === 'daily_summary' ? (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
             <Table className="w-full table-fixed min-w-[900px]">
@@ -2417,7 +2454,7 @@ export const TransactionPage: React.FC = () => {
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">{activeTab === 'deposit' ? 'DEPOSIT DAY' : 'SALES DATE'}</TableHead>
                   {showDayCompanyColumn && (
                     <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
                   )}
@@ -2701,8 +2738,13 @@ export const TransactionPage: React.FC = () => {
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  DATE
+                  {activeTab === 'deposit' ? 'DEPOSIT DATE' : 'SALES DATE'}
                 </TableHead>
+                {activeTab !== 'deposit' && (
+                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg" title="Day the sale's money was deposited; empty until it is deposited">
+                    DEPOSIT DAY
+                  </TableHead>
+                )}
                 {activeTab === 'deposit' && (
                   <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
                     COMPANY
@@ -2757,6 +2799,9 @@ export const TransactionPage: React.FC = () => {
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i} className="border-b border-slate-100">
                     <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
+                    {activeTab !== 'deposit' && (
+                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
+                    )}
                     {activeTab === 'deposit' && (
                       <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
                     )}
@@ -2784,7 +2829,7 @@ export const TransactionPage: React.FC = () => {
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={activeTab === 'deposit' ? 11 : 11}
+                  colSpan={activeTab === 'deposit' ? 11 : 12}
                   title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -2800,10 +2845,21 @@ export const TransactionPage: React.FC = () => {
                       title="Click to view transaction details and audit history"
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
-                      {/* 1. Date */}
+                      {/* 1. Date: deposit day on the Deposit tab, sales date on All Transactions */}
                       <TableCell className="px-4 py-3.5 text-xs font-medium text-focus whitespace-nowrap">
                         {tx.date}
                       </TableCell>
+
+                      {/* 1b. Deposit day (All Transactions only): empty until the sale is deposited */}
+                      {activeTab !== 'deposit' && (
+                        <TableCell className="px-4 py-3.5 text-xs font-medium whitespace-nowrap">
+                          {getDepositDayShort(tx) ? (
+                            <span className="text-emerald-700">{getDepositDayShort(tx)}</span>
+                          ) : (
+                            <span className="text-muted-fg/50">—</span>
+                          )}
+                        </TableCell>
+                      )}
 
                       {/* 2. Company (Deposit tab only) */}
                       {activeTab === 'deposit' && (

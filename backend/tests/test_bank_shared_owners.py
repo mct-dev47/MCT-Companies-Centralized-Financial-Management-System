@@ -105,3 +105,30 @@ def test_check_any_owner_access_enforces_boundaries(svc):
         _check_any_owner_access(svc.db, user_alpha, EmptyAccount())
     assert exc_info_empty.value.status_code == 403
 
+
+
+def test_transaction_ids_are_unique_and_time_ordered(svc):
+    ids = [svc._generate_transaction_id() for _ in range(2000)]
+    assert len(set(ids)) == len(ids)
+    assert ids[0][:16] <= ids[-1][:16]  # epoch-ms prefix never goes backwards
+
+
+def test_concurrent_balance_updates_are_not_lost():
+    """Two sessions that both loaded the account must each add their amount (no lost update)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    acc = _make(BankService(Session()), ["Alpha"])  # starting balance 1000
+
+    s1, s2 = BankService(Session()), BankService(Session())
+    a1, a2 = s1.get_account(acc.id), s2.get_account(acc.id)
+    assert a1.current_balance == a2.current_balance == Decimal("1000")
+    s1._adjust_balance(a1, Decimal("300"))
+    s1.db.commit()
+    s2._adjust_balance(a2, Decimal("40"))  # a2 still holds the stale 1000 in memory
+    s2.db.commit()
+    assert BankService(Session()).get_account(acc.id).current_balance == Decimal("1340")

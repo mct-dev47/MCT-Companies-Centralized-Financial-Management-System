@@ -23,7 +23,6 @@ import {
   Lock,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'
-import { isCompanyMatch } from '@/utils/companyUtils'
 import { cn } from '@/lib/utils'
 import { ConfirmModal, RowActionsMenu } from '@/components/common'
 import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
