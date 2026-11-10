@@ -4,11 +4,35 @@ import time
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timezone
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_, func
 
 from app.models.bank import BankAccount, BankTransaction
 from app.schemas.bank import BankAccountCreate, BankAccountUpdate, BankDepositWithdrawRequest
+
+
+_ENTRY_SOURCE_SUPPORT: Dict[str, bool] = {}
+
+
+def entry_source_supported(db: Session) -> bool:
+    """
+    True when bank_transactions.entry_source exists in this database (migration 0051 applied).
+    Checked once per database while True; a False answer is re-checked on later calls so the column is picked
+    up as soon as the migration lands, without a restart.
+    """
+    try:
+        bind = db.get_bind()
+        key = str(bind.url)
+        if _ENTRY_SOURCE_SUPPORT.get(key):
+            return True
+        from sqlalchemy import inspect as sa_inspect
+
+        cols = {c["name"] for c in sa_inspect(bind).get_columns("bank_transactions")}
+        ok = "entry_source" in cols
+        _ENTRY_SOURCE_SUPPORT[key] = ok
+        return ok
+    except Exception:
+        return False
 
 
 def _clean_owners(primary: Optional[str], names: Optional[List[str]]) -> List[str]:
@@ -56,8 +80,41 @@ class BankService:
         """Purge all bank accounts and transactions to guarantee a pristine database."""
         self.purge_all_accounts()
 
+    def _with_entries(self, query):
+        """Load each account's entries in one extra query (instead of one query per account)."""
+        return query.options(selectinload(BankAccount.transactions)).execution_options(populate_existing=True)
+
+    def _attach_entry_sources(self, accounts):
+        """Attach entry_source to the loaded entries with one query (skipped until the column exists)."""
+        accounts = [a for a in (accounts if isinstance(accounts, list) else [accounts]) if a is not None]
+        if not accounts or not entry_source_supported(self.db):
+            return
+        from sqlalchemy import bindparam, text
+
+        rows = self.db.execute(
+            text(
+                "SELECT id, entry_source FROM bank_transactions "
+                "WHERE bank_account_id IN :ids AND entry_source IS NOT NULL"
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": [a.id for a in accounts]},
+        ).fetchall()
+        by_id = {r[0]: r[1] for r in rows}
+        for a in accounts:
+            for t in a.transactions:
+                t._entry_source = by_id.get(t.id)
+
+    def _save_entry_source(self, tx: BankTransaction) -> None:
+        """Persist tx._entry_source (after the entry is inserted), only when the column exists."""
+        source = getattr(tx, "_entry_source", None)
+        if not source or not entry_source_supported(self.db):
+            return
+        from sqlalchemy import text
+
+        self.db.flush()
+        self.db.execute(text("UPDATE bank_transactions SET entry_source = :s WHERE id = :id"), {"s": source, "id": tx.id})
+
     def list_accounts(self, company_name: Optional[str] = None, company_id: Optional[int] = None) -> List[BankAccount]:
-        query = self.db.query(BankAccount)
+        query = self._with_entries(self.db.query(BankAccount))
         
         # 1. Direct company_id filter
         if company_id:
@@ -78,7 +135,9 @@ class BankService:
                 conditions.extend([func.lower(BankAccount.company_name).contains(a) for a in aliases])
                 conditions.extend([func.lower(BankAccount.company_names_json).contains(a) for a in aliases])
             query = query.filter(or_(*conditions))
-            return query.order_by(BankAccount.id.asc()).all()
+            result = query.order_by(BankAccount.id.asc()).all()
+            self._attach_entry_sources(result)
+            return result
 
         # 2. Company name filter
         if company_name and company_name != "All Companies":
@@ -105,10 +164,17 @@ class BankService:
             if resolved_cid:
                 conditions.append(BankAccount.company_id == resolved_cid)
             query = query.filter(or_(*conditions))
-        return query.order_by(BankAccount.id.asc()).all()
+        result = query.order_by(BankAccount.id.asc()).all()
+        self._attach_entry_sources(result)
+        return result
 
-    def get_account(self, account_id: str) -> Optional[BankAccount]:
-        return self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
+    def get_account(self, account_id: str, with_entries: bool = False) -> Optional[BankAccount]:
+        query = self.db.query(BankAccount)
+        if not with_entries:
+            return query.filter(BankAccount.id == account_id).first()
+        account = self._with_entries(query).filter(BankAccount.id == account_id).first()
+        self._attach_entry_sources(account)
+        return account
 
     def delete_account(self, account_id: str) -> bool:
         account = self.get_account(account_id)
@@ -139,20 +205,51 @@ class BankService:
         """
         return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(3)}"
 
-    def _adjust_balance(self, account: BankAccount, delta: Decimal) -> None:
+    def _sync_balance(self, account: BankAccount) -> None:
         """
-        Move an account balance by `delta` with one atomic SQL UPDATE (current_balance = current_balance + delta).
-        A Python read-add-write loses money when two saves hit the same bank at once.
+        Set the account balance to starting_balance + SUM(deposit - withdrawal) over ALL its bank entries,
+        in one atomic SQL UPDATE. The balance is therefore always exactly what the entries add up to, so the
+        Transactions ledger and Bank Management can never drift apart, and two saves hitting the same bank at
+        once cannot lose an amount. Call it right AFTER adding or deleting entries (it flushes them first).
         """
-        delta = Decimal(str(delta or 0))
-        if delta == Decimal("0"):
-            return
-        self.db.query(BankAccount).filter(BankAccount.id == account.id).update(
-            {BankAccount.current_balance: BankAccount.current_balance + delta},
-            synchronize_session=False,
+        from sqlalchemy import text
+
+        self.db.flush()
+        self.db.execute(
+            text(
+                "UPDATE bank_accounts SET current_balance = starting_balance + COALESCE("
+                "(SELECT SUM(COALESCE(deposit, 0) - COALESCE(withdrawal, 0)) "
+                "FROM bank_transactions WHERE bank_transactions.bank_account_id = bank_accounts.id), 0) "
+                "WHERE id = :account_id"
+            ),
+            {"account_id": account.id},
         )
         # Reload the new value from the database on next access
         self.db.expire(account, ["current_balance"])
+
+    def recompute_all_balances(self) -> int:
+        """Repair tool: re-derive every account's balance from its entries. Returns how many changed."""
+        changed = 0
+        for acc in self.db.query(BankAccount).all():
+            before = Decimal(str(acc.current_balance or 0))
+            self._sync_balance(acc)
+            self.db.refresh(acc)
+            if Decimal(str(acc.current_balance or 0)) != before:
+                changed += 1
+        self.db.commit()
+        return changed
+
+    def balance_discrepancy(self, account_id: str) -> Decimal:
+        """stored balance minus (starting balance + entries). Zero means the account is consistent."""
+        acc = self.get_account(account_id)
+        if acc is None:
+            raise ValueError("Bank account not found.")
+        net = (
+            self.db.query(func.coalesce(func.sum(func.coalesce(BankTransaction.deposit, 0) - func.coalesce(BankTransaction.withdrawal, 0)), 0))
+            .filter(BankTransaction.bank_account_id == account_id)
+            .scalar()
+        )
+        return (Decimal(str(acc.current_balance or 0)) - (Decimal(str(acc.starting_balance or 0)) + Decimal(str(net or 0)))).quantize(Decimal("0.01"))
 
     def create_account(self, data: BankAccountCreate) -> BankAccount:
         # Idempotency check: prevent duplicate account creation within 10 seconds or identical unedited record
@@ -263,7 +360,7 @@ class BankService:
         self.db.refresh(account)
         return account
 
-    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None) -> Tuple[BankAccount, BankTransaction]:
+    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None) -> Tuple[BankAccount, BankTransaction]:
         account = self.get_account(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -290,15 +387,16 @@ class BankService:
             source_sale_id=source_sale_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
-        self._adjust_balance(account, amount)
-
+        tx._entry_source = entry_source
         self.db.add(tx)
+        self._sync_balance(account)
+        self._save_entry_source(tx)
         self.db.commit()
         self.db.refresh(account)
         self.db.refresh(tx)
         return account, tx
 
-    def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None) -> Tuple[BankAccount, BankTransaction]:
+    def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None) -> Tuple[BankAccount, BankTransaction]:
         account = self.get_account(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -329,9 +427,10 @@ class BankService:
             source_sale_id=source_sale_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
-        self._adjust_balance(account, -amount)
-
+        tx._entry_source = entry_source
         self.db.add(tx)
+        self._sync_balance(account)
+        self._save_entry_source(tx)
         self.db.commit()
         self.db.refresh(account)
         self.db.refresh(tx)
@@ -341,24 +440,35 @@ class BankService:
         if not company_name:
             return None
         norm = company_name.strip().lower()
-        found = (
-            self.db.query(BankAccount)
-            .filter(or_(
-                func.lower(BankAccount.company_name).contains(norm),
-                func.lower(BankAccount.company_names_json).contains(norm),
-            ))
-            .first()
-        )
-        if found:
-            return found
         from app.services.bills_service import KNOWN_COMPANY_ALIASES
-        aliases = []
+        aliases: List[str] = []
         for key, val_list in KNOWN_COMPANY_ALIASES.items():
             if norm == key or norm in val_list or key in norm:
                 aliases.append(key)
                 aliases.extend(val_list)
-        for a in set(aliases):
-            found = self.db.query(BankAccount).filter(func.lower(BankAccount.company_name).contains(a)).first()
+        names = [norm] + sorted(a for a in set(aliases) if a and a != norm)
+
+        # 1. The company's OWN bank (it is the only owner: no co-owner list) is its default bank
+        for n in names:
+            found = (
+                self.db.query(BankAccount)
+                .filter(BankAccount.company_names_json.is_(None), func.lower(BankAccount.company_name).contains(n))
+                .order_by(BankAccount.id.asc())
+                .first()
+            )
+            if found:
+                return found
+        # 2. Only when it has none of its own: a bank it shares with other companies
+        for n in names:
+            found = (
+                self.db.query(BankAccount)
+                .filter(or_(
+                    func.lower(BankAccount.company_name).contains(n),
+                    func.lower(BankAccount.company_names_json).contains(n),
+                ))
+                .order_by(BankAccount.id.asc())
+                .first()
+            )
             if found:
                 return found
         return None
@@ -405,8 +515,8 @@ class BankService:
                 net_amount=amount,
                 source_sale_id=source_sale_id,
             )
-            self._adjust_balance(account, -amount)
             self.db.add(tx)
+            self._sync_balance(account)
             self.db.commit()
             return tx
 
@@ -453,8 +563,8 @@ class BankService:
             net_amount=amount,
         )
         setattr(tx, link_attr, link_id)
-        self._adjust_balance(account, amount if is_deposit else -amount)
         self.db.add(tx)
+        self._sync_balance(account)
         self.db.flush()
         return tx
 
@@ -556,12 +666,13 @@ class BankService:
         for t in linked:
             net = Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))
             net_by_account[t.bank_account_id] = net_by_account.get(t.bank_account_id, Decimal("0")) + net
-        for account_id, net in net_by_account.items():
-            account = self.get_account(account_id)
-            if account is not None and net != Decimal("0"):
-                self._adjust_balance(account, -net)
         for t in linked:
             self.db.delete(t)
+        self.db.flush()
+        for account_id in net_by_account:
+            account = self.get_account(account_id)
+            if account is not None:
+                self._sync_balance(account)
         self.db.commit()
         return len(linked)
 
@@ -686,7 +797,7 @@ class BankService:
                 category="Cash",
                 net_amount=amount,
             )
-            self._adjust_balance(account, -amount)
             self.db.add(tx)
+            self._sync_balance(account)
             self.db.commit()
             return tx

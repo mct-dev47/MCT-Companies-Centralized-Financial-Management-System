@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
@@ -17,6 +17,12 @@ from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+from app.core.idempotency import (
+    ExistingRecord,
+    find_by_client_ref_orm,
+    find_by_client_ref_supabase,
+    supabase_supports_client_ref,
+)
 
 
 class _SkipBackup(Exception):
@@ -471,13 +477,33 @@ def get_expenses_daily_summary(
     return result
 
 
+def _find_expense_by_client_ref(db: Session, client_ref: Optional[str]) -> Optional[ExistingRecord]:
+    """The expense already created with this client_ref, if any (spec 0038)."""
+    if not client_ref:
+        return None
+    try:
+        found = find_by_client_ref_supabase(get_supabase_admin_client(), "expenses", "expense_id", client_ref)
+        if found:
+            return found
+    except Exception:
+        pass
+    return find_by_client_ref_orm(db, Expense, "expense_id", client_ref)
+
+
 @router.post("", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED, summary="Record a new expense")
 def create_expense(
     expense_in: ExpenseCreate,
     request: Request,
+    response: Response,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    # Same client_ref sent again (retry, offline resend): return the expense that already exists
+    existing = _find_expense_by_client_ref(db, expense_in.client_ref)
+    if existing:
+        check_company_access(current_user, existing.company_id)
+        response.status_code = status.HTTP_200_OK
+        return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
 
     if expense_in.amount < Decimal("1.00"):
         raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
@@ -552,6 +578,11 @@ def create_expense(
             "audited_by": None,
             "audited_at": None,
             "audit_remarks": None,
+            **(
+                {"client_ref": expense_in.client_ref}
+                if expense_in.client_ref and supabase_supports_client_ref(client, "expenses")
+                else {}
+            ),
         }).execute()
 
         if not sb_insert.data:
@@ -594,6 +625,7 @@ def create_expense(
                 audited_by=None,
                 audited_at=None,
                 audit_remarks=None,
+                client_ref=expense_in.client_ref,
             )
             db.merge(local_exp)
             db.commit()
@@ -659,6 +691,14 @@ def create_expense(
     except HTTPException:
         raise
     except Exception as e:
+        # The insert may have succeeded before a later step failed, or a parallel request with the same
+        # client_ref won the race: return that expense instead of inserting a second one
+        existing = _find_expense_by_client_ref(db, expense_in.client_ref)
+        if existing:
+            check_company_access(current_user, existing.company_id)
+            response.status_code = status.HTTP_200_OK
+            return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
+
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)
         check_company_access(current_user, target_company.company_id)
@@ -681,6 +721,7 @@ def create_expense(
             audited_by=None,
             audited_at=None,
             audit_remarks=None,
+            client_ref=expense_in.client_ref,
         )
         db.add(expense)
         db.commit()
@@ -1139,18 +1180,21 @@ def delete_expense(
 
     deleted_from_supabase = False
     deleted_company_id = None
+    deleted_day = None
     client = None
     try:
         client = get_supabase_admin_client()
-        existing = client.table("expenses").select("company_id").eq("expense_id", expense_id).limit(1).execute()
+        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", expense_id).limit(1).execute()
         if existing.data:
             deleted_company_id = existing.data[0].get("company_id")
+            deleted_day = existing.data[0].get("expense_date")
     except Exception as e:
         print(f"Supabase fetch before delete error: {e}")
 
     expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if expense:
         deleted_company_id = deleted_company_id or expense.company_id
+        deleted_day = deleted_day or expense.expense_date
 
     if not deleted_company_id and not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -1177,6 +1221,11 @@ def delete_expense(
         except Exception as e:
             db.rollback()
             print(f"Bank entry purge error on expense delete: {e}")
+
+    # Cascade: the day's expense remark goes once no expense is left on that day
+    if deleted_day:
+        from app.services.daily_remark_cascade import purge_orphan_daily_remark
+        purge_orphan_daily_remark(db, client, "expense", deleted_company_id, deleted_day)
 
     try:
         log_transaction(

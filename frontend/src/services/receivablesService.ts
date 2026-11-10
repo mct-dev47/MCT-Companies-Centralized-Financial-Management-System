@@ -1,3 +1,5 @@
+import { HttpError, NetworkError } from '@/lib/requestErrors'
+
 export interface BackendReceivablePayment {
   payment_id: number
   receivable_id: number
@@ -27,6 +29,12 @@ export interface BackendReceivable {
   balance: number
   payment_status: 'Unpaid' | 'Partial' | 'Paid'
   is_locked?: boolean
+  /** Bank every payment goes to: the sale's bank, else the first payment's bank */
+  origin_bank_account_id?: string | null
+  origin_bank_name?: string | null
+  /** Deposit status/date of the linked sale */
+  sale_deposit_status?: 'Deposited' | 'Not Deposited' | null
+  sale_deposit_date?: string | null
   notes?: string | null
   created_at?: string | null
   updated_at?: string | null
@@ -150,15 +158,23 @@ export const receivablesService = {
     sale_id?: number
     sale_line_index?: number
     expense_id?: number
+    /** Unique ID for this new receivable; resending it returns the existing one (spec 0038). */
+    client_ref?: string
   }): Promise<BackendReceivable> {
-    const res = await fetch('/api/v1/receivables', {
-      method: 'POST',
-      headers: backendHeaders(),
-      body: JSON.stringify(data),
-    })
+    let res: Response
+    try {
+      res = await fetch('/api/v1/receivables', {
+        method: 'POST',
+        headers: backendHeaders(),
+        body: JSON.stringify(data),
+      })
+    } catch {
+      throw new NetworkError("Can't reach the server, so the receivable was not saved.")
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      throw new Error(err.detail || `Failed to create receivable: ${res.statusText}`)
+      const detail = typeof err.detail === 'string' ? err.detail : `Failed to create receivable: ${res.statusText}`
+      throw new HttpError(detail, res.status)
     }
     return res.json()
   },
@@ -175,6 +191,8 @@ export const receivablesService = {
       payment_status?: 'Unpaid' | 'Partial' | 'Paid'
       payment_method?: string
       bank_account_id?: string
+      deposit_status?: 'Deposited' | 'Not Deposited'
+      deposit_date?: string
     }
   ): Promise<BackendReceivable> {
     const res = await fetch(`/api/v1/receivables/${id}`, {

@@ -1,7 +1,8 @@
 import { mapWithConcurrency } from '@/utils/concurrency'
+import { Skeleton } from '@/components/ui/skeleton'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, useBlocker } from 'react-router-dom'
 import {
   Plus,
   Trash2,
@@ -22,6 +23,7 @@ import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { BackButton, ErrorBanner } from '@/components/common'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
   Table,
   TableHeader,
@@ -30,7 +32,7 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { salesService } from '@/services/salesService'
+import { salesService, type NewSalesInput } from '@/services/salesService'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 import {
   Dialog,
@@ -40,14 +42,16 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { expenseService } from '@/services/expenseService'
+import { expenseService, type NewExpenseInput } from '@/services/expenseService'
+import { offlineQueue, type OutboxReceivableInput } from '@/services/offlineQueue'
+import { isConnectivityError } from '@/lib/requestErrors'
 import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage, notifyWarning } from '@/utils/errorUtils'
 import { formatRealName } from '@/utils/formatRealName'
 import {
   formatParticularsString,
@@ -57,7 +61,7 @@ import {
 } from '@/utils/particularsUtils'
 import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import {
   particularsService,
   type CompanyParticular,
@@ -1031,9 +1035,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const [isLoadingBanks, setIsLoadingBanks] = React.useState<boolean>(
     () => bankService.getCachedAccounts(initialCompany).length === 0
   )
+  // Set when the bank list could not be fetched (so it isn't mistaken for "no banks"); bump the key to retry
+  const [bankLoadError, setBankLoadError] = React.useState<string | null>(null)
+  const [bankReloadKey, setBankReloadKey] = React.useState(0)
   const [selectedBankAccountId, setSelectedBankAccountId] =
     React.useState<string>(() => {
-      const cached = bankService.getCachedAccounts(initialCompany)
+      // Default to the bank this company owns alone; shared banks only if it has none
+      const cached = preferSoleOwnedBanks(bankService.getCachedAccounts(initialCompany), initialCompany)
       return cached.length > 0 ? cached[0].id : ''
     })
 
@@ -1047,17 +1055,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     } else {
       setIsLoadingBanks(true)
     }
+    setBankLoadError(null)
 
     bankService
-      .getAccounts(targetComp)
+      .getAccounts(targetComp, { forceRefresh: bankReloadKey > 0 })
       .then((accounts) => {
         if (mounted) {
           setBankAccounts(accounts || [])
           setIsLoadingBanks(false)
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (mounted) {
+          setBankLoadError(err instanceof Error ? err.message : 'Could not load bank accounts.')
           setIsLoadingBanks(false)
         }
       })
@@ -1065,7 +1075,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return () => {
       mounted = false
     }
-  }, [isAuditor, assignedCompany, selectedCompany])
+  }, [isAuditor, assignedCompany, selectedCompany, bankReloadKey])
 
   const availableBankAccounts = React.useMemo(() => {
     const targetComp = isAuditor ? assignedCompany : selectedCompany
@@ -1073,7 +1083,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const matching = bankAccounts.filter((a) =>
       isAccountOwnedBy(a, targetComp)
     )
-    if (matching.length > 0) return matching
+    // The company's own (sole-owner) bank comes first so it is the default; shared banks follow
+    if (matching.length > 0) return preferSoleOwnedBanks(matching, targetComp)
     const general = bankAccounts.filter(
       (a) =>
         !a.companyName ||
@@ -1083,13 +1094,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return general
   }, [bankAccounts, selectedCompany, isAuditor, assignedCompany])
 
+  // Keep the default on the company's sole owned bank (availableBankAccounts[0]) until the user picks one.
+  // A bank picked earlier (cache, or another company's list) must not stick just because it is a shared bank.
+  const userPickedBankRef = React.useRef(false)
+  React.useEffect(() => {
+    userPickedBankRef.current = false
+  }, [selectedCompany, assignedCompany])
   React.useEffect(() => {
     if (availableBankAccounts.length > 0) {
       const exists = availableBankAccounts.some(
         (a) => a.id === selectedBankAccountId
       )
-      if (!exists) {
-        setSelectedBankAccountId(availableBankAccounts[0].id)
+      const defaultId = availableBankAccounts[0].id
+      if (!exists || (!userPickedBankRef.current && selectedBankAccountId !== defaultId)) {
+        setSelectedBankAccountId(defaultId)
       }
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
@@ -1613,7 +1631,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         date: prevRow?.date || todayIso,
         particulars: '',
         category: prevRow?.category || defaultCategory,
-        paymentMethod: prevRow?.paymentMethod || 'Cash',
+        paymentMethod: 'Cash', // always start as Cash; never carry GCash etc. over from the row above
         serviceFee: 0,
         chequeNo: '',
         unitPrice: '',
@@ -1924,7 +1942,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             date: lastRow?.date || todayIso,
             particulars: '',
             category: lastRow?.category || defaultCategory,
-            paymentMethod: lastRow?.paymentMethod || 'Cash',
+            paymentMethod: 'Cash',
             chequeNo: '',
             unitPrice: '',
             quantity: 1,
@@ -2100,6 +2118,30 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     type: string
   } | null>(null)
 
+  // Warn before leaving with rows that were typed but not saved (spec 0038, AC-14).
+  // Rows saved offline are already safe in the outbox, so a successful save lifts the guard.
+  const allowLeaveRef = React.useRef(false)
+  const hasUnsavedRows =
+    !isEditMode &&
+    rows.some((r) => r.particulars.trim().length > 0 || (r.unitPrice !== '' && Number(r.unitPrice) > 0))
+  const leaveBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      hasUnsavedRows &&
+      !allowLeaveRef.current &&
+      !isSubmitting &&
+      currentLocation.pathname !== nextLocation.pathname
+  )
+  React.useEffect(() => {
+    if (!hasUnsavedRows) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (allowLeaveRef.current) return
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [hasUnsavedRows])
+
   // Save handler
   const handleSave = async () => {
     const remarkPromptConfirmed = dayRemarkConfirmedRef.current
@@ -2241,7 +2283,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         new Set(validRows.map((r) => normalizeDateToYYYYMMDD(r.date) || todayIso))
       ).sort()
       setDayRemarkDates(dates)
-      setDayRemarkDrafts(Object.fromEntries(dates.map((d) => [d, getDayRemark(companyToUse, d)])))
+      // Start empty every time: the day's saved remark is shown above the box, not copied into it
+      setDayRemarkDrafts(Object.fromEntries(dates.map((d) => [d, ''])))
       setIsDayRemarkOpen(true)
       return
     }
@@ -2284,6 +2327,73 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
     const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
     const nowIso = new Date().toISOString()
+
+    // Offline support (spec 0038): a new row that can't reach the server is kept in the on device
+    // outbox and sent automatically later. Its outbox id doubles as client_ref, so if the first try
+    // did reach the server (only the reply was lost), the resend returns that record, never a copy.
+    let queuedCount = 0
+    const announceQueued = () => {
+      if (queuedCount === 0) return
+      notifyWarning(
+        `No connection: ${queuedCount} ${queuedCount === 1 ? 'entry was' : 'entries were'} saved on this device ` +
+          'and will be sent automatically when the internet is back. Check the outbox at the top of the page.'
+      )
+    }
+    const ensureOutboxUser = async () => {
+      if (!offlineQueue.getSnapshot().userId && user?.id) await offlineQueue.setActiveUser(String(user.id))
+    }
+    const createSaleOrQueue = async (saleInput: NewSalesInput, receivableInput?: OutboxReceivableInput) => {
+      const saleRef = offlineQueue.newId()
+      const queueAll = async () => {
+        await ensureOutboxUser()
+        await offlineQueue.enqueue([
+          { id: saleRef, kind: 'sale', company: companyToUse, input: saleInput },
+          ...(receivableInput
+            ? [{ kind: 'receivable' as const, company: companyToUse, input: receivableInput, dependsOn: saleRef }]
+            : []),
+        ])
+        queuedCount += 1
+      }
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return queueAll()
+
+      let createdSale: Awaited<ReturnType<typeof salesService.addSale>>
+      try {
+        createdSale = await salesService.addSale({ ...saleInput, clientRef: saleRef })
+      } catch (err) {
+        if (isConnectivityError(err)) return queueAll()
+        throw err
+      }
+      if (!receivableInput) return
+      const parsedSaleId = createdSale?.id ? Number(createdSale.id) : NaN
+      const recInput = { ...receivableInput, sale_id: !Number.isNaN(parsedSaleId) ? parsedSaleId : undefined }
+      const recRef = offlineQueue.newId()
+      try {
+        await receivablesService.createReceivable({ ...recInput, client_ref: recRef })
+      } catch (err) {
+        if (!isConnectivityError(err)) throw err
+        // The sale is saved; only its receivable waits (it already knows the sale ID)
+        await ensureOutboxUser()
+        await offlineQueue.enqueue([
+          { id: recRef, kind: 'receivable', company: companyToUse, input: recInput, dependsOn: saleRef },
+        ])
+        queuedCount += 1
+      }
+    }
+    const createExpenseOrQueue = async (expenseInput: NewExpenseInput) => {
+      const expenseRef = offlineQueue.newId()
+      const queueIt = async () => {
+        await ensureOutboxUser()
+        await offlineQueue.enqueue([{ id: expenseRef, kind: 'expense', company: companyToUse, input: expenseInput }])
+        queuedCount += 1
+      }
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return queueIt()
+      try {
+        await expenseService.addExpense({ ...expenseInput, clientRef: expenseRef })
+      } catch (err) {
+        if (isConnectivityError(err)) return queueIt()
+        throw err
+      }
+    }
 
     try {
       if (isEditMode) {
@@ -2427,7 +2537,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           const extraFormatted = formatParticularsString(extraItemized)
 
           if (isSales) {
-            await salesService.addSale({
+            await createSaleOrQueue({
               company: companyToUse,
               date: rowDate,
               particulars: extraFormatted,
@@ -2444,7 +2554,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               createdBy: authorName,
             })
           } else {
-            await expenseService.addExpense({
+            await createExpenseOrQueue({
               company: companyToUse,
               date: rowDate,
               particulars: extraFormatted,
@@ -2480,37 +2590,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           const formatted = formatParticularsString(itemized)
 
           if (isSales) {
-            const createdSale = await salesService.addSale({
-              company: companyToUse,
-              date: rowDate,
-              particulars: formatted,
-              amount: rowAmount,
-              category: row.category || SALES_CATEGORY_LIST[0],
-              paymentMethod: row.paymentMethod,
-              chequeNo: row.chequeNo.trim() || undefined,
-              status: row.status,
-              depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
-              deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
-              deposit_date: getRowDepositDate(row) || undefined,
-              items: itemized,
-              bankAccountId: effectiveBankId,
-              createdBy: authorName,
-            })
-
+            // An unpaid row with a named customer also gets a receivable, linked to its sale
+            let receivableInput: OutboxReceivableInput | undefined
             if (row.status === 'Unpaid' && unpaidAssignments.length > 0) {
               const assignment = unpaidAssignments.find(
                 (u) => u.rowId === row.id
               )
               if (assignment && assignment.customerName.trim()) {
-                const parsedSaleId = createdSale?.id
-                  ? Number(createdSale.id)
-                  : NaN
                 const resolvedType: CustomerType =
                   assignment.customerType === 'Staff' ? 'Staff' : 'External'
                 const apiCustomerType =
                   resolvedType === 'Staff' ? 'Internal' : 'External'
 
-                await receivablesService.createReceivable({
+                receivableInput = {
                   customer_name: assignment.customerName.trim(),
                   customer_type: apiCustomerType,
                   items_summary: row.particulars.trim(),
@@ -2527,15 +2619,32 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     ? `Ref: ${row.chequeNo.trim()}`
                     : undefined,
                   company_name: companyToUse,
-                  sale_id: !Number.isNaN(parsedSaleId)
-                    ? parsedSaleId
-                    : undefined,
                   date: rowDate,
-                })
+                }
               }
             }
+
+            await createSaleOrQueue(
+              {
+                company: companyToUse,
+                date: rowDate,
+                particulars: formatted,
+                amount: rowAmount,
+                category: row.category || SALES_CATEGORY_LIST[0],
+                paymentMethod: row.paymentMethod,
+                chequeNo: row.chequeNo.trim() || undefined,
+                status: row.status,
+                depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+                deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+                deposit_date: getRowDepositDate(row) || undefined,
+                items: itemized,
+                bankAccountId: effectiveBankId,
+                createdBy: authorName,
+              },
+              receivableInput
+            )
           } else {
-            await expenseService.addExpense({
+            await createExpenseOrQueue({
               company: companyToUse,
               date: rowDate,
               particulars: formatted,
@@ -2579,12 +2688,18 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const remarkResults = await Promise.allSettled(
         (skipDayRemarks ? [] : dayRemarkDates)
           .map((d) => ({ d, text: (dayRemarkDrafts[d] || '').trim() }))
-          .filter(({ d, text }) => text !== getDayRemark(companyToUse, d).trim())
-          .map(({ d, text }) => saveDayRemark(companyToUse, d, text))
+          // Blank = leave the day's remark as it is. Otherwise add the new note after the saved one.
+          .filter(({ text }) => text.length > 0)
+          .map(({ d, text }) => {
+            const existing = getDayRemark(companyToUse, d).trim()
+            return saveDayRemark(companyToUse, d, (existing ? `${existing}; ${text}` : text).slice(0, 255))
+          })
       )
       remarkResults.forEach((r) => {
         if (r.status === 'rejected') console.warn('Could not save day remark:', r.reason)
       })
+
+      announceQueued()
 
       setSuccessBanner({
         count: validRowsCount,
@@ -2594,8 +2709,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           : `${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`,
       })
 
+      allowLeaveRef.current = true
       navigate(isSales ? '/sales' : '/expense')
     } catch (err: any) {
+      // Rows that went to the outbox are out of the sheet already; say so even though another row failed
+      announceQueued()
       console.error('Failed to save spreadsheet entries:', err)
       const userMessage = formatUserFriendlyErrorMessage(
         err,
@@ -2609,6 +2727,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   return (
     <div className="space-y-6 pb-16 w-full max-w-[1800px] mx-auto px-2 sm:px-4 lg:px-6 animate-in fade-in duration-300">
+      <ConfirmModal
+        open={leaveBlocker.state === 'blocked'}
+        onOpenChange={(open) => {
+          if (!open && leaveBlocker.state === 'blocked') leaveBlocker.reset()
+        }}
+        title="You have unsaved rows"
+        description="The rows in this sheet have not been saved yet. If you leave now, they will be lost."
+        confirmLabel="Leave without saving"
+        cancelLabel="Stay"
+        actionType="warning"
+        onConfirm={() => {
+          if (leaveBlocker.state === 'blocked') leaveBlocker.proceed()
+        }}
+      />
       {/* STEP 2: DEDICATED UNPAID RECEIVABLES ASSIGNMENT VIEW */}
       {currentStep === 'assign_unpaid' ? (
         <div className="space-y-6 animate-in fade-in duration-200">
@@ -2952,9 +3084,26 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     {isSales ? 'Deposit Bank' : 'Deposit Bank / Withdraw Bank'}
                   </span>
                 </label>
+                {isLoadingBanks && availableBankAccounts.length === 0 ? (
+                  <Skeleton className="h-10 w-full rounded-xl" aria-label="Loading bank accounts" />
+                ) : bankLoadError && availableBankAccounts.length === 0 ? (
+                  <div className="h-10 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
+                    <span className="truncate" title={bankLoadError}>Couldn't load bank accounts.</span>
+                    <button
+                      type="button"
+                      onClick={() => setBankReloadKey((k) => k + 1)}
+                      className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : (
                 <select
                   value={selectedBankAccountId}
-                  onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                  onChange={(e) => {
+                    userPickedBankRef.current = true
+                    setSelectedBankAccountId(e.target.value)
+                  }}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
                   className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer disabled:opacity-70"
                 >
@@ -2978,7 +3127,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     </>
                   )}
                 </select>
-                {!isLoadingBanks && availableBankAccounts.length === 0 && (
+                )}
+                {!isLoadingBanks && !bankLoadError && availableBankAccounts.length === 0 && (
                   <p className="text-[11px] font-medium text-amber-700 flex items-center gap-1 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
                     <span>
@@ -3911,6 +4061,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         ))}
                       </ul>
                     </div>
+                    <div className="min-w-0 space-y-1.5">
+                    {getDayRemark(isAuditor ? assignedCompany : selectedCompany, d).trim() && (
+                      <p className="rounded-lg bg-slate-50 border border-stroke/30 px-3 py-2 text-[11px] text-muted-fg break-words">
+                        <span className="font-semibold text-focus">Already saved for this day: </span>
+                        {getDayRemark(isAuditor ? assignedCompany : selectedCompany, d)}
+                        <span className="block mt-0.5">Anything you type below is added after it.</span>
+                      </p>
+                    )}
                     <textarea
                       rows={4}
                       value={dayRemarkDrafts[d] || ''}
@@ -3923,6 +4081,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       }
                       className="w-full px-3 py-2 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus resize-y min-w-0"
                     />
+                    </div>
                   </div>
                 </div>
               )

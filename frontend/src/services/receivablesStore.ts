@@ -44,6 +44,12 @@ export interface UtangSale {
   balance: number
   payment_status: PaymentStatus
   notes?: string
+  /** Fixed deposit bank for this order (the sale's bank, else the first payment's bank) */
+  origin_bank_account_id?: string | null
+  origin_bank_name?: string | null
+  /** Deposit status/date of the linked sale */
+  deposit_status?: 'Deposited' | 'Not Deposited' | null
+  deposit_date?: string | null
   payments: UtangPayment[]
 }
 
@@ -130,6 +136,10 @@ class ReceivablesStore {
           balance: Number(r.balance),
           payment_status: r.payment_status as PaymentStatus,
           notes: r.notes || undefined,
+          origin_bank_account_id: r.origin_bank_account_id ?? null,
+          origin_bank_name: r.origin_bank_name ?? null,
+          deposit_status: r.sale_deposit_status ?? null,
+          deposit_date: r.sale_deposit_date ?? null,
           payments: (r.payments || []).map((p) => ({
             id: String(p.payment_id),
             sale_id: String(p.receivable_id),
@@ -477,7 +487,9 @@ class ReceivablesStore {
         amount,
         date,
         method,
-        bank_account_id: bank_account_id || null,
+        // The order's own bank always wins (the server enforces the same)
+        bank_account_id:
+          method === 'Payroll Deduction' ? null : targetSale.origin_bank_account_id || bank_account_id || null,
         notes: notes || undefined,
         createdAt: paymentTimestamp,
       }
@@ -526,7 +538,8 @@ class ReceivablesStore {
           amount: alloc,
           date,
           method,
-          bank_account_id: bank_account_id || null,
+          bank_account_id:
+            method === 'Payroll Deduction' ? null : sale.origin_bank_account_id || bank_account_id || null,
           notes: notes || undefined,
           createdAt: paymentTimestamp,
         }
@@ -778,6 +791,8 @@ class ReceivablesStore {
       payment_status?: PaymentStatus
       payment_method?: string
       bank_account_id?: string
+      deposit_status?: 'Deposited' | 'Not Deposited'
+      deposit_date?: string
     }
   ): Promise<{ success: boolean; message: string }> {
     const sale = this.sales.find((s) => s.id === saleId)
@@ -807,6 +822,8 @@ class ReceivablesStore {
           payment_status: params.payment_status,
           payment_method: params.payment_method,
           bank_account_id: params.bank_account_id,
+          deposit_status: params.deposit_status,
+          deposit_date: params.deposit_status === 'Deposited' ? params.deposit_date : undefined,
         })
         salesService.invalidateCache()
         await this.refreshFromBackend()

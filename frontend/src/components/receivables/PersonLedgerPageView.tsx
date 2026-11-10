@@ -26,7 +26,8 @@ import {
 import { BackButton, ConfirmModal, RowActionsMenu } from '@/components/common'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { formatToYYYYMMDD } from '@/utils/dateUtils'
+import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import type {
   CustomerType,
   PaymentStatus,
@@ -58,6 +59,8 @@ export interface PersonLedgerPageViewProps {
       payment_status?: PaymentStatus
       payment_method?: string
       bank_account_id?: string
+      deposit_status?: 'Deposited' | 'Not Deposited'
+      deposit_date?: string
     }
   ) => Promise<{ success: boolean; message: string }>
   onDeleteSale?: (saleId: string) => Promise<{ success: boolean; message: string }>
@@ -96,6 +99,11 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   const [editBankAccounts, setEditBankAccounts] = React.useState<BankAccount[]>([])
   const [editNotes, setEditNotes] = React.useState('')
   const [isSavingEdit, setIsSavingEdit] = React.useState(false)
+  // Deposit Status tab: set automatically when a payment comes in; supervisors can change it here
+  const [editTab, setEditTab] = React.useState<'details' | 'deposit'>('details')
+  const [editDepositStatus, setEditDepositStatus] = React.useState<'Deposited' | 'Not Deposited'>('Not Deposited')
+  const [editDepositDate, setEditDepositDate] = React.useState('')
+  const [depositTouched, setDepositTouched] = React.useState(false)
 
   const [confirmDeleteSaleId, setConfirmDeleteSaleId] = React.useState<string | null>(null)
   const [isDeletingSale, setIsDeletingSale] = React.useState(false)
@@ -118,7 +126,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
     const filterForCompany = (list: BankAccount[]) => {
       if (!saleCompany || saleCompany === 'All Companies') return list
       const matched = list.filter((a) => isAccountOwnedBy(a, saleCompany))
-      if (matched.length > 0) return matched
+      if (matched.length > 0) return preferSoleOwnedBanks(matched, saleCompany)
       return list.filter(
         (a) =>
           !a.companyName ||
@@ -214,6 +222,15 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
     setEditPaymentStatus(sale.payment_status)
     setEditPaymentMethod('Cash')
     setEditNotes(sale.notes || '')
+    setEditTab('details')
+    setEditDepositStatus(
+      sale.deposit_status === 'Deposited' || (!sale.deposit_status && sale.amount_paid > 0.005)
+        ? 'Deposited'
+        : 'Not Deposited'
+    )
+    // Default deposit date is today unless one was already recorded
+    setEditDepositDate(sale.deposit_date || formatToYYYYMMDD(new Date()))
+    setDepositTouched(false)
   }
 
   const editedNumAmt = parseFloat(editTotalAmount) || 0
@@ -258,6 +275,18 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
       return
     }
 
+    const sendDeposit = depositTouched && Boolean(editingSale.sale_id)
+    if (sendDeposit && editDepositStatus === 'Deposited') {
+      if (!editDepositDate) {
+        setActionError('Please pick the deposit date.')
+        return
+      }
+      if (editDepositDate < editingSale.date) {
+        setActionError('Deposit date cannot be earlier than the order date.')
+        return
+      }
+    }
+
     setIsSavingEdit(true)
     setActionError(null)
     try {
@@ -271,9 +300,12 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
         date: editDate,
         payment_status: editPaymentStatus,
         payment_method: needsSettlementDeposit ? editPaymentMethod : undefined,
-        bank_account_id:
-          needsSettlementDeposit && editBankAccountId ? editBankAccountId : undefined,
+        bank_account_id: needsSettlementDeposit
+          ? editingSale.origin_bank_account_id || editBankAccountId || undefined
+          : undefined,
         notes: editNotes.trim(),
+        deposit_status: sendDeposit ? editDepositStatus : undefined,
+        deposit_date: sendDeposit && editDepositStatus === 'Deposited' ? editDepositDate : undefined,
       })
       if (!res.success) {
         setActionError(res.message)
@@ -950,7 +982,107 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
               </div>
             </DialogHeader>
 
-            <div className="space-y-3 pt-2 text-xs text-left">
+            <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-xl border border-slate-200/70 w-fit mt-1">
+              {(
+                [
+                  ['details', 'Details'],
+                  ['deposit', 'Deposit Status'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setEditTab(key)}
+                  className={cn(
+                    'px-3 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer',
+                    editTab === key ? 'bg-white text-focus shadow-2xs font-bold' : 'text-muted-fg hover:text-focus'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {editTab === 'deposit' && (
+              <div className="space-y-3 pt-2 text-xs text-left">
+                {!editingSale.sale_id ? (
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-muted-fg">
+                    This order is not linked to a sale, so its payments post straight to the bank.
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-muted-fg">
+                      Set to Deposited automatically when a payment is recorded. You can change it here.
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-focus block mb-1">Deposit Status</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(['Deposited', 'Not Deposited'] as const).map((opt) => {
+                          const canDeposit = editingSale.amount_paid > 0.005 || Boolean(showPaidSettlementFields)
+                          const disabled = opt === 'Deposited' && !canDeposit
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              disabled={disabled}
+                              onClick={() => {
+                                setEditDepositStatus(opt)
+                                setDepositTouched(true)
+                              }}
+                              className={cn(
+                                'h-10 rounded-xl border text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed',
+                                editDepositStatus === opt
+                                  ? opt === 'Deposited'
+                                    ? 'bg-emerald-50 border-emerald-400 text-emerald-800'
+                                    : 'bg-amber-50 border-amber-400 text-amber-800'
+                                  : 'bg-white border-stroke/50 text-focus hover:bg-slate-50'
+                              )}
+                            >
+                              {opt}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      {editingSale.amount_paid <= 0.005 && !showPaidSettlementFields && (
+                        <span className="text-[10px] text-muted-fg block mt-1">
+                          Nothing has been collected on this order yet, so it cannot be deposited.
+                        </span>
+                      )}
+                    </div>
+
+                    {editDepositStatus === 'Deposited' && (
+                      <div>
+                        <label className="font-semibold text-focus block mb-1">Deposit Date</label>
+                        <input
+                          type="date"
+                          value={editDepositDate}
+                          min={editingSale.date}
+                          max={formatToYYYYMMDD(new Date())}
+                          onChange={(e) => {
+                            setEditDepositDate(e.target.value)
+                            setDepositTouched(true)
+                          }}
+                          className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="font-semibold text-focus block mb-1">Deposit Bank</label>
+                      <div className="w-full h-10 px-3.5 flex items-center rounded-xl border border-stroke/50 bg-slate-50 font-semibold text-focus">
+                        {editingSale.origin_bank_name || 'No bank recorded for this order'}
+                      </div>
+                      <span className="text-[10px] text-muted-fg block mt-1">
+                        Always the bank this order was first recorded to.
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className={cn('space-y-3 pt-2 text-xs text-left', editTab !== 'details' && 'hidden')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="font-semibold text-focus block mb-1">Customer / Staff Name</label>
@@ -1052,20 +1184,28 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
                     <div>
                       <label className="font-semibold text-emerald-900 block mb-1">
-                        Deposit Bank (Optional)
+                        Deposit Bank{editingSale.origin_bank_account_id ? '' : ' (Optional)'}
                       </label>
-                      <select
-                        value={editBankAccountId}
-                        onChange={(e) => setEditBankAccountId(e.target.value)}
-                        className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
-                      >
-                        <option value="">No bank deposit</option>
-                        {editBankAccounts.map((b) => (
-                          <option key={b.id} value={b.id}>
-                            {b.bankName} ({b.accountNumber})
-                          </option>
-                        ))}
-                      </select>
+                      {editingSale.origin_bank_account_id ? (
+                        <div className="w-full h-10 px-2.5 flex items-center rounded-xl border border-emerald-300 bg-white text-focus font-semibold">
+                          {editingSale.origin_bank_name ||
+                            editBankAccounts.find((b) => b.id === editingSale.origin_bank_account_id)?.bankName ||
+                            'Recorded bank'}
+                        </div>
+                      ) : (
+                        <select
+                          value={editBankAccountId}
+                          onChange={(e) => setEditBankAccountId(e.target.value)}
+                          className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
+                        >
+                          <option value="">No bank deposit</option>
+                          {editBankAccounts.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.bankName}
+                            </option>
+                          ))}
+                        </select>
+                      )}
                     </div>
                   </div>
                 </div>

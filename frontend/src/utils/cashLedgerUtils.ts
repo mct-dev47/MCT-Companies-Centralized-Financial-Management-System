@@ -13,6 +13,10 @@ export function getPaidDepositForSale(sale: SalesItem): number {
   if (!isDeposited) {
     return 0
   }
+  // The server's figure already includes partial receivable payments on [Pending] lines
+  if (typeof sale.paidAmount === 'number') {
+    return sale.paidAmount
+  }
   const items = parseParticulars(sale.particulars, sale.items, sale.deposit)
   if (items.length > 0) {
     const fallback = normalizeParticularStatus(sale.status, 'Paid')
@@ -47,6 +51,11 @@ export function getRealizedCashForSale(
   }
   if (saleWithMeta.isStandaloneUtang) {
     return Math.max(0, Number(saleWithMeta.amount_paid) || 0)
+  }
+
+  // The server computes the same sum (untracked [Paid] lines + receivable payments) authoritatively
+  if (typeof sale.paidAmount === 'number') {
+    return sale.paidAmount
   }
 
   if (!linkedReceivables || linkedReceivables.length === 0) {

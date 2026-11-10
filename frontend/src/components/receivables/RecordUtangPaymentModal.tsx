@@ -27,7 +27,7 @@ import type {
   UtangSale,
   PaymentMethod,
 } from '@/services/receivablesStore'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 
 export interface RecordUtangPaymentModalProps {
   open: boolean
@@ -104,6 +104,26 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
     return unlockedPersonSales.reduce((acc, s) => acc + s.balance, 0)
   }, [activeSelectedSale, unlockedPersonSales])
 
+  // The deposit bank is fixed to the bank each order was first recorded to
+  const originBank = React.useMemo((): { mode: 'fixed' | 'per-order' | 'none'; id?: string; name?: string } => {
+    const nameFor = (s: UtangSale) =>
+      s.origin_bank_name ||
+      bankAccounts.find((b) => b.id === s.origin_bank_account_id)?.bankName ||
+      'Recorded bank'
+    if (activeSelectedSale) {
+      return activeSelectedSale.origin_bank_account_id
+        ? { mode: 'fixed', id: activeSelectedSale.origin_bank_account_id, name: nameFor(activeSelectedSale) }
+        : { mode: 'none' }
+    }
+    const withBank = unlockedPersonSales.filter((s) => s.origin_bank_account_id)
+    const ids = new Set(withBank.map((s) => s.origin_bank_account_id))
+    if (ids.size === 1 && withBank.length === unlockedPersonSales.length) {
+      return { mode: 'fixed', id: withBank[0].origin_bank_account_id!, name: nameFor(withBank[0]) }
+    }
+    if (withBank.length > 0) return { mode: 'per-order' }
+    return { mode: 'none' }
+  }, [activeSelectedSale, unlockedPersonSales, bankAccounts])
+
   const paidDateSet = React.useMemo(() => {
     const set = new Set<string>()
     if (person?.payments) {
@@ -130,7 +150,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
     const filterForCompany = (list: BankAccount[]) => {
       if (!targetCompany || targetCompany === 'All Companies') return list
       const matched = list.filter((a) => isAccountOwnedBy(a, targetCompany))
-      if (matched.length > 0) return matched
+      if (matched.length > 0) return preferSoleOwnedBanks(matched, targetCompany)
       return list.filter(
         (a) =>
           !a.companyName ||
@@ -211,9 +231,11 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
       company: targetCompany || undefined,
       company_id: targetCompanyId,
       bank_account_id:
-        paymentMethod !== 'Payroll Deduction' && selectedBankAccountId
-          ? selectedBankAccountId
-          : undefined,
+        paymentMethod === 'Payroll Deduction'
+          ? undefined
+          : originBank.mode === 'fixed'
+            ? originBank.id
+            : selectedBankAccountId || undefined,
       notes: notes.trim() || undefined,
     })
 
@@ -635,7 +657,19 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                 </div>
               </div>
 
-              {paymentMethod !== 'Payroll Deduction' && bankAccounts.length > 0 && (
+              {paymentMethod !== 'Payroll Deduction' && originBank.mode !== 'none' && (
+                <div className="space-y-1">
+                  <Label className="text-xs font-semibold text-focus">Deposit Bank</Label>
+                  <div className="w-full h-10 px-3 flex items-center text-xs rounded-xl border border-stroke/60 bg-slate-50 font-semibold text-focus">
+                    {originBank.mode === 'fixed' ? originBank.name : "Each order's own bank"}
+                  </div>
+                  <p className="text-[10.5px] text-muted-fg">
+                    Payments always go to the bank this order was first recorded to.
+                  </p>
+                </div>
+              )}
+
+              {paymentMethod !== 'Payroll Deduction' && originBank.mode === 'none' && bankAccounts.length > 0 && (
                 <div className="space-y-1">
                   <Label className="text-xs font-semibold text-focus">
                     Deposit Bank (Optional)
@@ -648,7 +682,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                     <option value="">Do not post bank deposit</option>
                     {bankAccounts.map((b) => (
                       <option key={b.id} value={b.id}>
-                        {b.bankName} ({b.accountNumber})
+                        {b.bankName}
                       </option>
                     ))}
                   </select>

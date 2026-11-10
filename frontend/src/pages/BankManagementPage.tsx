@@ -98,7 +98,7 @@ import { formatPHP } from '@/lib/format'
 
 import { cn } from '@/lib/utils'
 
-import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction, preferSoleOwnedBanks } from '@/services/bankService'
 
 import { websocketService, type ConnectionStatus } from '@/services/websocketService'
 
@@ -219,6 +219,9 @@ export const BankManagementPage: React.FC = () => {
 
   const [isLoading, setIsLoading] = React.useState(true)
 
+  // Set when the accounts could not be fetched, so a failed load is not shown as "no banks registered"
+  const [loadError, setLoadError] = React.useState<string | null>(null)
+
   const saveAccounts = React.useCallback((newAccounts: BankAccount[]) => {
 
     setAccounts(newAccounts)
@@ -330,8 +333,10 @@ export const BankManagementPage: React.FC = () => {
         : undefined
       const data = await bankService.getAccounts(targetComp, { forceRefresh })
       setAccounts(data || [])
+      setLoadError(null)
     } catch (err) {
       console.warn('Bank accounts database fetch warning:', err)
+      setLoadError(err instanceof Error ? err.message : 'Could not load bank accounts.')
     } finally {
       setIsLoading(false)
     }
@@ -560,21 +565,21 @@ export const BankManagementPage: React.FC = () => {
 
     if (isCompanyScoped) {
 
-      return accounts.filter((a) =>
+      return preferSoleOwnedBanks(accounts.filter((a) =>
 
         isAccountOwnedBy(a, assignedCompany)
 
-      )
+      ), assignedCompany)
 
     }
 
     if (selectedCompany !== 'All Companies') {
 
-      return accounts.filter((a) =>
+      return preferSoleOwnedBanks(accounts.filter((a) =>
 
         isAccountOwnedBy(a, selectedCompany)
 
-      )
+      ), selectedCompany)
 
     }
 
@@ -1923,7 +1928,7 @@ export const BankManagementPage: React.FC = () => {
 
                               if (c !== 'All Companies') {
 
-                                const matched = accounts.filter((a) => isAccountOwnedBy(a, c))
+                                const matched = preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, c)), c)
 
                                 if (matched.length > 0) {
 
@@ -1994,6 +1999,29 @@ export const BankManagementPage: React.FC = () => {
           </div>
 
         </div>
+
+      ) : loadError && roleScopedAccounts.length === 0 ? (
+
+        <Card className="rounded-[28px] sm:rounded-[36px] p-8 sm:p-12 text-center border border-rose-200 bg-rose-50/60 shadow-xs flex flex-col items-center justify-center min-h-[220px]">
+          <div className="w-14 h-14 rounded-2xl bg-rose-100 flex items-center justify-center text-rose-500 mb-4">
+            <Landmark className="h-7 w-7" />
+          </div>
+          <h3 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Couldn't load bank accounts</h3>
+          <p className="text-xs sm:text-sm text-muted-fg max-w-md mt-1 mb-5">
+            The bank accounts could not be fetched from the server. Your accounts are safe; try again.
+          </p>
+          <Button
+            type="button"
+            onClick={() => {
+              setIsLoading(true)
+              bankService.invalidateCache()
+              void fetchAccounts(true)
+            }}
+            className="rounded-full bg-[#960C01] hover:bg-[#800a01] text-white px-5 py-2 text-xs font-semibold cursor-pointer shadow-sm"
+          >
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
+          </Button>
+        </Card>
 
       ) : roleScopedAccounts.length === 0 ? (
 

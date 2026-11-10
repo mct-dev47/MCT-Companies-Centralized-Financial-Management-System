@@ -1,6 +1,6 @@
 from datetime import date
 from typing import List, Optional
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.company_resolver import resolve_company
@@ -12,7 +12,8 @@ from app.core.dependencies import (
 )
 from app.core.pagination import PaginationParams
 from app.db.session import get_db
-from app.models.receivable import ReceivablePayment
+from app.models.receivable import Receivable, ReceivablePayment
+from app.core.idempotency import find_by_client_ref_orm
 from app.schemas.receivable import (
     DebtorBatchDelete,
     DebtorBatchDeleteOut,
@@ -108,11 +109,19 @@ def get_receivables_summary(
 def create_receivable(
     data: ReceivableCreate,
     user: BusinessWriter,
+    response: Response,
     db: Session = Depends(get_db),
 ):
     """
     Create a new food sale receivable within the caller's authorized company scope.
+    Resending the same client_ref returns the receivable that already exists (spec 0038).
     """
+    existing = find_by_client_ref_orm(db, Receivable, "receivable_id", data.client_ref) if data.client_ref else None
+    if existing:
+        check_company_access(user, existing.company_id)
+        response.status_code = status.HTTP_200_OK
+        return db.query(Receivable).filter(Receivable.receivable_id == existing.record_id).first()
+
     service = ReceivablesService(db)
     target_cid, _ = service._resolve_company_info(data.company_id, data.company_name)
     check_company_access(user, target_cid)
