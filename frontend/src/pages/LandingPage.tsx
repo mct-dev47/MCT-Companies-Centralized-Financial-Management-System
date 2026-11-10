@@ -214,15 +214,8 @@ export const LandingPage: React.FC = () => {
       if (user.assignedCompany && user.assignedCompany !== 'All Companies') {
         commaCount = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
       }
-      const isClarian = Boolean(
-        user.email?.toLowerCase().includes('clarian') ||
-        user.email?.toLowerCase() === 'slosizante@gmail.com' ||
-        user.fullName?.toLowerCase().includes('clarian') ||
-        user.email?.toLowerCase().includes('jkproperty') ||
-        user.email?.toLowerCase().includes('filcap')
-      )
-      const count = Math.max(namesCount, idsCount, assignedList, commaCount, isClarian ? 2 : 0)
-      const canChooseCompany = isAuditOrFinance || (role === 'supervisor' && (count >= 2 || isClarian))
+      const count = Math.max(namesCount, idsCount, assignedList, commaCount)
+      const canChooseCompany = isAuditOrFinance || (role === 'supervisor' && count >= 2)
       navigate(canChooseCompany ? '/centralized-auth' : '/dashboard')
     } else {
       navigate('/login')

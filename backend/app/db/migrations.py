@@ -303,6 +303,23 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0051_auth_data_retention")
             logger.info("Migration 0051_auth_data_retention applied successfully.")
 
+    # 18. Check if 0052 is applied
+    result_0052 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0052_update_admin_email'")
+    ).first()
+
+    if not result_0052:
+        script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.postgres.sql"
+        if script_0052.exists():
+            sql_0052 = script_0052.read_text(encoding="utf-8")
+            for stmt in sql_0052.replace("BEGIN;", "").replace("COMMIT;", "").split(";"):
+                body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                if body:
+                    conn.execute(text(body))
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0052_update_admin_email')"))
+            applied.append("0052_update_admin_email")
+            logger.info("Migration 0052_update_admin_email applied successfully.")
+
     conn.commit()
     return applied
 
@@ -849,6 +866,25 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0051_auth_data_retention")
         logger.info("SQLite migration 0051_auth_data_retention applied successfully.")
+
+    # 18. Check if 0052 is applied
+    result_0052 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0052_update_admin_email'")
+    ).first()
+
+    if not result_0052:
+        script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.sqlite.sql"
+        if script_0052.exists():
+            for statement in script_0052.read_text(encoding="utf-8").split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    conn.execute(text(stmt))
+
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0052_update_admin_email')")
+        )
+        applied.append("0052_update_admin_email")
+        logger.info("SQLite migration 0052_update_admin_email applied successfully.")
 
     conn.commit()
     return applied

@@ -146,14 +146,6 @@ export const CentralizedAuthRouteGuard: React.FC<{ children: React.ReactNode }> 
     return <Navigate to="/employee" replace />
   }
 
-  const isClarian = Boolean(
-    user?.email?.toLowerCase().includes('clarian') ||
-    user?.email?.toLowerCase() === 'slosizante@gmail.com' ||
-    user?.fullName?.toLowerCase().includes('clarian') ||
-    user?.email?.toLowerCase().includes('jkproperty') ||
-    user?.email?.toLowerCase().includes('filcap')
-  )
-
   // If single-company supervisor, redirect to dashboard as they don't have multiple companies to choose from
   const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
   const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
@@ -162,9 +154,9 @@ export const CentralizedAuthRouteGuard: React.FC<{ children: React.ReactNode }> 
   if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
     commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
   }
-  const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated, isClarian ? 2 : 0)
+  const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
 
-  if (role === 'supervisor' && assignedCount <= 1 && !isClarian) {
+  if (role === 'supervisor' && assignedCount <= 1) {
     return <Navigate to="/dashboard" replace />
   }
 

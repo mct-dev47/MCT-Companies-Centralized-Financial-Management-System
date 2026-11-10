@@ -55,13 +55,6 @@ export const CentralizedAuthPage: React.FC = () => {
         navigate('/employee', { replace: true })
         return
       }
-      const isClarian = Boolean(
-        user?.email?.toLowerCase().includes('clarian') ||
-        user?.email?.toLowerCase() === 'slosizante@gmail.com' ||
-        user?.fullName?.toLowerCase().includes('clarian') ||
-        user?.email?.toLowerCase().includes('jkproperty') ||
-        user?.email?.toLowerCase().includes('filcap')
-      )
       const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
       const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
       const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
@@ -69,8 +62,8 @@ export const CentralizedAuthPage: React.FC = () => {
       if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
         commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
       }
-      const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated, isClarian ? 2 : 0)
-      if (role === 'supervisor' && assignedCount <= 1 && !isClarian) {
+      const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
+      if (role === 'supervisor' && assignedCount <= 1) {
         navigate('/dashboard', { replace: true })
       }
     }
@@ -98,30 +91,8 @@ export const CentralizedAuthPage: React.FC = () => {
       const userAssignedIds = user?.companyIds || []
       const role = (user?.role || '').toLowerCase()
 
-      const isClarian = Boolean(
-        user?.email?.toLowerCase().includes('clarian') ||
-        user?.email?.toLowerCase() === 'slosizante@gmail.com' ||
-        user?.fullName?.toLowerCase().includes('clarian') ||
-        user?.email?.toLowerCase().includes('jkproperty') ||
-        user?.email?.toLowerCase().includes('filcap')
-      )
-
-      if (isClarian) {
-        const clarianCompanies = ['JK Property and Ventures Corporation', 'FILCAP Prime Holdings Corp.', 'JK Global Printing Service']
-        for (const name of clarianCompanies) {
-          if (!userAssignedNames.some((cname) => cname.toLowerCase() === name.toLowerCase())) {
-            userAssignedNames.push(name)
-          }
-        }
-        for (const cid of [5, 7, 3]) {
-          if (!userAssignedIds.includes(cid)) {
-            userAssignedIds.push(cid)
-          }
-        }
-      }
-
       // Supervisor is strictly filtered to their assigned companies
-      if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0 || isClarian)) {
+      if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
         const filtered = data.filter((comp) => {
           const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
           const nameMatch = userAssignedNames.some((cname) => isCompanyMatch(cname, comp.name))

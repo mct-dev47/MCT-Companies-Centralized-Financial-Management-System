@@ -126,35 +126,6 @@ function scheduleProactiveRefresh(token: string): void {
  */
 export function detectUserByEmail(email: string): User {
   const normalized = email.trim().toLowerCase()
-  const isClarian =
-    normalized.includes('clarian') ||
-    normalized === 'slosizante@gmail.com' ||
-    normalized.includes('jkproperty') ||
-    normalized.includes('filcap')
-
-  if (isClarian) {
-    return {
-      id: `usr_${Date.now()}`,
-      fullName: 'Clarian Cuenta',
-      email: email.trim(),
-      role: 'Supervisor',
-      assignedCompany: 'JK Property and Ventures Corporation, FILCAP Prime Holdings Corp.',
-      assignedCompanies: [
-        'JK Property and Ventures Corporation',
-        'FILCAP Prime Holdings Corp.',
-        'JK Global Printing Service',
-      ],
-      companyId: 5,
-      companyIds: [5, 7, 3],
-      companyNames: [
-        'JK Property and Ventures Corporation',
-        'FILCAP Prime Holdings Corp.',
-        'JK Global Printing Service',
-      ],
-      avatarUrl: logo2Url,
-    }
-  }
-
   let role: UserRole = 'Supervisor'
   if (normalized.includes('admin')) {
     role = 'Admin'
@@ -170,7 +141,7 @@ export function detectUserByEmail(email: string): User {
     fullName: formatRealName(email.trim()),
     email: email.trim(),
     role: role,
-    assignedCompany: role === 'Supervisor' ? 'MCT Kitchen' : 'All Companies',
+    assignedCompany: role === 'Supervisor' ? '' : 'All Companies',
     avatarUrl: logo2Url,
   }
 }
@@ -289,57 +260,26 @@ function mapUser(user: BackendUserPayload): User {
     role = 'Supervisor'
   }
 
-  const isClarian =
-    user.email?.toLowerCase().includes('clarian') ||
-    user.email?.toLowerCase() === 'slosizante@gmail.com' ||
-    user.name?.toLowerCase().includes('clarian') ||
-    user.email?.toLowerCase().includes('jkproperty') ||
-    user.email?.toLowerCase().includes('filcap')
-
-  let userCompanyNames =
+  const userCompanyNames =
     user.company_names && user.company_names.length > 0
       ? [...user.company_names]
       : user.company_name
       ? [user.company_name]
       : []
 
-  let userCompanyIds =
+  const userCompanyIds =
     user.company_ids && user.company_ids.length > 0
       ? [...user.company_ids]
       : user.company_id
       ? [user.company_id]
       : []
 
-  if (isClarian) {
-    role = 'Supervisor'
-    const jkFilcapNames = [
-      'JK Property and Ventures Corporation',
-      'FILCAP Prime Holdings Corp.',
-      'JK Global Printing Service',
-    ]
-    for (const name of jkFilcapNames) {
-      if (!userCompanyNames.some((cn) => cn.toLowerCase() === name.toLowerCase())) {
-        userCompanyNames.push(name)
-      }
-    }
-    const jkFilcapIds = [5, 7, 3]
-    for (const cid of jkFilcapIds) {
-      if (!userCompanyIds.includes(cid)) {
-        userCompanyIds.push(cid)
-      }
-    }
-  }
-
   const assignedCompany =
     role === 'Admin' || role === 'Audit' || role === 'Finance' || role === 'Owner'
       ? 'All Companies'
-      : isClarian
-      ? 'JK Property and Ventures Corporation, FILCAP Prime Holdings Corp.'
-      : (userCompanyNames[0] || user.company_name || 'MCT Kitchen')
+      : userCompanyNames.join(', ') || user.company_name || ''
 
-  const displayName = isClarian
-    ? 'Clarian Cuenta'
-    : formatRealName(user.name?.trim() || user.email)
+  const displayName = formatRealName(user.name?.trim() || user.email)
 
   return {
     id: String(user.user_id),
@@ -348,7 +288,7 @@ function mapUser(user: BackendUserPayload): User {
     role: role,
     assignedCompany: assignedCompany,
     assignedCompanies: userCompanyNames,
-    companyId: user.company_id ?? (isClarian ? 5 : undefined),
+    companyId: user.company_id ?? userCompanyIds[0],
     companyIds: userCompanyIds,
     companyNames: userCompanyNames,
     avatarUrl: user.photo_url || logo2Url,

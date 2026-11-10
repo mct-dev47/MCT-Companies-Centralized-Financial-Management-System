@@ -44,7 +44,7 @@ class ReceivablesService:
         first_company = self.db.query(Company).first()
         if first_company:
             return first_company.company_id, first_company.company_name
-        return 1, company_name or "MyCity.Kitchen Corporation"
+        return 1, company_name or ""
 
     def _apply_company_filters(
         self,

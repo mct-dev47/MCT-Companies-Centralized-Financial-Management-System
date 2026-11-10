@@ -107,13 +107,6 @@ export const ReceivablesPage: React.FC = () => {
 
   const [companyList, setCompanyList] = React.useState<string[]>([
     'All Companies',
-    'MyCity.Kitchen Corporation',
-    'MCTolentino Hospitality Business Corporation',
-    'JK Global Headways Inc.',
-    'Speedfire Construction',
-    'JK Property and Ventures',
-    'FilCap Prime Holdings Corp.',
-    'MCT Group of Companies',
   ])
 
   React.useEffect(() => {

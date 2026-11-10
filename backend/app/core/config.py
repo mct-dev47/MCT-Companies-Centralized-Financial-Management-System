@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     BREVO_API_KEY: SecretStr = SecretStr("")
     BREVO_FROM_EMAIL: str = ""
     BREVO_FROM_NAME: str = "MCT Financial System"
+    ADMIN_EMAIL: str = ""
 
     # Email Security & Resilience Controls
     EMAIL_DISPATCH_TIMEOUT_SECONDS: float = 8.0

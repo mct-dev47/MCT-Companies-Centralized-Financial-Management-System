@@ -639,7 +639,7 @@ export const SalesPage: React.FC = () => {
               : u.payment_status === 'Partial'
                 ? 'Partial Credit'
                 : 'Utang (Pay Later)',
-          company: u.company || 'MyCity.Kitchen Corporation',
+          company: u.company || '',
           items: [
             ...(u.amount_paid > 0
               ? [

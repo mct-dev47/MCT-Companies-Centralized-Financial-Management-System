@@ -308,43 +308,52 @@ class InvitationDispatcher:
                 except Exception as supa_err:
                     logger.warning("Supabase Auth direct invite failed for %s: %s", mask_email(job.recipient_email), supa_err)
 
-                # Send copy to registered admin email if configured
+                # Send copy to registered admin email if configured in settings or database
                 try:
-                    admin_recipient = "gonzaga.reymie.lovete@gmail.com"
-                    admin_notice_payload = json.dumps({
-                        "sender": {
-                            "name": from_name,
-                            "email": from_email,
-                        },
-                        "to": [{"email": admin_recipient}],
-                        "subject": f"[Setup Link for {mask_email(job.recipient_email)}] MCT Financial Management System",
-                        "htmlContent": f"""
-                        <div style="font-family: sans-serif; padding: 20px;">
-                            <h2>User Invitation Setup Link</h2>
-                            <p>An account was created for <strong>{safe_user_name}</strong> ({html.escape(job.recipient_email)}).</p>
-                            <p>Direct setup link:</p>
-                            <p><a href="{setup_url}">{setup_url}</a></p>
-                        </div>
-                        """,
-                        "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
-                        "headers": {
-                            "X-Mailin-Track": "0",
-                        },
-                    }).encode("utf-8")
-                    admin_req = urllib.request.Request(
-                        "https://api.brevo.com/v3/smtp/email",
-                        data=admin_notice_payload,
-                        headers={
-                            "api-key": api_key,
-                            "Content-Type": "application/json",
-                            "Accept": "application/json",
-                            "User-Agent": "MCT-Financial-Management-System",
-                        },
-                        method="POST",
-                    )
-                    with urllib.request.urlopen(admin_req, timeout=5.0):
-                        logger.info("Delivered invitation notice to admin inbox for %s", mask_email(job.recipient_email))
-                        sent_via_fallback = True
+                    admin_recipient = getattr(settings, "ADMIN_EMAIL", "") or ""
+                    if not admin_recipient:
+                        admin_user = (
+                            self.db.query(User)
+                            .filter(or_(User.role == "admin", User.is_admin.is_(True)))
+                            .first()
+                        )
+                        if admin_user and admin_user.email:
+                            admin_recipient = admin_user.email
+                    if admin_recipient:
+                        admin_notice_payload = json.dumps({
+                            "sender": {
+                                "name": from_name,
+                                "email": from_email,
+                            },
+                            "to": [{"email": admin_recipient}],
+                            "subject": f"[Setup Link for {mask_email(job.recipient_email)}] MCT Financial Management System",
+                            "htmlContent": f"""
+                            <div style="font-family: sans-serif; padding: 20px;">
+                                <h2>User Invitation Setup Link</h2>
+                                <p>An account was created for <strong>{safe_user_name}</strong> ({html.escape(job.recipient_email)}).</p>
+                                <p>Direct setup link:</p>
+                                <p><a href="{setup_url}">{setup_url}</a></p>
+                            </div>
+                            """,
+                            "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
+                            "headers": {
+                                "X-Mailin-Track": "0",
+                            },
+                        }).encode("utf-8")
+                        admin_req = urllib.request.Request(
+                            "https://api.brevo.com/v3/smtp/email",
+                            data=admin_notice_payload,
+                            headers={
+                                "api-key": api_key,
+                                "Content-Type": "application/json",
+                                "Accept": "application/json",
+                                "User-Agent": "MCT-Financial-Management-System",
+                            },
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(admin_req, timeout=5.0):
+                            logger.info("Delivered invitation notice to admin inbox for %s", mask_email(job.recipient_email))
+                            sent_via_fallback = True
                 except Exception as admin_err:
                     logger.warning("Could not dispatch admin copy via Brevo: %s", admin_err)
 

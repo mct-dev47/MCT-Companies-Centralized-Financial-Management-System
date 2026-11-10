@@ -12,13 +12,6 @@ export const UserProfileDropdown: React.FC = () => {
   const { user, signOut } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isClarian = Boolean(
-    user?.email?.toLowerCase().includes('clarian') ||
-    user?.email?.toLowerCase() === 'slosizante@gmail.com' ||
-    user?.fullName?.toLowerCase().includes('clarian') ||
-    user?.email?.toLowerCase().includes('jkproperty') ||
-    user?.email?.toLowerCase().includes('filcap')
-  )
   const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
   const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
   const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
@@ -26,8 +19,8 @@ export const UserProfileDropdown: React.FC = () => {
   if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
     commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
   }
-  const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated, isClarian ? 2 : 0)
-  const hasMultipleCompanies = assignedCount >= 2 || isClarian
+  const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
+  const hasMultipleCompanies = assignedCount >= 2
 
   const canAccessCentralized =
     userRole === 'finance' ||

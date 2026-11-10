@@ -115,7 +115,7 @@ class ReceivablesStore {
       if (Array.isArray(data)) {
         this.sales = data.map((r: BackendReceivable) => ({
           id: String(r.receivable_id),
-          company: r.company_name || 'MyCity.Kitchen Corporation',
+          company: r.company_name || '',
           company_id: r.company_id,
           sale_id: r.sale_id ?? null,
           sale_line_index: r.sale_line_index ?? null,
@@ -170,7 +170,7 @@ class ReceivablesStore {
             delete copy.customer_role
             return {
               ...copy,
-              company: copy.company || 'MyCity.Kitchen Corporation',
+              company: copy.company || '',
             }
           })
           return
@@ -212,7 +212,7 @@ class ReceivablesStore {
   public getSales(company?: string): UtangSale[] {
     let list = this.sales
     if (company && company !== 'All Companies') {
-      list = list.filter((s) => isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company))
+      list = list.filter((s) => isCompanyMatch(s.company || '', company))
     }
     return [...list].sort((a, b) => b.date.localeCompare(a.date))
   }
@@ -221,7 +221,7 @@ class ReceivablesStore {
     const list: UtangPayment[] = []
     const salesList =
       company && company !== 'All Companies'
-        ? this.sales.filter((s) => isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company))
+        ? this.sales.filter((s) => isCompanyMatch(s.company || '', company))
         : this.sales
 
     salesList.forEach((s) => {
@@ -246,7 +246,7 @@ class ReceivablesStore {
     const isAllCompanies = !company || company === 'All Companies'
 
     this.sales.forEach((s) => {
-      const saleCompany = s.company || 'MyCity.Kitchen Corporation'
+      const saleCompany = s.company || ''
       if (!isAllCompanies && !isCompanyMatch(saleCompany, company!)) {
         return
       }
@@ -355,7 +355,7 @@ class ReceivablesStore {
     let filteredSales = this.sales
     if (company && company !== 'All Companies') {
       filteredSales = filteredSales.filter((s) =>
-        isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company)
+        isCompanyMatch(s.company || '', company)
       )
     }
     if (dateRange?.startDate && dateRange?.endDate) {
@@ -424,7 +424,7 @@ class ReceivablesStore {
       const sameName = s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase()
       if (!sameName) return false
       if (company && company !== 'All Companies') {
-        return isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company)
+        return isCompanyMatch(s.company || '', company)
       }
       return true
     })
@@ -594,7 +594,7 @@ class ReceivablesStore {
       const sameName = s.customer_name.trim().toLowerCase() === customer_name.trim().toLowerCase()
       if (!sameName || s.balance <= 0.005 || s.is_locked) return false
       if (company && company !== 'All Companies') {
-        return isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', company)
+        return isCompanyMatch(s.company || '', company)
       }
       return true
     })
@@ -713,7 +713,7 @@ class ReceivablesStore {
 
     const newSale: UtangSale = {
       id: saleId,
-      company: params.company || 'MyCity.Kitchen Corporation',
+      company: params.company || '',
       company_id: params.company_id,
       sale_id: params.sale_id ?? null,
       sale_line_index: params.sale_line_index ?? null,
@@ -746,7 +746,7 @@ class ReceivablesStore {
         payment_method: params.payment_method,
         bank_account_id: params.bank_account_id,
         notes: params.notes,
-        company_name: params.company || 'MyCity.Kitchen Corporation',
+        company_name: params.company || '',
         company_id: params.company_id,
         sale_id: params.sale_id,
         sale_line_index: params.sale_line_index,
@@ -897,7 +897,7 @@ class ReceivablesStore {
       const sameCompany =
         !params.company ||
         params.company === 'All Companies' ||
-        isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', params.company)
+        isCompanyMatch(s.company || '', params.company)
       if (sameName && sameCompany && !s.is_locked) {
         s.customer_name = newName
         s.customer_type = params.customer_type
@@ -918,7 +918,7 @@ class ReceivablesStore {
       const sameCompany =
         !params.company ||
         params.company === 'All Companies' ||
-        isCompanyMatch(s.company || 'MyCity.Kitchen Corporation', params.company)
+        isCompanyMatch(s.company || '', params.company)
       return sameName && sameCompany
     })
 

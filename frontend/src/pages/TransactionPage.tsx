@@ -716,7 +716,7 @@ export const TransactionPage: React.FC = () => {
     return list
   }, [user, activeCompany])
 
-  const defaultSupervisorCompany = supervisorCompanies[0] || 'MCTolentino Hospitality Business Corporation'
+  const defaultSupervisorCompany = supervisorCompanies[0] || ''
 
   const isCompanyScoped = !canSelectAllCompanies && supervisorCompanies.length <= 1
 
