@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
@@ -120,15 +121,45 @@ def get_session_activity(sid: str, fallback: float) -> float:
         return _session_activity.get(sid, fallback)
 
 
+def _normalize_origin(url_str: str) -> str:
+    parsed = urlparse(url_str)
+    if not parsed.scheme or not parsed.netloc:
+        return url_str.strip().lower().rstrip("/")
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}".rstrip("/")
+
+
 def verify_csrf_header(request: Request) -> None:
-    custom_csrf = request.headers.get("X-MCT-CSRF")
-    requested_with = request.headers.get("X-Requested-With")
-    if custom_csrf == "1" or (requested_with and requested_with.lower() == "xmlhttprequest"):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="CSRF header verification failed. Custom header required for cookie authentication.",
-    )
+    # 1. Custom header verification
+    custom_csrf = request.headers.get("X-MCT-CSRF") or request.headers.get("x-mct-csrf")
+    requested_with = request.headers.get("X-Requested-With") or request.headers.get("x-requested-with")
+    if not (custom_csrf == "1" or (requested_with and requested_with.lower() == "xmlhttprequest")):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="CSRF header verification failed. Custom header required for cookie authentication.",
+        )
+
+    # 2. Strict Origin/Referer verification against CORS_ORIGINS
+    trusted_origins = {_normalize_origin(orig) for orig in settings.CORS_ORIGINS}
+    origin_header = request.headers.get("origin")
+    if origin_header:
+        normalized_origin = _normalize_origin(origin_header)
+        if normalized_origin not in trusted_origins:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="CSRF origin verification failed. Request origin is not trusted.",
+            )
+    else:
+        referer_header = request.headers.get("referer")
+        if referer_header:
+            normalized_referer_origin = _normalize_origin(referer_header)
+            if normalized_referer_origin not in trusted_origins:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="CSRF referer verification failed. Request referer is not trusted.",
+                )
+
+
+verify_csrf_protection = verify_csrf_header
 
 
 def _revoke_session_family(db: Session, family_id: str, user_id: Optional[int] = None) -> None:
@@ -361,7 +392,7 @@ def rotate_refresh_token(
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
-    })
+    }, db=db)
 
     company_ids = [uc.company_id for uc in user.user_companies if uc.company_id]
     if not company_ids and user.company_id:

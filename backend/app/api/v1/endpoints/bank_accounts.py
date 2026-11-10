@@ -1,4 +1,5 @@
 from typing import List, Optional
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,13 @@ from app.services.bank_service import BankService
 from app.core.websocket import ws_manager
 
 router = APIRouter()
+
+def _sanitize_value_error(msg: str, fallback: str) -> str:
+    lower = msg.lower()
+    suspicious_tokens = ["traceback", "sql", "password", "secret", "select ", "insert ", "update ", "delete ", "c:\\", "/var/", "/usr/", "/etc/"]
+    if any(tok in lower for tok in suspicious_tokens) or re.search(r"[/\\].+[/\\].", msg):
+        return fallback
+    return msg
 
 
 def _check_any_owner_access(db: Session, current_user, account) -> None:
@@ -135,7 +143,8 @@ def update_bank_account(
         account = service.update_account(account_id, data)
     except ValueError as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = _sanitize_value_error(str(e), "Invalid bank account parameters.")
+        raise HTTPException(status_code=400, detail=msg)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
     ws_manager.broadcast_sync({
@@ -205,7 +214,8 @@ def deposit_to_bank_account(
         })
         return updated_account
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = _sanitize_value_error(str(e), "Invalid deposit parameters.")
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post("/{account_id}/withdraw", response_model=BankAccountOut, summary="Record a withdrawal from bank account")
@@ -239,4 +249,5 @@ def withdraw_from_bank_account(
         })
         return updated_account
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = _sanitize_value_error(str(e), "Invalid withdrawal parameters.")
+        raise HTTPException(status_code=400, detail=msg)

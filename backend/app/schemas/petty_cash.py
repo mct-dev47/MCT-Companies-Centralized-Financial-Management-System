@@ -2,8 +2,9 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from app.schemas.base import StrictBaseModel
+from app.core.ssrf import validate_safe_url
 
 
 class PettyCashTopUpCreate(StrictBaseModel):
@@ -54,6 +55,11 @@ class PettyCashTopUpCreate(StrictBaseModel):
                 raise ValueError("Top-up amount must be at least 1.00.")
         return self
 
+    @field_validator("receipt_url")
+    @classmethod
+    def validate_receipt_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
+
 
 class PettyCashTopUpUpdate(StrictBaseModel):
     amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
@@ -67,6 +73,11 @@ class PettyCashTopUpUpdate(StrictBaseModel):
     company_funded_amount: Optional[Decimal] = Field(None, decimal_places=2)
     employee_out_of_pocket: Optional[Decimal] = Field(None, decimal_places=2)
     existing_expense_id: Optional[int] = None
+
+    @field_validator("receipt_url")
+    @classmethod
+    def validate_receipt_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
 
 
 class PettyCashTopUpOut(BaseModel):

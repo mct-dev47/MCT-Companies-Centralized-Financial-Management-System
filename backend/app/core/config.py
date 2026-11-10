@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     HOST: str = "127.0.0.1"
     PORT: int = 8000
     ENVIRONMENT: str = "development"
+    ENABLE_API_DOCS: bool = False
 
     # Supabase settings
     SUPABASE_URL: str = ""
@@ -117,20 +118,37 @@ class Settings(BaseSettings):
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        raw_origins: List[str] = []
         if isinstance(v, list):
-            return [str(item).strip() for item in v]
-        if isinstance(v, str):
+            raw_origins = [str(item).strip() for item in v]
+        elif isinstance(v, str):
             val = v.strip()
             if val.startswith("[") and val.endswith("]"):
                 try:
                     parsed = json.loads(val)
                     if isinstance(parsed, list):
-                        return [str(item).strip() for item in parsed]
+                        raw_origins = [str(item).strip() for item in parsed]
                 except Exception:
                     inner = val[1:-1].strip()
-                    return [p.strip().strip("'").strip('"') for p in inner.split(",") if p.strip()]
-            return [i.strip().strip("'").strip('"') for i in val.split(",") if i.strip()]
-        return []
+                    raw_origins = [p.strip().strip("'").strip('"') for p in inner.split(",") if p.strip()]
+            else:
+                raw_origins = [i.strip().strip("'").strip('"') for i in val.split(",") if i.strip()]
+
+        cleaned_origins: List[str] = []
+        for orig in raw_origins:
+            orig = orig.strip()
+            if not orig:
+                continue
+            if orig == "*":
+                raise ValueError(
+                    "Security violation: Wildcard CORS origin '*' cannot be combined with credentials (allow_credentials=True). "
+                    "Configure exact trusted origins (e.g. 'http://localhost:5173')."
+                )
+            if not (orig.startswith("http://") or orig.startswith("https://")):
+                raise ValueError(f"Invalid CORS origin: '{orig}'. Origins must start with http:// or https://")
+            cleaned_origins.append(orig.rstrip("/"))
+
+        return cleaned_origins
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_ENV_FILE,

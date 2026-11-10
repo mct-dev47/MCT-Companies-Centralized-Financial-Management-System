@@ -5,6 +5,8 @@ from fastapi import Request, HTTPException as FastAPIHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy.exc import SQLAlchemyError
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +83,13 @@ def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSO
     headers = dict(exc.headers or {})
     headers["X-Request-ID"] = request_id
 
+    is_prod = str(getattr(settings, "ENVIRONMENT", "development")).lower() == "production"
     # If already a structured dict
     if isinstance(exc.detail, dict):
         payload = dict(exc.detail)
         payload.setdefault("request_id", request_id)
+        if exc.status_code >= 500 and is_prod:
+            payload["detail"] = "An internal server error occurred. Please try again later."
         if "code" not in payload:
             payload["code"] = _infer_error_code(exc.status_code, payload.get("detail", ""))
         if "retry_after" in payload and payload["retry_after"]:
@@ -92,6 +97,8 @@ def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSO
         return JSONResponse(status_code=exc.status_code, content=payload, headers=headers)
 
     detail_str = str(exc.detail) if exc.detail else "An error occurred."
+    if exc.status_code >= 500 and is_prod:
+        detail_str = "An internal server error occurred. Please try again later."
     code = getattr(exc, "code", None) or _infer_error_code(exc.status_code, detail_str)
     retry_after = getattr(exc, "retry_after", None)
     locked_until = getattr(exc, "locked_until", None)
@@ -174,6 +181,30 @@ def global_unhandled_exception_handler(request: Request, exc: Exception) -> JSON
         content={
             "code": "INTERNAL_SERVER_ERROR",
             "detail": "Something went wrong. Please try again later.",
+            "request_id": request_id,
+        },
+        headers=headers,
+    )
+
+
+def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
+    request_id = _extract_request_id(request)
+    headers = {"X-Request-ID": request_id}
+
+    logger.exception(
+        "Database exception intercepted: [%s] %s %s from IP %s. Exception: %s",
+        request_id,
+        request.method,
+        request.url.path,
+        request.client.host if request.client else "unknown",
+        exc,
+    )
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "code": "DATABASE_ERROR",
+            "detail": "A database error occurred. Please try again later.",
             "request_id": request_id,
         },
         headers=headers,

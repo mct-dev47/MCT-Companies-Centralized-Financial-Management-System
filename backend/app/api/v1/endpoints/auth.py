@@ -68,6 +68,9 @@ def verify_otp(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    # State-changing cookie request: verify CSRF header and origin
+    verify_csrf_header(request)
+
     client_ip = get_trusted_client_ip(request)
     result, refresh_cookie, remember_me = verify_login_otp(
         db=db,
@@ -85,6 +88,9 @@ def resend_otp(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    # State-changing cookie request: verify CSRF header and origin
+    verify_csrf_header(request)
+
     client_ip = get_trusted_client_ip(request)
     result, cookie = resend_login_otp(
         db=db,

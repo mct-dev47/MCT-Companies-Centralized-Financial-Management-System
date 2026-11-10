@@ -40,6 +40,7 @@ from app.services.session_service import (
     revoke_session,
     verify_refresh_cookie,
     create_refresh_cookie_payload,
+    verify_csrf_header,
 )
 
 
@@ -223,6 +224,277 @@ class TestSecurityHardening(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertEqual(ctx.exception.code, "INVITATION_IP_RATE_LIMITED")
+
+    # 5. CORS Hardening Tests
+    def test_cors_rejects_wildcard_origin_with_credentials(self):
+        """Settings rejects wildcard origin '*' when credentials are true."""
+        from pydantic import ValidationError
+        from app.core.config import Settings
+
+        with self.assertRaises(ValidationError) as ctx:
+            Settings(CORS_ORIGINS=["*"])
+        self.assertIn("Wildcard CORS origin '*' cannot be combined with credentials", str(ctx.exception))
+
+    def test_cors_middleware_uses_explicit_methods_and_headers(self):
+        """Verify CORSMiddleware uses explicit method and header allowlists instead of wildcards."""
+        from starlette.middleware.cors import CORSMiddleware
+        cors_mw = next((m for m in app.user_middleware if m.cls == CORSMiddleware), None)
+        self.assertIsNotNone(cors_mw, "CORSMiddleware not found in app user_middleware")
+
+        kwargs = cors_mw.kwargs
+        self.assertTrue(kwargs.get("allow_credentials"))
+        self.assertNotIn("*", kwargs.get("allow_methods", []))
+        self.assertNotIn("*", kwargs.get("allow_headers", []))
+        self.assertIn("GET", kwargs.get("allow_methods", []))
+        self.assertIn("POST", kwargs.get("allow_methods", []))
+        self.assertIn("Authorization", kwargs.get("allow_headers", []))
+        self.assertIn("X-MCT-CSRF", kwargs.get("allow_headers", []))
+        self.assertIn("X-Requested-With", kwargs.get("allow_headers", []))
+        self.assertIn("Idempotency-Key", kwargs.get("allow_headers", []))
+        self.assertIn("X-User-Role", kwargs.get("allow_headers", []))
+        self.assertIn("X-User-Name", kwargs.get("allow_headers", []))
+
+    # 6. CSRF Protection Tests
+    def test_csrf_header_verification_blocks_missing_custom_header(self):
+        """State-changing cookie requests without custom header are rejected with 403."""
+        req = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/login/verify-otp", "headers": []})
+        with self.assertRaises(HTTPException) as ctx:
+            verify_csrf_header(req)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("CSRF header verification failed", ctx.exception.detail)
+
+    def test_csrf_header_verification_blocks_untrusted_origin(self):
+        """Requests with custom header but untrusted Origin are rejected with 403."""
+        headers = [
+            (b"x-mct-csrf", b"1"),
+            (b"origin", b"http://malicious-attacker.com"),
+        ]
+        req = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/login/verify-otp", "headers": headers})
+        with self.assertRaises(HTTPException) as ctx:
+            verify_csrf_header(req)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("origin verification failed", ctx.exception.detail)
+
+    def test_csrf_header_verification_blocks_untrusted_referer(self):
+        """Requests with custom header but untrusted Referer are rejected with 403."""
+        headers = [
+            (b"x-mct-csrf", b"1"),
+            (b"referer", b"http://evil-site.org/phishing"),
+        ]
+        req = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/login/verify-otp", "headers": headers})
+        with self.assertRaises(HTTPException) as ctx:
+            verify_csrf_header(req)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertIn("referer verification failed", ctx.exception.detail)
+
+    def test_csrf_header_verification_passes_with_trusted_origin(self):
+        """Requests with custom header and trusted origin (including mixed-case) pass CSRF verification."""
+        trusted_origin = settings.CORS_ORIGINS[0].encode("utf-8")
+        headers = [
+            (b"x-mct-csrf", b"1"),
+            (b"origin", trusted_origin),
+        ]
+        req = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/login/verify-otp", "headers": headers})
+        # Must not raise
+        verify_csrf_header(req)
+
+        # Test case-insensitivity
+        mixed_case_origin = settings.CORS_ORIGINS[0].replace("http://", "HTTP://").encode("utf-8")
+        req_mixed = Request({"type": "http", "method": "POST", "path": "/api/v1/auth/login/verify-otp", "headers": [(b"x-mct-csrf", b"1"), (b"origin", mixed_case_origin)]})
+        verify_csrf_header(req_mixed)
+
+    # 7. Content Security Policy Tests
+    def test_csp_header_disallows_unsafe_eval_and_includes_hardening_directives(self):
+        """CSP removes unsafe-eval and adds object-src 'none', base-uri 'self', and form-action 'self'."""
+        req = Request({"type": "http", "method": "GET", "path": "/api/v1/test", "headers": []})
+        response = self._execute_middleware(req)
+        csp = response.headers.get("content-security-policy", "")
+
+        self.assertNotIn("'unsafe-eval'", csp)
+        self.assertIn("object-src 'none'", csp)
+        self.assertIn("base-uri 'self'", csp)
+        self.assertIn("form-action 'self'", csp)
+        self.assertIn("https://cdn.jsdelivr.net", csp)
+
+    # 8. SSRF Prevention Tests
+    def test_ssrf_validator_blocks_internal_and_cloud_metadata_ips(self):
+        """validate_safe_url blocks private, loopback, and cloud metadata destinations."""
+        from app.core.ssrf import validate_safe_url
+
+        blocked_urls = [
+            "http://127.0.0.1:8000/internal",
+            "http://10.0.0.5/api",
+            "http://192.168.1.1/router",
+            "http://172.16.0.1/admin",
+            "http://169.254.169.254/latest/meta-data/",
+            "file:///etc/passwd",
+            "ftp://ftp.example.com",
+            "gopher://evil.com",
+        ]
+        for url in blocked_urls:
+            with self.assertRaises(ValueError):
+                validate_safe_url(url, allow_localhost_dev=False)
+
+    def test_company_schema_ssrf_validation(self):
+        """CompanyCreate rejects SSRF URLs in logo_url."""
+        from pydantic import ValidationError
+        from app.schemas.company import CompanyCreate
+
+        with self.assertRaises(ValidationError) as ctx:
+            CompanyCreate(
+                name="Test Co",
+                location="Manila",
+                logo_url="http://169.254.169.254/metadata",
+            )
+        self.assertIn("SSRF security violation", str(ctx.exception))
+
+    def test_petty_cash_schema_ssrf_validation(self):
+        """PettyCashTopUpCreate rejects SSRF URLs in receipt_url."""
+        from pydantic import ValidationError
+        from app.schemas.petty_cash import PettyCashTopUpCreate
+        from datetime import date
+
+        with self.assertRaises(ValidationError) as ctx:
+            PettyCashTopUpCreate(
+                company_id=1,
+                amount="100.00",
+                topup_date=date.today(),
+                receipt_url="http://192.168.1.1/secret.jpg",
+            )
+        self.assertIn("SSRF security violation", str(ctx.exception))
+
+    def test_user_schema_ssrf_validation(self):
+        """UserCreate and UserUpdate reject SSRF URLs in photo_url."""
+        from pydantic import ValidationError
+        from app.schemas.user import UserCreate, UserUpdate
+
+        with self.assertRaises(ValidationError) as ctx:
+            UserCreate(
+                name="Security Test",
+                email="security.test@gmail.com",
+                photo_url="http://169.254.169.254/latest/meta-data/",
+            )
+        self.assertIn("SSRF security violation", str(ctx.exception))
+
+        with self.assertRaises(ValidationError) as ctx:
+            UserUpdate(
+                photo_url="http://192.168.1.1/avatar.png",
+            )
+        self.assertIn("SSRF security violation", str(ctx.exception))
+
+    def test_user_response_accepts_storage_path(self):
+        """UserResponse serialization accepts relative storage object paths without error."""
+        from app.schemas.user import UserResponse
+
+        resp = UserResponse(
+            user_id=26,
+            name="Test User",
+            email="test.user@gmail.com",
+            photo_url="user/26/475baab5f6d142cc839187d5d1d87994.png",
+        )
+        self.assertEqual(resp.photo_url, "user/26/475baab5f6d142cc839187d5d1d87994.png")
+
+    def test_user_schema_allows_relative_storage_paths(self):
+        """UserCreate and UserUpdate accept relative storage paths and relative URLs."""
+        from app.schemas.user import UserCreate, UserUpdate
+
+        created = UserCreate(
+            name="Test Create",
+            email="test.create@gmail.com",
+            photo_url="user/26/475baab5f6d142cc839187d5d1d87994.png",
+        )
+        self.assertEqual(created.photo_url, "user/26/475baab5f6d142cc839187d5d1d87994.png")
+
+        updated = UserUpdate(
+            photo_url="/api/v1/users/26/picture",
+        )
+        self.assertEqual(updated.photo_url, "/api/v1/users/26/picture")
+
+    def test_ssrf_validator_relative_url_behavior(self):
+        """validate_safe_url accepts relative paths only when allow_relative=True."""
+        from app.core.ssrf import validate_safe_url
+
+        # allow_relative=True allows safe relative paths
+        self.assertEqual(
+            validate_safe_url("user/26/photo.png", allow_relative=True),
+            "user/26/photo.png",
+        )
+        self.assertEqual(
+            validate_safe_url("/api/v1/users/26/picture", allow_relative=True),
+            "/api/v1/users/26/picture",
+        )
+
+        # allow_relative=True still rejects protocol-relative SSRF attacks
+        with self.assertRaises(ValueError):
+            validate_safe_url("//169.254.169.254/metadata", allow_relative=True)
+
+        # allow_relative=False (default) rejects scheme-less URLs
+        with self.assertRaises(ValueError):
+            validate_safe_url("user/26/photo.png", allow_relative=False)
+
+    # 9. Generic Production Error & Database Leakage Prevention Tests
+    def test_sqlalchemy_exception_handler_returns_generic_error_without_leaking_sql(self):
+        """SQLAlchemyError handler returns generic 500 without leaking SQL table/query details."""
+        from app.core.errors import sqlalchemy_exception_handler
+        from sqlalchemy.exc import OperationalError
+
+        req = Request({"type": "http", "method": "GET", "path": "/api/v1/test", "headers": []})
+        sensitive_sql_error = OperationalError(
+            statement="SELECT user_id, password_hash, secret_key FROM users WHERE is_admin = 1;",
+            params={},
+            orig=Exception("connection to server at 'internal-db.corp' failed"),
+        )
+        res = sqlalchemy_exception_handler(req, sensitive_sql_error)
+
+        import json
+        body = json.loads(res.body.decode("utf-8"))
+        self.assertEqual(res.status_code, 500)
+        self.assertEqual(body.get("code"), "DATABASE_ERROR")
+        self.assertEqual(body.get("detail"), "A database error occurred. Please try again later.")
+        self.assertNotIn("password_hash", str(body))
+        self.assertNotIn("internal-db.corp", str(body))
+        self.assertIn("request_id", body)
+
+    def test_production_http_500_masks_sensitive_internal_traceback(self):
+        """http_exception_handler in production mode sanitizes 5xx details."""
+        from app.core.errors import http_exception_handler
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        req = Request({"type": "http", "method": "GET", "path": "/api/v1/test", "headers": []})
+        exc = StarletteHTTPException(
+            status_code=500,
+            detail="Sensitive internal error: /var/secrets/key.pem corrupted at line 42",
+        )
+
+        with patch.object(settings, "ENVIRONMENT", "production"):
+            res = http_exception_handler(req, exc)
+            import json
+            body = json.loads(res.body.decode("utf-8"))
+            self.assertEqual(res.status_code, 500)
+            self.assertEqual(body.get("detail"), "An internal server error occurred. Please try again later.")
+            self.assertNotIn("/var/secrets", str(body))
+
+    # 10. API Documentation Protection in Production Tests
+    def test_production_docs_endpoint_requires_admin_authentication(self):
+        """In production, accessing docs endpoint requires admin credentials."""
+        from app.main import _get_admin_for_docs
+
+        # Unauthenticated request raises 401
+        req_unauth = Request({"type": "http", "method": "GET", "path": "/docs", "headers": [], "query_string": b""})
+        with self.assertRaises(HTTPException) as ctx:
+            _get_admin_for_docs(req_unauth, self.db)
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertIn("Admin authentication required", ctx.exception.detail)
+
+    def test_root_endpoint_omits_docs_url_in_production(self):
+        """In production, root GET / omits docs_url."""
+        from app.main import root
+        import app.main as main_mod
+
+        with patch.object(main_mod, "enable_open_docs", False):
+            res = root()
+            self.assertNotIn("docs_url", res)
+            self.assertIn("health_check", res)
 
 
 if __name__ == "__main__":

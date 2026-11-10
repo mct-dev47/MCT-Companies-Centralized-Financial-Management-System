@@ -74,7 +74,7 @@ def _get_application_user(*, email: str | None = None, user_id: int | None = Non
     # 1. Try Supabase with role
     try:
         query = get_supabase_admin_client().table("users").select(
-            "user_id,email,name,is_admin,role,company_id,photo_url,created_at,updated_at,last_login_at"
+            "user_id,email,name,is_admin,role,company_id,photo_url,created_at,updated_at,last_login_at,token_version,status,must_change_password"
         )
         if email is not None:
             query = query.eq("email", email)
@@ -91,7 +91,7 @@ def _get_application_user(*, email: str | None = None, user_id: int | None = Non
     # 2. Try Supabase without role
     try:
         query = get_supabase_admin_client().table("users").select(
-            "user_id,email,name,is_admin,company_id,created_at,updated_at,last_login_at"
+            "user_id,email,name,is_admin,company_id,created_at,updated_at,last_login_at,token_version,status,must_change_password"
         )
         if email is not None:
             query = query.eq("email", email)
@@ -166,7 +166,7 @@ def _update_application_user_login(user_id: int) -> None:
     threading.Thread(target=_do_update, daemon=True).start()
 
 
-def _application_user_response(user: dict[str, object]) -> UserResponse:
+def _application_user_response(user: dict[str, object], db: Optional[Session] = None) -> UserResponse:
     company_name = None
     company_names: list[str] = []
     company_ids: list[int] = []
@@ -176,12 +176,17 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
     from app.db.session import SessionLocal
     from app.models.company import Company
     from app.models.user import UserCompany
+    local_db = None
     try:
-        db = SessionLocal()
+        active_db = db
+        if active_db is None:
+            local_db = SessionLocal()
+            active_db = local_db
+
         cid = int(company_id) if company_id is not None else None
         if cid:
             company_ids.append(cid)
-            comp = db.query(Company).filter(Company.company_id == cid).first()
+            comp = active_db.query(Company).filter(Company.company_id == cid).first()
             if comp:
                 company_name = comp.company_name
                 company_names.append(comp.company_name)
@@ -189,24 +194,62 @@ def _application_user_response(user: dict[str, object]) -> UserResponse:
 
         uid = user.get("user_id")
         if uid:
-            ucs = db.query(UserCompany).filter(UserCompany.user_id == int(uid)).all()
+            ucs = active_db.query(UserCompany).filter(UserCompany.user_id == int(uid)).all()
             for uc in ucs:
                 if uc.company_id and uc.company_id not in company_ids:
                     company_ids.append(uc.company_id)
-                c = db.query(Company).filter(Company.company_id == uc.company_id).first()
+                c = active_db.query(Company).filter(Company.company_id == uc.company_id).first()
                 if c and c.company_name not in company_names:
                     company_names.append(c.company_name)
                     if not company_name:
                         company_name = c.company_name
                     if not company_logo_url and getattr(c, "logo_url", None):
                         company_logo_url = getattr(c, "logo_url", None)
-        db.close()
+
+        # Fallback to Supabase user_companies table if empty
+        if not company_ids and uid:
+            try:
+                supa_res = get_supabase_admin_client().table("user_companies").select("company_id").eq("user_id", int(uid)).execute()
+                for row in (supa_res.data or []):
+                    scid = row.get("company_id")
+                    if scid and int(scid) not in company_ids:
+                        company_ids.append(int(scid))
+                        c = active_db.query(Company).filter(Company.company_id == int(scid)).first()
+                        if c and c.company_name not in company_names:
+                            company_names.append(c.company_name)
+                            if not company_name:
+                                company_name = c.company_name
+            except Exception:
+                pass
     except Exception:
         pass
+    finally:
+        if local_db is not None:
+            try:
+                local_db.close()
+            except Exception:
+                pass
 
     user_role = str(user.get("role") or ("admin" if user.get("is_admin") else "company")).lower()
     is_admin_flag = bool(user.get("is_admin", False))
-    resolved_photo_url = str(user.get("photo_url") or company_logo_url) if (user.get("photo_url") or company_logo_url) else None
+
+    raw_photo = user.get("photo_url")
+    resolved_photo_url = None
+    if raw_photo:
+        raw_photo_str = str(raw_photo)
+        try:
+            from app.services.user_service import UserService
+            user_svc = UserService(db=None)
+            storage_path = user_svc._extract_storage_path(raw_photo_str)
+            if storage_path:
+                signed = user_svc._sign_url(storage_path)
+                resolved_photo_url = signed or raw_photo_str
+            else:
+                resolved_photo_url = raw_photo_str
+        except Exception:
+            resolved_photo_url = raw_photo_str
+    elif company_logo_url:
+        resolved_photo_url = str(company_logo_url)
 
     return UserResponse(
         user_id=int(user["user_id"]),
@@ -695,7 +738,7 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
         user = _get_application_user(user_id=int(user_id)) if user_id else None
         if user:
             _update_application_user_login(int(user["user_id"]))
-            user_info = _application_user_response(user)
+            user_info = _application_user_response(user, db=session)
         else:
             user_info = UserResponse(user_id=0, email=challenge["email"], name=challenge["email"].split("@")[0], company_id=None, is_admin=False)
         user_role = str(user.get("role") or ("admin" if user.get("is_admin") else "company")).lower() if user else "company"
@@ -703,7 +746,15 @@ def verify_login_otp(db: Optional[Session], otp_data: VerifyOtpRequest, ip_addre
 
         remember_me = bool(challenge.get("remember_me", False))
         user_id_val = int(user["user_id"]) if user else 1
-        token_version_val = int(user.get("token_version", 1)) if user else 1
+
+        from app.models.user import User as UserModel
+        db_user = session.query(UserModel).filter(UserModel.user_id == user_id_val).first() if user_id_val else None
+        if db_user and getattr(db_user, "token_version", None) is not None:
+            token_version_val = int(db_user.token_version)
+        elif user and user.get("token_version") is not None:
+            token_version_val = int(user["token_version"])
+        else:
+            token_version_val = 1
         sid = secrets.token_urlsafe(32)
 
         from app.services.session_service import create_refresh_cookie_payload, register_user_session
