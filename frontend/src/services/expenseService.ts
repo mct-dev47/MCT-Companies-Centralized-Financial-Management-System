@@ -1,4 +1,5 @@
 import type { DashboardTransactionItem } from './dashboardService'
+import { HttpError, NetworkError } from '@/lib/requestErrors'
 import type { DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { formatCreatedAt } from '@/utils/dateUtils'
 import { removeLegacyAuditStorage, saveAuditReview } from './auditReviewApi'
@@ -81,6 +82,8 @@ export interface NewExpenseInput {
   createdBy?: string
   updatedBy?: string
   updatedAt?: string
+  /** Unique ID for this new record; resending it returns the existing record (spec 0038). */
+  clientRef?: string
 }
 
 const EXPENSES_STORAGE_KEY = 'mct_expense_records_v1'
@@ -159,6 +162,10 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
 
 const expenseCache = new Map<string, { data: ExpenseItem[]; timestamp: number }>()
 const EXPENSE_CACHE_TTL = 30000
+
+/** Shown when the backend can't be reached: nothing was saved, so the user must not be told it was. */
+const SERVER_UNREACHABLE =
+  "Can't reach the server, so nothing was saved. Check that the backend is running, then try again."
 
 export const expenseService = {
   invalidateCache(): void {
@@ -346,12 +353,6 @@ export const expenseService = {
       }
     }
 
-    const parts = rawDate.split('-')
-    const formattedDate =
-      parts.length === 3
-        ? `${parts[1]}/${parts[2]}/${parts[0].slice(2)}`
-        : input.date
-
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
@@ -374,6 +375,7 @@ export const expenseService = {
         reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
         remarks: input.remarks || undefined,
+        client_ref: input.clientRef || undefined,
       }
 
       const res = await fetch('/api/v1/expenses', {
@@ -420,52 +422,14 @@ export const expenseService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new Error(errorMsg)
+        throw new HttpError(errorMsg, res.status)
       }
     } catch (err: any) {
-      if (err.message && !err.message.includes('fetch')) {
+      if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
         throw err
       }
-      console.warn('Backend POST /expenses failed, creating local record:', err)
+      throw new NetworkError(SERVER_UNREACHABLE)
     }
-
-    const parsedItems =
-      input.items || parseParticulars(input.particulars, null, input.amount)
-
-    const newExpense: ExpenseItem = {
-      id: `exp_${Date.now()}`,
-      refNo,
-      chequeNo: input.chequeNo || '',
-      date: formattedDate,
-      rawDate: input.date,
-      particulars: input.particulars,
-      withdrawal: input.amount,
-      netAmount: input.amount,
-      category: input.category,
-      paymentMethod: input.paymentMethod,
-      company: input.company,
-      items: parsedItems,
-      status: deriveRecordStatusFromParticulars(
-        parsedItems,
-        input.status === 'Unpaid'
-          ? 'Unpaid'
-          : input.status === 'Pending' || input.status === 'On hold'
-            ? 'Pending'
-            : 'Paid'
-      ),
-      auditStatus: 'Pending Audit',
-      auditNotes: 'Newly recorded expense transaction.',
-      createdBy: input.createdBy || 'Carlos Tan (Supervisor)',
-      createdAt: new Date().toISOString(),
-      updatedBy: input.updatedBy,
-      updatedAt: input.updatedAt,
-      type: 'Expense',
-    }
-
-    inMemoryExpenses = [newExpense, ...inMemoryExpenses]
-    saveStoredExpenses(inMemoryExpenses)
-    this.invalidateCache()
-    return newExpense
   },
 
   async updateExpense(
@@ -560,63 +524,14 @@ export const expenseService = {
             : 'Failed to update expense entry.'
         )
       }
+      // Any other refusal (403, 404, 422, 500...) is an error too, never a silent local update
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(typeof errData.detail === 'string' ? errData.detail : 'Failed to update expense entry.')
     } catch (err) {
       if (err instanceof ExpenseValidationError) throw err
-      console.warn('Backend PUT /expenses failed, updating locally:', err)
+      if (err instanceof TypeError) throw new Error(SERVER_UNREACHABLE)
+      throw err
     }
-
-    const index = inMemoryExpenses.findIndex(
-      (e) => e.id === id || e.id === `exp_${numericId}`
-    )
-    if (index === -1) return null
-
-    const existing = inMemoryExpenses[index]
-    let displayDate = existing.date
-    let rawDate = existing.rawDate
-    if (updates.date && updates.date.includes('-')) {
-      const [year, month, day] = updates.date.split('-')
-      if (month && day) {
-        displayDate = `${month}/${day}/${year?.slice(2) || '26'}`
-        rawDate = updates.date
-      }
-    } else if (updates.date) {
-      displayDate = updates.date
-    }
-
-    const finalWithdrawal =
-      withdrawalVal !== undefined ? withdrawalVal : existing.withdrawal
-    const updatedParticulars = updates.particulars || existing.particulars
-    const updatedItems =
-      updates.items ||
-      parseParticulars(updatedParticulars, existing.items, finalWithdrawal)
-
-    const updated: ExpenseItem = {
-      ...existing,
-      ...updates,
-      particulars: updatedParticulars,
-      items: updatedItems,
-      status:
-        updates.status ||
-        deriveRecordStatusFromParticulars(
-          updatedItems,
-          existing.status === 'Unpaid'
-            ? 'Unpaid'
-            : existing.status === 'Pending'
-              ? 'Pending'
-              : 'Paid'
-        ),
-      date: displayDate,
-      rawDate: rawDate,
-      withdrawal: finalWithdrawal,
-      netAmount: finalWithdrawal,
-      updatedBy: exp.updatedBy,
-      updatedAt: new Date().toISOString(),
-    }
-
-    inMemoryExpenses[index] = updated
-    saveStoredExpenses(inMemoryExpenses)
-    this.invalidateCache()
-    return updated
   },
 
   async recordExpensePayment(
@@ -727,16 +642,12 @@ export const expenseService = {
         this.invalidateCache()
         return true
       }
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(typeof errData.detail === 'string' ? errData.detail : 'Failed to delete expense entry.')
     } catch (err) {
-      console.warn('Backend DELETE /expenses failed, deleting locally:', err)
+      if (err instanceof TypeError) throw new Error(SERVER_UNREACHABLE)
+      throw err
     }
-
-    inMemoryExpenses = inMemoryExpenses.filter(
-      (e) => e.id !== id && e.id !== `exp_${numericId}`
-    )
-    saveStoredExpenses(inMemoryExpenses)
-    this.invalidateCache()
-    return true
   },
 
   async updateExpenseAuditStatus(

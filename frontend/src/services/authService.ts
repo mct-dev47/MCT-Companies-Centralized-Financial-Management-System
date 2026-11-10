@@ -476,6 +476,13 @@ export const authService = {
         this.touchSessionActivity()
         return mapped
       } catch {
+        // Network failure (offline): the server never said the session ended, so keep the user signed in
+        // and try again once the connection is back (spec 0038, AC-15). Only a real server rejection
+        // (the !response.ok branch above) clears the session.
+        if (inMemorySessionUser && typeof window !== 'undefined') {
+          window.addEventListener('online', () => void this.refreshSession(), { once: true })
+          return inMemorySessionUser
+        }
         inMemoryAccessToken = null
         inMemorySessionUser = null
         return null

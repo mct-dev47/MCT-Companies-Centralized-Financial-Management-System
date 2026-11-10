@@ -221,9 +221,16 @@ class ReceivablesService:
             balance=balance,
             payment_status=payment_status,
             notes=data.notes.strip() if data.notes else None,
+            client_ref=data.client_ref,
         )
         self.db.add(rec)
         self.db.flush()
+
+        # Money always goes to the bank the sale was recorded to; payroll deductions never touch a bank
+        is_payroll = (data.payment_method or "").strip().lower() == "payroll deduction"
+        deposit_bank_id = None if is_payroll else (
+            self.sync_service.resolve_origin_bank_account_id(rec) or data.bank_account_id
+        )
 
         if amount_paid > 0:
             pay = ReceivablePayment(
@@ -231,29 +238,33 @@ class ReceivablesService:
                 payment_date=rec.transaction_date,
                 amount=amount_paid,
                 payment_method=data.payment_method or "Cash",
-                bank_account_id=data.bank_account_id,
+                bank_account_id=deposit_bank_id,
                 reference_no=None,
                 notes="Initial payment on food order",
                 received_by=actor_name,
             )
             self.db.add(pay)
 
-            if data.bank_account_id:
+            if deposit_bank_id:
                 try:
                     bank_svc = BankService(self.db)
                     bank_svc.record_deposit_by_account_id(
-                        account_id=data.bank_account_id,
+                        account_id=deposit_bank_id,
                         amount=amount_paid,
                         particulars=f"Food Receivable Payment - {rec.customer_name}",
                         tx_date=rec.transaction_date.strftime("%m/%d/%y"),
                         source_sale_id=rec.sale_id,
                     )
-                    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": data.bank_account_id}})
+                    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": deposit_bank_id}})
                 except Exception:
                     pass
 
         if rec.sale_id and amount_paid > Decimal("0.005") and not skip_counterpart_sync:
-            self.sync_service.sync_receivable_to_sale(rec, skip_counterpart_sync=skip_counterpart_sync)
+            self.sync_service.sync_receivable_to_sale(
+                rec,
+                skip_counterpart_sync=skip_counterpart_sync,
+                auto_deposit_on=None if is_payroll else rec.transaction_date,
+            )
 
         self.db.commit()
         self.db.refresh(rec)
@@ -292,12 +303,17 @@ class ReceivablesService:
             )
 
         pay_date = payment_data.payment_date or date.today()
+        is_payroll = (payment_data.payment_method or "").strip().lower() == "payroll deduction"
+        # Always the bank the receivable was first recorded to
+        deposit_bank_id = None if is_payroll else (
+            self.sync_service.resolve_origin_bank_account_id(rec) or payment_data.bank_account_id
+        )
         payment = ReceivablePayment(
             receivable_id=rec.receivable_id,
             payment_date=pay_date,
             amount=pay_amount,
             payment_method=payment_data.payment_method or "Cash",
-            bank_account_id=payment_data.bank_account_id,
+            bank_account_id=deposit_bank_id,
             reference_no=payment_data.reference_no,
             notes=payment_data.notes,
             received_by=actor_name or payment_data.received_by,
@@ -315,22 +331,27 @@ class ReceivablesService:
         else:
             rec.payment_status = "Partial"
 
-        if payment_data.bank_account_id:
+        if deposit_bank_id:
             try:
                 bank_svc = BankService(self.db)
                 bank_svc.record_deposit_by_account_id(
-                    account_id=payment_data.bank_account_id,
+                    account_id=deposit_bank_id,
                     amount=pay_amount,
                     particulars=f"Food Receivable Payment - {rec.customer_name}",
                     reference_no=payment_data.reference_no,
                     tx_date=pay_date.strftime("%m/%d/%y"),
                     source_sale_id=rec.sale_id,
                 )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": payment_data.bank_account_id}})
+                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": deposit_bank_id}})
             except Exception:
                 pass
 
-        self.sync_service.sync_receivable_to_sale(rec, skip_counterpart_sync=skip_counterpart_sync)
+        # A collected payment auto-marks the sale Deposited on the payment day (supervisors can change it)
+        self.sync_service.sync_receivable_to_sale(
+            rec,
+            skip_counterpart_sync=skip_counterpart_sync,
+            auto_deposit_on=None if is_payroll else pay_date,
+        )
 
         self.db.commit()
         self.db.refresh(payment)
@@ -439,6 +460,7 @@ class ReceivablesService:
             rec.notes = update_data.notes.strip() if update_data.notes else None
 
         requested_status = update_data.payment_status
+        auto_deposit_on: Optional[date] = None
 
         # AC-4: Switching status to Unpaid reverses existing ReceivablePayment rows and linked bank deposits
         if requested_status == "Unpaid":
@@ -494,29 +516,35 @@ class ReceivablesService:
             if remaining > Decimal("0.005"):
                 pay_method = (update_data.payment_method or "Cash").strip() or "Cash"
                 pay_date = date.today()
+                is_payroll = pay_method.lower() == "payroll deduction"
+                settle_bank_id = None if is_payroll else (
+                    self.sync_service.resolve_origin_bank_account_id(rec) or update_data.bank_account_id
+                )
+                if not is_payroll:
+                    auto_deposit_on = pay_date
                 settlement_pay = ReceivablePayment(
                     receivable_id=rec.receivable_id,
                     payment_date=pay_date,
                     amount=remaining,
                     payment_method=pay_method,
-                    bank_account_id=update_data.bank_account_id,
+                    bank_account_id=settle_bank_id,
                     notes="Settled via Receivable Order Edit",
                     received_by=actor_name,
                 )
                 self.db.add(settlement_pay)
                 rec.amount_paid = target_total
 
-                if update_data.bank_account_id:
+                if settle_bank_id:
                     try:
                         BankService(self.db).record_deposit_by_account_id(
-                            account_id=update_data.bank_account_id,
+                            account_id=settle_bank_id,
                             amount=remaining,
                             particulars=f"Food Receivable Payment - {rec.customer_name}",
                             tx_date=pay_date.strftime("%m/%d/%y"),
                             source_sale_id=rec.sale_id,
                         )
                         ws_manager.broadcast_sync(
-                            {"type": "BANK_UPDATED", "payload": {"account_id": update_data.bank_account_id}}
+                            {"type": "BANK_UPDATED", "payload": {"account_id": settle_bank_id}}
                         )
                     except Exception:
                         pass
@@ -539,7 +567,14 @@ class ReceivablesService:
             old_items_summary=old_items_summary,
             old_total_amount=old_total,
             skip_counterpart_sync=skip_counterpart_sync,
+            auto_deposit_on=auto_deposit_on,
         )
+
+        # Deposit Status tab: the supervisor's explicit choice wins over the automatic one
+        if update_data.deposit_status is not None and rec.sale_id and not skip_counterpart_sync:
+            self.sync_service.set_sale_deposit(
+                int(rec.sale_id), update_data.deposit_status, update_data.deposit_date
+            )
 
         self.db.commit()
         self.db.refresh(rec)

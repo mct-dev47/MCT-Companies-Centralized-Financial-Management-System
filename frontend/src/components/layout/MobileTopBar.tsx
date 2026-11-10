@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
 import { AppSidebar } from '@/components/layout/AppSidebar'
 import { NotificationBell } from '@/components/layout/NotificationBell'
+import { OutboxIndicator } from '@/components/layout/OfflineOutbox'
 import { UserProfileDropdown } from '@/components/layout/UserProfileDropdown'
 
 import logo2Url from '@/assets/LOGO2.png'
@@ -55,6 +56,7 @@ export const MobileTopBar: React.FC = () => {
 
       {/* Far Right: Notification Bell & User Profile */}
       <div className="flex items-center gap-2">
+        <OutboxIndicator />
         <NotificationBell />
         <UserProfileDropdown />
       </div>

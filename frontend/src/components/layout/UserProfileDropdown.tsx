@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { confirmLogoutWithOutbox } from '@/hooks/useOutbox'
 import { Link, useNavigate } from 'react-router-dom'
 import { Settings, LogOut, ChevronDown, Loader2, Building2 } from 'lucide-react'
 import { useSession } from '@/hooks/useSession'
@@ -105,6 +106,7 @@ export const UserProfileDropdown: React.FC = () => {
 
   const handleLogout = async () => {
     if (isLoggingOut) return
+    if (!confirmLogoutWithOutbox()) return
     try {
       setIsLoggingOut(true)
       await signOut()

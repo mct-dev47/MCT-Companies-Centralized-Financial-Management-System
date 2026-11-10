@@ -26,7 +26,8 @@ export interface DashboardTransactionItem {
   refNo: string
   chequeNo?: string
   date: string // e.g. "October 1, 2026" or "2026-10-01"
-  type: 'Expense' | 'Sales' | 'Loan' | 'Income' | 'Petty Cash'
+  /** 'Bank' = a deposit/withdrawal typed directly in Bank Management (no sale/expense record behind it) */
+  type: 'Expense' | 'Sales' | 'Loan' | 'Income' | 'Petty Cash' | 'Bank'
   company: string
   description: string
   particulars?: string

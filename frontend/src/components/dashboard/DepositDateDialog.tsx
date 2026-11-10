@@ -10,10 +10,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { formatDisplayDate } from '@/utils/dateUtils'
-import type { BankAccount } from '@/services/bankService'
+import { type BankAccount, preferSoleOwnedBanks, isAccountOwnedBy, isSoleOwner } from '@/services/bankService'
 import type { SalesItem } from '@/services/salesService'
 
-const norm = (s?: string) => (s || '').trim().toLowerCase()
 
 const todayIso = () => {
   const d = new Date()
@@ -41,7 +40,8 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
 }) => {
   const saleDay = sale?.rawDate || ''
   const companyAccounts = React.useMemo(
-    () => (sale ? accounts.filter((a) => norm(a.companyName) === norm(sale.company)) : []),
+    // Every bank the company owns, alone or shared; its own (sole-owner) banks listed first
+    () => (sale ? preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, sale.company)), sale.company) : []),
     [accounts, sale]
   )
 
@@ -55,7 +55,10 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
     const today = todayIso()
     // Default to today (never before the sale date) since that is when staff are recording the deposit
     setDepositDate(sale.rawDate && sale.rawDate > today ? sale.rawDate : today)
-    setBankId(sale.bankAccountId || (companyAccounts.length === 1 ? String(companyAccounts[0].id) : ''))
+    // Default: the company's only own bank; else its only bank (even if shared); else let the user choose
+    const ownBanks = companyAccounts.filter((a) => isSoleOwner(a, sale.company))
+    const fallback = ownBanks.length === 1 ? ownBanks[0] : companyAccounts.length === 1 ? companyAccounts[0] : null
+    setBankId(sale.bankAccountId || (fallback ? String(fallback.id) : ''))
     setSaving(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sale?.id])

@@ -69,7 +69,7 @@ import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { loanService } from '@/services/loanService'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import {
   pettyCashService,
   type PettyCashLedgerEntry,
@@ -224,6 +224,9 @@ export const PettyCashPage: React.FC = () => {
 
   // Spec 0012: funding bank Finance chooses when endorsing a petty cash request.
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
+  const [banksLoading, setBanksLoading] = React.useState(true)
+  const [banksError, setBanksError] = React.useState<string | null>(null)
+  const [banksReloadKey, setBanksReloadKey] = React.useState(0)
   const [selectedFundingBankId, setSelectedFundingBankId] = React.useState('')
   const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState<'direct' | 'transfer_first'>('direct')
   const [selectedDestinationBankId, setSelectedDestinationBankId] = React.useState('')
@@ -537,16 +540,23 @@ export const PettyCashPage: React.FC = () => {
   // Load bank accounts once, so Finance can pick a funding bank when endorsing (spec 0012).
   React.useEffect(() => {
     let mounted = true
+    setBanksLoading(true)
+    setBanksError(null)
     bankService
-      .getAccounts()
+      .getAccounts(undefined, { forceRefresh: banksReloadKey > 0 })
       .then((accounts) => {
         if (mounted && accounts) setBankAccounts(accounts)
       })
-      .catch(() => {})
+      .catch((err) => {
+        if (mounted) setBanksError(err instanceof Error ? err.message : 'Could not load bank accounts.')
+      })
+      .finally(() => {
+        if (mounted) setBanksLoading(false)
+      })
     return () => {
       mounted = false
     }
-  }, [])
+  }, [banksReloadKey])
 
   // Open Confirmation Modal for Endorse, Reject, Approve or Disapprove
   const handleOpenReviewConfirm = (action: 'endorse' | 'reject' | 'approve' | 'disapprove') => {
@@ -556,9 +566,11 @@ export const PettyCashPage: React.FC = () => {
     // For a Finance endorsement, preselect the requesting company's own bank account when it
     // exists (Finance may change it to an outside funder). Otherwise leave it unchosen.
     if (action === 'endorse') {
-      const ownAccount = bankAccounts.find((acc) =>
-        isAccountOwnedBy(acc, targetEntry?.companyName || '')
-      )
+      // The company's own (sole-owner) bank first; a shared bank only if it has none of its own
+      const ownAccount = preferSoleOwnedBanks(
+        bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || '')),
+        targetEntry?.companyName || ''
+      )[0]
       setSelectedFundingBankId(ownAccount ? ownAccount.id : '')
       setSelectedPaymentMethod('direct')
       setSelectedDestinationBankId('')
@@ -2302,6 +2314,20 @@ export const PettyCashPage: React.FC = () => {
                   <Label className="text-xs font-semibold text-focus block">
                     Funding Bank Account <span className="text-red-500">* (Required)</span>
                   </Label>
+                  {banksLoading && bankAccounts.length === 0 ? (
+                    <Skeleton className="h-11 w-full rounded-xl" aria-label="Loading bank accounts" />
+                  ) : banksError && bankAccounts.length === 0 ? (
+                    <div className="h-11 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
+                      <span className="truncate" title={banksError}>Couldn't load bank accounts.</span>
+                      <button
+                        type="button"
+                        onClick={() => setBanksReloadKey((k) => k + 1)}
+                        className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
                   <div className="relative">
                     <select
                       value={selectedFundingBankId}
@@ -2327,7 +2353,8 @@ export const PettyCashPage: React.FC = () => {
                     </select>
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
                   </div>
-                  {bankAccounts.length === 0 && (
+                  )}
+                  {!banksLoading && !banksError && bankAccounts.length === 0 && (
                     <p className="text-[11px] text-amber-700 font-medium">
                       No bank accounts found. Add a bank account before endorsing.
                     </p>

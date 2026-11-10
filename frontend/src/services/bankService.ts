@@ -14,6 +14,8 @@ export interface BankTransaction {
   netAmount: number
   /** Which owner company this entry belongs to (matters only on shared bank accounts) */
   companyName?: string
+  /** 'manual' = typed directly in Bank Management */
+  entrySource?: string
   timestamp?: string
   createdAt?: string
 }
@@ -47,6 +49,21 @@ export function isSharedAccount(acc?: BankAccount | null): boolean {
 export function isAccountOwnedBy(acc: Pick<BankAccount, 'companyName' | 'companyNames'>, company: string): boolean {
   const owners = acc.companyNames?.length ? acc.companyNames : [acc.companyName]
   return owners.some((o) => isCompanyMatch(o || '', company))
+}
+
+/** True when `company` is the ONLY owner of the account (not a shared bank). */
+export function isSoleOwner(acc: Pick<BankAccount, 'companyName' | 'companyNames'>, company: string): boolean {
+  const owners = acc.companyNames?.length ? acc.companyNames : [acc.companyName]
+  return owners.length === 1 && isAccountOwnedBy(acc, company)
+}
+
+/**
+ * The company's banks ordered for picking a default: banks it owns alone first, then banks it shares
+ * with other companies. Order within each group is kept, so `[0]` is the right default bank.
+ */
+export function preferSoleOwnedBanks<T extends Pick<BankAccount, 'companyName' | 'companyNames'>>(accounts: T[], company: string): T[] {
+  if (!company || company === 'All Companies') return accounts
+  return [...accounts].sort((a, b) => Number(isSoleOwner(b, company)) - Number(isSoleOwner(a, company)))
 }
 
 export interface NewBankAccountInput {
@@ -163,6 +180,7 @@ function mapAccountFromBackend(raw: any): BankAccount {
         category: t.category,
         netAmount: Number(t.net_amount || 0),
         companyName: t.company_name || undefined,
+        entrySource: t.entry_source || undefined,
         createdAt: t.created_at,
       }))
     : []
@@ -423,5 +441,22 @@ export const bankService = {
     const data = await res.json()
     clearBankCache()
     return mapAccountFromBackend(data)
+  },
+
+  /** Re-sync every bank with the Transactions ledger (posts only the differences). Finance / Admin. */
+  async reconcileAll(userRole?: string): Promise<{
+    sales_checked: number
+    expenses_checked: number
+    entries_posted: number
+    balances_fixed: number
+    accounts_still_off: Record<string, string>
+  }> {
+    const res = await fetch('/api/v1/bank-accounts/reconcile', {
+      method: 'POST',
+      headers: backendHeaders(userRole),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    clearBankCache()
+    return res.json()
   },
 }

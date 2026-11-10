@@ -85,6 +85,20 @@ def list_bank_accounts(
     ]
 
 
+@router.post("/reconcile", summary="Bring every bank back in line with the Transactions ledger")
+def reconcile_bank_accounts(
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    """Finance (all companies) or a Supervisor (their assigned companies only)."""
+    from app.core.dependencies import get_authorized_company_scope
+    from app.services.bank_reconcile import reconcile_all_banks
+
+    result = reconcile_all_banks(db, company_ids=get_authorized_company_scope(current_user))
+    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"action": "reconciled"}})
+    return result
+
+
 @router.get("/{account_id}", response_model=BankAccountOut, summary="Get single bank account with transactions")
 def get_bank_account(
     account_id: str,
@@ -92,7 +106,7 @@ def get_bank_account(
     db: Session = Depends(get_db),
 ):
     service = BankService(db)
-    account = service.get_account(account_id)
+    account = service.get_account(account_id, with_entries=True)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
 
@@ -193,7 +207,7 @@ def deposit_to_bank_account(
         check_company_access(current_user, req_comp.company_id)
 
     try:
-        updated_account, tx = service.deposit(account_id, req)
+        updated_account, tx = service.deposit(account_id, req, entry_source="manual")
         ws_manager.broadcast_sync({
             "type": "BANK_UPDATED",
             "payload": {
@@ -203,7 +217,7 @@ def deposit_to_bank_account(
                 "action": "deposit",
             }
         })
-        return updated_account
+        return service.get_account(account_id, with_entries=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -227,7 +241,7 @@ def withdraw_from_bank_account(
         check_company_access(current_user, req_comp.company_id)
 
     try:
-        updated_account, tx = service.withdraw(account_id, req)
+        updated_account, tx = service.withdraw(account_id, req, entry_source="manual")
         ws_manager.broadcast_sync({
             "type": "BANK_UPDATED",
             "payload": {
@@ -237,6 +251,6 @@ def withdraw_from_bank_account(
                 "action": "withdrawal",
             }
         })
-        return updated_account
+        return service.get_account(account_id, with_entries=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
