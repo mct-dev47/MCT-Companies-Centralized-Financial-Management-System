@@ -1,3 +1,4 @@
+import { mapWithConcurrency } from '@/utils/concurrency'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -57,7 +58,6 @@ import {
 import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
 import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
-import { isCompanyMatch } from '@/utils/companyUtils'
 import {
   particularsService,
   type CompanyParticular,
@@ -78,6 +78,9 @@ export interface UnpaidAssignmentRow {
   customerName: string
 }
 
+/** How many sheet rows are saved at the same time. */
+const SAVE_CONCURRENCY = 4
+
 export interface SpreadsheetRow {
   id: string
   date: string
@@ -90,7 +93,13 @@ export interface SpreadsheetRow {
   quantity: number | ''
   status: 'Paid' | 'Unpaid' | 'Pending'
   depositStatus: 'Deposited' | 'Not Deposited'
+  /** YYYY-MM-DD the money was deposited. Empty = follows the sales date (a paid sale is deposited that day). */
+  depositDate?: string
 }
+
+/** Deposit day a sheet row will be saved with; empty when the row is not deposited. */
+export const getRowDepositDate = (row: SpreadsheetRow): string =>
+  row.depositStatus === 'Deposited' ? row.depositDate || normalizeDateToYYYYMMDD(row.date) || '' : ''
 
 export interface RowValidationError {
   rowIndex: number
@@ -1414,6 +1423,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             'Paid'
           ) as 'Paid' | 'Unpaid' | 'Pending',
           depositStatus: (editItem.depositStatus || editItem.deposit_status || ((it.status || editItem.status) === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
+          depositDate: String((editItem as any).deposit_date || (editItem as any).depositDate || '').slice(0, 10),
         }))
       )
     } else if (editItem.particulars) {
@@ -1444,6 +1454,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               'Paid'
             ) as 'Paid' | 'Unpaid' | 'Pending',
             depositStatus: (editItem.depositStatus || editItem.deposit_status || ((p.status || editItem.status) === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
+            depositDate: String((editItem as any).deposit_date || (editItem as any).depositDate || '').slice(0, 10),
           }))
         )
       } else {
@@ -1462,6 +1473,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               'Paid'
             ) as 'Paid' | 'Unpaid' | 'Pending',
             depositStatus: (editItem.depositStatus || editItem.deposit_status || (editItem.status === 'Paid' ? 'Deposited' : 'Not Deposited')) as 'Deposited' | 'Not Deposited',
+            depositDate: String((editItem as any).deposit_date || (editItem as any).depositDate || '').slice(0, 10),
           },
         ])
       }
@@ -1738,10 +1750,22 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           }
         }
 
+        const finalDepositStatus = field === 'depositStatus' ? value : nextDepositStatus
+        let depositDate = field === 'depositDate' ? value : r.depositDate
+        if (finalDepositStatus !== 'Deposited') {
+          // Not deposited yet: no deposit day
+          depositDate = ''
+        } else if (r.depositStatus !== 'Deposited' && field !== 'depositDate' && isEditMode) {
+          // Marking a saved, undeposited sale as Deposited: it is being deposited today
+          depositDate = todayIso
+        }
+        // New paid rows keep depositDate empty, so the deposit day follows the sales date
+
         return {
           ...r,
           [field]: value,
-          depositStatus: field === 'depositStatus' ? value : nextDepositStatus,
+          depositStatus: finalDepositStatus,
+          depositDate,
         }
       })
     )
@@ -2222,8 +2246,42 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
 
+    // A deposit day can't be before the sale was made or in the future
+    if (isSales) {
+      const badIdx = validRows.findIndex((r) => {
+        const dep = getRowDepositDate(r)
+        if (!dep) return false
+        const saleDay = normalizeDateToYYYYMMDD(r.date) || todayIso
+        return dep < saleDay || dep > todayIso
+      })
+      if (badIdx !== -1) {
+        setErrorMessage(`Row ${badIdx + 1}: the deposit date must be on or after the sales date and not later than today.`)
+        return
+      }
+    }
+
     setIsSubmitting(true)
     const effectiveBankId = selectedBankAccountId || undefined
+
+    // If some rows saved and some failed: drop the saved ones from the sheet (so a retry can't
+    // duplicate them) and stop with a message. `offset` = position of rows[0] in the sheet's valid rows.
+    const reportPartialFailure = (
+      savedRows: typeof validRows,
+      results: PromiseSettledResult<unknown>[],
+      offset: number
+    ) => {
+      const failedIdx = results.map((r, i) => (r.status === 'rejected' ? i : -1)).filter((i) => i >= 0)
+      if (failedIdx.length === 0) return
+      const savedIds = new Set(savedRows.filter((_, i) => results[i].status === 'fulfilled').map((r) => r.id))
+      if (savedIds.size > 0) setRows((prev) => prev.filter((r) => !savedIds.has(r.id)))
+      const firstReason = (results[failedIdx[0]] as PromiseRejectedResult).reason
+      const reasonText = firstReason instanceof Error ? firstReason.message : String(firstReason || '')
+      const rowNumbers = failedIdx.map((i) => i + offset + 1).join(', ')
+      throw new Error(
+        `${savedIds.size} of ${savedRows.length} ${savedRows.length === 1 ? 'row was' : 'rows were'} saved. ` +
+          `Row ${rowNumbers} failed and ${failedIdx.length === 1 ? 'is' : 'are'} still in the sheet${reasonText ? `: ${reasonText}` : '.'}`
+      )
+    }
     const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
     const nowIso = new Date().toISOString()
 
@@ -2257,6 +2315,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             status: first.status,
             depositStatus: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
             deposit_status: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+            deposit_date: getRowDepositDate(first) || '',
             items: itemized,
             bankAccountId: effectiveBankId,
             updatedBy: authorName,
@@ -2348,8 +2407,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           })
         }
 
-        for (let i = 1; i < validRows.length; i++) {
-          const row = validRows[i]
+        // Extra rows added while editing are new records: save them in parallel (at most 4 at once)
+        const extraRows = validRows.slice(1)
+        const extraResults = await mapWithConcurrency(extraRows, SAVE_CONCURRENCY, async (row, j) => {
+          const i = j + 1
           const rowDate = normalizeDateToYYYYMMDD(row.date) || todayIso
           const rowAmount = Math.round(row.rowTotal * 100) / 100
           const extraItemized: ParticularItem[] = [
@@ -2377,6 +2438,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
               deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_date: getRowDepositDate(row) || undefined,
               items: extraItemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
@@ -2396,9 +2458,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               createdBy: authorName,
             })
           }
-        }
+        })
+        reportPartialFailure(extraRows, extraResults, 1)
       } else {
-        for (const row of validRows) {
+        // Each row is its own record: save them in parallel (at most 4 at once).
+        // An unpaid row's receivable is still created right after its own sale.
+        const rowResults = await mapWithConcurrency(validRows, SAVE_CONCURRENCY, async (row) => {
           const rowDate = normalizeDateToYYYYMMDD(row.date) || todayIso
           const rowAmount = Math.round(row.rowTotal * 100) / 100
           const itemized: ParticularItem[] = [
@@ -2426,6 +2491,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               status: row.status,
               depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
               deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_date: getRowDepositDate(row) || undefined,
               items: itemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
@@ -2483,25 +2549,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               createdBy: authorName,
             })
           }
-        }
+        })
+        reportPartialFailure(validRows, rowResults, 0)
       }
 
+      // Refresh in the background; the next page loads its own data anyway
       if (unpaidAssignments.length > 0) {
-        await receivablesStore.refreshFromBackend()
+        void receivablesStore.refreshFromBackend().catch(() => {})
       }
 
       bankService.invalidateCache()
       bankService.prefetchAccounts(companyToUse)
 
-      // Invalidate particulars cache and persist row particulars for future autocomplete
+      // The backend saves each row's particulars to the company library on create and update,
+      // so only the local autocomplete cache needs refreshing here
       const txType = isSales ? 'Sales' : 'Expense'
-      // Wait for the saves, then reload the list so the next entry remembers what was just typed
-      await Promise.allSettled(
-        validRows
-          .map((row) => row.particulars?.trim())
-          .filter((pName): pName is string => !!pName)
-          .map((pName) => particularsService.addParticular(companyToUse, pName, txType))
-      )
       particularsService.invalidateCache(companyToUse, txType)
       if (effectiveParticularsCompany && effectiveParticularsCompany !== companyToUse) {
         particularsService.invalidateCache(effectiveParticularsCompany, txType)
@@ -2513,16 +2575,16 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           .catch(() => {})
       }
 
-      // Save the optional day remark for every date that was just recorded
-      for (const d of skipDayRemarks ? [] : dayRemarkDates) {
-        const text = (dayRemarkDrafts[d] || '').trim()
-        if (text === getDayRemark(companyToUse, d).trim()) continue
-        try {
-          await saveDayRemark(companyToUse, d, text)
-        } catch (e) {
-          console.warn('Could not save day remark:', e)
-        }
-      }
+      // Save the optional day remark for every date that was just recorded (all at once)
+      const remarkResults = await Promise.allSettled(
+        (skipDayRemarks ? [] : dayRemarkDates)
+          .map((d) => ({ d, text: (dayRemarkDrafts[d] || '').trim() }))
+          .filter(({ d, text }) => text !== getDayRemark(companyToUse, d).trim())
+          .map(({ d, text }) => saveDayRemark(companyToUse, d, text))
+      )
+      remarkResults.forEach((r) => {
+        if (r.status === 'rejected') console.warn('Could not save day remark:', r.reason)
+      })
 
       setSuccessBanner({
         count: validRowsCount,
@@ -2532,9 +2594,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           : `${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`,
       })
 
-      setTimeout(() => {
-        navigate(isSales ? '/sales' : '/expense')
-      }, 900)
+      navigate(isSales ? '/sales' : '/expense')
     } catch (err: any) {
       console.error('Failed to save spreadsheet entries:', err)
       const userMessage = formatUserFriendlyErrorMessage(
@@ -3037,7 +3097,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             >
               <Table
                 containerClassName="overflow-visible"
-                className="w-full border-collapse table-fixed min-w-[1388px]"
+                className={cn('w-full border-collapse table-fixed', isSales ? 'min-w-[1528px]' : 'min-w-[1388px]')}
               >
                 <colgroup>
                   <col style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }} />
@@ -3050,6 +3110,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                   <col style={{ width: '110px', minWidth: '110px', maxWidth: '110px' }} />
                   {isSales && <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />}
+                  {isSales && <col style={{ width: '140px', minWidth: '140px', maxWidth: '140px' }} />}
                   <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
                   <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
                 </colgroup>
@@ -3059,7 +3120,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       #
                     </TableHead>
                     <TableHead className="w-[145px] max-w-[145px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
-                      DATE
+                      {isSales ? 'SALES DATE' : 'DATE'}
                     </TableHead>
                     <TableHead className="w-[250px] max-w-[250px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
                       PARTICULARS <span className="text-red-500">*</span>
@@ -3085,6 +3146,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     {isSales && (
                       <TableHead className="w-[125px] max-w-[125px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5">
                         DEPOSIT STATUS
+                      </TableHead>
+                    )}
+                    {isSales && (
+                      <TableHead
+                        title="Day the money was deposited. Defaults to the sales date for paid sales, or today when an undeposited sale is marked Deposited."
+                        className="w-[140px] max-w-[140px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5"
+                      >
+                        DEPOSIT DATE
                       </TableHead>
                     )}
                     <TableHead className="w-[125px] max-w-[125px] text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
@@ -3449,6 +3518,32 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 <option value="Deposited">Deposited</option>
                                 <option value="Not Deposited">Not Deposited</option>
                               </select>
+                            )}
+                          </TableCell>
+                        )}
+
+                        {/* Deposit Date (Sales only): editable once the row is Deposited */}
+                        {isSales && (
+                          <TableCell className="w-[140px] max-w-[140px] border-r border-slate-200/60 p-1 px-1.5 box-border">
+                            {row.depositStatus === 'Deposited' && row.status !== 'Unpaid' && row.status !== 'Pending' ? (
+                              <input
+                                type="date"
+                                value={getRowDepositDate(row)}
+                                min={normalizeDateToYYYYMMDD(row.date) || undefined}
+                                max={todayIso}
+                                onChange={(e) => {
+                                  setErrorMessage(null)
+                                  handleRowChange(row.id, 'depositDate', e.target.value)
+                                }}
+                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border border-emerald-300 bg-white text-emerald-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 box-border"
+                              />
+                            ) : (
+                              <div
+                                title="No deposit day until the sale is deposited"
+                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border bg-slate-100 text-slate-400 border-slate-200 flex items-center justify-center select-none"
+                              >
+                                —
+                              </div>
                             )}
                           </TableCell>
                         )}

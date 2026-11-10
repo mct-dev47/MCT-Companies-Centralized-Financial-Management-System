@@ -16,6 +16,11 @@ from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
+from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+
+
+class _SkipBackup(Exception):
+    """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
 
@@ -555,8 +560,10 @@ def create_expense(
         created_row = sb_insert.data[0]
         sb_expense_id = created_row["expense_id"]
 
-        # Also backup to local SQLite
+        # Also backup to the ORM database, unless it IS the Supabase database (then the row is already there)
         try:
+            if rest_and_orm_share_database():
+                raise _SkipBackup()
             local_comp = db.query(Company).filter(Company.company_id == target_company_id).first()
             if not local_comp:
                 local_comp = Company(
@@ -590,28 +597,28 @@ def create_expense(
             )
             db.merge(local_exp)
             db.commit()
+        except _SkipBackup:
+            pass
         except Exception:
             db.rollback()
 
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=sb_expense_id)
 
-        # Auto-save particulars to company library
-        try:
-            for p_name in extract_particular_names(parts):
-                save_company_particular_if_not_exists(
-                    db, target_company_id, target_company_name, p_name, "Expense"
-                )
-        except Exception:
-            pass
-
+        # Particulars library + audit log don't change the response: do them after it is sent
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
-        log_transaction(
-            db, AuditAction.EXPENSE_CREATED,
-            user_id=current_user.get("user_id"), company_id=target_company_id,
+        schedule_created_side_effects(
+            db,
+            company_id=target_company_id,
+            company_name=target_company_name,
+            particulars_text=parts,
+            particulars_type="Expense",
+            audit_action=AuditAction.EXPENSE_CREATED,
+            user_id=current_user.get("user_id"),
             ip_address=request.client.host if request.client else "unknown",
-            record_id=sb_expense_id, record_type="expense",
-            extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
+            record_id=sb_expense_id,
+            record_type="expense",
+            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
         )
 
         try:

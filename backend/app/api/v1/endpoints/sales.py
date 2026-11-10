@@ -19,6 +19,11 @@ from app.services.sales_receivables_sync import (
 )
 from app.core.websocket import ws_manager
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
+from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+
+
+class _SkipBackup(Exception):
+    """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
 
@@ -536,8 +541,10 @@ def create_sale(
         created_row = sb_insert.data[0]
         sb_sales_id = created_row["sales_id"]
 
-        # Also backup to local SQLite
+        # Also backup to the ORM database, unless it IS the Supabase database (then the row is already there)
         try:
+            if rest_and_orm_share_database():
+                raise _SkipBackup()
             local_comp = db.query(Company).filter(Company.company_id == target_company_id).first()
             if not local_comp:
                 local_comp = Company(
@@ -570,6 +577,8 @@ def create_sale(
             )
             db.merge(local_sale)
             db.commit()
+        except _SkipBackup:
+            pass
         except Exception:
             db.rollback()
 
@@ -588,22 +597,20 @@ def create_sale(
             }
         )
 
-        # Auto-save particulars to company library
-        try:
-            for p_name in extract_particular_names(parts):
-                save_company_particular_if_not_exists(
-                    db, target_company_id, target_company_name, p_name, "Sales"
-                )
-        except Exception:
-            pass
-
+        # Particulars library + audit log don't change the response: do them after it is sent
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
-        log_transaction(
-            db, AuditAction.SALE_CREATED,
-            user_id=current_user.get("user_id"), company_id=target_company_id,
+        schedule_created_side_effects(
+            db,
+            company_id=target_company_id,
+            company_name=target_company_name,
+            particulars_text=parts,
+            particulars_type="Sales",
+            audit_action=AuditAction.SALE_CREATED,
+            user_id=current_user.get("user_id"),
             ip_address=request.client.host if request.client else "unknown",
-            record_id=sb_sales_id, record_type="sale",
-            extra={
+            record_id=sb_sales_id,
+            record_type="sale",
+            audit_extra={
                 "amount": float(sale_in.amount),
                 "transaction_date": sale_in.transaction_date.isoformat(),
                 "particulars": parts,

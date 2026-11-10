@@ -1,4 +1,6 @@
 import json
+import secrets
+import time
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal
 from datetime import datetime, date, timezone
@@ -130,13 +132,27 @@ class BankService:
         return candidate
 
     def _generate_transaction_id(self) -> str:
-        count = self.db.query(BankTransaction).count()
-        num = count + 1
-        candidate = f"tx-{num:04d}"
-        while self.db.query(BankTransaction).filter(BankTransaction.id == candidate).first():
-            num += 1
-            candidate = f"tx-{num:04d}"
-        return candidate
+        """
+        Time-ordered, collision-free id: tx-<13-digit epoch ms><6 random hex>.
+        Needs no database round trip and stays unique when several saves run at once
+        (the old count()+1 scheme handed two concurrent saves the same id). Ids still sort oldest first.
+        """
+        return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(3)}"
+
+    def _adjust_balance(self, account: BankAccount, delta: Decimal) -> None:
+        """
+        Move an account balance by `delta` with one atomic SQL UPDATE (current_balance = current_balance + delta).
+        A Python read-add-write loses money when two saves hit the same bank at once.
+        """
+        delta = Decimal(str(delta or 0))
+        if delta == Decimal("0"):
+            return
+        self.db.query(BankAccount).filter(BankAccount.id == account.id).update(
+            {BankAccount.current_balance: BankAccount.current_balance + delta},
+            synchronize_session=False,
+        )
+        # Reload the new value from the database on next access
+        self.db.expire(account, ["current_balance"])
 
     def create_account(self, data: BankAccountCreate) -> BankAccount:
         # Idempotency check: prevent duplicate account creation within 10 seconds or identical unedited record
@@ -274,7 +290,7 @@ class BankService:
             source_sale_id=source_sale_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
-        account.current_balance = account.current_balance + amount
+        self._adjust_balance(account, amount)
 
         self.db.add(tx)
         self.db.commit()
@@ -313,7 +329,7 @@ class BankService:
             source_sale_id=source_sale_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
-        account.current_balance = account.current_balance - amount
+        self._adjust_balance(account, -amount)
 
         self.db.add(tx)
         self.db.commit()
@@ -389,7 +405,7 @@ class BankService:
                 net_amount=amount,
                 source_sale_id=source_sale_id,
             )
-            account.current_balance = account.current_balance - amount
+            self._adjust_balance(account, -amount)
             self.db.add(tx)
             self.db.commit()
             return tx
@@ -437,7 +453,7 @@ class BankService:
             net_amount=amount,
         )
         setattr(tx, link_attr, link_id)
-        account.current_balance = account.current_balance + (amount if is_deposit else -amount)
+        self._adjust_balance(account, amount if is_deposit else -amount)
         self.db.add(tx)
         self.db.flush()
         return tx
@@ -543,7 +559,7 @@ class BankService:
         for account_id, net in net_by_account.items():
             account = self.get_account(account_id)
             if account is not None and net != Decimal("0"):
-                account.current_balance = account.current_balance - net
+                self._adjust_balance(account, -net)
         for t in linked:
             self.db.delete(t)
         self.db.commit()
@@ -670,7 +686,7 @@ class BankService:
                 category="Cash",
                 net_amount=amount,
             )
-            account.current_balance = account.current_balance - amount
+            self._adjust_balance(account, -amount)
             self.db.add(tx)
             self.db.commit()
             return tx

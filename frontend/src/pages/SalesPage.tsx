@@ -1611,7 +1611,7 @@ export const SalesPage: React.FC = () => {
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                    DATE & DAY
+                    SALES DATE & DAY
                   </TableHead>
                   <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     TRANSACTIONS
@@ -1964,7 +1964,7 @@ export const SalesPage: React.FC = () => {
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
                 <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  DATE
+                  SALES DATE
                 </TableHead>
                 {showCompanyColumn && (
                   <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
