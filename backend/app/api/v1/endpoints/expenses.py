@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
@@ -17,6 +17,12 @@ from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+from app.core.idempotency import (
+    ExistingRecord,
+    find_by_client_ref_orm,
+    find_by_client_ref_supabase,
+    supabase_supports_client_ref,
+)
 
 
 class _SkipBackup(Exception):
@@ -27,7 +33,28 @@ router = APIRouter()
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.pagination import PaginationParams
-from app.core.cache import get_cached, set_cached
+from app.core.cache import get_cached, set_cached, system_cache
+
+PETTY_CASH_CATEGORY = "Petty Cash"
+
+
+def _is_petty_cash_payment(payment_method: Optional[str]) -> bool:
+    """Same rule the petty cash wallet uses to count an expense as spent from petty cash."""
+    return "petty cash" in (payment_method or "").strip().lower()
+
+
+def _local_category_id(db: Session, name: str) -> Optional[int]:
+    """Local category id for a name (created when missing), for the local-database paths."""
+    cleaned = (name or "").strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    cat = db.query(Category).filter(func.lower(Category.name) == cleaned.lower()).first()
+    if cat is None:
+        cat = Category(name=cleaned)
+        db.add(cat)
+        db.flush()
+    return cat.category_id
+
 
 def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
@@ -40,7 +67,8 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
         expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
         if expense is None:
             return
-        is_petty = (expense.payment_method or "").strip().lower() == "petty cash"
+        # Same rule the petty cash wallet uses to count an expense as spent from petty cash
+        is_petty = "petty cash" in (expense.payment_method or "").strip().lower()
         target = (
             Decimal("0.00")
             if force_zero or is_petty
@@ -144,6 +172,8 @@ def get_expenses(
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    if not hasattr(pagination, "offset"):
+        pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
     is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
@@ -320,6 +350,8 @@ def get_expenses_daily_summary(
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    if not hasattr(pagination, "offset"):
+        pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
     is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
@@ -471,13 +503,33 @@ def get_expenses_daily_summary(
     return result
 
 
+def _find_expense_by_client_ref(db: Session, client_ref: Optional[str]) -> Optional[ExistingRecord]:
+    """The expense already created with this client_ref, if any (spec 0038)."""
+    if not client_ref:
+        return None
+    try:
+        found = find_by_client_ref_supabase(get_supabase_admin_client(), "expenses", "expense_id", client_ref)
+        if found:
+            return found
+    except Exception:
+        pass
+    return find_by_client_ref_orm(db, Expense, "expense_id", client_ref)
+
+
 @router.post("", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED, summary="Record a new expense")
 def create_expense(
     expense_in: ExpenseCreate,
     request: Request,
+    response: Response,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    # Same client_ref sent again (retry, offline resend): return the expense that already exists
+    existing = _find_expense_by_client_ref(db, expense_in.client_ref)
+    if existing:
+        check_company_access(current_user, existing.company_id)
+        response.status_code = status.HTTP_200_OK
+        return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
 
     if expense_in.amount < Decimal("1.00"):
         raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
@@ -488,6 +540,11 @@ def create_expense(
     parts = (expense_in.particulars or expense_in.description or "").strip()
     if not parts:
         raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
+
+    # Paid with petty cash: the category is always Petty Cash, whatever was sent
+    if _is_petty_cash_payment(expense_in.payment_method):
+        expense_in.category = PETTY_CASH_CATEGORY
+        expense_in.category_id = None
 
     cat_str = (expense_in.category or "").strip()
     if not expense_in.category_id and not cat_str:
@@ -552,6 +609,11 @@ def create_expense(
             "audited_by": None,
             "audited_at": None,
             "audit_remarks": None,
+            **(
+                {"client_ref": expense_in.client_ref}
+                if expense_in.client_ref and supabase_supports_client_ref(client, "expenses")
+                else {}
+            ),
         }).execute()
 
         if not sb_insert.data:
@@ -594,6 +656,7 @@ def create_expense(
                 audited_by=None,
                 audited_at=None,
                 audit_remarks=None,
+                client_ref=expense_in.client_ref,
             )
             db.merge(local_exp)
             db.commit()
@@ -604,6 +667,7 @@ def create_expense(
 
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=sb_expense_id)
+        system_cache.invalidate_tag("petty_cash")
 
         # Particulars library + audit log don't change the response: do them after it is sent
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
@@ -659,6 +723,14 @@ def create_expense(
     except HTTPException:
         raise
     except Exception as e:
+        # The insert may have succeeded before a later step failed, or a parallel request with the same
+        # client_ref won the race: return that expense instead of inserting a second one
+        existing = _find_expense_by_client_ref(db, expense_in.client_ref)
+        if existing:
+            check_company_access(current_user, existing.company_id)
+            response.status_code = status.HTTP_200_OK
+            return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
+
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)
         check_company_access(current_user, target_company.company_id)
@@ -667,7 +739,7 @@ def create_expense(
 
         expense = Expense(
             company_id=target_company.company_id,
-            category_id=expense_in.category_id,
+            category_id=expense_in.category_id or _local_category_id(db, expense_in.category or ""),
             payment_method=(expense_in.payment_method or "").strip() or None,
             created_by=expense_in.created_by,
             expense_date=expense_in.expense_date,
@@ -681,6 +753,7 @@ def create_expense(
             audited_by=None,
             audited_at=None,
             audit_remarks=None,
+            client_ref=expense_in.client_ref,
         )
         db.add(expense)
         db.commit()
@@ -688,6 +761,7 @@ def create_expense(
 
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=expense.expense_id)
+        system_cache.invalidate_tag("petty_cash")
 
         # Auto-save particulars to company library
         try:
@@ -842,6 +916,15 @@ def update_expense(
     if current and current.get("company_id"):
         check_company_access(current_user, current.get("company_id"))
 
+    # Paid with petty cash (newly chosen, or already petty cash): the category is always Petty Cash
+    effective_payment_method = (
+        expense_in.payment_method if expense_in.payment_method is not None else (current or {}).get("payment_method")
+    )
+    force_petty_category = _is_petty_cash_payment(effective_payment_method)
+    if force_petty_category:
+        expense_in.category = PETTY_CASH_CATEGORY
+        expense_in.category_id = None
+
     # Re-check the petty cash wallet with this expense's old amount added back
     if current:
         PettyCashService(db).ensure_sufficient_balance(
@@ -910,6 +993,9 @@ def update_expense(
 
     # Also update in local SQLite
     expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    if expense and force_petty_category and "category_id" not in update_payload:
+        # Supabase step did not run: still file the expense under Petty Cash locally
+        update_payload["category_id"] = _local_category_id(db, PETTY_CASH_CATEGORY)
     if expense:
         if "expense_date" in update_payload:
             expense.expense_date = expense_in.expense_date
@@ -935,6 +1021,7 @@ def update_expense(
 
     # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
     reconcile_expense_bank(db, expense_id=expense_id)
+    system_cache.invalidate_tag("petty_cash")
 
     # Auto-save updated particulars to company library
     if parts:
@@ -1139,18 +1226,21 @@ def delete_expense(
 
     deleted_from_supabase = False
     deleted_company_id = None
+    deleted_day = None
     client = None
     try:
         client = get_supabase_admin_client()
-        existing = client.table("expenses").select("company_id").eq("expense_id", expense_id).limit(1).execute()
+        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", expense_id).limit(1).execute()
         if existing.data:
             deleted_company_id = existing.data[0].get("company_id")
+            deleted_day = existing.data[0].get("expense_date")
     except Exception as e:
         print(f"Supabase fetch before delete error: {e}")
 
     expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if expense:
         deleted_company_id = deleted_company_id or expense.company_id
+        deleted_day = deleted_day or expense.expense_date
 
     if not deleted_company_id and not expense:
         raise HTTPException(status_code=404, detail="Expense not found")
@@ -1177,6 +1267,13 @@ def delete_expense(
         except Exception as e:
             db.rollback()
             print(f"Bank entry purge error on expense delete: {e}")
+
+    # Cascade: the day's expense remark goes once no expense is left on that day
+    if deleted_day:
+        from app.services.daily_remark_cascade import purge_orphan_daily_remark
+        purge_orphan_daily_remark(db, client, "expense", deleted_company_id, deleted_day)
+
+    system_cache.invalidate_tag("petty_cash")
 
     try:
         log_transaction(

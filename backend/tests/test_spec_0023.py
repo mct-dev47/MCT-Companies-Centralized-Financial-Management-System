@@ -43,7 +43,6 @@ FINANCE_USER = {
 def setup_app(monkeypatch):
     monkeypatch.setattr(tenant_service, "_supabase_client", lambda: None)
     monkeypatch.setattr("app.api.v1.endpoints.tenants.require_company_feature_access", lambda *args, **kwargs: None)
-    monkeypatch.setattr("app.services.petty_cash_service.get_supabase_admin_client", lambda: None)
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)

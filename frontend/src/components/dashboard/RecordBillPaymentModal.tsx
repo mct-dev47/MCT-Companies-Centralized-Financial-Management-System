@@ -23,6 +23,8 @@ import {
   type BillItem,
   type BillPaymentPeriod,
 } from '@/services/billsService'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
+import { pettyCashService } from '@/services/pettyCashService'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
@@ -33,6 +35,17 @@ export interface RecordBillPaymentModalProps {
   bill: BillItem | null
   onBillPaid?: (updatedBill: BillItem) => void
 }
+
+/** Amount typing rules: digits with at most one dot and 2 decimals. Letters and "-" are refused. */
+const AMOUNT_PATTERN = /^\d*\.?\d{0,2}$/
+const amountTypingError = (raw: string): string | null => {
+  if (AMOUNT_PATTERN.test(raw)) return null
+  if (raw.includes('-')) return 'Negative amounts are not allowed.'
+  if (/[^0-9.]/.test(raw)) return 'Only numbers are allowed (no letters or symbols).'
+  return 'Use a valid amount with up to 2 decimal places (e.g. 1250.75).'
+}
+
+export type BillFundingSource = 'bank' | 'petty_cash'
 
 export const MONTH_NAMES = [
   'Jan',
@@ -78,8 +91,15 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   const [amountInput, setAmountInput] = React.useState<string>('')
   const [isInstallment, setIsInstallment] = React.useState<boolean>(false)
   const [totalBilledInput, setTotalBilledInput] = React.useState<string>('')
-  const [paymentMethod, setPaymentMethod] = React.useState<string>('Cash')
+  const [paymentMethod, setPaymentMethod] = React.useState<string>('Bank Transfer')
   const [referenceNo, setReferenceNo] = React.useState<string>('')
+  // Funding source: which company bank account, or petty cash, pays this bill
+  const [fundingSource, setFundingSource] = React.useState<BillFundingSource | ''>('')
+  const [bankAccountId, setBankAccountId] = React.useState<string>('')
+  const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
+  const [pettyCashBalance, setPettyCashBalance] = React.useState<number | null>(null)
+  const [isLoadingFunds, setIsLoadingFunds] = React.useState(false)
+  const [typingError, setTypingError] = React.useState<string | null>(null)
   const [notes, setNotes] = React.useState<string>('')
 
   // Period selector navigation states
@@ -122,7 +142,10 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
       setSelectedYear(yr)
       setDailyCalendarMonth(new Date(yr, !isNaN(baseDate.getMonth()) ? baseDate.getMonth() : new Date().getMonth(), 1))
 
-      setPaymentMethod('Cash')
+      setPaymentMethod('Bank Transfer')
+      setFundingSource('')
+      setBankAccountId('')
+      setTypingError(null)
       setReferenceNo('')
       setNotes('')
       setError('')
@@ -131,7 +154,49 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
     }
   }, [open, bill])
 
+  // Load the bill company's bank accounts (with their current balances) and petty cash balance
+  React.useEffect(() => {
+    if (!open || !bill?.company) return
+    let cancelled = false
+    const company = bill.company
+    setIsLoadingFunds(true)
+    Promise.all([
+      bankService.getAccounts(company, { forceRefresh: true }).catch(() => [] as BankAccount[]),
+      pettyCashService
+        .getSummary(company)
+        .then((sum) => sum.balance)
+        .catch(() => null),
+    ])
+      .then(([accounts, petty]) => {
+        if (cancelled) return
+        setBankAccounts(preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, company)), company))
+        setPettyCashBalance(petty)
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingFunds(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, bill?.company])
+
   if (!bill) return null
+
+  const selectedBank = bankAccounts.find((a) => String(a.id) === String(bankAccountId))
+  const availableFunds: number | null =
+    fundingSource === 'bank'
+      ? selectedBank
+        ? Number(selectedBank.currentBalance) || 0
+        : null
+      : fundingSource === 'petty_cash'
+      ? pettyCashBalance
+      : null
+  const fundingLabel = fundingSource === 'bank' ? selectedBank?.bankName || 'the selected bank' : 'petty cash'
+  const fundingError: string | null = !fundingSource
+    ? 'Please choose the funding source (bank or petty cash).'
+    : fundingSource === 'bank' && !selectedBank
+    ? 'Please choose the bank account that pays this bill.'
+    : null
 
   const options = getBillPaymentOptions(bill)
   const allPeriods = options.periods
@@ -153,8 +218,10 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
 
   let amountInputError: string | null = null
   if (amountInput.trim()) {
-    if (isNaN(parsedAmount) || parsedAmount < 1) {
-      amountInputError = 'Payment amount must be at least ₱1.00.'
+    if (!AMOUNT_PATTERN.test(amountInput.trim()) || isNaN(parsedAmount) || parsedAmount <= 0) {
+      amountInputError = 'Payment amount must be a number greater than ₱0.00.'
+    } else if (availableFunds !== null && parsedAmount > availableFunds + 0.005) {
+      amountInputError = `Payment amount is more than the balance of ${fundingLabel} (${formatPHP(availableFunds)}).`
     } else if (isPeriodPartiallyPaid && periodRemainingBalance > 0 && parsedAmount > periodRemainingBalance + 0.005) {
       amountInputError = `Payment amount cannot exceed the remaining balance of ${formatPHP(periodRemainingBalance)}.`
     } else if (isInstallment && !isNaN(parsedTotalBilled) && parsedTotalBilled > 0 && parsedAmount > parsedTotalBilled + 0.005) {
@@ -168,18 +235,18 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   let willBePartiallyPaid = false
 
   if (isPeriodPartiallyPaid) {
-    isAmountValid = !isNaN(parsedAmount) && parsedAmount >= 1 && !amountInputError
+    isAmountValid = !isNaN(parsedAmount) && parsedAmount > 0 && !amountInputError
     willBePartiallyPaid = isAmountValid && parsedAmount < periodRemainingBalance - 0.005
   } else if (isInstallment) {
     isAmountValid =
       !isNaN(parsedTotalBilled) &&
-      parsedTotalBilled >= 1 &&
+      parsedTotalBilled > 0 &&
       !isNaN(parsedAmount) &&
-      parsedAmount >= 1 &&
+      parsedAmount > 0 &&
       !amountInputError
     willBePartiallyPaid = isAmountValid && parsedAmount < parsedTotalBilled - 0.005
   } else {
-    isAmountValid = !isNaN(parsedAmount) && parsedAmount >= 1 && !amountInputError
+    isAmountValid = !isNaN(parsedAmount) && parsedAmount > 0 && !amountInputError
     willBePartiallyPaid = false
   }
 
@@ -257,6 +324,11 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
       return
     }
 
+    if (fundingError) {
+      setError(fundingError)
+      return
+    }
+
     if (!isAmountValid) {
       if (isPeriodPartiallyPaid && periodRemainingBalance > 0 && parsedAmount > periodRemainingBalance) {
         setError(`Payment amount cannot exceed the remaining balance of ${formatPHP(periodRemainingBalance)}.`)
@@ -281,7 +353,9 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
         paymentDate,
         amount: parsedAmount,
         billedAmount: billedAmountToPass,
-        paymentMethod,
+        paymentMethod: fundingSource === 'petty_cash' ? 'Petty Cash' : paymentMethod,
+        fundingSource: fundingSource || undefined,
+        bankAccountId: fundingSource === 'bank' ? bankAccountId : undefined,
         refNo: referenceNo.trim() || undefined,
         referenceNo: referenceNo.trim() || undefined,
         notes: notes.trim() || undefined,
@@ -765,14 +839,16 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                     </span>
                     <Input
                       required
-                      type="number"
-                      min="1"
-                      step="any"
+                      type="text"
+                      inputMode="decimal"
+                      autoComplete="off"
                       value={totalBilledInput}
-                      onWheel={(e) => e.currentTarget.blur()}
                       onChange={(e) => {
                         setError('')
-                        setTotalBilledInput(e.target.value)
+                        const raw = e.target.value.trim()
+                        const err = amountTypingError(raw)
+                        setTypingError(err)
+                        if (!err) setTotalBilledInput(raw)
                       }}
                       placeholder="e.g. 5420.50"
                       className="h-10 pl-7 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -804,15 +880,16 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   </span>
                   <Input
                     required
-                    type="number"
-                    min="1"
-                    max={isPeriodPartiallyPaid ? periodRemainingBalance : isInstallment ? parsedTotalBilled : undefined}
-                    step="any"
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
                     value={amountInput}
-                    onWheel={(e) => e.currentTarget.blur()}
                     onChange={(e) => {
                       setError('')
-                      setAmountInput(e.target.value)
+                      const raw = e.target.value.trim()
+                      const err = amountTypingError(raw)
+                      setTypingError(err)
+                      if (!err) setAmountInput(raw)
                     }}
                     placeholder="0.00"
                     className={cn(
@@ -821,6 +898,14 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                     )}
                   />
                 </div>
+
+                {/* Refused keystroke (letter, minus sign, 3rd decimal) */}
+                {typingError && !amountInputError && (
+                  <p className="text-[11px] text-[#960C01] font-semibold flex items-center gap-1.5 pt-0.5 animate-in fade-in duration-150">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-[#960C01]" />
+                    <span>{typingError}</span>
+                  </p>
+                )}
 
                 {/* Inline Validation Error Message */}
                 {amountInputError && (
@@ -852,22 +937,78 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                 )}
               </div>
 
-              {/* 3. Payment Method */}
+              {/* 3. Funding Source: a company bank account or petty cash */}
               <div className="space-y-1.5">
-                <label className="text-xs font-semibold text-focus block">
-                  Payment Method
+                <label className="text-xs font-semibold text-focus flex items-center justify-between">
+                  <span>
+                    Funding Source <span className="text-[#960C01]">*</span>
+                  </span>
+                  {isLoadingFunds && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-fg" />}
                 </label>
                 <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  value={fundingSource === 'bank' ? `bank:${bankAccountId}` : fundingSource}
+                  onChange={(e) => {
+                    setError('')
+                    const val = e.target.value
+                    if (val.startsWith('bank:')) {
+                      setFundingSource('bank')
+                      setBankAccountId(val.slice(5))
+                    } else if (val === 'petty_cash') {
+                      setFundingSource('petty_cash')
+                      setBankAccountId('')
+                    } else {
+                      setFundingSource('')
+                      setBankAccountId('')
+                    }
+                  }}
                   className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
                 >
-                  <option value="Cash">Cash</option>
-                  <option value="GCash">GCash</option>
-                  <option value="Bank Transfer">Bank Transfer</option>
-                  <option value="Cheque">Cheque</option>
+                  <option value="">Select bank or petty cash...</option>
+                  {bankAccounts.length > 0 && (
+                    <optgroup label="Bank Accounts">
+                      {bankAccounts.map((acc) => (
+                        <option key={acc.id} value={`bank:${acc.id}`}>
+                          {acc.bankName}
+                          {acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} —{' '}
+                          {formatPHP(Number(acc.currentBalance) || 0)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label="Petty Cash">
+                    <option value="petty_cash">
+                      Petty Cash{pettyCashBalance !== null ? ` — ${formatPHP(pettyCashBalance)}` : ''}
+                    </option>
+                  </optgroup>
                 </select>
+                {!isLoadingFunds && bankAccounts.length === 0 && (
+                  <p className="text-[11px] text-muted-fg">No bank account is registered for {bill.company}.</p>
+                )}
+                {availableFunds !== null && (
+                  <p className="text-[11px] text-muted-fg">
+                    Available in {fundingLabel}: <strong className="text-focus">{formatPHP(availableFunds)}</strong>
+                  </p>
+                )}
               </div>
+
+              {/* 4. Payment Method (bank funding only; petty cash is always "Petty Cash") */}
+              {fundingSource !== 'petty_cash' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-focus block">
+                    Payment Method
+                  </label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
+                  >
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Online Banking">Online Banking</option>
+                    <option value="Debit Card">Debit Card</option>
+                  </select>
+                </div>
+              )}
 
               {/* 4. Receipt / Ref No. */}
               <div className="space-y-1.5">
@@ -911,7 +1052,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
             </Button>
             <Button
               type="submit"
-              disabled={isSubmitting || !isAmountValid || isPeriodPaid || !paymentDate}
+              disabled={isSubmitting || !isAmountValid || isPeriodPaid || !paymentDate || Boolean(fundingError)}
               className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
             >
               {isSubmitting ? (

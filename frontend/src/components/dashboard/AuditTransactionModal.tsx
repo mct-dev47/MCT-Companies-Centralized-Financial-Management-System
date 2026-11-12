@@ -156,6 +156,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const isAudit = roleLower.includes('audit')
   const isAdmin = roleLower === 'admin' || isAudit
   const isOwner = roleLower === 'owner'
+  const isFinance = roleLower.includes('finance')
   const canAudit = isAdmin && !isOwner
 
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
@@ -1702,7 +1703,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       </span>
                     )}
                   </button>
-                  {!isAudited && !viewOnly && !isAdmin && !isOwner && (
+                  {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && (
                     <Button
                       type="button"
                       variant="outline"
@@ -1768,25 +1769,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   </div>
                 )}
               </div>
-
-              {/* Day Remark (one note for the whole day, separate from the transaction remark) */}
-              {dayRemarkKind && dayRemarkCompany && /^\d{4}-\d{2}-\d{2}$/.test(dayRemarkDate) && (
-                <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2.5 min-w-0">
-                  <span className="text-xs font-medium text-muted-fg block mb-1">
-                    Day remark ({formatDisplayDate(dayRemarkDate)}):
-                  </span>
-                  <DayRemarkCell
-                    variant="block"
-                    companyNames={[dayRemarkCompany]}
-                    date={dayRemarkDate}
-                    formattedDate={formatDisplayDate(dayRemarkDate)}
-                    kindLabel={dayRemarkKind === 'expense' ? 'Expense' : 'Sales'}
-                    canEdit={canEditDayRemark}
-                    getRemark={getDayRemark}
-                    onSave={saveDayRemark}
-                  />
-                </div>
-              )}
 
               {/* Activity Timeline & Remarks Section (Collapsible Chevron) */}
               <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">

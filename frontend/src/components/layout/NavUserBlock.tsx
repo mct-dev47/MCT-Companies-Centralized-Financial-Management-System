@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { confirmLogoutWithOutbox } from '@/hooks/useOutbox'
 import { useNavigate } from 'react-router-dom'
 import { LogOut, Loader2 } from 'lucide-react'
 import { useSession } from '@/hooks/useSession'
@@ -16,6 +17,7 @@ export const NavUserBlock: React.FC<NavUserBlockProps> = ({ isCollapsed = false 
 
   const handleLogout = async () => {
     if (isLoggingOut) return
+    if (!confirmLogoutWithOutbox()) return
     try {
       setIsLoggingOut(true)
       await signOut()

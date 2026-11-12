@@ -21,6 +21,7 @@ import {
   Trash2,
   ArrowLeft,
   X,
+  MessageSquare,
 } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
@@ -888,8 +889,8 @@ export const TransactionPage: React.FC = () => {
 
   const isOwner = userRole === 'owner'
   const isFinanceOnly = isFinance && !isAudit && !isAdmin && !isOwner
-  const isViewOnlyUser = isFinanceOnly || isOwner
-  const showActionColumn = !isViewOnlyUser
+  const isViewOnlyUser = isOwner
+  const showActionColumn = !isOwner
   const canAudit = (isAdmin || isAudit) && !isOwner
   const isBusinessWriter =
     (userRole === 'supervisor' || userRole === 'company') &&
@@ -900,6 +901,15 @@ export const TransactionPage: React.FC = () => {
   // Row delete confirmation state
   const [deleteConfirmTx, setDeleteConfirmTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isDeletingTx, setIsDeletingTx] = React.useState(false)
+
+  // Day level audit (By Day focus): Mark as Audited / Flag Discrepancy with optional remarks
+  const [dayAudit, setDayAudit] = React.useState<{
+    action: 'Verified' | 'Flagged'
+    date: string
+    targets: DashboardTransactionItem[]
+  } | null>(null)
+  const [dayAuditRemarks, setDayAuditRemarks] = React.useState('')
+  const [isSubmittingDayAudit, setIsSubmittingDayAudit] = React.useState(false)
 
   // 3-Dots Action Menu state
   const [openMenuTxId, setOpenMenuTxId] = React.useState<string | null>(null)
@@ -917,6 +927,10 @@ export const TransactionPage: React.FC = () => {
   const [dayMenu, setDayMenu] = React.useState<{ date: string; top: number; right: number; openUpward: boolean } | null>(null)
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+  const [remarksTargetTx, setRemarksTargetTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [remarksInput, setRemarksInput] = React.useState('')
+  const [isRemarksDialogOpen, setIsRemarksDialogOpen] = React.useState(false)
+  const [isSavingRemarks, setIsSavingRemarks] = React.useState(false)
 
   // Close floating 3-dots action menu on click outside, scroll or resize
   React.useEffect(() => {
@@ -1711,10 +1725,11 @@ export const TransactionPage: React.FC = () => {
   // The By Day table gets a Company column only when a shared (multi-company) bank is in view
   const showDayCompanyColumn = dailySummaryGroups.some((g) => !!g.company)
   const showDayBalanceColumn = activeTab === 'deposit'
-  const dayColCount =
-    (showDayCompanyColumn ? 7 : 6) +
-    (showDayBalanceColumn ? 1 : 0) +
-    (showActionColumn ? 1 : 0)
+  const dayColCount = activeTab === 'deposit'
+    ? 6
+    : (showDayCompanyColumn ? 7 : 6) +
+      (showDayBalanceColumn ? 1 : 0) +
+      (showActionColumn ? 1 : 0)
   const hasFocusedDay = React.useMemo(
     () => dailySummaryGroups.some((g) => expandedDates.has(g.id)),
     [dailySummaryGroups, expandedDates]
@@ -1940,10 +1955,12 @@ export const TransactionPage: React.FC = () => {
     handleRowClick(tx)
   }
 
-  // Supervisor and Finance can edit an unaudited sale or expense in the spreadsheet editor
+  // Supervisors can edit an unaudited sale or expense in the spreadsheet editor.
+  // Finance is view only here (it can only add remarks on unaudited records).
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
+    !isFinanceOnly &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     tx.auditStatus !== 'Verified'
@@ -2075,12 +2092,23 @@ export const TransactionPage: React.FC = () => {
 
   // Audit a whole day in one go: every auditable row that is not already audited or flagged.
   // Flagged rows keep their discrepancy and must be re-audited by hand.
-  const handleAuditWholeDay = async (date: string, dayTxs: DashboardTransactionItem[]) => {
-    const targets = dayTxs.filter(
-      (t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged'
-    )
+  const getDayAuditTargets = (dayTxs: DashboardTransactionItem[]) =>
+    dayTxs.filter((t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged')
+
+  // Opens the day level audit dialog (Mark as Audited or Flag Discrepancy, remarks optional)
+  const openDayAudit = (action: 'Verified' | 'Flagged', date: string, dayTxs: DashboardTransactionItem[]) => {
+    const targets = getDayAuditTargets(dayTxs)
     if (targets.length === 0) return
-    if (!window.confirm(`Mark ${targets.length} ${targets.length === 1 ? 'record' : 'records'} on ${date} as audited?`)) return
+    setDayMenu(null)
+    setDayAuditRemarks('')
+    setDayAudit({ action, date, targets })
+  }
+
+  const handleConfirmDayAudit = async () => {
+    if (!dayAudit) return
+    const { action, targets } = dayAudit
+    const notes = dayAuditRemarks.trim() || undefined
+    setIsSubmittingDayAudit(true)
 
     const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
@@ -2089,26 +2117,29 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) =>
       prev.map((t) =>
         keys.has(`${t.type}:${t.id}`)
-          ? { ...t, auditStatus: 'Verified', auditedBy: auditorName, auditDate: today, auditNotes: undefined }
+          ? { ...t, auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes }
           : t
       )
     )
 
     const results = await Promise.allSettled(
       targets.map((tx) => {
-        if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName)
-        if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
+        if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
+        if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Loan') {
           const loanId = tx.id.replace(/:lender$/, '')
-          return loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+          return loanService.updateLoan(loanId, { auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes })
         }
         if (tx.type === 'Income') {
           const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          return tenantService.saveAuditReview(leaseId, 'Verified')
+          return tenantService.saveAuditReview(leaseId, action, notes)
         }
         return Promise.resolve()
       })
     )
+    setIsSubmittingDayAudit(false)
+    setDayAudit(null)
+    setDayAuditRemarks('')
     const failed = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
     if (failed) {
       reportAuditSaveFailure(failed.reason)
@@ -2172,6 +2203,31 @@ export const TransactionPage: React.FC = () => {
       prev.map((t) => (t.id === updatedItem.id && t.type === updatedItem.type ? updatedItem : t))
     )
     setSelectedTx(updatedItem)
+  }
+
+  const handleSaveRemarks = async () => {
+    if (!remarksTargetTx) return
+    setIsSavingRemarks(true)
+    try {
+      const trimmed = remarksInput.trim()
+      const isExp = remarksTargetTx.type === 'Expense' || remarksTargetTx.type === 'Bill'
+      if (isExp) {
+        const updatedExpense = await expenseService.updateExpenseRemarks(remarksTargetTx.id, trimmed)
+        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        handleTransactionUpdated(tx)
+      } else {
+        const updatedSale = await salesService.updateSaleRemarks(remarksTargetTx.id, trimmed)
+        const tx = salesService.toDashboardTransaction(updatedSale)
+        handleTransactionUpdated(tx)
+      }
+      notifySuccess(trimmed ? 'Remarks updated successfully' : 'Remarks removed successfully')
+      setIsRemarksDialogOpen(false)
+      setRemarksTargetTx(null)
+    } catch (err: any) {
+      notifyError(err, 'Failed to update remarks')
+    } finally {
+      setIsSavingRemarks(false)
+    }
   }
 
   // Export CSV handler
@@ -2570,47 +2626,9 @@ export const TransactionPage: React.FC = () => {
       <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs space-y-4">
         {/* Shared Filter Bar (persists across tab switches) */}
         <div className="space-y-3">
-          {/* Row 1: Type + All Records/By Day toggles on left; full-width flex Company + Bank dropdowns on right */}
-          <div className="flex flex-wrap items-center gap-2.5 w-full">
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              {/* Type Filter (All | Sales | Expenses) */}
-              <div
-                role="group"
-                aria-label="Filter by transaction type"
-                className="flex items-center bg-slate-100/90 rounded-full border border-stroke/40 p-1 gap-1 shrink-0"
-              >
-                {(['All', 'Sales', 'Expenses'] as const).map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    aria-pressed={typeFilter === opt}
-                    onClick={() => {
-                      setTypeFilter(opt)
-                      setDepositCurrentPage(1)
-                      setSalesCurrentPage(1)
-                    }}
-                    className={cn(
-                      'min-h-[44px] px-3.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                      typeFilter === opt
-                        ? 'bg-[#960C01] text-white shadow-xs'
-                        : 'text-focus/70 hover:text-focus hover:bg-white/60'
-                    )}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-
-              {/* All Records / By Day toggle */}
-              {viewModeToggle}
-            </div>
-
-            <div
-              className={cn(
-                'flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2 min-w-0',
-                availableBankAccounts.length > 0 ? 'sm:min-w-[400px]' : 'sm:min-w-[200px]'
-              )}
-            >
+          {/* Row 1: Company + Bank + Date Range + All Records / By Day toggle */}
+          <div className="flex flex-col lg:flex-row lg:flex-wrap items-stretch lg:items-center justify-between gap-2.5 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Company */}
               {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
                 <CompanyFilterDropdown
@@ -2618,11 +2636,11 @@ export const TransactionPage: React.FC = () => {
                   companyList={availableCompanyOptions}
                   onSelectCompany={handleSelectCompany}
                   fullWidth
-                  className="flex-1 min-w-[200px]"
+                  className="flex-1 min-w-[170px]"
                 />
               ) : (
                 <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                   title={effectiveTargetCompany}
                 >
                   <span className="truncate min-w-0">{effectiveTargetCompany}</span>
@@ -2635,7 +2653,7 @@ export const TransactionPage: React.FC = () => {
                   selectedAccountId={selectedBankAccountId}
                   bankAccounts={availableBankAccounts}
                   fullWidth
-                  className="flex-1 min-w-[190px]"
+                  className="flex-1 min-w-[170px]"
                   onSelectAccount={(id) => {
                     setSelectedBankAccountId(id)
                     setDepositCurrentPage(1)
@@ -2643,94 +2661,59 @@ export const TransactionPage: React.FC = () => {
                   }}
                 />
               )}
+
+              {/* Date Range Control in Row 1 */}
+              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+                <TransactionDateRangeControl
+                  value={dateRange}
+                  onChange={(newRange) => {
+                    setDateRange(newRange)
+                    setDepositCurrentPage(1)
+                    setSalesCurrentPage(1)
+                  }}
+                  fullWidth
+                />
+              </div>
+            </div>
+
+            {/* Day audit actions (Audit, By Day with a focused day) + All Records / By Day toggle */}
+            <div className="shrink-0 flex flex-wrap items-center gap-2">
+              {canAudit && salesViewMode === 'daily_summary' && hasFocusedDay && (() => {
+                const focusedTxs = visibleDayGroups.flatMap((g) => g.banks.flatMap((b) => b.transactions))
+                const focusedDate = visibleDayGroups.map((g) => g.date).join(', ')
+                const pendingCount = getDayAuditTargets(focusedTxs).length
+                const disabledTitle = 'Every transaction on this day is already audited or flagged'
+                return (
+                  <>
+                    <Button
+                      type="button"
+                      disabled={pendingCount === 0}
+                      onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
+                      title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
+                      className="min-h-[44px] h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>Mark as Audited{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pendingCount === 0}
+                      onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
+                      title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
+                      className="min-h-[44px] h-11 px-4 rounded-full border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Flag Discrepancy</span>
+                    </Button>
+                  </>
+                )
+              })()}
+              {viewModeToggle}
             </div>
           </div>
 
-          {/* Row 2: All Dates, Category, Status, and Method stretched across full container width */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 w-full">
-            {/* Merged Date Range Control */}
-            <TransactionDateRangeControl
-              value={dateRange}
-              onChange={(newRange) => {
-                setDateRange(newRange)
-                setDepositCurrentPage(1)
-                setSalesCurrentPage(1)
-              }}
-              fullWidth
-            />
-
-            {/* Category Filter */}
-            <DropdownFilter
-              value={categoryFilter}
-              onChange={(val) => {
-                setCategoryFilter(val)
-                setDepositCurrentPage(1)
-                setSalesCurrentPage(1)
-              }}
-              defaultValue="All"
-              placeholder="Category: All"
-              menuTitle="Filter By Category"
-              ariaLabel="Filter by category"
-              searchable={categoryOptions.length > 8}
-              searchPlaceholder="Search category…"
-              hideOptionDots
-              fullWidth
-              options={categoryOptions.map((c) => ({
-                value: c,
-                label: c === 'All' ? 'Category: All' : c,
-              }))}
-            />
-
-            {/* Status Filter (no colored dots) */}
-            <DropdownFilter
-              value={statusFilter}
-              onChange={(val) => {
-                setStatusFilter(val)
-                setDepositCurrentPage(1)
-                setSalesCurrentPage(1)
-              }}
-              defaultValue="All"
-              placeholder="Status: All"
-              menuTitle="Filter By Status"
-              ariaLabel="Filter by lifecycle status"
-              hideOptionDots
-              fullWidth
-              options={[
-                { value: 'All', label: 'Status: All' },
-                { value: 'Deposited', label: 'Deposited (Sales)' },
-                { value: 'Awaiting', label: 'Awaiting Deposit / Transfer' },
-                { value: 'Paid', label: 'Paid' },
-                { value: 'Pending', label: 'Pending / Partial' },
-                { value: 'Unpaid', label: 'Unpaid / Overdue' },
-                { value: 'Unpaid Sales', label: 'Unpaid Sales' },
-                { value: 'On hold', label: 'On hold' },
-                { value: 'Pending Audit', label: 'Pending Audit' },
-                { value: 'Audited', label: 'Audited' },
-                { value: 'Flagged', label: 'Flagged' },
-              ]}
-            />
-
-            {/* Payment Method Filter */}
-            <DropdownFilter
-              value={paymentMethodFilter}
-              onChange={(val) => {
-                setPaymentMethodFilter(val)
-                setDepositCurrentPage(1)
-                setSalesCurrentPage(1)
-              }}
-              defaultValue="All"
-              placeholder="Method: All"
-              menuTitle="Filter By Payment Method"
-              ariaLabel="Filter by payment method"
-              fullWidth
-              options={paymentMethodOptions.map((m) => ({
-                value: m,
-                label: m === 'All' ? 'Method: All' : m,
-              }))}
-            />
-          </div>
-
-          {/* Row 3: Full-width Search Bar */}
+          {/* Row 2: Full-width Search Bar using all available space */}
           <div className="relative w-full">
             <label htmlFor="transactions-search-input" className="sr-only">
               Search transactions
@@ -2805,43 +2788,71 @@ export const TransactionPage: React.FC = () => {
           <div className="overflow-x-auto rounded-xl border border-slate-100">
             <Table className="w-full min-w-[760px] lg:min-w-0 table-fixed">
               <colgroup>
-                {(showActionColumn
-                  ? showDayBalanceColumn
+                {(activeTab === 'deposit'
+                  ? [14, 18, 17, 17, 18, 16]
+                  : (showActionColumn
+                    ? showDayBalanceColumn
+                      ? showDayCompanyColumn
+                        ? [12, 12, 10, 12, 12, 12, 13, 11, 6]
+                        : [15, 12, 14, 14, 14, 14, 11, 6]
+                      : showDayCompanyColumn
+                      ? [14, 14, 11, 14, 14, 14, 13, 6]
+                      : [17, 13, 16, 16, 16, 15, 7]
+                    : showDayBalanceColumn
                     ? showDayCompanyColumn
-                      ? [12, 12, 10, 12, 12, 12, 13, 11, 6]
-                      : [15, 12, 14, 14, 14, 14, 11, 6]
+                      ? [13, 13, 11, 13, 13, 13, 13, 11]
+                      : [16, 13, 15, 15, 15, 14, 12]
                     : showDayCompanyColumn
-                    ? [14, 14, 11, 14, 14, 14, 13, 6]
-                    : [17, 13, 16, 16, 16, 15, 7]
-                  : showDayBalanceColumn
-                  ? showDayCompanyColumn
-                    ? [13, 13, 11, 13, 13, 13, 13, 11]
-                    : [16, 13, 15, 15, 15, 14, 12]
-                  : showDayCompanyColumn
-                  ? [15, 15, 12, 15, 15, 15, 13]
-                  : [19, 14, 17, 17, 17, 16]
+                    ? [15, 15, 12, 15, 15, 15, 13]
+                    : [19, 14, 17, 17, 17, 16])
                 ).map((w, i) => (
                   <col key={i} style={{ width: `${w}%` }} />
                 ))}
               </colgroup>
               <TableHeader>
-                <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">{activeTab === 'deposit' ? 'DEPOSIT DAY' : 'DATE'}</TableHead>
-                  {showDayCompanyColumn && (
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
-                  )}
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY IN</TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY OUT</TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">NET</TableHead>
-                  {showDayBalanceColumn && (
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right" title="End-of-day balance">BANK BALANCE</TableHead>
-                  )}
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
-                  {showActionColumn && (
-                    <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
-                  )}
-                </TableRow>
+                {activeTab === 'deposit' ? (
+                  <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      DATE
+                    </TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      CHECK NO
+                    </TableHead>
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                      WITHDRAWAL
+                    </TableHead>
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                      DEPOSIT
+                    </TableHead>
+                    <TableHead
+                      className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
+                      title="Balance of the bank"
+                    >
+                      BALANCE
+                    </TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      TRAN-CODE
+                    </TableHead>
+                  </TableRow>
+                ) : (
+                  <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
+                    {showDayCompanyColumn && (
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
+                    )}
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY IN</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY OUT</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">NET</TableHead>
+                    {showDayBalanceColumn && (
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right" title="End-of-day balance">BANK BALANCE</TableHead>
+                    )}
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
+                    {showActionColumn && (
+                      <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
+                    )}
+                  </TableRow>
+                )}
               </TableHeader>
               <TableBody>
                 {loading ? (
@@ -2862,6 +2873,64 @@ export const TransactionPage: React.FC = () => {
                     const parsed = new Date(`${group.date}T00:00:00`)
                     const validDate = !isNaN(parsed.getTime())
                     const dayTxs = group.banks.flatMap((b) => b.transactions)
+
+                    if (activeTab === 'deposit') {
+                      return (
+                        <TableRow
+                          key={group.id}
+                          className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors"
+                        >
+                          {/* 1. DATE - NO CHEVRON */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                            {validDate
+                              ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              : group.date}
+                          </TableCell>
+
+                          {/* 2. CHECK NO */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                            {Array.from(new Set(dayTxs.map((t) => t.chequeNo).filter(Boolean))).join(', ') || '—'}
+                          </TableCell>
+
+                          {/* 3. WITHDRAWAL */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                            {group.dayTotalWithdrawal > 0 ? (
+                              `−${formatPHP(group.dayTotalWithdrawal)}`
+                            ) : (
+                              <span className="text-muted-fg/40 font-normal">—</span>
+                            )}
+                          </TableCell>
+
+                          {/* 4. DEPOSIT */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                            {group.dayTotalDeposit > 0 ? (
+                              `+${formatPHP(group.dayTotalDeposit)}`
+                            ) : (
+                              <span className="text-muted-fg/40 font-normal">—</span>
+                            )}
+                          </TableCell>
+
+                          {/* 5. BALANCE */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap">
+                            {(() => {
+                              const bal = getClosingBalance(group.date)
+                              if (bal === null) return <span className="text-muted-fg">—</span>
+                              return (
+                                <span className={bal < 0 ? 'text-rose-600' : 'text-focus'}>
+                                  {bal < 0 ? `−${formatPHP(Math.abs(bal))}` : formatPHP(bal)}
+                                </span>
+                              )
+                            })()}
+                          </TableCell>
+
+                          {/* 6. TRAN-CODE */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                            {Array.from(new Set(dayTxs.map((t) => t.refNo || (t as any).reference_no).filter(Boolean))).join(', ') || '—'}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    }
+
                     return (
                       <React.Fragment key={group.id}>
                         <TableRow
@@ -3002,46 +3071,43 @@ export const TransactionPage: React.FC = () => {
                                   <span>
                                     Transactions on {group.date}{group.company ? ` · ${group.company}` : ''}
                                   </span>
-                                  {canAudit && dayTxs.some((t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged') && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleAuditWholeDay(group.date, dayTxs)}
-                                      className="px-2.5 py-1 rounded-lg text-xs font-semibold border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer"
-                                    >
-                                      Audit whole day
-                                    </button>
-                                  )}
                                 </div>
                                 <table className="w-full min-w-[820px] lg:min-w-0 table-fixed text-left text-xs">
                                   <colgroup>
-                                    {(showActionColumn
-                                      ? activeTab === 'deposit'
-                                        ? [20, 8, 8, 7, 9, 10, 10, 13, 10, 5]
-                                        : [23, 9, 9, 8, 9, 11, 11, 14, 6]
-                                      : activeTab === 'deposit'
-                                      ? [22, 8, 8, 8, 9, 10, 10, 14, 11]
-                                      : [25, 9, 9, 9, 9, 12, 12, 15]
+                                    {(activeTab === 'deposit'
+                                      ? [14, 18, 17, 17, 18, 16]
+                                      : showActionColumn
+                                      ? [9, 23, 8, 11, 9, 9, 11, 14, 6]
+                                      : [9, 25, 9, 12, 9, 9, 12, 15]
                                     ).map((w, i) => (
                                       <col key={i} style={{ width: `${w}%` }} />
                                     ))}
                                   </colgroup>
                                   <thead className="bg-slate-100/60 text-muted-fg text-xs font-bold uppercase tracking-wider border-b border-slate-100">
-                                    <tr>
-                                      <th className="px-2.5 py-2.5 font-bold">Particulars</th>
-                                      <th className="px-2 py-2.5 font-bold">Trans. Date</th>
-                                      <th className="px-2 py-2.5 font-bold">Deposit Date</th>
-                                      <th className="px-2 py-2.5 font-bold">Method</th>
-                                      <th className="px-2 py-2.5 font-bold">Cheque No.</th>
-                                      <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">Amount</th>
-                                      <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">Deposit Amount</th>
-                                      <th className="pl-3 pr-2 py-2.5 font-bold text-center">Status</th>
-                                      {activeTab === 'deposit' && (
-                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">Balance</th>
-                                      )}
-                                      {showActionColumn && (
-                                        <th className="px-1.5 py-2.5 font-bold text-center">Action</th>
-                                      )}
-                                    </tr>
+                                    {activeTab === 'deposit' ? (
+                                      <tr>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">DATE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">CHECK NO</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">WITHDRAWAL</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">DEPOSIT</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right" title="Balance of the bank">BALANCE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">TRAN-CODE</th>
+                                      </tr>
+                                    ) : (
+                                      <tr>
+                                        <th className="px-2 py-2.5 font-bold text-left">DATE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">PARTICULARS</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">METHOD</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">AMOUNT</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">CHEQUE NO.</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">DEPOSIT DATE</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">AMOUNT DEPOSIT</th>
+                                        <th className="pl-3 pr-2 py-2.5 font-bold text-center">STATUS</th>
+                                        {showActionColumn && (
+                                          <th className="px-1.5 py-2.5 font-bold text-center">ACTION</th>
+                                        )}
+                                      </tr>
+                                    )}
                                   </thead>
                                   <tbody className="divide-y divide-slate-100 text-xs">
                                     {dayTxs.map((tx) => {
@@ -3063,24 +3129,63 @@ export const TransactionPage: React.FC = () => {
                                         activeTab === 'deposit'
                                           ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? 0
                                           : null
+                                      const txKey = `${tx.type}:${tx.id}`
+
+                                      if (activeTab === 'deposit') {
+                                        return (
+                                          <tr
+                                            key={txKey}
+                                            onClick={() => handleRowClick(tx)}
+                                            title="Click to view transaction details and audit history"
+                                            className="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                                          >
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-medium text-focus whitespace-nowrap">
+                                              {saleDateShort}
+                                            </td>
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-mono text-focus/80 truncate">
+                                              {tx.chequeNo || '—'}
+                                            </td>
+                                            <td className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                                              {withdrawal > 0 ? formatPHP(withdrawal) : <span className="text-muted-fg/40 font-normal">—</span>}
+                                            </td>
+                                            <td className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                                              {deposit > 0 ? formatPHP(deposit) : <span className="text-muted-fg/40 font-normal">—</span>}
+                                            </td>
+                                            <td
+                                              className={cn(
+                                                'pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap',
+                                                (rowBal ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
+                                              )}
+                                              title="Balance of the bank"
+                                            >
+                                              {(rowBal ?? 0) < 0
+                                                ? `−${formatPHP(Math.abs(rowBal ?? 0))}`
+                                                : formatPHP(rowBal ?? 0)}
+                                            </td>
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-mono text-focus/80 truncate">
+                                              {tx.refNo || '—'}
+                                            </td>
+                                          </tr>
+                                        )
+                                      }
+
                                       return (
                                         <tr
-                                          key={`${tx.type}-${tx.id}`}
+                                          key={txKey}
                                           onClick={() => handleRowClick(tx)}
+                                          title="Click to view transaction details and audit history"
                                           className="hover:bg-slate-50/70 transition-colors cursor-pointer"
                                         >
+                                          {/* 1. Date */}
+                                          <td className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                                            {saleDateShort}
+                                          </td>
+
+                                          {/* 2. Particulars: Title, Company, Ref (No Cheque) */}
                                           <td className="px-2.5 py-3 text-xs align-top">
                                             <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                                               <span className="font-semibold text-focus break-words leading-snug">
                                                 {title}
-                                              </span>
-                                              <span
-                                                className={cn(
-                                                  'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold border shrink-0',
-                                                  typeMeta.badgeClassName
-                                                )}
-                                              >
-                                                {typeMeta.label}
                                               </span>
                                               {itemCount > 1 && (
                                                 <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
@@ -3093,26 +3198,22 @@ export const TransactionPage: React.FC = () => {
                                                 </span>
                                               )}
                                             </div>
+                                            {tx.company && (
+                                              <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                                                {tx.company}
+                                              </div>
+                                            )}
                                             <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
                                               {tx.refNo || '—'}
                                             </div>
                                           </td>
-                                          <td className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
-                                            {saleDateShort}
-                                          </td>
-                                          <td className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
-                                            {depDateShort ? (
-                                              <span className="text-emerald-700">{depDateShort}</span>
-                                            ) : (
-                                              <span className="text-muted-fg/50">—</span>
-                                            )}
-                                          </td>
+
+                                          {/* 3. Method */}
                                           <td className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
                                             {tx.paymentMethod || 'Cash'}
                                           </td>
-                                          <td className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
-                                            {tx.chequeNo || '—'}
-                                          </td>
+
+                                          {/* 4. Amount */}
                                           <td
                                             className={cn(
                                               'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
@@ -3121,6 +3222,22 @@ export const TransactionPage: React.FC = () => {
                                           >
                                             {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
                                           </td>
+
+                                          {/* 5. Cheque No. */}
+                                          <td className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
+                                            {tx.chequeNo || '—'}
+                                          </td>
+
+                                          {/* 6. Deposit Date */}
+                                          <td className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                                            {depDateShort ? (
+                                              <span className="text-emerald-700">{depDateShort}</span>
+                                            ) : (
+                                              <span className="text-muted-fg/50">—</span>
+                                            )}
+                                          </td>
+
+                                          {/* 7. Deposit Amount */}
                                           <td className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
                                             {depositedAmt > 0 ? (
                                               <span className="text-emerald-700">{formatPHP(depositedAmt)}</span>
@@ -3128,18 +3245,13 @@ export const TransactionPage: React.FC = () => {
                                               <span className="text-muted-fg/50 font-normal">—</span>
                                             )}
                                           </td>
+
+                                          {/* 8. Status */}
                                           <td className="pl-3 pr-2 py-3 text-center align-top">
                                             <TransactionStatusBadge lifecycle={lifecycle} />
                                           </td>
-                                          {activeTab === 'deposit' && (
-                                            <td className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
-                                              <span className={(rowBal ?? 0) < 0 ? 'text-rose-600' : 'text-focus'}>
-                                                {(rowBal ?? 0) < 0
-                                                  ? `−${formatPHP(Math.abs(rowBal ?? 0))}`
-                                                  : formatPHP(rowBal ?? 0)}
-                                              </span>
-                                            </td>
-                                          )}
+
+                                          {/* 9. Action */}
                                           {showActionColumn && (
                                             <td className="px-1.5 py-2.5 text-center whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
                                               <Button
@@ -3148,7 +3260,6 @@ export const TransactionPage: React.FC = () => {
                                                 size="sm"
                                                 onClick={(e) => {
                                                   e.stopPropagation()
-                                                  const txKey = `${tx.type}:${tx.id}`
                                                   if (openMenuTxId === txKey) {
                                                     setOpenMenuTxId(null)
                                                     setMenuPosition(null)
@@ -3179,10 +3290,10 @@ export const TransactionPage: React.FC = () => {
                                   </tbody>
                                   <tfoot className="bg-slate-50/90 border-t border-slate-200 text-xs font-semibold">
                                     <tr>
-                                      <td colSpan={5} className="px-2.5 py-2.5 text-muted-fg">
+                                      <td colSpan={2} className="px-2.5 py-2.5 text-muted-fg">
                                         Day totals
                                       </td>
-                                      <td colSpan={(activeTab === 'deposit' ? 4 : 3) + (showActionColumn ? 1 : 0)} className="px-2.5 py-2.5 text-right tabular-nums">
+                                      <td colSpan={activeTab === 'deposit' ? 4 : (showActionColumn ? 7 : 6)} className="px-2.5 py-2.5 text-right tabular-nums">
                                         <span className="text-emerald-700 mr-3">Money In: +{formatPHP(group.dayTotalDeposit)}</span>
                                         <span className="text-rose-700 mr-3">Money Out: −{formatPHP(group.dayTotalWithdrawal)}</span>
                                         <span className={group.dayNetMovement < 0 ? 'text-rose-700' : 'text-focus'}>
@@ -3207,90 +3318,116 @@ export const TransactionPage: React.FC = () => {
           <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full min-w-[860px] lg:min-w-0 table-fixed">
             <colgroup>
-              {(showActionColumn
-                ? activeTab === 'deposit'
-                  ? [20, 8, 8, 7, 9, 10, 10, 13, 10, 5]
-                  : [23, 9, 9, 8, 9, 11, 11, 14, 6]
-                : activeTab === 'deposit'
-                ? [22, 8, 8, 8, 9, 10, 10, 14, 11]
-                : [25, 9, 9, 9, 9, 12, 12, 15]
+              {(activeTab === 'deposit'
+                ? [14, 18, 17, 17, 18, 16]
+                : showActionColumn
+                ? [9, 23, 8, 11, 9, 9, 11, 14, 6]
+                : [9, 25, 9, 12, 9, 9, 12, 15]
               ).map((w, i) => (
                 <col key={i} style={{ width: `${w}%` }} />
               ))}
             </colgroup>
             <TableHeader>
-              <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  PARTICULARS
-                </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  {typeFilter === 'Sales' ? 'SALES DATE' : typeFilter === 'Expenses' ? 'EXPENSE DATE' : 'TRANS. DATE'}
-                </TableHead>
-                <TableHead
-                  className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left"
-                  title="Day the sale's money was deposited or transferred; empty until deposited"
-                >
-                  DEPOSIT DATE
-                </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  METHOD
-                </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  CHEQUE NO.
-                </TableHead>
-                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  AMOUNT
-                </TableHead>
-                <TableHead
-                  className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
-                  title="Amount actually deposited to the bank; empty until deposited"
-                >
-                  DEPOSIT AMOUNT
-                </TableHead>
-                <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  STATUS
-                </TableHead>
-                {activeTab === 'deposit' && (
+              {activeTab === 'deposit' ? (
+                <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE
+                  </TableHead>
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    CHECK NO
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    WITHDRAWAL
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    DEPOSIT
+                  </TableHead>
                   <TableHead
                     className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
-                    title="Running balance after this entry"
+                    title="Balance of the bank"
                   >
-                    BANK BALANCE
+                    BALANCE
                   </TableHead>
-                )}
-                {showActionColumn && (
-                  <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    ACTION
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    TRAN-CODE
                   </TableHead>
-                )}
-              </TableRow>
+                </TableRow>
+              ) : (
+                <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE
+                  </TableHead>
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    PARTICULARS
+                  </TableHead>
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    METHOD
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    AMOUNT
+                  </TableHead>
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    CHEQUE NO.
+                  </TableHead>
+                  <TableHead
+                    className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left"
+                    title="Day the sale's money was deposited or transferred; empty until deposited"
+                  >
+                    DEPOSIT DATE
+                  </TableHead>
+                  <TableHead
+                    className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
+                    title="Amount actually deposited to the bank; empty until deposited"
+                  >
+                    AMOUNT DEPOSIT
+                  </TableHead>
+                  <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    STATUS
+                  </TableHead>
+                  {showActionColumn && (
+                    <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                      ACTION
+                    </TableHead>
+                  )}
+                </TableRow>
+              )}
             </TableHeader>
 
             <TableBody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i} className="border-b border-slate-100">
-                    <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-44 rounded-md" /></TableCell>
-                    <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    <TableCell className="px-2 py-3"><Skeleton className="h-4 w-14 rounded-md" /></TableCell>
-                    <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="pl-3 pr-2 py-3 text-center"><Skeleton className="h-5 w-24 rounded-full mx-auto" /></TableCell>
-                    {activeTab === 'deposit' && (
-                      <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    )}
-                    {showActionColumn && (
-                      <TableCell className="px-1.5 py-3 text-center">
-                        <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
-                      </TableCell>
+                    {activeTab === 'deposit' ? (
+                      <>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-24 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                      </>
+                    ) : (
+                      <>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-44 rounded-md" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-14 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-3 pr-2 py-3 text-center"><Skeleton className="h-5 w-24 rounded-full mx-auto" /></TableCell>
+                        {showActionColumn && (
+                          <TableCell className="px-1.5 py-3 text-center">
+                            <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
+                          </TableCell>
+                        )}
+                      </>
                     )}
                   </TableRow>
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={(activeTab === 'deposit' ? 9 : 8) + (showActionColumn ? 1 : 0)}
+                  colSpan={activeTab === 'deposit' ? 6 : (8 + (showActionColumn ? 1 : 0))}
                   title={`No ${activeTab === 'deposit' ? 'bank ledger' : 'transaction'} records found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -3316,6 +3453,56 @@ export const TransactionPage: React.FC = () => {
                       : null
 
                   const txKey = `${tx.type}:${tx.id}`
+
+                  if (activeTab === 'deposit') {
+                    return (
+                      <TableRow
+                        key={txKey}
+                        onClick={() => handleRowClick(tx)}
+                        title="Click to view transaction details and audit history"
+                        className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
+                      >
+                        {/* 1. DATE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                          {saleDateShort}
+                        </TableCell>
+
+                        {/* 2. CHECK NO */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                          {tx.chequeNo || '—'}
+                        </TableCell>
+
+                        {/* 3. WITHDRAWAL */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                          {withdrawalAmt > 0 ? formatPHP(withdrawalAmt) : <span className="text-muted-fg/40 font-normal">—</span>}
+                        </TableCell>
+
+                        {/* 4. DEPOSIT */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                          {depositAmt > 0 ? formatPHP(depositAmt) : <span className="text-muted-fg/40 font-normal">—</span>}
+                        </TableCell>
+
+                        {/* 5. BALANCE */}
+                        <TableCell
+                          className={cn(
+                            'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
+                            (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
+                          )}
+                          title="Balance of the bank"
+                        >
+                          {(rowBalance ?? 0) < 0
+                            ? `−${formatPHP(Math.abs(rowBalance ?? 0))}`
+                            : formatPHP(rowBalance ?? 0)}
+                        </TableCell>
+
+                        {/* 6. TRAN-CODE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                          {tx.refNo || '—'}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  }
+
                   return (
                     <TableRow
                       key={txKey}
@@ -3323,19 +3510,16 @@ export const TransactionPage: React.FC = () => {
                       title="Click to view transaction details and audit history"
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
-                      {/* 1. Particulars + Type chip on right + muted Ref No. */}
+                      {/* 1. Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                        {saleDateShort}
+                      </TableCell>
+
+                      {/* 2. Particulars: Title on Line 1, Company on Line 2, Ref on Line 3 (No cheque, no badge) */}
                       <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-focus/90 align-top" title={tx.particulars || tx.description}>
                         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                           <span className="font-semibold text-focus break-words leading-snug">
                             {title}
-                          </span>
-                          <span
-                            className={cn(
-                              'inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold border shrink-0',
-                              typeMeta.badgeClassName
-                            )}
-                          >
-                            {typeMeta.label}
                           </span>
                           {itemCount > 1 && (
                             <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
@@ -3348,39 +3532,22 @@ export const TransactionPage: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-fg">
-                          <span className="font-mono truncate">{tx.refNo || '—'}</span>
-                          {activeTab === 'deposit' && tx.company && (
-                            <span className="truncate">{tx.company}</span>
-                          )}
+                        {tx.company && (
+                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                            {tx.company}
+                          </div>
+                        )}
+                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                          {tx.refNo || '—'}
                         </div>
                       </TableCell>
 
-                      {/* 2. Transaction Date */}
-                      <TableCell className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
-                        {saleDateShort}
-                      </TableCell>
-
-                      {/* 3. Deposit / Transfer Date */}
-                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
-                        {depDateShort ? (
-                          <span className="text-emerald-700">{depDateShort}</span>
-                        ) : (
-                          <span className="text-muted-fg/50">—</span>
-                        )}
-                      </TableCell>
-
-                      {/* 4. Payment Method */}
+                      {/* 3. Method */}
                       <TableCell className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
                         {tx.paymentMethod || 'Cash'}
                       </TableCell>
 
-                      {/* 5. Cheque No. */}
-                      <TableCell className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
-                        {tx.chequeNo || '—'}
-                      </TableCell>
-
-                      {/* 6. Signed Gross Amount */}
+                      {/* 4. Signed Gross Amount */}
                       <TableCell
                         className={cn(
                           'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
@@ -3390,7 +3557,21 @@ export const TransactionPage: React.FC = () => {
                         {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
                       </TableCell>
 
-                      {/* 7. Deposit Amount (only what actually reached the bank) */}
+                      {/* 5. Cheque No. */}
+                      <TableCell className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
+                        {tx.chequeNo || '—'}
+                      </TableCell>
+
+                      {/* 6. Deposit Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                        {depDateShort ? (
+                          <span className="text-emerald-700">{depDateShort}</span>
+                        ) : (
+                          <span className="text-muted-fg/50">—</span>
+                        )}
+                      </TableCell>
+
+                      {/* 7. Deposit Amount */}
                       <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
                         {depositedAmt > 0 ? (
                           <span className="text-emerald-700">{formatPHP(depositedAmt)}</span>
@@ -3399,27 +3580,12 @@ export const TransactionPage: React.FC = () => {
                         )}
                       </TableCell>
 
-                      {/* 7. Status Badge */}
+                      {/* 8. Status Badge */}
                       <TableCell className="pl-3 pr-2 py-3 text-center align-top">
                         <TransactionStatusBadge lifecycle={lifecycle} />
                       </TableCell>
 
-                      {/* 8. Running Balance (Bank Ledger tab only) */}
-                      {activeTab === 'deposit' && (
-                        <TableCell
-                          className={cn(
-                            'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
-                            (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
-                          )}
-                          title="Running balance after this entry"
-                        >
-                          {(rowBalance ?? 0) < 0
-                            ? `−${formatPHP(Math.abs(rowBalance ?? 0))}`
-                            : formatPHP(rowBalance ?? 0)}
-                        </TableCell>
-                      )}
-
-                      {/* Action: 3 dots action button (hidden for read-only Finance/Owner) */}
+                      {/* 9. Action: 3 dots action button */}
                       {showActionColumn && (
                         <TableCell
                           className="px-1.5 py-2.5 text-center whitespace-nowrap align-top"
@@ -3466,92 +3632,7 @@ export const TransactionPage: React.FC = () => {
         </div>
       )}
 
-        {/* 4b. Totals for the rows that match the current filters (spec 0016) */}
-        {salesViewMode === 'daily_summary' ? null : activeTab === 'deposit' ? (
-          <div
-            className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs"
-            aria-label="Totals for the filtered deposit rows"
-            data-testid="ledger-totals"
-          >
-            <div
-              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-sky-200/70 bg-sky-50/60"
-              title={
-                selectedBankAccount
-                  ? `${selectedBankAccount.bankName} (${selectedBankAccount.accountType}) starting balance`
-                  : `Consolidated starting balance (${availableBankAccounts.length} bank account${availableBankAccounts.length === 1 ? '' : 's'})`
-              }
-            >
-              <div className="flex flex-col min-w-0 pr-1">
-                <span className="font-semibold text-sky-800 truncate">Starting Balance</span>
-                {selectedBankAccount && (
-                  <span className="text-[10px] text-sky-600 truncate font-normal">
-                    {selectedBankAccount.bankName}
-                  </span>
-                )}
-              </div>
-              <span className="font-bold tabular-nums text-sky-700 shrink-0">{formatPHP(activeStartingBalance)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
-              <span className="font-semibold text-emerald-800">Total Deposits</span>
-              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
-              <span className="font-semibold text-rose-800">Total Withdrawals</span>
-              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
-            </div>
-            <div
-              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50"
-              title={
-                selectedBankAccount
-                  ? `${selectedBankAccount.bankName} ending balance`
-                  : 'Starting balance + net deposits'
-              }
-            >
-              <div className="flex flex-col min-w-0 pr-1">
-                <span className="font-semibold text-focus truncate">Ending Balance</span>
-                {selectedBankAccount && (
-                  <span className="text-[10px] text-muted-fg truncate font-normal">
-                    {selectedBankAccount.bankName}
-                  </span>
-                )}
-              </div>
-              <span
-                className={cn(
-                  'font-bold tabular-nums shrink-0',
-                  activeEndingBalance < 0 ? 'text-rose-600' : 'text-focus'
-                )}
-              >
-                {activeEndingBalance < 0 ? `-${formatPHP(Math.abs(activeEndingBalance))}` : formatPHP(activeEndingBalance)}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs"
-            aria-label="Totals for the filtered rows"
-            data-testid="ledger-totals"
-          >
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
-              <span className="font-semibold text-emerald-800">Total Deposits</span>
-              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
-              <span className="font-semibold text-rose-800">Total Withdrawals</span>
-              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
-              <span className="font-semibold text-focus">Net Amount</span>
-              <span
-                className={cn(
-                  'font-bold tabular-nums',
-                  activeTotals.net < 0 ? 'text-rose-600' : 'text-focus'
-                )}
-              >
-                {activeTotals.net < 0 ? `-${formatPHP(Math.abs(activeTotals.net))}` : formatPHP(activeTotals.net)}
-              </span>
-            </div>
-          </div>
-        )}
+
 
         {/* 5. Pagination Footer */}
         {salesViewMode === 'all' && (
@@ -3576,14 +3657,14 @@ export const TransactionPage: React.FC = () => {
         )}
       </div>
 
-      {/* 6. Transaction Details Modal (Finance/Owner: strict view-only; Supervisor: edit unaudited; Audit: audit review) */}
+      {/* 6. Transaction Details Modal (Finance can add/update remarks on unaudited; Supervisor: edit unaudited; Audit: audit review; Owner: read-only) */}
       <AuditTransactionModal
         open={isModalOpen}
         onOpenChange={setIsModalOpen}
         transaction={selectedTx}
         onTransactionUpdated={handleTransactionUpdated}
-        editable={!isAdmin && !isViewOnlyUser}
-        viewOnly={isViewOnlyUser}
+        editable={!isAdmin && !isOwner && !isFinanceOnly}
+        viewOnly={isOwner}
       />
 
       {/* 6b. By Day row menu (acts on the whole day) */}
@@ -3607,18 +3688,26 @@ export const TransactionPage: React.FC = () => {
               onClick={(e) => e.stopPropagation()}
             >
               {canAudit && (
-                <button
-                  type="button"
-                  disabled={auditable.length === 0}
-                  onClick={() => {
-                    close()
-                    handleAuditWholeDay(dayGroup?.date ?? dayMenu.date, dayTxs)
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Audit whole day{auditable.length > 0 ? ` (${auditable.length})` : ''}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={auditable.length === 0}
+                    onClick={() => openDayAudit('Verified', dayGroup?.date ?? dayMenu.date, dayTxs)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Mark day as Audited{auditable.length > 0 ? ` (${auditable.length})` : ''}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={auditable.length === 0}
+                    onClick={() => openDayAudit('Flagged', dayGroup?.date ?? dayMenu.date, dayTxs)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag day Discrepancy</span>
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -3688,6 +3777,24 @@ export const TransactionPage: React.FC = () => {
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {isFinance && activeMenuTx.auditStatus !== 'Verified' && (
+              <button
+                type="button"
+                onClick={() => {
+                  const tx = activeMenuTx
+                  setOpenMenuTxId(null)
+                  setMenuPosition(null)
+                  setRemarksTargetTx(tx)
+                  setRemarksInput(tx.remarks || '')
+                  setIsRemarksDialogOpen(true)
+                }}
+                className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 transition-colors text-left cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>{activeMenuTx.remarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+              </button>
+            )}
 
             {canEditTx(activeMenuTx) && (
               <button
@@ -3911,6 +4018,189 @@ export const TransactionPage: React.FC = () => {
                     <CheckCircle2 className="w-3.5 h-3.5 text-white" />
                     <span>{markAuditTargetTx?.auditStatus === 'Verified' ? 'Confirm Re-Audit' : 'Confirm & Mark Audited'}</span>
                   </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 8d. Day level audit dialog (Mark as Audited / Flag Discrepancy, remarks optional) */}
+      <Dialog
+        open={!!dayAudit}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !isSubmittingDayAudit) {
+            setDayAudit(null)
+            setDayAuditRemarks('')
+          }
+        }}
+      >
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          {dayAudit && (() => {
+            const isFlag = dayAudit.action === 'Flagged'
+            const count = dayAudit.targets.length
+            return (
+              <>
+                <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        'w-10 h-10 rounded-xl border flex items-center justify-center shrink-0',
+                        isFlag ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'
+                      )}
+                    >
+                      {isFlag ? (
+                        <AlertCircle className="w-5 h-5 text-rose-600" />
+                      ) : (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      )}
+                    </div>
+                    <div>
+                      <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                        {isFlag ? 'Flag Day Discrepancy' : 'Mark Day as Audited'}
+                      </DialogTitle>
+                      <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                        Applies to {count} pending {count === 1 ? 'record' : 'records'} on {dayAudit.date}. Already audited or flagged records are not changed.
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                <div className="space-y-3 pt-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-focus block">
+                      Remarks <span className="text-muted-fg font-normal">(Optional)</span>
+                    </Label>
+                    <textarea
+                      rows={3}
+                      value={dayAuditRemarks}
+                      onChange={(e) => setDayAuditRemarks(e.target.value)}
+                      placeholder={isFlag ? 'Describe the discrepancy for this day (optional)…' : 'Optional audit remarks (leave blank if none)…'}
+                      className={cn(
+                        'w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 font-normal leading-relaxed resize-none',
+                        isFlag ? 'focus:ring-rose-500/20 focus:border-rose-500' : 'focus:ring-emerald-500/20 focus:border-emerald-500'
+                      )}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSubmittingDayAudit}
+                      onClick={() => {
+                        setDayAudit(null)
+                        setDayAuditRemarks('')
+                      }}
+                      className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={isSubmittingDayAudit}
+                      onClick={handleConfirmDayAudit}
+                      className={cn(
+                        'h-10 px-5 text-xs font-semibold rounded-xl text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50',
+                        isFlag ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                      )}
+                    >
+                      {isSubmittingDayAudit ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Saving…</span>
+                        </>
+                      ) : isFlag ? (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 text-white" />
+                          <span>Flag {count} {count === 1 ? 'record' : 'records'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                          <span>Mark {count} as Audited</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* 8c. Standalone Add/Edit Remarks Dialog from Action Menu */}
+      <Dialog
+        open={isRemarksDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!isSavingRemarks) {
+            setIsRemarksDialogOpen(nextOpen)
+            if (!nextOpen) {
+              setRemarksInput('')
+              setRemarksTargetTx(null)
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  {remarksTargetTx?.remarks ? 'Edit Remarks' : 'Add Remarks'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter operational remarks for {remarksTargetTx?.particulars || remarksTargetTx?.description || 'transaction'}.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks
+              </Label>
+              <textarea
+                rows={4}
+                value={remarksInput}
+                onChange={(e) => setRemarksInput(e.target.value)}
+                placeholder="Enter remarks or notes here…"
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-[#960C01]/20 focus:border-[#960C01] font-normal leading-relaxed resize-y bg-white"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSavingRemarks}
+                onClick={() => {
+                  setIsRemarksDialogOpen(false)
+                  setRemarksInput('')
+                  setRemarksTargetTx(null)
+                }}
+                className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSavingRemarks}
+                onClick={handleSaveRemarks}
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#960C01]/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSavingRemarks ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Save Remarks</span>
                 )}
               </Button>
             </div>

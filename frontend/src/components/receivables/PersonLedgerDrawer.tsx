@@ -25,7 +25,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { ConfirmModal, RowActionsMenu } from '@/components/common'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import type {
   CustomerType,
   PaymentStatus,
@@ -122,7 +122,7 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
     const filterForCompany = (list: BankAccount[]) => {
       if (!saleCompany || saleCompany === 'All Companies') return list
       const matched = list.filter((a) => isAccountOwnedBy(a, saleCompany))
-      if (matched.length > 0) return matched
+      if (matched.length > 0) return preferSoleOwnedBanks(matched, saleCompany)
       return list.filter(
         (a) =>
           !a.companyName ||
@@ -966,7 +966,7 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
                           <option value="">No bank deposit</option>
                           {editBankAccounts.map((b) => (
                             <option key={b.id} value={b.id}>
-                              {b.bankName} ({b.accountNumber})
+                              {b.bankName}
                             </option>
                           ))}
                         </select>

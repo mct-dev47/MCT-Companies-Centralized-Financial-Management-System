@@ -355,7 +355,62 @@ class SalesReceivablesSyncService:
         locked_ids = self.get_locked_sale_ids(r.sale_id for r in rec_list if r.sale_id)
         for r in rec_list:
             setattr(r, "is_locked", bool(r.sale_id and int(r.sale_id) in locked_ids))
+        self.attach_deposit_info(rec_list)
         return rec_list
+
+    def set_sale_deposit(self, sale_id: int, deposit_status: str, deposit_date: Optional[date] = None) -> None:
+        """Supervisor override of a sale's deposit status from the receivable edit (Deposit Status tab).
+        Deposited needs collected money; the date defaults to today and can't precede the sale date."""
+        sb_row, local_sale = self._fetch_authoritative_sale(sale_id)
+        if sb_row is None and local_sale is None:
+            raise HTTPException(status_code=404, detail="Linked sale not found")
+
+        def pick(key: str, local_attr: str) -> Any:
+            if sb_row is not None and sb_row.get(key) is not None:
+                return sb_row.get(key)
+            return getattr(local_sale, local_attr, None) if local_sale is not None else None
+
+        if (str(pick("audit_status", "audit_status") or "")).strip().lower() == "verified":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This sale has been Verified by an Auditor and is locked as read-only.",
+            )
+
+        target_date: Optional[date] = None
+        if deposit_status == "Deposited":
+            collected = self.compute_sale_paid_amount(sale_id, pick("particulars", "particulars"), pick("amount", "amount"))
+            pm = (str(pick("payment_method", "payment_method") or "")).strip().lower()
+            chq = (str(pick("cheque_number", "cheque_no") or "")).strip()
+            if collected <= Decimal("0.005") and not (pm == "cheque" and chq):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Nothing has been collected on this order yet, so it cannot be marked as deposited.",
+                )
+            target_date = deposit_date or date.today()
+            sale_tx = pick("transaction_date", "transaction_date")
+            if isinstance(sale_tx, str):
+                try:
+                    sale_tx = date.fromisoformat(sale_tx[:10])
+                except ValueError:
+                    sale_tx = None
+            if sale_tx and target_date < sale_tx:
+                raise HTTPException(status_code=422, detail="Deposit date cannot be earlier than the sale date.")
+
+        client = self._get_supabase_client()
+        if client is not None:
+            payload = {"deposit_status": deposit_status, "deposit_date": target_date.isoformat() if target_date else None}
+            try:
+                client.table("sales").update(payload).eq("sales_id", sale_id).execute()
+            except Exception:
+                try:
+                    client.table("sales").update({"deposit_status": deposit_status}).eq("sales_id", sale_id).execute()
+                except Exception as exc:
+                    logger.warning("Failed updating deposit status of sale %s in Supabase: %s", sale_id, exc)
+        if local_sale is not None:
+            local_sale.deposit_status = deposit_status
+            local_sale.deposit_date = target_date
+        self.db.flush()
+        self.reconcile_sale_bank(sale_id)
 
     @staticmethod
     def map_receivable_to_sale_tag(payment_status: Optional[str], amount_paid: Decimal, balance: Decimal) -> str:
@@ -454,7 +509,8 @@ class SalesReceivablesSyncService:
             is_deposited = (str(deposit_status or "")).strip().lower() == "deposited"
             target = Decimal("0.00")
             if is_deposited and not force_zero:
-                target = compute_paid_amount_from_particulars(particulars, amount)
+                # Partial receivable payments count too, so a partly paid line still reaches the bank
+                target = self.compute_sale_paid_amount(sale_id, particulars, amount)
 
             company_name = None
             if company_id:
@@ -506,6 +562,144 @@ class SalesReceivablesSyncService:
                 )
                 if tx:
                     tx.source_sale_id = sale_id
+
+    def compute_sale_paid_amount(
+        self,
+        sale_id: Optional[int],
+        particulars: Optional[str],
+        amount: Any,
+        receivables: Optional[List[Receivable]] = None,
+    ) -> Decimal:
+        """Money collected for a sale: its [Paid] lines that no receivable tracks, plus whatever was
+        paid on each linked receivable (partial payments included). Deposit status is not applied here."""
+        total = _to_decimal(amount, Decimal("0.00"))
+        if receivables is None:
+            receivables = (
+                self.db.query(Receivable).filter(Receivable.sale_id == sale_id).all() if sale_id else []
+            )
+        lines = parse_sale_lines(particulars, total)
+        if not receivables:
+            if not lines:
+                return total
+            return sum((ln.total for ln in lines if ln.status == "Paid"), Decimal("0.00"))
+
+        receivable_paid = sum((_to_decimal(r.amount_paid) for r in receivables), Decimal("0.00"))
+        if not lines:
+            return receivable_paid
+
+        claimed: Set[int] = set()
+        for r in receivables:
+            idx = self._match_line_index(lines, r.sale_line_index, r.items_summary, _to_decimal(r.total_amount))
+            if idx is not None:
+                claimed.add(idx)
+        untracked_paid = sum(
+            (ln.total for i, ln in enumerate(lines) if i not in claimed and ln.status == "Paid"),
+            Decimal("0.00"),
+        )
+        return untracked_paid + receivable_paid
+
+    def compute_paid_amounts(self, sales: Iterable[Tuple[int, Optional[str], Any]]) -> Dict[int, Decimal]:
+        """Batch version of compute_sale_paid_amount for (sale_id, particulars, amount) rows."""
+        rows = [(int(sid), parts, amt) for sid, parts, amt in sales if sid is not None]
+        if not rows:
+            return {}
+        by_sale: Dict[int, List[Receivable]] = {}
+        try:
+            for r in self.db.query(Receivable).filter(Receivable.sale_id.in_([sid for sid, _, _ in rows])).all():
+                by_sale.setdefault(int(r.sale_id), []).append(r)
+        except Exception as exc:
+            logger.warning("Receivable lookup for paid amounts failed: %s", exc)
+        return {
+            sid: self.compute_sale_paid_amount(sid, parts, amt, receivables=by_sale.get(sid, []))
+            for sid, parts, amt in rows
+        }
+
+    def get_sale_deposit_info(self, sale_ids: Iterable[Optional[int]]) -> Dict[int, Dict[str, Any]]:
+        """bank_account_id, deposit_status and deposit_date per sale (Supabase wins over the local copy)."""
+        clean_ids = sorted({int(sid) for sid in sale_ids if sid is not None})
+        info: Dict[int, Dict[str, Any]] = {}
+        if not clean_ids:
+            return info
+        try:
+            for sid, bank_id, dep_status, dep_date in (
+                self.db.query(Sale.sales_id, Sale.bank_account_id, Sale.deposit_status, Sale.deposit_date)
+                .filter(Sale.sales_id.in_(clean_ids))
+                .all()
+            ):
+                info[int(sid)] = {
+                    "bank_account_id": bank_id,
+                    "deposit_status": dep_status,
+                    "deposit_date": dep_date,
+                }
+        except Exception:
+            pass
+        client = self._get_supabase_client()
+        if client is not None:
+            try:
+                res = (
+                    client.table("sales")
+                    .select("sales_id, bank_account_id, deposit_status, deposit_date")
+                    .in_("sales_id", clean_ids)
+                    .execute()
+                )
+                for row in res.data or []:
+                    entry = info.setdefault(int(row["sales_id"]), {})
+                    for key in ("bank_account_id", "deposit_status", "deposit_date"):
+                        if row.get(key) is not None:
+                            entry[key] = row.get(key)
+            except Exception:
+                pass
+        return info
+
+    @staticmethod
+    def _first_payment_bank(rec: Receivable) -> Optional[str]:
+        dated = [p for p in (rec.payments or []) if p.bank_account_id]
+        if not dated:
+            return None
+        dated.sort(key=lambda p: (p.payment_date or date.max, p.payment_id or 0))
+        return dated[0].bank_account_id
+
+    def resolve_origin_bank_account_id(self, rec: Receivable) -> Optional[str]:
+        """The bank a receivable's money always goes to: the bank its sale was recorded to,
+        otherwise the bank of its first payment. None when neither exists yet."""
+        if rec.sale_id:
+            bank_id = self.get_sale_deposit_info([rec.sale_id]).get(int(rec.sale_id), {}).get("bank_account_id")
+            if bank_id:
+                return str(bank_id)
+        return self._first_payment_bank(rec)
+
+    def attach_deposit_info(self, receivables: Iterable[Receivable]) -> List[Receivable]:
+        """Set origin bank (id + name) and the linked sale's deposit status/date on each receivable for the API."""
+        from app.models.bank import BankAccount
+
+        rec_list = list(receivables)
+        sale_info = self.get_sale_deposit_info(r.sale_id for r in rec_list if r.sale_id)
+        origin: Dict[int, Optional[str]] = {}
+        for r in rec_list:
+            info = sale_info.get(int(r.sale_id), {}) if r.sale_id else {}
+            origin[id(r)] = (str(info["bank_account_id"]) if info.get("bank_account_id") else None) or self._first_payment_bank(r)
+        bank_ids = sorted({b for b in origin.values() if b})
+        names: Dict[str, str] = {}
+        if bank_ids:
+            try:
+                for bid, bname in self.db.query(BankAccount.id, BankAccount.bank_name).filter(BankAccount.id.in_(bank_ids)).all():
+                    names[str(bid)] = bname
+            except Exception:
+                pass
+        for r in rec_list:
+            info = sale_info.get(int(r.sale_id), {}) if r.sale_id else {}
+            bid = origin[id(r)]
+            setattr(r, "origin_bank_account_id", bid)
+            setattr(r, "origin_bank_name", names.get(bid) if bid else None)
+            setattr(r, "sale_deposit_status", info.get("deposit_status"))
+            dep_date = info.get("deposit_date")
+            if isinstance(dep_date, str):
+                try:
+                    dep_date = date.fromisoformat(dep_date[:10])
+                except ValueError:
+                    dep_date = None
+            setattr(r, "sale_deposit_date", dep_date)
+        return rec_list
 
     def _fetch_authoritative_sale(self, sale_id: int) -> Tuple[Optional[Dict[str, Any]], Optional[Sale]]:
         local_sale = self.db.query(Sale).filter(Sale.sales_id == sale_id).first()
@@ -574,7 +768,10 @@ class SalesReceivablesSyncService:
         deleted: bool = False,
         skip_counterpart_sync: bool = False,
         emit_ws: bool = False,
+        auto_deposit_on: Optional[date] = None,
     ) -> None:
+        """auto_deposit_on: a payment was just collected on this day, so the sale is marked Deposited
+        (deposit date = that day, never before the sale date). Supervisors can change it afterwards."""
         if skip_counterpart_sync:
             return
 
@@ -662,6 +859,32 @@ class SalesReceivablesSyncService:
                         BankService(self.db).purge_linked_entries(link_attr="source_sale_id", link_id=sale_id)
                     except Exception as exc:
                         logger.warning("Failed purging bank entries of sale %s: %s", sale_id, exc)
+                # The parent sale is gone: drop that day's sales remark if no sale is left on the day
+                try:
+                    from app.models.daily_remark import DailyRemark
+                    sale_cid = (sb_row or {}).get("company_id") or (local_sale.company_id if local_sale is not None else None)
+                    sale_day = (sb_row or {}).get("transaction_date") or (local_sale.transaction_date if local_sale is not None else None)
+                    if isinstance(sale_day, str):
+                        sale_day = date.fromisoformat(sale_day[:10])
+                    if sale_cid and sale_day:
+                        still_there = self.db.query(Sale).filter(
+                            Sale.company_id == int(sale_cid), Sale.transaction_date == sale_day
+                        ).count()
+                        if client is not None and not still_there:
+                            res = (
+                                client.table("sales").select("sales_id")
+                                .eq("company_id", int(sale_cid)).eq("transaction_date", sale_day.isoformat())
+                                .limit(1).execute()
+                            )
+                            still_there = len(res.data or [])
+                        if not still_there:
+                            self.db.query(DailyRemark).filter(
+                                DailyRemark.company_id == int(sale_cid),
+                                DailyRemark.remark_date == sale_day,
+                                DailyRemark.kind == "sales",
+                            ).delete(synchronize_session=False)
+                except Exception as exc:
+                    logger.warning("Day remark cascade skipped for sale %s: %s", sale_id, exc)
             else:
                 new_particulars = format_sale_lines(lines)
                 if client is not None:
@@ -747,17 +970,42 @@ class SalesReceivablesSyncService:
 
             sale_pm = ((sb_row.get("payment_method") if sb_row else None) or (local_sale.payment_method if local_sale else "") or "").strip().lower()
             sale_chq = ((sb_row.get("cheque_number") if sb_row else None) or (local_sale.cheque_no if local_sale else "") or "").strip()
-            if derived_payment_status == "Unpaid" or (derived_payment_status == "Pending" and (sale_pm != "cheque" or not sale_chq)):
+            # Money already collected on the sale (partial receivable payments included) may sit in the bank
+            collected = self.compute_sale_paid_amount(sale_id, new_particulars, new_sale_amount)
+            has_collected = collected > Decimal("0.005")
+            is_cheque_pending = derived_payment_status == "Pending" and sale_pm == "cheque" and bool(sale_chq)
+            if derived_payment_status == "Unpaid" or (
+                derived_payment_status == "Pending" and not has_collected and not is_cheque_pending
+            ):
                 sb_payload["deposit_status"] = "Not Deposited"
+                sb_payload["deposit_date"] = None
                 if local_sale is not None:
                     local_sale.deposit_status = "Not Deposited"
                     local_sale.deposit_date = None
+            elif auto_deposit_on is not None and has_collected:
+                sale_tx_date = local_sale.transaction_date if local_sale is not None else None
+                if sale_tx_date is None and sb_row is not None and sb_row.get("transaction_date"):
+                    try:
+                        sale_tx_date = date.fromisoformat(str(sb_row.get("transaction_date"))[:10])
+                    except ValueError:
+                        sale_tx_date = None
+                dep_date = max(auto_deposit_on, sale_tx_date) if sale_tx_date else auto_deposit_on
+                sb_payload["deposit_status"] = "Deposited"
+                sb_payload["deposit_date"] = dep_date.isoformat()
+                if local_sale is not None:
+                    local_sale.deposit_status = "Deposited"
+                    local_sale.deposit_date = dep_date
 
             if client is not None:
                 try:
                     client.table("sales").update(sb_payload).eq("sales_id", sale_id).execute()
                 except Exception as exc:
-                    logger.warning("Failed updating sale %s in Supabase during receivable sync: %s", sale_id, exc)
+                    # Retry without deposit_date in case the table predates that column
+                    try:
+                        sb_payload.pop("deposit_date", None)
+                        client.table("sales").update(sb_payload).eq("sales_id", sale_id).execute()
+                    except Exception:
+                        logger.warning("Failed updating sale %s in Supabase during receivable sync: %s", sale_id, exc)
 
             if local_sale is not None:
                 local_sale.particulars = new_particulars

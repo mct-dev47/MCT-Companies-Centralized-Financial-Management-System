@@ -54,6 +54,7 @@ class Sale(Base):
     audit_remarks = Column(Text, nullable=True)
     # Operational remarks (spec 0040): supervisor and finance notes
     remarks = Column(Text, nullable=True)
+    client_ref = Column(String(64), nullable=True, unique=True)  # offline queue dedupe (spec 0038)
     # Bank account this sale is credited to (spec 0042)
     bank_account_id = Column(String(100), nullable=True, index=True)
     # Day the money reached the bank (spec 0043). transaction_date stays the day the sale happened.
@@ -88,6 +89,7 @@ class Expense(Base):
     audit_remarks = Column(Text, nullable=True)
     # Operational remarks (spec 0040): supervisor and finance notes
     remarks = Column(Text, nullable=True)
+    client_ref = Column(String(64), nullable=True, unique=True)  # offline queue dedupe (spec 0038)
     # Bank account this expense is paid from (spec 0042)
     bank_account_id = Column(String(100), nullable=True, index=True)
     linked_topup_id = Column(Integer, ForeignKey("petty_cash_topups.topup_id", ondelete="SET NULL"), nullable=True, index=True)

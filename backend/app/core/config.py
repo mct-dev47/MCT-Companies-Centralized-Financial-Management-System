@@ -1,7 +1,7 @@
 from typing import List, Union, Optional
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 import json
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -160,6 +160,12 @@ class Settings(BaseSettings):
             cleaned_origins.append(orig.rstrip("/"))
 
         return cleaned_origins
+
+    @model_validator(mode="after")
+    def enforce_production_security_defaults(self):
+        if str(self.ENVIRONMENT or "").strip().lower() == "production":
+            self.OTP_COOKIE_SECURE = True
+        return self
 
     model_config = SettingsConfigDict(
         env_file=BACKEND_ENV_FILE,

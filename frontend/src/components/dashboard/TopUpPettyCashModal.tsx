@@ -19,11 +19,12 @@ import {
   MessageSquare,
   CheckCircle2,
 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
 import { loanService } from '@/services/loanService'
 import { pettyCashService } from '@/services/pettyCashService'
 
@@ -34,6 +35,9 @@ export interface TopUpPettyCashModalProps {
   currentBalance?: number | null
   companies?: string[]
   bankAccounts?: BankAccount[]
+  banksLoading?: boolean
+  banksError?: string | null
+  onRetryBanks?: () => void
   onSuccess?: (newRequest?: PettyCashTopUpRecord) => void
 }
 
@@ -66,6 +70,9 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
   currentBalance = 0,
   companies = [],
   bankAccounts: initialBankAccounts,
+  banksLoading = false,
+  banksError = null,
+  onRetryBanks,
   onSuccess,
 }) => {
   const { user } = useSession()
@@ -84,19 +91,49 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
   const [isSubmitting, setIsSubmitting] = React.useState(false)
 
   // Bank accounts list
-  const [bankAccountsList, setBankAccountsList] = React.useState<BankAccount[]>(initialBankAccounts || [])
+  const [localBankAccounts, setLocalBankAccounts] = React.useState<BankAccount[]>(initialBankAccounts || [])
+  const [localBanksLoading, setLocalBanksLoading] = React.useState(false)
+  const [localBanksError, setLocalBanksError] = React.useState<string | null>(null)
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
+  const prevOpenRef = React.useRef(false)
+  const prevBankCompRef = React.useRef('')
+  const banksAutoSelectedRef = React.useRef(false)
+
+  const bankAccountsList = React.useMemo(() => {
+    if (initialBankAccounts && initialBankAccounts.length > 0) return initialBankAccounts
+    return localBankAccounts
+  }, [initialBankAccounts, localBankAccounts])
+
+  const effectiveBanksLoading = Boolean(banksLoading) || localBanksLoading
+  const effectiveBanksError = banksError || localBanksError
+
+  const fetchFallbackBanks = React.useCallback(async (forceRefresh = false) => {
+    setLocalBanksLoading(true)
+    setLocalBanksError(null)
+    try {
+      const accounts = await bankService.getAccounts(undefined, { forceRefresh })
+      setLocalBankAccounts(accounts || [])
+    } catch (err: any) {
+      setLocalBanksError(err instanceof Error ? err.message : 'Could not load bank accounts.')
+    } finally {
+      setLocalBanksLoading(false)
+    }
+  }, [])
+
+  // Sync parent-provided banks
+  React.useEffect(() => {
+    if (initialBankAccounts && initialBankAccounts.length > 0) {
+      setLocalBankAccounts(initialBankAccounts)
+      setLocalBanksError(null)
+    }
+  }, [initialBankAccounts])
 
   // Load bank accounts and companies if needed
   React.useEffect(() => {
     let mounted = true
     if (open) {
-      if (!initialBankAccounts || initialBankAccounts.length === 0) {
-        bankService.getAccounts().then((accounts) => {
-          if (mounted && accounts) setBankAccountsList(accounts)
-        }).catch(() => {})
-      } else {
-        setBankAccountsList(initialBankAccounts)
+      if (isFinance && (!initialBankAccounts || initialBankAccounts.length === 0)) {
+        void fetchFallbackBanks(false)
       }
 
       if (companies.length === 0) {
@@ -110,7 +147,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
     return () => {
       mounted = false
     }
-  }, [open, initialBankAccounts, companies.length])
+  }, [open, isFinance, initialBankAccounts, companies.length, fetchFallbackBanks])
 
   // Reset form on open
   React.useEffect(() => {
@@ -121,11 +158,40 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
       setRequestDate(todayIso())
       setParticulars('')
       setFundingBankId('')
+      prevBankCompRef.current = ''
+      banksAutoSelectedRef.current = false
       setFinanceRemark(isFinance ? 'Endorsed for petty cash replenishment' : '')
       setError('')
       setIsSubmitting(false)
     }
   }, [open, company, user?.assignedCompany, isFinance])
+
+  // Auto-preselect requesting company's sole-owned bank when opened or company changes
+  React.useEffect(() => {
+    if (!open || !isFinance) {
+      prevOpenRef.current = open
+      if (!open) banksAutoSelectedRef.current = false
+      return
+    }
+    const compChanged = prevBankCompRef.current !== requestingCompany
+    const justOpened = !prevOpenRef.current && open
+    prevOpenRef.current = open
+
+    if (justOpened || compChanged) {
+      banksAutoSelectedRef.current = false
+      prevBankCompRef.current = requestingCompany
+      if (bankAccountsList.length === 0) setFundingBankId('')
+    }
+
+    if (bankAccountsList.length > 0 && requestingCompany && !banksAutoSelectedRef.current) {
+      const ownAccount = preferSoleOwnedBanks(
+        bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany)),
+        requestingCompany
+      )[0]
+      setFundingBankId(ownAccount ? ownAccount.id : '')
+      banksAutoSelectedRef.current = true
+    }
+  }, [open, isFinance, requestingCompany, bankAccountsList])
 
   const parsedAmount = parseFloat(amountInput) || 0
 
@@ -346,21 +412,49 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                   <Label className="text-xs font-semibold text-focus block">
                     Funding Bank Account <span className="text-red-500">*</span>
                   </Label>
-                  <div className="relative">
-                    <select
-                      value={fundingBankId}
-                      onChange={(e) => setFundingBankId(e.target.value)}
-                      className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
-                      required
-                    >
-                      <option value="">Select funding bank account...</option>
-                      {bankAccountsList.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} - {acc.accountName} ({acc.companyName || 'Corporate'})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {effectiveBanksLoading && bankAccountsList.length === 0 ? (
+                    <Skeleton className="h-9 w-full rounded-xl" aria-label="Loading bank accounts" />
+                  ) : effectiveBanksError && bankAccountsList.length === 0 ? (
+                    <div className="h-9 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
+                      <span className="truncate" title={effectiveBanksError}>Couldn't load bank accounts.</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onRetryBanks) onRetryBanks()
+                          void fetchFallbackBanks(true)
+                        }}
+                        className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <select
+                        value={fundingBankId}
+                        onChange={(e) => setFundingBankId(e.target.value)}
+                        className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
+                        required
+                      >
+                        <option value="">Select funding bank account...</option>
+                        {(requestingCompany
+                          ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
+                          : bankAccountsList
+                        ).map((acc) => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.bankName} ({acc.accountName}) [{acc.companyName || 'Corporate'}]
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : bankAccountsList.length === 0) && (
+                    <p className="text-[11px] text-amber-700 font-medium">
+                      {requestingCompany
+                        ? `No bank accounts registered for ${requestingCompany}. Add a bank account for this company before endorsing.`
+                        : 'No bank accounts found. Add a bank account before endorsing.'}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1">

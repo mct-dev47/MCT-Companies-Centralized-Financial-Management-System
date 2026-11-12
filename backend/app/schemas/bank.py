@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from decimal import Decimal
 from datetime import datetime
 
@@ -23,6 +23,8 @@ class BankTransactionOut(BankTransactionBase):
 
     id: str
     bank_account_id: str
+    # Read via entry_source_safe so serializing never queries a column that may not exist yet
+    entry_source: Optional[str] = Field(None, validation_alias=AliasChoices("entry_source_safe", "entry_source"))
     created_at: Optional[datetime] = None
 
 

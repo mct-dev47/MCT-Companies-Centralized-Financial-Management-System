@@ -10,7 +10,7 @@ BEGIN
         SELECT conname FROM pg_constraint
         WHERE conrelid = 'receivables'::regclass AND contype = 'f' AND confrelid = 'sales'::regclass
     LOOP
-        EXECUTE format('ALTER TABLE receivables DROP CONSTRAINT %I', c);
+        EXECUTE 'ALTER TABLE receivables DROP CONSTRAINT ' || quote_ident(c);
     END LOOP;
     ALTER TABLE receivables
         ADD CONSTRAINT receivables_sale_id_fkey
