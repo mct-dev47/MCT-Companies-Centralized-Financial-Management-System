@@ -42,6 +42,10 @@ export interface DropdownFilterProps<T extends string = string> {
   menuClassName?: string
   menuWidthClassName?: string
   ariaLabel?: string
+  /** Hide colored status dots inside dropdown menu options. */
+  hideOptionDots?: boolean
+  /** Stretch container and trigger button to fill parent width cleanly. */
+  fullWidth?: boolean
 }
 
 const STATUS_PRESETS: Record<
@@ -115,6 +119,8 @@ export function DropdownFilter<T extends string = string>({
   menuClassName,
   menuWidthClassName,
   ariaLabel,
+  hideOptionDots = false,
+  fullWidth = false,
 }: DropdownFilterProps<T>) {
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -132,7 +138,7 @@ export function DropdownFilter<T extends string = string>({
           return {
             value: opt,
             label: opt,
-            dotClassName: preset?.dot,
+            dotClassName: hideOptionDots ? undefined : preset?.dot,
             activePillClassName: preset?.pill,
             activeItemClassName: preset?.item,
           }
@@ -140,12 +146,14 @@ export function DropdownFilter<T extends string = string>({
         const preset = STATUS_PRESETS[opt.value]
         return {
           ...opt,
-          dotClassName: opt.dotClassName ?? opt.dotColor ?? preset?.dot,
+          dotClassName: hideOptionDots
+            ? undefined
+            : opt.dotClassName ?? opt.dotColor ?? preset?.dot,
           activePillClassName: opt.activePillClassName ?? preset?.pill,
           activeItemClassName: opt.activeItemClassName ?? preset?.item,
         }
       }),
-    [options]
+    [options, hideOptionDots]
   )
 
   const resolvedDefault =
@@ -205,7 +213,7 @@ export function DropdownFilter<T extends string = string>({
   }
 
   return (
-    <div ref={containerRef} className="relative inline-block">
+    <div ref={containerRef} className={cn('relative', fullWidth ? 'block w-full' : 'inline-block')}>
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
@@ -213,6 +221,7 @@ export function DropdownFilter<T extends string = string>({
         aria-expanded={open}
         className={cn(
           'inline-flex items-center gap-2 h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          fullWidth && 'w-full justify-between',
           !isDefault && selectedOption?.activePillClassName
             ? selectedOption.activePillClassName
             : 'border-stroke/60',
@@ -220,28 +229,34 @@ export function DropdownFilter<T extends string = string>({
           className
         )}
       >
-        {renderIcon()}
-        <span className="font-medium truncate max-w-[160px]">{displayLabel}</span>
-        <ChevronDown
-          className={cn(
-            'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-            open && 'rotate-180'
-          )}
-        />
-        {clearable && !isDefault && (
-          <span
-            role="button"
-            tabIndex={0}
-            onClick={handleReset}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') handleReset()
-            }}
-            className="p-0.5 rounded-full hover:bg-stroke/20 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-            title="Clear filter"
-          >
-            <X className="h-3 w-3" />
+        <span className={cn('inline-flex items-center gap-2 min-w-0', fullWidth && 'flex-1 text-left')}>
+          {renderIcon()}
+          <span className={cn('font-medium truncate', fullWidth ? 'w-full' : 'max-w-[160px]')}>
+            {displayLabel}
           </span>
-        )}
+        </span>
+        <span className="inline-flex items-center gap-1 shrink-0">
+          <ChevronDown
+            className={cn(
+              'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+              open && 'rotate-180'
+            )}
+          />
+          {clearable && !isDefault && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={handleReset}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') handleReset()
+              }}
+              className="p-0.5 rounded-full hover:bg-stroke/20 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
+              title="Clear filter"
+            >
+              <X className="h-3 w-3" />
+            </span>
+          )}
+        </span>
       </button>
 
       {open && (

@@ -14,6 +14,7 @@ import {
   Trash2,
   ChevronLeft,
   ChevronRight,
+  ArrowLeft,
   AlertCircle,
   X,
   CheckCircle2,
@@ -44,8 +45,9 @@ import {
   DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
-import { BankFilterSelect, useBankFilter, PETTY_CASH_BANK_ID, isPettyCashPayment } from '@/components/common/BankFilter'
+import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -62,6 +64,7 @@ import {
   normalizeDateToYYYYMMDD,
   formatToYYYYMMDD,
   formatCreatedAt,
+  formatDisplayDate,
 } from '@/utils/dateUtils'
 import {
   getParticularsSummary,
@@ -192,15 +195,7 @@ export const ExpensePage: React.FC = () => {
   const [dailyPage, setDailyPage] = React.useState(1)
 
   const toggleDateExpansion = (dateKey: string) => {
-    setExpandedDates((prev) => {
-      const next = new Set(prev)
-      if (next.has(dateKey)) {
-        next.delete(dateKey)
-      } else {
-        next.add(dateKey)
-      }
-      return next
-    })
+    setExpandedDates((prev) => (prev.has(dateKey) ? new Set() : new Set([dateKey])))
   }
 
   // Dropdown menus
@@ -226,6 +221,8 @@ export const ExpensePage: React.FC = () => {
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
   const [deleteConfirmExpense, setDeleteConfirmExpense] =
     React.useState<ExpenseItem | null>(null)
+  const [deleteConfirmDay, setDeleteConfirmDay] =
+    React.useState<{ date: string; items: ExpenseItem[] } | null>(null)
   const [isDeleting, setIsDeleting] = React.useState(false)
 
   // Audit / Details modal state
@@ -393,11 +390,12 @@ export const ExpensePage: React.FC = () => {
 
   // 1. Base filtered expenses (independent of Deposit / Expense Record tab so KPIs above stay constant)
   const {
+    accounts: allBankAccounts,
     available: bankOptions,
     selectedId: selectedBankId,
     setSelectedId: setSelectedBankId,
     bankLabel,
-  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany, { includePettyCash: true })
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
 
   const baseFilteredExpenses = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
@@ -411,15 +409,9 @@ export const ExpensePage: React.FC = () => {
           return false
         }
 
-        // Bank filter ('' = All Banks). "Petty Cash" lists expenses paid from petty cash; a real bank
-        // never lists them, since petty cash expenses don't come out of any bank.
-        if (selectedBankId) {
-          const isPetty = isPettyCashPayment(item.paymentMethod)
-          if (selectedBankId === PETTY_CASH_BANK_ID) {
-            if (!isPetty) return false
-          } else if (isPetty || String(item.bankAccountId || '') !== selectedBankId) {
-            return false
-          }
+        // Bank filter ('' = All Banks)
+        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
+          return false
         }
 
         if (
@@ -509,11 +501,51 @@ export const ExpensePage: React.FC = () => {
     })
   }, [filteredExpenses, tableTab])
 
+  const withdrawCount = React.useMemo(() => {
+    return baseFilteredExpenses.filter(
+      (e) => getPaidDisbursementForExpense(e) > 0 || e.status === 'Paid'
+    ).length
+  }, [baseFilteredExpenses])
+
+  const withdrawBalanceByKey = React.useMemo(() => {
+    const ordered = [...expenses]
+      .filter((e) => getPaidDisbursementForExpense(e) > 0 || e.status === 'Paid')
+      .sort((a, b) => {
+        const da = a.disbursement_date || a.rawDate || a.date
+        const db = b.disbursement_date || b.rawDate || b.date
+        const byDate = String(da).localeCompare(String(db))
+        if (byDate !== 0) return byDate
+        return (a.id || '').localeCompare(b.id || '')
+      })
+    const running = new Map<string, number>()
+    const balances = new Map<string, number>()
+    ordered.forEach((e) => {
+      const groupKey = selectedBankId ? selectedBankId : (e.company || '').toLowerCase().trim()
+      if (!running.has(groupKey)) {
+        const seedBank = selectedBankId ? allBankAccounts.find((b) => String(b.id) === selectedBankId) : null
+        running.set(groupKey, seedBank ? (Number(seedBank.startingBalance) || 0) : 0)
+      }
+      const prev = running.get(groupKey)!
+      const amt = getPaidDisbursementForExpense(e) || e.withdrawal || 0
+      const next = Math.round((prev - amt) * 100) / 100
+      running.set(groupKey, next)
+      balances.set(e.id, next)
+    })
+    return balances
+  }, [expenses, selectedBankId, allBankAccounts])
+
+  const hasFocusedDay = React.useMemo(
+    () => dailyExpenseGroups.some((g) => expandedDates.has(g.date)),
+    [dailyExpenseGroups, expandedDates]
+  )
   const totalDailyPages = Math.max(1, Math.ceil(dailyExpenseGroups.length / ITEMS_PER_PAGE))
   const paginatedDailyGroups = React.useMemo(() => {
+    if (hasFocusedDay) {
+      return dailyExpenseGroups.filter((g) => expandedDates.has(g.date))
+    }
     const start = (dailyPage - 1) * ITEMS_PER_PAGE
     return dailyExpenseGroups.slice(start, start + ITEMS_PER_PAGE)
-  }, [dailyExpenseGroups, dailyPage])
+  }, [dailyExpenseGroups, hasFocusedDay, expandedDates, dailyPage])
 
   // Day remarks: one note per company, per date (expense). Supervisors and Finance can edit.
   const dayRemarkCompanies = React.useMemo(
@@ -689,6 +721,24 @@ export const ExpensePage: React.FC = () => {
     }
   }
 
+  const handleConfirmDeleteDay = async () => {
+    if (!deleteConfirmDay || isAdmin) return
+    try {
+      setIsDeleting(true)
+      for (const item of deleteConfirmDay.items) {
+        await expenseService.deleteExpense(item.id)
+      }
+      const idsToDelete = new Set(deleteConfirmDay.items.map((i) => i.id))
+      setExpenses((prev) => prev.filter((e) => !idsToDelete.has(e.id)))
+      setDeleteConfirmDay(null)
+    } catch (err) {
+      console.error('Failed to delete day expenses:', err)
+      notifyError(err, 'Unable to delete day expense records. Please try again.')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   // 3-Dots Action Menu
   const [openMenuExpenseId, setOpenMenuExpenseId] = React.useState<
     string | null
@@ -700,6 +750,30 @@ export const ExpensePage: React.FC = () => {
   } | null>(null)
   const [activeMenuExpense, setActiveMenuExpense] =
     React.useState<ExpenseItem | null>(null)
+
+  const [dayMenu, setDayMenu] = React.useState<{
+    date: string
+    items: ExpenseItem[]
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
+
+  React.useEffect(() => {
+    if (!dayMenu) return
+    const handleClose = () => setDayMenu(null)
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') handleClose() }
+    window.addEventListener('click', handleClose)
+    window.addEventListener('scroll', handleClose, true)
+    window.addEventListener('resize', handleClose)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', handleClose)
+      window.removeEventListener('scroll', handleClose, true)
+      window.removeEventListener('resize', handleClose)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [dayMenu])
 
   React.useEffect(() => {
     if (!openMenuExpenseId) return
@@ -850,307 +924,276 @@ export const ExpensePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-            <Input
-              type="search"
-              placeholder="Search by ref no, cheque, particulars, category…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Period Dropdown */}
-            <div ref={periodDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsPeriodDropdownOpen((prev) => !prev)}
+        {/* Primary Tab Switcher: Withdraw (Bank Ledger) | Expense Record (All Transactions) */}
+        <div
+          role="tablist"
+          aria-label="Expense views"
+          className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tableTab === 'Withdraw'}
+            onClick={() => setTableTab('Withdraw')}
+            className={cn(
+              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              tableTab === 'Withdraw'
+                ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
+                : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
+            )}
+          >
+            <div className="min-w-0">
+              <div className="text-sm sm:text-base font-bold leading-tight">Withdraw</div>
+              <div
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  isPeriodDropdownOpen &&
-                    'ring-2 ring-slate-100 border-slate-300'
+                  'text-xs mt-0.5 leading-snug',
+                  tableTab === 'Withdraw' ? 'text-white/85' : 'text-muted-fg'
                 )}
               >
-                <span className="font-medium text-focus/90">
-                  {selectedPeriod}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isPeriodDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isPeriodDropdownOpen && (
-                <div
-                  style={periodPos.isMobile ? periodPos.style : undefined}
-                  className={cn(
-                    'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                    periodPos.isMobile
-                      ? 'w-[min(calc(100vw-32px),220px)]'
-                      : 'absolute right-0 top-full mt-2 w-40'
-                  )}
-                >
-                  {PERIOD_OPTIONS.map((period) => (
-                    <button
-                      key={period}
-                      type="button"
-                      onClick={() => handlePeriodChange(period)}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        selectedPeriod === period
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{period}</span>
-                      {selectedPeriod === period && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
+                Bank ledger of expenses
+              </div>
             </div>
+            <span
+              className={cn(
+                'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full tabular-nums',
+                tableTab === 'Withdraw' ? 'bg-white/20 text-white' : 'bg-surface text-focus/80'
+              )}
+            >
+              {withdrawCount}
+            </span>
+          </button>
 
-            {/* Status Dropdown */}
-            <div ref={statusDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsStatusDropdownOpen((prev) => !prev)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tableTab === 'Expense Record'}
+            onClick={() => setTableTab('Expense Record')}
+            className={cn(
+              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              tableTab === 'Expense Record'
+                ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
+                : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
+            )}
+          >
+            <div className="min-w-0">
+              <div className="text-sm sm:text-base font-bold leading-tight">Expense Record</div>
+              <div
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                  statusFilter === 'Pending'
-                    ? 'border-yellow-400 bg-yellow-50 text-yellow-800'
-                    : statusFilter === 'Paid'
-                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                      : statusFilter === 'Unpaid'
-                        ? 'border-rose-300 bg-rose-50 text-rose-700'
-                        : 'border-stroke/60',
-                  isStatusDropdownOpen &&
-                    'ring-2 ring-slate-100 border-slate-300'
+                  'text-xs mt-0.5 leading-snug',
+                  tableTab === 'Expense Record' ? 'text-white/85' : 'text-muted-fg'
                 )}
               >
-                <span className="font-medium">
-                  {statusFilter === 'All' ? 'Status' : statusFilter}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isStatusDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isStatusDropdownOpen && (
-                <div
-                  style={statusPos.isMobile ? statusPos.style : undefined}
-                  className={cn(
-                    'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                    statusPos.isMobile
-                      ? 'w-[min(calc(100vw-32px),220px)]'
-                      : 'absolute right-0 top-full mt-2 w-48'
-                  )}
-                >
-                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const)
-                    .filter((st) => !(tableTab === 'Withdraw' && st === 'Paid'))
-                    .map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => {
-                        setStatusFilter(st)
-                        setIsStatusDropdownOpen(false)
-                      }}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        statusFilter === st
-                          ? st === 'Pending'
-                            ? 'bg-yellow-100 text-yellow-800 font-semibold'
-                            : 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span className="flex items-center gap-2">
-                        {st !== 'All' && (
-                          <span
-                            className={cn(
-                              'w-2 h-2 rounded-full',
-                              st === 'Paid'
-                                ? 'bg-emerald-500'
-                                : st === 'Pending'
-                                  ? 'bg-yellow-400'
-                                  : 'bg-rose-500'
-                            )}
-                          />
-                        )}
-                        {st === 'All' ? 'All Status' : st}
-                      </span>
-                      {statusFilter === st && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
+                All expense transactions
+              </div>
             </div>
+            <span
+              className={cn(
+                'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full tabular-nums',
+                tableTab === 'Expense Record' ? 'bg-white/20 text-white' : 'bg-surface text-focus/80'
+              )}
+            >
+              {filteredExpenses.length}
+            </span>
+          </button>
+        </div>
 
-            {/* Date Range Picker */}
-            <DateRangePicker
-              value={dateRange}
-              onChange={(newRange: DateRange) => setDateRange(newRange)}
-              hidePresets
-            />
-
-            {/* Company Scope: ONLY Finance and Audit have the dropdown filter */}
-            {!isCompanyScoped && (
-              <div ref={companyDropdownRef} className="relative inline-block">
-                <button
-                  type="button"
-                  onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-                  className={cn(
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                    isCompanyDropdownOpen &&
-                      'ring-2 ring-slate-100 border-slate-300'
-                  )}
-                  aria-label="Filter expenses by company"
-                >
-                  <span className="font-medium text-focus/90 truncate max-w-[150px]">
-                    {selectedCompany}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                  {selectedCompany !== 'All Companies' && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedCompany('All Companies')
-                        setActiveCompany('All Companies')
-                      }}
-                      className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-                      title="Reset to All Companies"
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
-                  )}
-                </button>
-
-                {isCompanyDropdownOpen && (
-                  <div
-                    style={companyPos.isMobile ? companyPos.style : undefined}
+        {/* Controls Container / Shared Filters */}
+        <div className="flex flex-col gap-3 pt-1">
+          {/* Row 1: Company + Bank + Date + All Records / By Day toggle */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+              {/* Company Scope */}
+              {!isCompanyScoped ? (
+                <div ref={companyDropdownRef} className="relative flex-1 min-w-[170px]">
+                  <button
+                    type="button"
+                    onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                     className={cn(
-                      'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                      companyPos.isMobile
-                        ? 'w-[min(calc(100vw-32px),320px)]'
-                        : 'absolute right-0 top-full mt-2 w-68'
+                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer select-none box-border',
+                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
+                    aria-label="Filter expenses by company"
                   >
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                        Filter By Company
-                      </span>
+                    <span className="font-semibold text-focus truncate max-w-[240px]">
+                      {selectedCompany}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
                       {selectedCompany !== 'All Companies' && (
-                        <button
-                          type="button"
-                          onClick={() => {
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation()
                             setSelectedCompany('All Companies')
                             setActiveCompany('All Companies')
-                            setIsCompanyDropdownOpen(false)
                           }}
-                          className="text-xs text-primary hover:underline font-semibold cursor-pointer"
+                          className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
+                          title="Reset to All Companies"
                         >
-                          Clear Filter
-                        </button>
+                          <X className="h-3.5 w-3.5" />
+                        </span>
                       )}
+                      <ChevronDown className="h-4 w-4 text-muted-fg shrink-0" />
                     </div>
+                  </button>
 
-                    <div className="px-1 pb-2">
-                      <Input
-                        type="text"
-                        placeholder="Search company…"
-                        value={companySearch}
-                        onChange={(e) => setCompanySearch(e.target.value)}
-                        className="h-8 text-xs rounded-lg"
-                        autoFocus
-                      />
-                    </div>
-
-                    <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                      {filteredCompanyList.length === 0 ? (
-                        <div className="py-4 text-center text-xs text-muted-fg">
-                          No matching companies
-                        </div>
-                      ) : (
-                        filteredCompanyList.map((c) => (
+                  {isCompanyDropdownOpen && (
+                    <div
+                      style={companyPos.isMobile ? companyPos.style : undefined}
+                      className={cn(
+                        'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                        companyPos.isMobile
+                          ? 'w-[min(calc(100vw-32px),320px)]'
+                          : 'absolute left-0 top-full mt-2 w-72'
+                      )}
+                    >
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
+                          Filter By Company
+                        </span>
+                        {selectedCompany !== 'All Companies' && (
                           <button
-                            key={c}
                             type="button"
                             onClick={() => {
-                              setSelectedCompany(c)
-                              setActiveCompany(c)
+                              setSelectedCompany('All Companies')
+                              setActiveCompany('All Companies')
                               setIsCompanyDropdownOpen(false)
-                              setCompanySearch('')
                             }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                              selectedCompany === c
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-focus/80 hover:bg-slate-50'
-                            )}
+                            className="text-xs text-primary hover:underline font-semibold cursor-pointer"
                           >
-                            <span className="truncate">{c}</span>
-                            {selectedCompany === c && (
-                              <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                            )}
+                            Clear Filter
                           </button>
-                        ))
-                      )}
+                        )}
+                      </div>
+
+                      <div className="relative mb-2 px-1">
+                        <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={companySearch}
+                          onChange={(e) => setCompanySearch(e.target.value)}
+                          placeholder="Search company…"
+                          className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
+                        />
+                        {companySearch && (
+                          <button
+                            type="button"
+                            onClick={() => setCompanySearch('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
+                        {filteredCompanyList.length === 0 ? (
+                          <div className="py-4 text-center text-xs text-muted-fg">
+                            No matching companies
+                          </div>
+                        ) : (
+                          filteredCompanyList.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                setSelectedCompany(c)
+                                setActiveCompany(c)
+                                setIsCompanyDropdownOpen(false)
+                                setCompanySearch('')
+                              }}
+                              className={cn(
+                                'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                                selectedCompany === c
+                                  ? 'bg-primary/10 text-primary font-semibold'
+                                  : 'text-focus/80 hover:bg-slate-50'
+                              )}
+                            >
+                              <span className="truncate">{c}</span>
+                              {selectedCompany === c && (
+                                <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
+                </div>
+              ) : (
+                <div
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  title={selectedCompany}
+                >
+                  <span className="truncate min-w-0">{selectedCompany}</span>
+                </div>
+              )}
+
+              {/* Bank Filter Select */}
+              <div className="flex-1 min-w-[170px]">
+                <BankFilterSelect
+                  accounts={bankOptions}
+                  value={selectedBankId}
+                  onChange={setSelectedBankId}
+                  className="w-full min-h-[44px] h-11 text-xs sm:text-sm"
+                />
               </div>
-            )}
 
-            <BankFilterSelect
-              accounts={bankOptions}
-              value={selectedBankId}
-              onChange={setSelectedBankId}
-              includePettyCash
-            />
-
-            {/* Tab Switcher: Withdraw / Expense Record */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => setTableTab('Withdraw')}
-                className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
-                  tableTab === 'Withdraw'
-                    ? 'bg-rose-600 text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <ArrowDownLeft className="h-3.5 w-3.5 shrink-0" />
-                Withdraw
-              </button>
-              <button
-                type="button"
-                onClick={() => setTableTab('Expense Record')}
-                className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
-                  tableTab === 'Expense Record'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <TrendingDown className="h-3.5 w-3.5 shrink-0" />
-                Expense Record
-              </button>
+              {/* Date Range Control in Row 1 */}
+              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+                <TransactionDateRangeControl
+                  value={dateRange}
+                  onChange={(newRange) => setDateRange(newRange)}
+                  fullWidth
+                />
+              </div>
             </div>
+
+            {/* All Records / By Day Toggle */}
+            <div className="shrink-0 flex items-center">
+              <div
+                role="group"
+                aria-label="Group records"
+                className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+              >
+                <button
+                  type="button"
+                  aria-pressed={subTab === 'All Transactions'}
+                  onClick={() => setSubTab('All Transactions')}
+                  className={cn(
+                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    subTab === 'All Transactions'
+                      ? 'bg-[#960C01] text-white shadow-xs'
+                      : 'text-focus/70 hover:text-focus hover:bg-white/60'
+                  )}
+                >
+                  All Records
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={subTab === 'Daily Summary'}
+                  onClick={() => setSubTab('Daily Summary')}
+                  className={cn(
+                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    subTab === 'Daily Summary'
+                      ? 'bg-[#960C01] text-white shadow-xs'
+                      : 'text-focus/70 hover:text-focus hover:bg-white/60'
+                  )}
+                >
+                  By Day
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Row 2: Full-width Search Bar */}
+          <div className="relative w-full">
+            <Search className="w-4 h-4 text-muted-fg absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search particulars, Ref No., Cheque No., company, method…"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+            />
           </div>
         </div>
       </div>
@@ -1253,85 +1296,22 @@ export const ExpensePage: React.FC = () => {
       >
         {/* Dynamic Tab Context Banner */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-2 border-b border-slate-100">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border',
-                tableTab === 'Withdraw'
-                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                  : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-              )}
+          {subTab === 'Daily Summary' && hasFocusedDay ? (
+            <button
+              type="button"
+              onClick={() => setExpandedDates(new Set())}
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
-              {tableTab === 'Withdraw' ? (
-                <>
-                  <Wallet className="w-3.5 h-3.5" />
-                  <span>Withdraw View (Paid Cash Outflows)</span>
-                </>
-              ) : (
-                <>
-                  <TrendingDown className="w-3.5 h-3.5" />
-                  <span>Expense Record View (All Expenses)</span>
-                </>
-              )}
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back to all {dailyExpenseGroups.length} days</span>
+            </button>
+          ) : (
+            <span className="text-xs text-muted-fg font-medium">
+              {subTab === 'Daily Summary'
+                ? `${dailyExpenseGroups.length} ${dailyExpenseGroups.length === 1 ? 'day' : 'days'} (${filteredExpenses.length} total records)`
+                : `${filteredExpenses.length} ${tableTab === 'Withdraw' ? 'withdrawal' : 'expense'} ${filteredExpenses.length === 1 ? 'record' : 'records'} shown`}
             </span>
-
-            {/* Subtab Toggle Switcher: Daily Summary vs All Transactions */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-0.5 gap-0.5">
-              <button
-                type="button"
-                onClick={() => setSubTab('Daily Summary')}
-                className={cn(
-                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
-                  subTab === 'Daily Summary'
-                    ? 'bg-white text-focus shadow-xs'
-                    : 'text-muted-fg hover:text-focus'
-                )}
-              >
-                Daily Summary
-              </button>
-              <button
-                type="button"
-                onClick={() => setSubTab('All Transactions')}
-                className={cn(
-                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
-                  subTab === 'All Transactions'
-                    ? 'bg-white text-focus shadow-xs'
-                    : 'text-muted-fg hover:text-focus'
-                )}
-              >
-                All Transactions
-              </button>
-            </div>
-
-            {statusFilter !== 'All' && (
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border',
-                  statusFilter === 'Paid'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : statusFilter === 'Pending'
-                      ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-                      : 'bg-rose-50 text-rose-700 border-rose-200'
-                )}
-              >
-                <span>Particulars Status: {statusFilter}</span>
-                <button
-                  type="button"
-                  onClick={() => setStatusFilter('All')}
-                  className="hover:opacity-75 cursor-pointer"
-                  title="Clear status filter"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            )}
-          </div>
-
-          <span className="text-xs text-muted-fg font-medium">
-            {subTab === 'Daily Summary'
-              ? `${dailyExpenseGroups.length} ${dailyExpenseGroups.length === 1 ? 'day' : 'days'} (${filteredExpenses.length} total records)`
-              : `${filteredExpenses.length} ${tableTab === 'Withdraw' ? 'withdrawal' : 'expense'} ${filteredExpenses.length === 1 ? 'record' : 'records'} shown`}
-          </span>
+          )}
         </div>
 
         {subTab === 'Daily Summary' ? (
@@ -1348,36 +1328,32 @@ export const ExpensePage: React.FC = () => {
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                     DATE & DAY
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     TRANSACTIONS
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                     {tableTab === 'Withdraw' ? 'TOTAL WITHDRAWN' : 'GROSS EXPENSES'}
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                     REALIZED CASH
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                     DAY REMARK
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     AUDIT STATUS
                   </TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    DRILLDOWN
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    ACTION
                   </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-fg">
-                      Loading daily expense summary...
-                    </TableCell>
-                  </TableRow>
+                  <TableSkeleton rows={5} columns={7} />
                 ) : paginatedDailyGroups.length === 0 ? (
                   <TableRow>
                     <TableCell
@@ -1409,24 +1385,31 @@ export const ExpensePage: React.FC = () => {
                             isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
                           )}
                         >
-                          <TableCell className="px-3.5 py-3.5 text-left">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-focus">{group.formattedDate}</span>
-                              <span className="text-2xs text-muted-fg font-medium">{group.dayOfWeek}</span>
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-left">
+                            <div className="flex items-center gap-2 min-w-0">
+                              {isExpanded ? (
+                                <ChevronDown className="w-4 h-4 text-primary shrink-0" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                              )}
+                              <div className="flex flex-col min-w-0">
+                                <span className="text-xs font-bold text-focus">{group.formattedDate}</span>
+                                <span className="text-[11px] text-muted-fg font-medium">{group.dayOfWeek}</span>
+                              </div>
                             </div>
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-center">
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-focus border border-slate-200">
                               {group.transactionCount} {group.transactionCount === 1 ? 'record' : 'records'}
                             </span>
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-focus text-xs sm:text-sm">
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-right font-bold tabular-nums text-focus text-xs">
                             {formatPHP(group.grossTotal)}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-rose-600 text-xs sm:text-sm">
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-right font-bold tabular-nums text-rose-600 text-xs">
                             {formatPHP(group.realizedCash)}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-left" onClick={(e) => e.stopPropagation()}>
                             <DayRemarkCell
                               companyNames={group.items.map((item) => item.company)}
                               date={group.date}
@@ -1444,10 +1427,10 @@ export const ExpensePage: React.FC = () => {
                               }))}
                             />
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-center">
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
                             <span
                               className={cn(
-                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-2xs font-bold border',
+                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
                                 group.auditStatus === 'All Verified'
                                   ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                                   : group.auditStatus === 'Discrepancy'
@@ -1458,22 +1441,27 @@ export const ExpensePage: React.FC = () => {
                               {group.auditStatus}
                             </span>
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-center">
+                          <TableCell className="px-2.5 sm:px-3 py-2.5 text-center" onClick={(e) => e.stopPropagation()}>
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                toggleDateExpansion(group.date)
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
+                                setDayMenu({
+                                  date: group.date,
+                                  items: group.items,
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
                               }}
-                              className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
+                              className="h-8 w-8 p-0 text-muted-fg hover:text-focus hover:bg-slate-200/60 rounded-lg inline-flex items-center justify-center cursor-pointer transition-colors"
+                              title="Day Actions"
+                              aria-label="Open day actions"
                             >
-                              <span>{isExpanded ? 'Hide' : 'Show'}</span>
-                              {isExpanded ? (
-                                <ChevronDown className="w-3.5 h-3.5 transition-transform" />
-                              ) : (
-                                <ChevronRight className="w-3.5 h-3.5 transition-transform" />
-                              )}
+                              <MoreVertical className="w-4 h-4" />
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -1499,8 +1487,7 @@ export const ExpensePage: React.FC = () => {
                                 {(() => {
                                   const byBank = new Map<string, { count: number; total: number }>()
                                   group.items.forEach((it) => {
-                                    // Petty cash expenses are grouped under "Petty Cash", not "No bank"
-                                    const key = isPettyCashPayment(it.paymentMethod) ? PETTY_CASH_BANK_ID : String(it.bankAccountId || '')
+                                    const key = String(it.bankAccountId || '')
                                     const entry = byBank.get(key) || { count: 0, total: 0 }
                                     entry.count += 1
                                     entry.total += (tableTab === 'Withdraw' ? getPaidDisbursementForExpense(it) : it.withdrawal)
@@ -1527,121 +1514,131 @@ export const ExpensePage: React.FC = () => {
                                 })()}
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-left text-xs">
-                                    <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
+                                    <colgroup>
+                                      <col style={{ width: '10%' }} />
+                                      <col style={{ width: '23%' }} />
+                                      <col style={{ width: '9%' }} />
+                                      <col style={{ width: '11%' }} />
+                                      <col style={{ width: '10%' }} />
+                                      <col style={{ width: '11%' }} />
+                                      <col style={{ width: '11%' }} />
+                                      <col style={{ width: '9%' }} />
+                                      <col style={{ width: '6%' }} />
+                                    </colgroup>
+                                    <thead className="bg-slate-100/60 text-muted-fg text-[11px] uppercase tracking-wider border-b border-slate-100">
                                       <tr>
-                                        <th className="px-3 py-2 font-bold">Cheque / Ref</th>
-                                        {showCompanyColumn && <th className="px-3 py-2 font-bold">Company</th>}
-                                        <th className="px-3 py-2 font-bold">Particulars</th>
-                                        <th className="px-3 py-2 font-bold">Category</th>
-                                        <th className="px-3 py-2 font-bold text-center">Status</th>
-                                        <th className="px-3 py-2 font-bold">Payment Method</th>
-                                        <th className="px-3 py-2 font-bold text-right">Amount</th>
-                                        <th className="px-3 py-2 font-bold text-center">Audit Status</th>
-                                        <th className="px-3 py-2 font-bold text-center">Actions</th>
+                                        <th className="px-3 py-2 font-bold text-left">DATE</th>
+                                        <th className="px-3 py-2 font-bold text-left">PARTICULARS</th>
+                                        <th className="px-3 py-2 font-bold text-left">METHOD</th>
+                                        <th className="px-3 py-2 font-bold text-right">AMOUNT</th>
+                                        <th className="px-3 py-2 font-bold text-left">CHEQUE NO.</th>
+                                        <th className="px-3 py-2 font-bold text-left">DEPOSIT DATE</th>
+                                        <th className="px-3 py-2 font-bold text-right">AMOUNT DEPOSIT</th>
+                                        <th className="px-3 py-2 font-bold text-center">STATUS</th>
+                                        <th className="px-3 py-2 font-bold text-center">ACTION</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-100">
-                                      {group.items.map((expense) => (
-                                        <tr key={expense.id} className="hover:bg-slate-50/60 transition-colors">
-                                          <td className="px-3 py-2 font-mono text-xs text-focus font-medium">
-                                            {expense.chequeNo || expense.refNo}
-                                          </td>
-                                          {showCompanyColumn && (
-                                            <td className="px-3 py-2 text-focus font-medium">
-                                              {expense.company}
+                                      {group.items.map((expense) => {
+                                        const summary = getParticularsSummary(
+                                          expense.particulars,
+                                          expense.items,
+                                          {
+                                            statusFilter: effectiveParticularsStatusFilter,
+                                            fallbackStatus: normalizeParticularStatus(expense.status, 'Paid'),
+                                            fallbackTotal: expense.withdrawal,
+                                          }
+                                        )
+
+                                        return (
+                                          <tr
+                                            key={expense.id}
+                                            onClick={() => setSelectedExpense(expense)}
+                                            className="hover:bg-slate-50/60 transition-colors cursor-pointer"
+                                          >
+                                            <td className="px-3 py-2 font-medium text-focus whitespace-nowrap align-top">
+                                              {formatDisplayDate(expense.rawDate || expense.date)}
                                             </td>
-                                          )}
-                                          <td className="px-3 py-2 text-focus max-w-[260px]">
-                                            <p className="truncate font-medium">{expense.particulars}</p>
-                                          </td>
-                                          <td className="px-3 py-2 text-muted-fg font-medium">
-                                            {expense.category || 'General'}
-                                          </td>
-                                          <td className="px-3 py-2 text-center">
-                                            <span
-                                              className={cn(
-                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
-                                                expense.status === 'Paid'
-                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                                                  : expense.status === 'Pending'
-                                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
-                                                  : 'bg-rose-50 text-rose-700 border-rose-300'
+                                            <td className="px-3 py-2 text-xs align-top">
+                                              <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                                <span className="font-semibold text-focus break-words leading-snug">
+                                                  {summary.title || expense.particulars}
+                                                </span>
+                                                {summary.itemCount > 1 && (
+                                                  <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                                    +{summary.itemCount - 1} more
+                                                  </span>
+                                                )}
+                                              </div>
+                                              {expense.company && (
+                                                <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                                                  {expense.company}
+                                                </div>
                                               )}
-                                            >
-                                              {expense.status}
-                                            </span>
-                                          </td>
-                                          <td className="px-3 py-2 text-muted-fg font-medium">
-                                            {expense.paymentMethod || 'Cash'}
-                                          </td>
-                                          <td className="px-3 py-2 text-right font-bold tabular-nums text-focus">
-                                            {formatPHP(tableTab === 'Withdraw' ? getPaidDisbursementForExpense(expense) : expense.withdrawal)}
-                                          </td>
-                                          <td className="px-3 py-2 text-center">
-                                            <span
-                                              className={cn(
-                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold border',
-                                                expense.auditStatus === 'Verified'
-                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                                  : expense.auditStatus === 'Flagged'
-                                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                                  : 'bg-slate-100 text-muted-fg border-slate-200'
-                                              )}
-                                            >
-                                              {expense.auditStatus}
-                                            </span>
-                                          </td>
-                                          <td className="px-3 py-2 text-center">
-                                            <div className="flex items-center justify-center gap-1">
+                                              <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                                                {expense.refNo || (expense as any).reference_no || '—'}
+                                              </div>
+                                            </td>
+                                            <td className="px-3 py-2 text-focus/90 font-medium truncate align-top">
+                                              {expense.paymentMethod || 'Cash'}
+                                            </td>
+                                            <td className="px-3 py-2 font-bold text-right tabular-nums whitespace-nowrap align-top text-rose-700">
+                                              -{formatPHP(expense.withdrawal)}
+                                            </td>
+                                            <td className="px-3 py-2 font-mono text-focus/80 truncate align-top">
+                                              {expense.chequeNo || '—'}
+                                            </td>
+                                            <td className="px-3 py-2 font-medium whitespace-nowrap align-top">
+                                              <span className="text-muted-fg/50">—</span>
+                                            </td>
+                                            <td className="px-3 py-2 font-bold text-right tabular-nums whitespace-nowrap align-top">
+                                              <span className="text-muted-fg/50 font-normal">—</span>
+                                            </td>
+                                            <td className="px-3 py-2 text-center align-top">
+                                              <span
+                                                className={cn(
+                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border tracking-wide uppercase',
+                                                  expense.status === 'Paid'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                    : expense.status === 'Pending'
+                                                    ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                                    : 'bg-rose-50 text-rose-700 border-rose-300'
+                                                )}
+                                              >
+                                                {expense.status || 'Paid'}
+                                              </span>
+                                            </td>
+                                            <td className="px-3 py-2 text-center align-top" onClick={(e) => e.stopPropagation()}>
                                               <button
                                                 type="button"
-                                                onClick={() => setSelectedExpense(expense)}
-                                                className="p-1 text-slate-500 hover:text-focus hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
-                                                title="View Details"
-                                              >
-                                                <Eye className="w-3.5 h-3.5" />
-                                              </button>
-                                              {canAdd && expense.auditStatus !== 'Verified' && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    navigate('/expense/add', {
-                                                      state: { editExpense: expense },
+                                                onClick={(e) => {
+                                                  e.stopPropagation()
+                                                  if (openMenuExpenseId === expense.id) {
+                                                    setOpenMenuExpenseId(null)
+                                                    setMenuPosition(null)
+                                                    setActiveMenuExpense(null)
+                                                  } else {
+                                                    const rect = e.currentTarget.getBoundingClientRect()
+                                                    const openUpward = rect.bottom + 160 > window.innerHeight
+                                                    setMenuPosition({
+                                                      top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                                      right: Math.max(12, window.innerWidth - rect.right),
+                                                      openUpward,
                                                     })
+                                                    setActiveMenuExpense(expense)
+                                                    setOpenMenuExpenseId(expense.id)
                                                   }
-                                                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
-                                                  title="Edit Record"
-                                                >
-                                                  <Pencil className="w-3.5 h-3.5" />
-                                                </button>
-                                              )}
-                                              {canAdd && expense.auditStatus !== 'Verified' && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => setDeleteConfirmExpense(expense)}
-                                                  className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                                                  title="Delete Record"
-                                                >
-                                                  <Trash2 className="w-3.5 h-3.5" />
-                                                </button>
-                                              )}
-                                              {canAuditActions && (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => {
-                                                    setSelectedTx(expenseService.toDashboardTransaction(expense))
-                                                    setIsAuditModalOpen(true)
-                                                  }}
-                                                  className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
-                                                  title="Audit Transaction"
-                                                >
-                                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                                </button>
-                                              )}
-                                            </div>
-                                          </td>
-                                        </tr>
-                                      ))}
+                                                }}
+                                                className="h-7 w-7 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
+                                                title="Actions"
+                                                aria-label="Open actions menu"
+                                              >
+                                                <MoreVertical className="w-3.5 h-3.5" />
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        )
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
@@ -1658,55 +1655,57 @@ export const ExpensePage: React.FC = () => {
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className="w-full table-fixed min-w-[940px]">
+          <Table className="w-full table-fixed min-w-[860px] lg:min-w-0">
             <colgroup>
-              <col style={{ width: showCompanyColumn ? '10%' : '12%' }} />
-              {showCompanyColumn && <col style={{ width: '13%' }} />}
               <col style={{ width: '10%' }} />
-              <col style={{ width: showCompanyColumn ? '18%' : '20%' }} />
+              <col style={{ width: '23%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: showCompanyColumn ? '8%' : '10%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
-              <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+              <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                {showCompanyColumn && (
-                  <TableHead className="w-[13%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                    COMPANY
-                  </TableHead>
-                )}
-                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  CHEQUE NO.
-                </TableHead>
-                <TableHead className="w-[18%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  WITHDRAWAL
+                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  METHOD
                 </TableHead>
-                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  CATEGORY
+                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  AMOUNT
                 </TableHead>
-                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  NET AMOUNT
+                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  CHEQUE NO.
                 </TableHead>
-                <TableHead className="w-[8%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  ACTIONS
+                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  DEPOSIT DATE
+                </TableHead>
+                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  AMOUNT DEPOSIT
+                </TableHead>
+                <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  STATUS
+                </TableHead>
+                <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  ACTION
                 </TableHead>
               </TableRow>
             </TableHeader>
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
+                <TableSkeleton rows={5} columns={9} />
               ) : paginatedExpenses.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={showCompanyColumn ? 8 : 7}
+                    colSpan={9}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1717,40 +1716,25 @@ export const ExpensePage: React.FC = () => {
                         No expense records found
                       </p>
                       <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no expense transactions recorded for{' '}
-                        {displayedCompanyTitle} matching your current filters.
+                        There are no expense transactions recorded for {displayedCompanyTitle} matching your current filters.
                       </p>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : (
                 paginatedExpenses.map((expense) => {
-                  const fallbackStatus = normalizeParticularStatus(
-                    expense.status,
-                    'Paid'
-                  )
-                  const summary = getParticularsSummary(
-                    expense.particulars,
-                    expense.items,
-                    {
-                      statusFilter: effectiveParticularsStatusFilter,
-                      fallbackStatus,
-                      fallbackTotal: expense.withdrawal,
-                    }
-                  )
-                  const rowAmount =
-                    effectiveParticularsStatusFilter !== 'All'
-                      ? summary.filteredTotal
-                      : expense.withdrawal
-                  const createdAtTime = formatCreatedAt(expense.createdAt, {
-                    timeOnly: true,
+                  const fallbackStatus = normalizeParticularStatus(expense.status, 'Paid')
+                  const summary = getParticularsSummary(expense.particulars, expense.items, {
+                    statusFilter: effectiveParticularsStatusFilter,
+                    fallbackStatus,
+                    fallbackTotal: expense.withdrawal,
                   })
 
                   return (
                     <TableRow
                       key={expense.id}
                       id={`expense-row-${expense.id}`}
-                      onClick={() => handleRowClick(expense)}
+                      onClick={() => handleOpenRow(expense)}
                       className={cn(
                         'border-b border-slate-100 hover:bg-slate-50/60 transition-all duration-300 cursor-pointer',
                         highlightedExpenseId === expense.id &&
@@ -1758,129 +1742,77 @@ export const ExpensePage: React.FC = () => {
                       )}
                       title="Click to view complete details"
                     >
-                      {/* 1. Date & Created At Time */}
-                      <TableCell className="w-[12%] px-3.5 py-3.5 text-xs font-medium text-focus truncate text-left">
-                        <div className="flex flex-col truncate">
-                          <div className="flex items-center gap-1.5 truncate">
-                            <span>{expense.date}</span>
-                            {highlightedExpenseId === expense.id && (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#960C01] text-white shadow-xs animate-bounce shrink-0">
-                                NEW
-                              </span>
-                            )}
-                          </div>
-                          {createdAtTime && (
-                            <span
-                              className="text-[10px] text-muted-fg font-mono mt-0.5"
-                              title={`Created at ${formatCreatedAt(expense.createdAt)}`}
-                            >
-                              {createdAtTime}
+                      {/* 1. Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                        {formatDisplayDate(expense.rawDate || expense.date)}
+                      </TableCell>
+
+                      {/* 2. Particulars: Title on Line 1, Company on Line 2, Ref on Line 3 (No cheque, no badge) */}
+                      <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-focus/90 align-top" title={expense.particulars}>
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <span className="font-semibold text-focus break-words leading-snug">
+                            {summary.title || expense.particulars}
+                          </span>
+                          {summary.itemCount > 1 && (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                              +{summary.itemCount - 1} more
                             </span>
                           )}
-                          {expense.auditStatus &&
-                            expense.auditStatus !== 'Pending Audit' && (
-                              <div className="mt-1 flex items-center gap-1">
-                                <span
-                                  className={cn(
-                                    'inline-block px-1.5 py-0.2 rounded text-[9.5px] font-bold border',
-                                    expense.auditStatus === 'Verified'
-                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                      : 'bg-rose-50 text-rose-700 border-rose-200'
-                                  )}
-                                >
-                                  {expense.auditStatus === 'Verified'
-                                    ? 'Audited'
-                                    : 'Discrepancy'}
-                                </span>
-                              </div>
-                            )}
-                          {expense.auditDate &&
-                            expense.auditStatus === 'Verified' && (
-                              <span className="text-[9.5px] text-muted-fg font-mono mt-0.5">
-                                {expense.auditDate}
-                              </span>
-                            )}
+                        </div>
+                        {expense.company && (
+                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                            {expense.company}
+                          </div>
+                        )}
+                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                          {expense.refNo || (expense as any).reference_no || '—'}
                         </div>
                       </TableCell>
 
-                      {/* 2. Company */}
-                      {showCompanyColumn && (
-                        <TableCell
-                          className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
-                          title={expense.company}
-                        >
-                          <div className="flex items-center gap-1.5 truncate">
-                            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                            <span className="truncate">{expense.company}</span>
-                          </div>
-                        </TableCell>
-                      )}
+                      {/* 3. Method */}
+                      <TableCell className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
+                        {expense.paymentMethod || 'Cash'}
+                      </TableCell>
 
-                      {/* 3. Cheque No */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs text-focus/90 truncate font-mono text-left">
+                      {/* 4. Signed Gross Amount */}
+                      <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top text-rose-700">
+                        -{formatPHP(expense.withdrawal)}
+                      </TableCell>
+
+                      {/* 5. Cheque No. */}
+                      <TableCell className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
                         {expense.chequeNo || '—'}
                       </TableCell>
 
-                      {/* 4. Particulars (filtered by statusFilter, with yellow Pending badge) */}
-                      <TableCell
-                        className="w-[21%] px-3.5 py-3.5 text-xs text-focus/90 font-normal truncate text-left"
-                        title={expense.particulars}
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="truncate block font-medium">
-                            {summary.firstItemName}
-                          </span>
-                          <span
-                            className={cn(
-                              'shrink-0 px-1.5 py-0.5 rounded-full text-[9.5px] font-bold border',
-                              summary.firstItemStatus === 'Paid'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : summary.firstItemStatus === 'Pending'
-                                  ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-                                  : 'bg-rose-50 text-rose-700 border-rose-200'
-                            )}
-                          >
-                            {summary.firstItemStatus}
-                          </span>
-                          {summary.count > 1 && (
-                            <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                              +{summary.count - 1} more
-                            </span>
+                      {/* 6. Deposit Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                        <span className="text-muted-fg/50">—</span>
+                      </TableCell>
+
+                      {/* 7. Deposit Amount */}
+                      <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
+                        <span className="text-muted-fg/50 font-normal">—</span>
+                      </TableCell>
+
+                      {/* 8. Status Badge */}
+                      <TableCell className="pl-3 pr-2 py-3 text-center align-top">
+                        <span
+                          className={cn(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border tracking-wide uppercase',
+                            expense.status === 'Paid'
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                              : expense.status === 'Pending'
+                              ? 'bg-amber-50 text-amber-700 border-amber-300'
+                              : 'bg-rose-50 text-rose-700 border-rose-300'
                           )}
-                        </div>
+                        >
+                          {expense.status || 'Paid'}
+                        </span>
                       </TableCell>
 
-                      {/* 5. Withdrawal */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-red-600">
-                        {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
-                      </TableCell>
-
-                      {/* 6. Category & Payment Method */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs text-focus/90 font-medium truncate text-left">
-                        <div className="flex flex-col gap-0.5 min-w-0">
-                          <span
-                            className="truncate font-semibold text-focus"
-                            title={expense.category || 'General'}
-                          >
-                            {expense.category || 'General'}
-                          </span>
-                          <span
-                            className="text-[10px] text-muted-fg truncate"
-                            title={expense.paymentMethod || 'Cash'}
-                          >
-                            {expense.paymentMethod || 'Cash'}
-                          </span>
-                        </div>
-                      </TableCell>
-
-                      {/* 7. Net Amount */}
-                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
-                        {formatPHP(rowAmount)}
-                      </TableCell>
-
-                      {/* 8. Actions */}
+                      {/* 9. Action: 3 dots action button */}
                       <TableCell
-                        className="w-[8%] px-3.5 py-3.5 text-center whitespace-nowrap"
+                        className="px-1.5 py-3 text-center whitespace-nowrap align-top"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex items-center justify-center">
@@ -1895,29 +1827,22 @@ export const ExpensePage: React.FC = () => {
                                 setMenuPosition(null)
                                 setActiveMenuExpense(null)
                               } else {
-                                const rect =
-                                  e.currentTarget.getBoundingClientRect()
-                                const openUpward =
-                                  rect.bottom + 160 > window.innerHeight
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
                                 setMenuPosition({
-                                  top: openUpward
-                                    ? rect.top - 6
-                                    : rect.bottom + 6,
-                                  right: Math.max(
-                                    12,
-                                    window.innerWidth - rect.right
-                                  ),
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
                                   openUpward,
                                 })
                                 setActiveMenuExpense(expense)
                                 setOpenMenuExpenseId(expense.id)
                               }
                             }}
-                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                            title="Row Actions"
-                            aria-label="Open row actions"
+                            className="h-7 w-7 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
+                            title="Actions"
+                            aria-label="Open actions menu"
                           >
-                            <MoreVertical className="w-4 h-4" />
+                            <MoreVertical className="w-3.5 h-3.5" />
                           </Button>
                         </div>
                       </TableCell>
@@ -1933,43 +1858,58 @@ export const ExpensePage: React.FC = () => {
         {/* 6. Pagination Footer */}
         <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
           {subTab === 'Daily Summary' ? (
-            <>
-              <span className="font-medium text-focus/80">
-                {dailyExpenseGroups.length === 0
-                  ? 'Showing 0 of 0 days'
-                  : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailyExpenseGroups.length)} of ${dailyExpenseGroups.length} days`}
-              </span>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <span className="text-xs text-muted-fg italic">
-                  Page {dailyPage} out of {totalDailyPages}
+            hasFocusedDay ? (
+              <div className="flex items-center justify-between w-full">
+                <span className="font-semibold text-focus">
+                  Viewing disbursements for {paginatedDailyGroups[0]?.formattedDate}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setExpandedDates(new Set())}
+                  className="text-xs text-primary font-semibold hover:underline cursor-pointer"
+                >
+                  Back to all days
+                </button>
+              </div>
+            ) : (
+              <>
+                <span className="font-medium text-focus/80">
+                  {dailyExpenseGroups.length === 0
+                    ? 'Showing 0 of 0 days'
+                    : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailyExpenseGroups.length)} of ${dailyExpenseGroups.length} days`}
                 </span>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={dailyPage <= 1}
-                  onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Previous day page"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <span className="text-xs text-muted-fg italic">
+                    Page {dailyPage} out of {totalDailyPages}
+                  </span>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={dailyPage >= totalDailyPages}
-                  onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Next day page"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={dailyPage <= 1}
+                    onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
+                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                    aria-label="Previous day page"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={dailyPage >= totalDailyPages}
+                    onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
+                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                    aria-label="Next day page"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </>
+            )
           ) : (
             <>
               <span className="font-medium text-focus/80">
@@ -2060,6 +2000,27 @@ export const ExpensePage: React.FC = () => {
         />
       )}
 
+      {/* Delete Day Confirmation Dialog */}
+      {!isAdmin && (
+        <ConfirmModal
+          open={Boolean(deleteConfirmDay)}
+          onOpenChange={(open) => !open && setDeleteConfirmDay(null)}
+          title="Delete Day Expense Records"
+          description={
+            <>
+              Are you sure you want to delete all {deleteConfirmDay?.items.length} expense records for{' '}
+              <strong className="text-focus">{deleteConfirmDay ? formatDisplayDate(deleteConfirmDay.date) : ''}</strong>? This action will remove all disbursements on this day from the ledger.
+            </>
+          }
+          confirmLabel="Delete Day"
+          loadingLabel="Deleting…"
+          variant="destructive"
+          action="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDeleteDay}
+        />
+      )}
+
       {/* Transaction Details & Audit Modal */}
       <AuditTransactionModal
         open={isAuditModalOpen}
@@ -2106,10 +2067,10 @@ export const ExpensePage: React.FC = () => {
               className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-              <span>View Details</span>
+              <span>See Details</span>
             </button>
 
-            {canAuditActions ? (
+            {canAuditActions && (
               <>
                 <button
                   type="button"
@@ -2133,52 +2094,109 @@ export const ExpensePage: React.FC = () => {
                   <span>Flag Discrepancy</span>
                 </button>
               </>
-            ) : !isOwner ? (
-              activeMenuExpense.auditStatus === 'Verified' ? (
-                <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700 border-t border-slate-100 mt-1 pt-1.5">
-                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Locked (Audited)</span>
-                </div>
-              ) : (
+            )}
+          </div>,
+          document.body
+        )}
+
+      {/* Day-Level 3-Dots Portal Menu */}
+      {dayMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed w-52 bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${dayMenu.top}px`,
+              right: `${dayMenu.right}px`,
+              transform: dayMenu.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                toggleDateExpansion(dayMenu.date)
+                setDayMenu(null)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+              <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
+            </button>
+
+            {isCompanyUser && !isOwner && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = dayMenu.items[0]
+                    setDayMenu(null)
+                    if (target) {
+                      navigate('/expense/add', {
+                        state: { editExpense: target },
+                      })
+                    }
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>Edit</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const items = dayMenu.items
+                    const date = dayMenu.date
+                    setDayMenu(null)
+                    if (items && items.length > 0) {
+                      setDeleteConfirmDay({ date, items })
+                    }
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Delete</span>
+                </button>
+              </>
+            )}
+
+            {canAuditActions && (() => {
+              const pending = dayMenu.items.filter((e) => e.auditStatus !== 'Verified' && e.auditStatus !== 'Flagged')
+              return (
                 <>
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      const exp = activeMenuExpense
-                      setOpenMenuExpenseId(null)
-                      setMenuPosition(null)
-                      setActiveMenuExpense(null)
-                      if (exp) {
-                        navigate('/expense/add', {
-                          state: { editExpense: exp },
-                        })
-                      }
+                    disabled={pending.length === 0}
+                    onClick={() => {
+                      pending.forEach((e) => {
+                        handleMarkExpenseAudit(e, 'Verified')
+                      })
+                      setDayMenu(null)
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                    <span>Edit Expense</span>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Mark day as Audited {pending.length > 0 ? `(${pending.length})` : ''}</span>
                   </button>
-
                   <button
                     type="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      const exp = activeMenuExpense
-                      setOpenMenuExpenseId(null)
-                      setMenuPosition(null)
-                      setActiveMenuExpense(null)
-                      if (exp) setDeleteConfirmExpense(exp)
+                    disabled={pending.length === 0}
+                    onClick={() => {
+                      pending.forEach((e) => {
+                        handleMarkExpenseAudit(e, 'Flagged')
+                      })
+                      setDayMenu(null)
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                    <span>Delete Expense</span>
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag Day Discrepancy</span>
                   </button>
                 </>
               )
-            ) : null}
+            })()}
           </div>,
           document.body
         )}

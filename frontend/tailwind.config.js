@@ -40,6 +40,7 @@ export default {
         sans: ['"Inter Variable"', 'InterVariable', 'Inter', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
       },
       fontSize: {
+        '2xs': ['0.6875rem', { lineHeight: '0.875rem' }],
         heading: ['clamp(2.5rem, 3.33vw, 4rem)', { lineHeight: '1.1' }],
         subheading: ['clamp(2rem, 2.5vw, 3rem)', { lineHeight: '1.2' }],
         'page-title': ['clamp(1.75rem, 2.08vw, 2.5rem)', { lineHeight: '1.2' }],
