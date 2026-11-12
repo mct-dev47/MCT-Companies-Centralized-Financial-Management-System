@@ -531,6 +531,9 @@ export const billsService = {
       notes?: string
       billedAmount?: number
       remainingAmount?: number
+      /** Where the money comes from: a company bank account or petty cash */
+      fundingSource?: 'bank' | 'petty_cash'
+      bankAccountId?: string
     }
   ): Promise<BillItem> {
     const validation = validatePaymentInput(payment)
@@ -551,6 +554,8 @@ export const billsService = {
           payment_method: payment.paymentMethod.trim(),
           reference_no: (payment.referenceNo || payment.refNo)?.trim() || null,
           notes: payment.notes?.trim() || null,
+          funding_source: payment.fundingSource || null,
+          bank_account_id: payment.fundingSource === 'bank' ? payment.bankAccountId || null : null,
         }),
       })
       if (!response.ok) {

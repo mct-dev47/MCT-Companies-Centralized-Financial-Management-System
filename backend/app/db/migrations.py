@@ -9,6 +9,16 @@ logger = logging.getLogger(__name__)
 MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations"
 
 
+def _sql_statements(sql: str) -> list[str]:
+    """Split a SQL script into statements, dropping ``--`` comment lines first.
+
+    Comments must go before splitting on ";": a comment that contains a semicolon would otherwise leave
+    its second half behind as a bogus statement (this broke 0051).
+    """
+    body = "\n".join(line for line in sql.splitlines() if not line.strip().startswith("--"))
+    return [stmt.strip() for stmt in body.split(";") if stmt.strip()]
+
+
 def get_applied_migrations(engine: Engine) -> list[str]:
     """
     Returns the list of migration versions already applied to the database.
@@ -280,11 +290,16 @@ def _run_postgresql_migrations(conn) -> list[str]:
     if not result_0050:
         script_0050 = MIGRATIONS_DIR / "0050_receivables_sale_cascade.postgres.sql"
         if script_0050.exists():
-            # One DO block: run it whole (it must not be split on semicolons)
-            conn.exec_driver_sql(script_0050.read_text(encoding="utf-8"))
-            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0050_receivables_sale_cascade')"))
-            applied.append("0050_receivables_sale_cascade")
-            logger.info("Migration 0050_receivables_sale_cascade applied successfully.")
+            # Own savepoint: if this fails, later migrations (e.g. 0051, which bank writes depend on) still apply
+            try:
+                with conn.begin_nested():
+                    # One DO block: run it whole (it must not be split on semicolons)
+                    conn.exec_driver_sql(script_0050.read_text(encoding="utf-8"))
+                    conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0050_receivables_sale_cascade')"))
+                applied.append("0050_receivables_sale_cascade")
+                logger.info("Migration 0050_receivables_sale_cascade applied successfully.")
+            except Exception as exc:
+                logger.error("Migration 0050_receivables_sale_cascade failed and was skipped: %s", exc)
 
     # 17. Check if 0051 is applied
     result_0051 = conn.execute(
@@ -312,13 +327,156 @@ def _run_postgresql_migrations(conn) -> list[str]:
         script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.postgres.sql"
         if script_0052.exists():
             sql_0052 = script_0052.read_text(encoding="utf-8")
-            for stmt in sql_0052.replace("BEGIN;", "").replace("COMMIT;", "").split(";"):
-                body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
-                if body:
-                    conn.execute(text(body))
+            clean_0052 = sql_0052.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            if clean_0052:
+                conn.execute(text(clean_0052))
             conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0052_update_admin_email')"))
             applied.append("0052_update_admin_email")
             logger.info("Migration 0052_update_admin_email applied successfully.")
+
+    # 19. Check if 0053 is applied: bank_transactions.entry_source
+    result_0053 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0053_bank_transactions_entry_source'")
+    ).first()
+
+    if not result_0053:
+        script_0053 = MIGRATIONS_DIR / "0053_bank_transactions_entry_source.postgres.sql"
+        if script_0053.exists():
+            import time as _time
+
+            for attempt in range(1, 4):
+                try:
+                    with conn.begin_nested():
+                        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                        for stmt in _sql_statements(script_0053.read_text(encoding="utf-8")):
+                            conn.execute(text(stmt))
+                        conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0053_bank_transactions_entry_source')"))
+                    applied.append("0053_bank_transactions_entry_source")
+                    logger.info("Migration 0053_bank_transactions_entry_source applied successfully.")
+                    break
+                except Exception as exc:
+                    logger.error("Migration 0053_bank_transactions_entry_source attempt %s failed: %s", attempt, exc)
+                    if attempt < 3:
+                        _time.sleep(2)
+
+    # 20. 0054: client_ref on sales, expenses, receivables (offline queue dedupe, spec 0038)
+    result_0054 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0054_client_ref_idempotency'")
+    ).first()
+
+    if not result_0054:
+        script_0054 = MIGRATIONS_DIR / "0054_client_ref_idempotency.postgres.sql"
+        if script_0054.exists():
+            import time as _time
+
+            for attempt in range(1, 4):
+                try:
+                    with conn.begin_nested():
+                        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                        for stmt in _sql_statements(script_0054.read_text(encoding="utf-8")):
+                            conn.execute(text(stmt))
+                        conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0054_client_ref_idempotency')"))
+                    applied.append("0054_client_ref_idempotency")
+                    logger.info("Migration 0054_client_ref_idempotency applied successfully.")
+                    break
+                except Exception as exc:
+                    logger.error("Migration 0054_client_ref_idempotency attempt %s failed: %s", attempt, exc)
+                    if attempt < 3:
+                        _time.sleep(2)
+
+    # 21. 0055: deleting the last sale/expense of a day deletes that day's remark (trigger + one-time cleanup)
+    result_0055 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0055_daily_remarks_cascade'")
+    ).first()
+
+    if not result_0055:
+        script_0055 = MIGRATIONS_DIR / "0055_daily_remarks_cascade.postgres.sql"
+        if script_0055.exists():
+            try:
+                with conn.begin_nested():
+                    conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                    conn.exec_driver_sql(script_0055.read_text(encoding="utf-8"))
+                    conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0055_daily_remarks_cascade')"))
+                applied.append("0055_daily_remarks_cascade")
+                logger.info("Migration 0055_daily_remarks_cascade applied successfully.")
+            except Exception as exc:
+                logger.error("Migration 0055_daily_remarks_cascade failed and was skipped: %s", exc)
+
+    # 22. 0056: deleting a sale/expense (any way, not only via the API) deletes its bank entries and fixes the balance
+    result_0056 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0056_bank_entries_cascade'")
+    ).first()
+
+    if not result_0056:
+        from app.db.bank_cascade import postgres_script
+
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.exec_driver_sql(postgres_script())
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0056_bank_entries_cascade')"))
+            applied.append("0056_bank_entries_cascade")
+            logger.info("Migration 0056_bank_entries_cascade applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0056_bank_entries_cascade failed and was skipped: %s", exc)
+
+    # 23. 0057: a sale's deposit status may only change together with a matching deposit date (blocks stale
+    #     code, like the old startup backfill on other checkouts, from flipping sales behind the bank's back)
+    result_0057 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0057_sale_deposit_guard'")
+    ).first()
+
+    if not result_0057:
+        from app.db.sale_status_guard import postgres_script as guard_script
+
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.exec_driver_sql(guard_script())
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0057_sale_deposit_guard')"))
+            applied.append("0057_sale_deposit_guard")
+            logger.info("Migration 0057_sale_deposit_guard applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0057_sale_deposit_guard failed and was skipped: %s", exc)
+
+    # 24. 0058: compound performance indexes for high-frequency transaction queries
+    result_0058 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0058_compound_performance_indexes'")
+    ).first()
+
+    if not result_0058:
+        script_0058 = MIGRATIONS_DIR / "0058_compound_performance_indexes.postgres.sql"
+        if script_0058.exists():
+            try:
+                with conn.begin_nested():
+                    with open(script_0058, "r", encoding="utf-8") as f:
+                        for stmt in f.read().split(";"):
+                            clean_stmt = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                            if clean_stmt:
+                                conn.execute(text(clean_stmt))
+                    conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
+                applied.append("0058_compound_performance_indexes")
+                logger.info("Migration 0058_compound_performance_indexes applied successfully.")
+            except Exception as exc:
+                logger.error("Migration 0058_compound_performance_indexes failed and was skipped: %s", exc)
+
+    # 25. 0059: bill payments record their funding source (bank / petty cash) and the expense that moves the money
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+
+    if not result_0059:
+        script_0059 = MIGRATIONS_DIR / "0059_bill_payment_funding.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0059.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+            applied.append("0059_bill_payment_funding")
+            logger.info("Migration 0059_bill_payment_funding applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0059_bill_payment_funding failed and was skipped: %s", exc)
 
     conn.commit()
     return applied
@@ -867,16 +1025,35 @@ def _run_sqlite_migrations(conn) -> list[str]:
         applied.append("0051_auth_data_retention")
         logger.info("SQLite migration 0051_auth_data_retention applied successfully.")
 
+    # Ensure payment_method column exists on sales and expenses in SQLite (schema parity guard)
+    for _tbl in ("sales", "expenses"):
+        _tbl_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": _tbl}
+        ).first()
+        if _tbl_exists:
+            _cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({_tbl})")).fetchall()}
+            if "payment_method" not in _cols:
+                conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN payment_method VARCHAR(100) NULL"))
+
     # 18. Check if 0052 is applied
     result_0052 = conn.execute(
         text("SELECT 1 FROM schema_migrations WHERE version = '0052_update_admin_email'")
     ).first()
 
     if not result_0052:
+        users_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        ).first()
         script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.sqlite.sql"
-        if script_0052.exists():
+        if users_table_exists and script_0052.exists():
+            u_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+            if "is_admin" not in u_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+            if "role" not in u_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) NULL"))
             for statement in script_0052.read_text(encoding="utf-8").split(";"):
-                stmt = statement.strip()
+                lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                stmt = "\n".join(lines).strip()
                 if stmt:
                     conn.execute(text(stmt))
 
@@ -885,6 +1062,113 @@ def _run_sqlite_migrations(conn) -> list[str]:
         )
         applied.append("0052_update_admin_email")
         logger.info("SQLite migration 0052_update_admin_email applied successfully.")
+
+    # 19. 0053: bank_transactions.entry_source
+    result_0053 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0053_bank_transactions_entry_source'")
+    ).first()
+    if not result_0053:
+        tx_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if tx_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "entry_source" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN entry_source VARCHAR(30) NULL"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0053_bank_transactions_entry_source')")
+        )
+        applied.append("0053_bank_transactions_entry_source")
+
+    # 20. 0054: client_ref on sales, expenses, receivables (offline queue dedupe, spec 0038)
+    result_0054 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0054_client_ref_idempotency'")
+    ).first()
+    if not result_0054:
+        for table in ("sales", "expenses", "receivables"):
+            exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": table}
+            ).first()
+            if not exists:
+                continue
+            cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+            if "client_ref" not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN client_ref VARCHAR(64) NULL"))
+            conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{table}_client_ref ON {table} (client_ref)"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0054_client_ref_idempotency')")
+        )
+        applied.append("0054_client_ref_idempotency")
+
+    # 21. 0056: deleting a sale/expense deletes its bank entries and fixes the balance (trigger)
+    result_0056 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0056_bank_entries_cascade'")
+    ).first()
+    if not result_0056:
+        from app.db.bank_cascade import install_sqlite_triggers
+
+        install_sqlite_triggers(conn)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0056_bank_entries_cascade')"))
+        applied.append("0056_bank_entries_cascade")
+
+    # 22. 0057: deposit status only changes together with a matching deposit date (trigger)
+    result_0057 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0057_sale_deposit_guard'")
+    ).first()
+    if not result_0057:
+        from app.db.sale_status_guard import install_sqlite_trigger
+
+        install_sqlite_trigger(conn)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0057_sale_deposit_guard')"))
+        applied.append("0057_sale_deposit_guard")
+
+    # 23. 0058: compound performance indexes for high-frequency queries
+    result_0058 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0058_compound_performance_indexes'")
+    ).first()
+    if not result_0058:
+        index_specs = [
+            ("sales", "CREATE INDEX IF NOT EXISTS idx_sales_company_transaction_date ON sales (company_id, transaction_date DESC)"),
+            ("sales", "CREATE INDEX IF NOT EXISTS idx_sales_company_deposit_status ON sales (company_id, deposit_status, transaction_date DESC)"),
+            ("expenses", "CREATE INDEX IF NOT EXISTS idx_expenses_company_expense_date ON expenses (company_id, expense_date DESC)"),
+            ("bank_transactions", "CREATE INDEX IF NOT EXISTS idx_bank_transactions_account_date ON bank_transactions (bank_account_id, transaction_date DESC)"),
+            ("bills", "CREATE INDEX IF NOT EXISTS idx_bills_company_due_date ON bills (company_id, due_date ASC)"),
+            ("loan", "CREATE INDEX IF NOT EXISTS idx_loan_borrower_date ON loan (borrower, loan_date DESC)"),
+            ("loan", "CREATE INDEX IF NOT EXISTS idx_loan_lender_date ON loan (lender, loan_date DESC)"),
+        ]
+        existing_tables = {
+            row[0]
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        for tbl_name, idx_sql in index_specs:
+            if tbl_name in existing_tables:
+                try:
+                    conn.execute(text(idx_sql))
+                except Exception as exc:
+                    logger.warning("SQLite index skipped on %s: %s", tbl_name, exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
+        applied.append("0058_compound_performance_indexes")
+        logger.info("SQLite migration 0058_compound_performance_indexes applied successfully.")
+
+    # 24. 0059: bill payment funding source, bank account and linked expense
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+    if not result_0059:
+        exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bill_payments'")
+        ).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bill_payments)")).fetchall()}
+            for col_name, col_def in (
+                ("funding_source", "VARCHAR(20) NULL"),
+                ("bank_account_id", "VARCHAR(100) NULL"),
+                ("expense_id", "INTEGER NULL"),
+            ):
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE bill_payments ADD COLUMN {col_name} {col_def}"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+        applied.append("0059_bill_payment_funding")
 
     conn.commit()
     return applied

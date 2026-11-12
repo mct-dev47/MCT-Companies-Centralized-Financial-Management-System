@@ -118,6 +118,28 @@ DUE_SOON_TYPES = {
     NotificationType.PETTY_CASH_LOW_BALANCE,
 }
 
+# Due-date reminders (overdue / due today / tomorrow / soon) for bills, lending, loans and tenants.
+# Only the company SUPERVISOR sees these; Finance and Audit never do.
+DUE_DATE_TYPES = (OVERDUE_TYPES | DUE_TODAY_TYPES | DUE_SOON_TYPES) - {NotificationType.PETTY_CASH_LOW_BALANCE}
+
+SUPERVISOR_ROLES = ("supervisor", "company")
+
+
+def _is_supervisor_role(role: Optional[str]) -> bool:
+    return (role or "supervisor").strip().lower() in SUPERVISOR_ROLES
+
+
+def _remarks_suffix(finance_remark: Optional[str], audit_remark: Optional[str]) -> str:
+    """Every remark Finance and Audit left on a record, so a notification always carries both."""
+    parts = []
+    fin = (finance_remark or "").strip()
+    aud = (audit_remark or "").strip()
+    if fin:
+        parts.append(f"Finance remark: {fin}")
+    if aud:
+        parts.append(f"Audit remark: {aud}")
+    return (" " + " | ".join(parts)) if parts else ""
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -381,9 +403,11 @@ class NotificationService:
             system_cache.set(base_cache_key, deduped, ttl=15, tags=["notifications"])
 
         filtered = deduped
+        if not _is_supervisor_role(effective_role):
+            filtered = [n for n in filtered if n.notification_type not in DUE_DATE_TYPES]
         if notification_type:
             nt = notification_type.upper()
-            filtered = [n for n in deduped if n.notification_type == nt]
+            filtered = [n for n in filtered if n.notification_type == nt]
 
         return filtered[offset: offset + limit]
 
@@ -405,20 +429,35 @@ class NotificationService:
             q = select(func.count(Notification.notification_id)).where(
                 Notification.recipient_user_id == recipient_user_id,
                 Notification.read_at.is_(None),
+                Notification.resolved_at.is_(None),
             )
             if company_id is not None:
                 q = q.where(Notification.company_id == company_id)
+            if not _is_supervisor_role(user_role):
+                q = q.where(Notification.notification_type.notin_(DUE_DATE_TYPES))
             count = self.db.scalar(q)
-            if count is not None and count > 0:
-                return int(count)
 
-            has_any = self.db.scalar(
-                select(func.count(Notification.notification_id)).where(
-                    Notification.recipient_user_id == recipient_user_id
-                )
+            active_q = select(func.count(Notification.notification_id)).where(
+                Notification.recipient_user_id == recipient_user_id,
+                Notification.resolved_at.is_(None),
             )
+            if company_id is not None:
+                active_q = active_q.where(Notification.company_id == company_id)
+            if not _is_supervisor_role(user_role):
+                active_q = active_q.where(Notification.notification_type.notin_(DUE_DATE_TYPES))
+            has_any = self.db.scalar(active_q)
             if has_any and has_any > 0:
-                return 0
+                extra_pc = self._unpersisted_petty_cash_workflow(
+                    recipient_user_id=recipient_user_id,
+                    company_id=company_id,
+                    user_role=user_role,
+                )
+                extra_bills = self._unpersisted_bill_reminders(
+                    recipient_user_id=recipient_user_id,
+                    company_id=company_id,
+                    user_role=user_role,
+                )
+                return int(count or 0) + len(extra_pc) + len(extra_bills)
 
         return len(
             self.get_notifications(
@@ -459,7 +498,9 @@ class NotificationService:
                     computed_status = bills_svc._status(b, as_of=today, periods=periods)
 
                     due_d = (next_p["period_date"] if next_p else None) or b.due_date
-                    if due_d and computed_status != "paid" and next_p is not None:
+                    # The next unpaid period decides (not the overall status, which reads "paid" while the
+                    # upcoming period is still in the future, so "due soon / tomorrow" would never fire).
+                    if due_d and next_p is not None and not next_p.get("paid"):
                         period_key = next_p["period_key"]
                         period_label = next_p["period_label"]
 
@@ -1361,7 +1402,10 @@ class NotificationService:
                         notification_id=_make_id(NotificationType.LOAN_ENDORSED_AUDIT, loan.loan_id),
                         notification_type=NotificationType.LOAN_ENDORSED_AUDIT,
                         title="Loan Endorsed for Audit Review",
-                        message=f"Loan request of ₱{amt:,.2f} for {borrower_name} from {lender_name} (Ref: {ref}) was endorsed by Finance and awaits compliance approval.",
+                        message=(
+                            f"Loan request of ₱{amt:,.2f} for {borrower_name} from {lender_name} (Ref: {ref}) was endorsed by Finance and awaits compliance approval."
+                            + _remarks_suffix(loan.finance_remark, loan.audit_remark)
+                        ),
                         company_id=loan.borrower,
                         reference_type="loan",
                         reference_id=loan.loan_id,
@@ -1389,8 +1433,9 @@ class NotificationService:
                     if is_approved:
                         msg = f"Your loan request of ₱{amt:,.2f} from {lender_name} (Ref: {ref}) has been approved by Internal Audit. Funds disbursed to your account."
                     else:
-                        reason = loan.audit_remark or loan.finance_remark or "Request declined."
-                        msg = f"Your loan request (Ref: {ref}) of ₱{amt:,.2f} was {loan.status.lower()}: {reason}"
+                        msg = f"Your loan request (Ref: {ref}) of ₱{amt:,.2f} was {loan.status.lower()}."
+                    remarks = _remarks_suffix(loan.finance_remark, loan.audit_remark)
+                    msg += remarks if remarks else ("" if is_approved else " Request declined.")
                     results.append(NotificationOut(
                         notification_id=_make_id(ntype, loan.loan_id, loan.status.replace(" ", "_")),
                         notification_type=ntype,
@@ -1580,18 +1625,33 @@ class NotificationService:
             if role in ("finance", "admin"):
                 pending_finance = [
                     t for t in topups
-                    if t.status == "Pending Finance Endorsement"
+                    if (t.status or "").strip().lower() in ("pending finance endorsement", "pending finance approval")
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in pending_finance:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    if req_type == "reimbursement":
+                        tot = topup.total_expenses if topup.total_expenses is not None else amt
+                        title = "Petty Cash Replenishment Request (Finance Endorsement)"
+                        msg = (
+                            f"{cname} submitted a petty cash replenishment claim "
+                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt:,.2f}, Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
+                    else:
+                        title = "Petty Cash Request (Finance Endorsement)"
+                        msg = (
+                            f"{cname} requested a petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
                     results.append(NotificationOut(
                         notification_id=_make_id(NotificationType.PETTY_CASH_REQUEST, topup.topup_id),
                         notification_type=NotificationType.PETTY_CASH_REQUEST,
-                        title="Petty Cash Request (Finance Endorsement)",
-                        message=f"{cname} requested a petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) awaiting your review and endorsement.",
+                        title=title,
+                        message=msg,
                         company_id=topup.company_id,
                         reference_type="petty_cash",
                         reference_id=topup.topup_id,
@@ -1602,18 +1662,23 @@ class NotificationService:
             if role in ("audit", "auditor", "admin"):
                 pending_audit = [
                     t for t in topups
-                    if t.status == "Pending Audit Approval"
+                    if (t.status or "").strip().lower() == "pending audit approval"
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in pending_audit:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    kind_label = "replenishment claim" if req_type == "reimbursement" else "top-up"
                     results.append(NotificationOut(
                         notification_id=_make_id(NotificationType.PETTY_CASH_AUDIT, topup.topup_id),
                         notification_type=NotificationType.PETTY_CASH_AUDIT,
                         title="Petty Cash Audit Compliance Required",
-                        message=f"Petty cash top-up of ₱{amt:,.2f} for {cname} (Ref: {ref}) was endorsed by Finance and awaits Audit approval.",
+                        message=(
+                            f"Petty cash {kind_label} of ₱{amt:,.2f} for {cname} (Ref: {ref}) was endorsed by Finance and awaits Audit approval."
+                            + _remarks_suffix(topup.finance_remark, topup.remark)
+                        ),
                         company_id=topup.company_id,
                         reference_type="petty_cash",
                         reference_id=topup.topup_id,
@@ -1624,22 +1689,39 @@ class NotificationService:
             if role in ("supervisor", "company", "admin"):
                 topup_rows = [
                     t for t in topups
-                    if t.status in ("Approved", "Rejected by Finance", "Disapproved by Audit", "Disapproved")
+                    if (t.status or "").strip().lower() in (
+                        "approved",
+                        "rejected by finance",
+                        "disapproved by audit",
+                        "disapproved",
+                    )
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in topup_rows:
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
-                    is_approved = topup.status == "Approved"
+                    status_str = topup.status or "Approved"
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    kind_noun = "replenishment claim" if req_type == "reimbursement" else "top-up"
+                    is_approved = status_str.strip().lower() == "approved"
                     ntype = NotificationType.PETTY_CASH_APPROVED if is_approved else NotificationType.PETTY_CASH_REJECTED
-                    title = "Petty Cash Top-up Approved" if is_approved else f"Petty Cash {topup.status}"
+                    title = (
+                        ("Petty Cash Replenishment Approved" if req_type == "reimbursement" else "Petty Cash Top-up Approved")
+                        if is_approved
+                        else f"Petty Cash {status_str}"
+                    )
                     if is_approved:
-                        msg = f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                        msg = (
+                            f"Your petty cash replenishment claim of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and is ready for settlement."
+                            if req_type == "reimbursement"
+                            else f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                        )
                     else:
-                        reason = topup.remark or topup.finance_remark or "Request declined."
-                        msg = f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) was {topup.status.lower()}: {reason}"
+                        msg = f"Your petty cash {kind_noun} of ₱{amt:,.2f} (Ref: {ref}) was {status_str.lower()}."
+                    remarks = _remarks_suffix(topup.finance_remark, topup.remark)
+                    msg += remarks if remarks else ("" if is_approved else " Request declined.")
                     results.append(NotificationOut(
-                        notification_id=_make_id(ntype, topup.topup_id, topup.status.replace(" ", "_")),
+                        notification_id=_make_id(ntype, topup.topup_id, status_str.replace(" ", "_")),
                         notification_type=ntype,
                         title=title,
                         message=msg,
@@ -1684,7 +1766,8 @@ class NotificationService:
                     continue
                 if t.reference_no and str(t.reference_no).upper().startswith("SEED-"):
                     continue
-                if (t.status or "Approved").lower() == "approved":
+                req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
+                if (t.status or "Approved").lower() == "approved" and req_type == "topup":
                     amt = Decimal(str(t.amount or 0)).quantize(Decimal("0.01"))
                     topups_by_company[t.company_id] = topups_by_company.get(t.company_id, Decimal("0.00")) + amt
 
@@ -1806,7 +1889,13 @@ class NotificationService:
                         notification_id=_make_id(NotificationType.DEPOSIT_VERIFIED, row.audit_log_id),
                         notification_type=NotificationType.DEPOSIT_VERIFIED,
                         title="Deposit / Sales Verified by Audit",
-                        message=f"Deposit {amt_str}for {cname} has been verified and approved by Internal Audit.",
+                        message=(
+                            f"Deposit {amt_str}for {cname} has been verified and approved by Internal Audit."
+                            + _remarks_suffix(
+                                details.get("finance_remarks") or details.get("finance_remark"),
+                                details.get("audit_remarks") or details.get("audit_remark") or details.get("audit_notes"),
+                            )
+                        ),
                         company_id=row.company_id,
                         reference_type="deposit",
                         reference_id=int(record_id),
@@ -1830,6 +1919,112 @@ DEFAULT_RETENTION_DAYS = 90
 
 
 def _extend_service(cls):
+    def _unpersisted_petty_cash_workflow(
+        self,
+        recipient_user_id: int,
+        company_id: Optional[int] = None,
+        user_role: Optional[str] = None,
+        notification_type: Optional[str] = None,
+    ) -> list[NotificationOut]:
+        """
+        Return computed petty cash workflow alerts that have not yet been persisted as
+        active Notification rows for `recipient_user_id`. Prevents persistent alerts in
+        other modules from hiding live petty cash review items.
+        """
+        role = (user_role or "").strip().lower()
+        if role not in ("finance", "audit", "auditor"):
+            return []
+
+        nt_filter = notification_type.strip().upper() if notification_type else None
+        if nt_filter and nt_filter not in (
+            NotificationType.PETTY_CASH_REQUEST,
+            NotificationType.PETTY_CASH_AUDIT,
+        ):
+            return []
+
+        computed = self._petty_cash_workflow_notifications(
+            user_role=role,
+            company_id=company_id,
+        )
+        if not computed:
+            return []
+
+        from sqlalchemy import select
+        existing_pairs = set(
+            self.db.execute(
+                select(Notification.notification_type, Notification.reference_id).where(
+                    Notification.recipient_user_id == recipient_user_id,
+                    Notification.reference_type == "petty_cash",
+                    Notification.reference_id.isnot(None),
+                    Notification.resolved_at.is_(None),
+                )
+            ).all()
+        )
+        results: list[NotificationOut] = []
+        for item in computed:
+            if item.notification_type not in (
+                NotificationType.PETTY_CASH_REQUEST,
+                NotificationType.PETTY_CASH_AUDIT,
+            ):
+                continue
+            if nt_filter and item.notification_type != nt_filter:
+                continue
+            if (item.notification_type, item.reference_id) in existing_pairs:
+                continue
+            results.append(item)
+        return results
+
+    _BILL_DUE_TYPES = (
+        NotificationType.BILL_OVERDUE,
+        NotificationType.BILL_DUE_TODAY,
+        NotificationType.BILL_DUE_TOMORROW,
+        NotificationType.BILL_DUE_SOON,
+    )
+
+    def _unpersisted_bill_reminders(
+        self,
+        recipient_user_id: int,
+        company_id: Optional[int] = None,
+        user_role: Optional[str] = None,
+        notification_type: Optional[str] = None,
+    ) -> list[NotificationOut]:
+        """
+        Live bill due-date reminders (overdue / due today / due tomorrow / due soon) that are not stored as
+        Notification rows for this user. Due dates are computed, never written by an event, so without this a
+        user with ANY stored notification (e.g. a petty cash request) would never see a bill coming due.
+        A reminder disappears on its own once the period is paid.
+        """
+        if not _is_supervisor_role(user_role):
+            return []
+        nt_filter = notification_type.strip().upper() if notification_type else None
+        if nt_filter and nt_filter not in self._BILL_DUE_TYPES:
+            return []
+
+        # get_notifications is cached (15s), so the bell's polling doesn't recompute every bill each time
+        computed = [
+            n for n in self.get_notifications(company_id=company_id, user_role=user_role, limit=10_000)
+            if n.notification_type in self._BILL_DUE_TYPES
+            and (not nt_filter or n.notification_type == nt_filter)
+        ]
+        if not computed:
+            return []
+
+        from sqlalchemy import select
+        # A stored copy (e.g. from the due-date sweep) is "<computed id>-<user id>"; don't show it twice.
+        stored_ids = set(
+            self.db.scalars(
+                select(Notification.notification_id).where(
+                    Notification.recipient_user_id == recipient_user_id,
+                    Notification.reference_type == "bill",
+                )
+            ).all()
+        )
+        return [
+            n for n in computed
+            if n.notification_id not in stored_ids
+            and f"{n.notification_id}-{recipient_user_id}" not in stored_ids
+        ]
+
     def get_notifications_feed(
         self,
         recipient_user_id: int,
@@ -1842,13 +2037,20 @@ def _extend_service(cls):
         limit: int = 50,
     ) -> NotificationListResponse:
         from sqlalchemy import select, or_, and_
-        query = select(Notification).where(Notification.recipient_user_id == recipient_user_id)
+        query = select(Notification).where(
+            Notification.recipient_user_id == recipient_user_id,
+            Notification.resolved_at.is_(None),
+        )
 
         if company_id is not None:
             query = query.where(Notification.company_id == company_id)
 
         if notification_type:
             query = query.where(Notification.notification_type == notification_type.upper())
+
+        # Due-date reminders are for the company supervisor only
+        if not _is_supervisor_role(user_role):
+            query = query.where(Notification.notification_type.notin_(DUE_DATE_TYPES))
 
         if cursor:
             try:
@@ -1878,7 +2080,7 @@ def _extend_service(cls):
 
         items = self.db.scalars(query.limit(limit + 1)).all()
         
-        # If persistent table has no items for this user yet, fallback to computed items
+        # If persistent table has no active items for this user yet, fallback to computed items
         if not items and not cursor:
             computed = self.get_notifications(
                 company_id=company_id,
@@ -1894,14 +2096,39 @@ def _extend_service(cls):
                 total_unread=len(computed),
             )
 
-        has_more = len(items) > limit
-        results = items[:limit]
+        extra_pc = (
+            self._unpersisted_petty_cash_workflow(
+                recipient_user_id=recipient_user_id,
+                company_id=company_id,
+                user_role=user_role,
+                notification_type=notification_type,
+            )
+            if not cursor
+            else []
+        )
+        # Bill due-date reminders always show, even when the user has other stored notifications
+        extra_pc = extra_pc + (
+            self._unpersisted_bill_reminders(
+                recipient_user_id=recipient_user_id,
+                company_id=company_id,
+                user_role=user_role,
+                notification_type=notification_type,
+            )
+            if not cursor
+            else []
+        )
+
+        available_for_persistent = max(0, limit - len(extra_pc))
+        has_more = len(items) > available_for_persistent
+        results = items[:available_for_persistent]
 
         next_cursor = None
         if results:
             last = results[-1]
             c_dt = last.created_at.isoformat() if last.created_at else datetime.now(timezone.utc).isoformat()
             next_cursor = f"{c_dt}|{last.notification_id}"
+
+        combined_items = extra_pc[:limit] + [NotificationOut.model_validate(n) for n in results]
 
         # Get total unread count for this recipient & company scope
         effective_scope_key = user_scope_key or (f"u:{recipient_user_id}:r:{user_role}:c:{company_id}" if user_role else f"u:{recipient_user_id}:c:{company_id}")
@@ -1913,7 +2140,7 @@ def _extend_service(cls):
         )
 
         return NotificationListResponse(
-            items=[NotificationOut.model_validate(n) for n in results],
+            items=combined_items,
             next_cursor=next_cursor,
             has_more=has_more,
             total_unread=unread_count,
@@ -2024,6 +2251,12 @@ def _extend_service(cls):
             self.db.commit()
             return len(rows)
 
+    def _sync_extend_service_attach(cls):
+        cls._unpersisted_petty_cash_workflow = _unpersisted_petty_cash_workflow
+        cls._BILL_DUE_TYPES = _BILL_DUE_TYPES
+        cls._unpersisted_bill_reminders = _unpersisted_bill_reminders
+    _sync_extend_service_attach(cls)
+
     cls.get_notifications_feed = get_notifications_feed
     cls.mark_as_read = mark_as_read
     cls.mark_all_as_read = mark_all_as_read
@@ -2068,7 +2301,12 @@ def run_temporal_due_date_sweep(session_factory: Callable[[], Session]) -> dict:
                 recipients = resolve_event_recipients(
                     db=db,
                     company_id=item.company_id,
-                    target_roles=["supervisor", "finance"],
+                    # Due-date reminders go to the company supervisor only
+                    target_roles=(
+                        ["supervisor", "company"]
+                        if item.notification_type in DUE_DATE_TYPES
+                        else ["supervisor", "finance"]
+                    ),
                     target_user_ids=[],
                 )
                 for uid in recipients:

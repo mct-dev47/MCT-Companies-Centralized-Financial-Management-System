@@ -25,14 +25,24 @@ import {
   CheckCircle2,
   RotateCw,
   FolderOpen,
+  ChevronDown,
+  Landmark,
+  Search,
 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatRealName } from '@/utils/formatRealName'
 import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
 import { loanService } from '@/services/loanService'
-import { pettyCashService, type PettyCashLedgerEntry, type PettyCashCategory } from '@/services/pettyCashService'
+import {
+  pettyCashService,
+  type PettyCashLedgerEntry,
+  type PettyCashCategory,
+  type EligibleExpense,
+} from '@/services/pettyCashService'
 import { particularsService, type CompanyParticular } from '@/services/particularsService'
 import { cn } from '@/lib/utils'
 
@@ -41,7 +51,13 @@ export interface ReimbursementModalProps {
   onOpenChange: (open: boolean) => void
   company: string
   currentBalance?: number | null
+  unreservedBalance?: number | null
+  unreservedBalances?: Record<string, number>
   companies?: string[]
+  bankAccounts?: BankAccount[]
+  banksLoading?: boolean
+  banksError?: string | null
+  onRetryBanks?: () => void
   onSuccess?: (newRecord?: PettyCashLedgerEntry) => void
 }
 
@@ -65,6 +81,14 @@ export interface UploadedFileItem {
 
 const todayIso = () => formatToYYYYMMDD(new Date())
 
+/**
+ * Strips unnecessary leading zeroes before another digit (e.g. "05" -> "5", "00.5" -> "0.5"),
+ * while keeping empty string, single "0", and decimals like "0.25" intact.
+ */
+function sanitizeDecimalInput(value: string): string {
+  return value.replace(/^0+(?=\d)/, '')
+}
+
 function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B'
   const k = 1024
@@ -78,7 +102,13 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   onOpenChange,
   company,
   currentBalance = 0,
+  unreservedBalance,
+  unreservedBalances,
   companies = [],
+  bankAccounts: initialBankAccounts,
+  banksLoading = false,
+  banksError = null,
+  onRetryBanks,
   onSuccess,
 }) => {
   const { user } = useSession()
@@ -108,10 +138,26 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   ])
 
   // Funding Breakdown (Bi-directional)
-  const [companyFundedAmount, setCompanyFundedAmount] = React.useState('0')
-  const [employeeOutOfPocketAmount, setEmployeeOutOfPocketAmount] = React.useState('0')
+  const [companyFundedAmount, setCompanyFundedAmount] = React.useState('')
+  const [employeeOutOfPocketAmount, setEmployeeOutOfPocketAmount] = React.useState('')
   const [isPreRecorded, setIsPreRecorded] = React.useState(false)
   const [existingExpenseId, setExistingExpenseId] = React.useState('')
+  const [eligibleExpenses, setEligibleExpenses] = React.useState<EligibleExpense[]>([])
+  const [eligibleLoading, setEligibleLoading] = React.useState(false)
+  const [eligibleError, setEligibleError] = React.useState<string | null>(null)
+  const [expenseSearchQuery, setExpenseSearchQuery] = React.useState('')
+  const [isExpenseDropdownOpen, setIsExpenseDropdownOpen] = React.useState(false)
+  const [selectedEligibleExpense, setSelectedEligibleExpense] = React.useState<EligibleExpense | null>(null)
+  const expenseDropdownRef = React.useRef<HTMLDivElement | null>(null)
+
+  // Finance Direct-Endorsement Funding Bank
+  const [localBankAccounts, setLocalBankAccounts] = React.useState<BankAccount[]>(initialBankAccounts || [])
+  const [localBanksLoading, setLocalBanksLoading] = React.useState(false)
+  const [localBanksError, setLocalBanksError] = React.useState<string | null>(null)
+  const [fundingBankId, setFundingBankId] = React.useState('')
+  const prevOpenRef = React.useRef(false)
+  const prevBankCompanyRef = React.useRef('')
+  const banksAutoSelectedRef = React.useRef(false)
 
   // Receipt Files
   const [attachments, setAttachments] = React.useState<UploadedFileItem[]>([])
@@ -134,6 +180,41 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
   // Companies Data
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
+
+  // Effective bank list & fetch fallback
+  const effectiveBankAccounts = React.useMemo(() => {
+    if (initialBankAccounts && initialBankAccounts.length > 0) return initialBankAccounts
+    return localBankAccounts
+  }, [initialBankAccounts, localBankAccounts])
+
+  const effectiveBanksLoading = Boolean(banksLoading) || localBanksLoading
+  const effectiveBanksError = banksError || localBanksError
+
+  const fetchFallbackBanks = React.useCallback(async (forceRefresh = false) => {
+    setLocalBanksLoading(true)
+    setLocalBanksError(null)
+    try {
+      const accounts = await bankService.getAccounts(undefined, { forceRefresh })
+      setLocalBankAccounts(accounts || [])
+    } catch (err: any) {
+      setLocalBanksError(err instanceof Error ? err.message : 'Could not load bank accounts.')
+    } finally {
+      setLocalBanksLoading(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (initialBankAccounts && initialBankAccounts.length > 0) {
+      setLocalBankAccounts(initialBankAccounts)
+      setLocalBanksError(null)
+    }
+  }, [initialBankAccounts])
+
+  React.useEffect(() => {
+    if (open && isFinance && (!initialBankAccounts || initialBankAccounts.length === 0)) {
+      void fetchFallbackBanks(false)
+    }
+  }, [open, isFinance, initialBankAccounts, fetchFallbackBanks])
 
   // Load companies
   React.useEffect(() => {
@@ -233,6 +314,18 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     }
   }, [open, requestingCompany])
 
+  // Effective unreserved petty cash balance for the selected company
+  const effectiveUnreservedBalance = React.useMemo(() => {
+    if (
+      unreservedBalances &&
+      requestingCompany &&
+      typeof unreservedBalances[requestingCompany] === 'number'
+    ) {
+      return unreservedBalances[requestingCompany]
+    }
+    return unreservedBalance ?? currentBalance ?? 0
+  }, [unreservedBalances, requestingCompany, unreservedBalance, currentBalance])
+
   // Reset form when modal opens
   React.useEffect(() => {
     if (open) {
@@ -245,10 +338,18 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setPaidBy(formatRealName(user?.fullName || user?.name || user?.email || ''))
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
-      setCompanyFundedAmount('0')
-      setEmployeeOutOfPocketAmount('0')
+      setCompanyFundedAmount('')
+      setEmployeeOutOfPocketAmount('')
       setIsPreRecorded(false)
       setExistingExpenseId('')
+      setEligibleExpenses([])
+      setEligibleError(null)
+      setExpenseSearchQuery('')
+      setIsExpenseDropdownOpen(false)
+      setSelectedEligibleExpense(null)
+      setFundingBankId('')
+      prevBankCompanyRef.current = ''
+      banksAutoSelectedRef.current = false
       setAttachments([])
       setGeneralError('')
       setFieldErrors({})
@@ -262,16 +363,97 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     }
   }, [open, company, user])
 
-  // Close combobox when clicking outside
+  // Auto-preselect sole-owned funding bank of requesting company for Finance users
+  React.useEffect(() => {
+    if (!open || !isFinance) {
+      prevOpenRef.current = open
+      if (!open) banksAutoSelectedRef.current = false
+      return
+    }
+    const compChanged = prevBankCompanyRef.current !== requestingCompany
+    const justOpened = !prevOpenRef.current && open
+    prevOpenRef.current = open
+
+    if (justOpened || compChanged) {
+      banksAutoSelectedRef.current = false
+      prevBankCompanyRef.current = requestingCompany
+      if (effectiveBankAccounts.length === 0) {
+        setFundingBankId('')
+      }
+    }
+
+    if (effectiveBankAccounts.length > 0 && requestingCompany && !banksAutoSelectedRef.current) {
+      const ownAccount = preferSoleOwnedBanks(
+        effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)),
+        requestingCompany
+      )[0]
+      setFundingBankId(ownAccount ? ownAccount.id : '')
+      banksAutoSelectedRef.current = true
+    }
+  }, [open, isFinance, requestingCompany, effectiveBankAccounts])
+
+  // Close combobox / eligible-expense dropdown when clicking outside
   React.useEffect(() => {
     const handleDocClick = (e: MouseEvent) => {
       if (comboboxContainerRef.current && !comboboxContainerRef.current.contains(e.target as Node)) {
         setActiveComboboxId(null)
       }
+      if (expenseDropdownRef.current && !expenseDropdownRef.current.contains(e.target as Node)) {
+        setIsExpenseDropdownOpen(false)
+      }
     }
     document.addEventListener('mousedown', handleDocClick)
     return () => document.removeEventListener('mousedown', handleDocClick)
   }, [])
+
+  const loadEligibleExpenses = React.useCallback(
+    async (queryText: string) => {
+      if (!requestingCompany) {
+        setEligibleExpenses([])
+        return
+      }
+      setEligibleLoading(true)
+      setEligibleError(null)
+      try {
+        const list = await pettyCashService.getEligibleExpenses(requestingCompany, queryText, 50)
+        setEligibleExpenses(list)
+      } catch (err: any) {
+        setEligibleError(err instanceof Error ? err.message : 'Failed to load eligible expenses.')
+      } finally {
+        setEligibleLoading(false)
+      }
+    },
+    [requestingCompany]
+  )
+
+  // Clear selected pre-recorded expense when requestingCompany switches
+  const prevExpenseCompanyRef = React.useRef('')
+  React.useEffect(() => {
+    if (!open) {
+      prevExpenseCompanyRef.current = ''
+      return
+    }
+    if (prevExpenseCompanyRef.current && prevExpenseCompanyRef.current !== requestingCompany) {
+      setSelectedEligibleExpense(null)
+      setExistingExpenseId('')
+      setExpenseSearchQuery('')
+    }
+    prevExpenseCompanyRef.current = requestingCompany
+  }, [open, requestingCompany])
+
+  // Fetch company-scoped eligible expenses when pre-recorded toggle is enabled or search changes
+  React.useEffect(() => {
+    if (!open || !isPreRecorded || !requestingCompany) return
+    let active = true
+    const timer = window.setTimeout(() => {
+      if (!active) return
+      void loadEligibleExpenses(expenseSearchQuery)
+    }, expenseSearchQuery ? 200 : 0)
+    return () => {
+      active = false
+      window.clearTimeout(timer)
+    }
+  }, [open, isPreRecorded, requestingCompany, expenseSearchQuery, loadEligibleExpenses])
 
   // Check if form has unsaved modifications
   const isDirty = React.useMemo(() => {
@@ -318,8 +500,26 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const cVal = parseFloat(companyFundedAmount) || 0
     const clampedC = Math.min(grandTotal, Math.max(0, cVal))
     const oVal = Math.max(0, Math.round((grandTotal - clampedC) * 100) / 100)
-    setEmployeeOutOfPocketAmount(String(oVal))
+    setEmployeeOutOfPocketAmount(oVal > 0 ? String(oVal) : '')
   }, [grandTotal])
+
+  const handleSelectEligibleExpense = (exp: EligibleExpense) => {
+    setSelectedEligibleExpense(exp)
+    setExistingExpenseId(String(exp.expenseId))
+    setIsExpenseDropdownOpen(false)
+    const roundedAmt = Math.round(Number(exp.amount || 0) * 100) / 100
+    setCompanyFundedAmount(String(roundedAmt))
+    const compO = Math.max(0, Math.round((grandTotal - roundedAmt) * 100) / 100)
+    setEmployeeOutOfPocketAmount(compO > 0 ? String(compO) : '')
+    if (fieldErrors.existingExpenseId || fieldErrors.companyFunded) {
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next.existingExpenseId
+        delete next.companyFunded
+        return next
+      })
+    }
+  }
 
   const companyFundedNum = React.useMemo(() => {
     const n = parseFloat(companyFundedAmount)
@@ -629,6 +829,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
     const totalAmount = validLines.reduce((acc, l) => acc + l.amount, 0)
     const roundedTotal = Math.round(totalAmount * 100) / 100
+
+    // Check if any file is still uploading
+    const isFileUploading = attachments.some((att) => att.status === 'uploading')
+    if (isFileUploading) {
+      setGeneralError('Please wait for files to finish uploading before submitting.')
+      return
+    }
+
     const parsedCompanyFunded = parseFloat(companyFundedAmount)
     const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
     const parsedOutOfPocket = parseFloat(employeeOutOfPocketAmount)
@@ -638,6 +846,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       errors.companyFunded = 'Company petty cash amount cannot be negative.'
     } else if (validCompanyFunded > roundedTotal) {
       errors.companyFunded = 'Company petty cash portion cannot exceed total expenses.'
+    } else if (!isPreRecorded && validCompanyFunded > 0 && validCompanyFunded > effectiveUnreservedBalance) {
+      errors.companyFunded = `Paid from company petty cash (${formatPHP(validCompanyFunded)}) exceeds available unreserved petty cash (${formatPHP(effectiveUnreservedBalance)}).`
     }
 
     if (validOutOfPocket < 0) {
@@ -654,17 +864,27 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     if (isPreRecorded) {
       const expIdNum = parseInt(existingExpenseId.trim(), 10)
       if (!existingExpenseId.trim() || isNaN(expIdNum) || expIdNum <= 0) {
-        errors.existingExpenseId = 'Please enter a valid positive Expense ID.'
+        errors.existingExpenseId = 'Please select an eligible pre-recorded Petty Cash expense.'
       } else {
         parsedExpenseId = expIdNum
       }
     }
 
-    // Check if any file is still uploading
-    const isFileUploading = attachments.some((att) => att.status === 'uploading')
-    if (isFileUploading) {
-      setGeneralError('Please wait for files to finish uploading before submitting.')
-      return
+    const netOutOfPocketCheck = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
+    const isZeroExcessSubmit = roundedTotal > 0 && netOutOfPocketCheck === 0
+    const ownCompanyBanksForSubmit = requestingCompany
+      ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
+      : effectiveBankAccounts
+    const selectedBankForSubmit = ownCompanyBanksForSubmit.find(
+      (acc) => String(acc.id) === String(fundingBankId)
+    )
+
+    if (isFinance && !isZeroExcessSubmit) {
+      if (!fundingBankId || !selectedBankForSubmit) {
+        errors.fundingBank = requestingCompany
+          ? `Please choose a funding bank account belonging to ${requestingCompany} before submitting to Internal Audit.`
+          : 'Please choose a funding bank account before submitting to Internal Audit.'
+      }
     }
 
     // If there are validation errors, block submit
@@ -688,9 +908,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
       const combinedDescription = validLines.map((l) => l.particulars).join(', ')
       const netOutOfPocket = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
+      const roundedCompanyFunded = Math.round(validCompanyFunded * 100) / 100
       const primaryReceiptUrl = uploadedAttachments[0]?.file_url || null
+      const httpReceiptUrl =
+        primaryReceiptUrl && primaryReceiptUrl.startsWith('data:') ? null : primaryReceiptUrl
       const attachmentsJson = uploadedAttachments.length > 0 ? JSON.stringify(uploadedAttachments) : null
-      const targetStatus = isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval'
+      const targetStatus = isZeroExcessSubmit
+        ? 'Settled'
+        : (isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval')
 
       await pettyCashService.createTopUp({
         company: requestingCompany,
@@ -701,25 +926,32 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         status: targetStatus,
         request_type: 'reimbursement',
         paid_by: paidBy.trim(),
-        receipt_url: primaryReceiptUrl,
+        receipt_url: httpReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
         category: category.trim(),
-        finance_remark: remarks.trim() || undefined,
-        endorsement_remark: remarks.trim() || undefined,
+        bank_account_id: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
+        finance_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
+        endorsement_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
         total_expenses: roundedTotal,
-        company_funded_amount: Math.round(validCompanyFunded * 100) / 100,
+        company_funded_amount: roundedCompanyFunded,
         employee_out_of_pocket: netOutOfPocket,
         existing_expense_id: parsedExpenseId,
       })
 
-      notifySuccess('Replenishment request submitted successfully.')
+      notifySuccess(
+        isZeroExcessSubmit
+          ? 'Petty cash disbursement deducted immediately.'
+          : roundedCompanyFunded > 0 && !parsedExpenseId
+          ? 'Company petty cash deducted immediately; excess out-of-pocket claim submitted.'
+          : 'Reimbursement request submitted successfully.'
+      )
 
       const newEntry: PettyCashLedgerEntry = {
         id: `pc-${Date.now()}`,
         recordId: Date.now(),
-        type: 'request',
-        requestType: 'reimbursement',
+        type: isZeroExcessSubmit ? 'expense' : 'request',
+        requestType: isZeroExcessSubmit ? 'replenishment_disbursement' : 'reimbursement',
         companyName: requestingCompany,
         date: expenseDate,
         description: combinedDescription,
@@ -728,22 +960,35 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         receiptUrl: primaryReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
-        amountRequested: netOutOfPocket,
+        amountRequested: isZeroExcessSubmit ? roundedCompanyFunded : netOutOfPocket,
         totalExpenses: roundedTotal,
-        companyFundedAmount: Math.round(validCompanyFunded * 100) / 100,
+        companyFundedAmount: roundedCompanyFunded,
         employeeOutOfPocket: netOutOfPocket,
         existingExpenseId: parsedExpenseId || undefined,
+        fundingBankId: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
+        fundingBankName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.bankName : undefined,
+        fundingAccountName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.accountName : undefined,
+        fundingCompanyName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.companyName : undefined,
+        isOwnAccount: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? true : undefined,
+        financeRemark: !isZeroExcessSubmit && isFinance && remarks.trim() ? remarks.trim() : undefined,
         amountIn: 0,
-        amountOut: 0,
+        amountOut: isZeroExcessSubmit && !parsedExpenseId ? roundedCompanyFunded : 0,
         runningBalance: currentBalance || 0,
-        status: targetStatus,
+        status: isZeroExcessSubmit ? '' : targetStatus,
+        auditStatus: isZeroExcessSubmit ? 'Pending Audit' : null,
         createdAt: new Date().toISOString(),
       }
 
       onSuccess?.(newEntry)
       onOpenChange(false)
     } catch (err: any) {
-      setGeneralError(formatUserFriendlyErrorMessage(err, 'Failed to submit replenishment request.'))
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to submit reimbursement request.')
+      setGeneralError(msg)
+      if (isPreRecorded && /already claimed|already associated|not found/i.test(msg)) {
+        setSelectedEligibleExpense(null)
+        setExistingExpenseId('')
+        void loadEligibleExpenses(expenseSearchQuery)
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -774,10 +1019,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               </div>
               <div>
                 <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-                  Replenishment Request
+                  Reimbursement Request
                 </DialogTitle>
                 <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-                  For expenses paid from company petty cash and out-of-pocket replenishment.
+                  For expenses paid out of pocket or split with company petty cash.
                 </DialogDescription>
               </div>
             </div>
@@ -1189,16 +1434,15 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               )}
             </div>
 
-            {/* Funding Breakdown (Spec 0038) */}
             <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-bold text-focus flex items-center gap-1.5">
                   <Building2 className="w-4 h-4 text-primary" />
                   <span>Funding Breakdown</span>
                 </div>
                 {employeeOutOfPocket === 0 && grandTotal > 0 && (
-                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                    Zero excess claim (Float settlement only)
+                  <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                    100% Company Petty Cash (Deducts Immediately)
                   </span>
                 )}
               </div>
@@ -1216,13 +1460,16 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     min="0"
                     placeholder="0.00"
                     value={companyFundedAmount}
+                    onFocus={() => {
+                      if (companyFundedAmount === '0') setCompanyFundedAmount('')
+                    }}
                     onChange={(e) => {
-                      const val = e.target.value
+                      const val = sanitizeDecimalInput(e.target.value)
                       setCompanyFundedAmount(val)
                       const parsedC = parseFloat(val)
                       const validC = isNaN(parsedC) ? 0 : parsedC
                       const compO = Math.max(0, Math.round((grandTotal - validC) * 100) / 100)
-                      setEmployeeOutOfPocketAmount(String(compO))
+                      setEmployeeOutOfPocketAmount(compO > 0 ? String(compO) : '')
                       if (fieldErrors.companyFunded) {
                         setFieldErrors((prev) => {
                           const n = { ...prev }
@@ -1240,7 +1487,9 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
                   )}
                   <p className="text-[10.5px] text-muted-fg">
-                    Enter ₱0.00 if paid entirely out of pocket.
+                    {isPreRecorded
+                      ? 'Matched to your selected pre-recorded expense.'
+                      : `Available float: ${formatPHP(effectiveUnreservedBalance)}. Deducts immediately on save.`}
                   </p>
                 </div>
 
@@ -1256,13 +1505,16 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     min="0"
                     placeholder="0.00"
                     value={employeeOutOfPocketAmount}
+                    onFocus={() => {
+                      if (employeeOutOfPocketAmount === '0') setEmployeeOutOfPocketAmount('')
+                    }}
                     onChange={(e) => {
-                      const val = e.target.value
+                      const val = sanitizeDecimalInput(e.target.value)
                       setEmployeeOutOfPocketAmount(val)
                       const parsedO = parseFloat(val)
                       const validO = isNaN(parsedO) ? 0 : parsedO
                       const compC = Math.max(0, Math.round((grandTotal - validO) * 100) / 100)
-                      setCompanyFundedAmount(String(compC))
+                      setCompanyFundedAmount(compC > 0 ? String(compC) : '')
                       if (fieldErrors.companyFunded) {
                         setFieldErrors((prev) => {
                           const n = { ...prev }
@@ -1277,10 +1529,96 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     )}
                   />
                   <p className="text-[10.5px] text-muted-fg">
-                    Net amount to be disbursed to employee.
+                    {employeeOutOfPocket === 0 && grandTotal > 0
+                      ? '₱0.00 out of pocket — skips Finance/Audit approval queue.'
+                      : 'Goes to Finance & Audit approval for employee reimbursement.'}
                   </p>
                 </div>
               </div>
+
+              {employeeOutOfPocket === 0 && grandTotal > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800 font-medium">
+                  Covered 100% by company petty cash: deducts immediately with no Finance endorsement or bank payout needed, and tracks under Audit Status.
+                </div>
+              )}
+
+              {/* Finance Funding Bank Selection (direct endorsement to Internal Audit) */}
+              {isFinance && !(employeeOutOfPocket === 0 && grandTotal > 0) && (
+                <div className="pt-2.5 border-t border-stroke/20 space-y-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="reimbursement-funding-bank" className="text-xs font-semibold text-focus flex items-center gap-1.5">
+                      <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
+                      <span>Funding Bank Account</span>
+                      {employeeOutOfPocket === 0 && grandTotal > 0 ? (
+                        <span className="text-[10.5px] font-normal text-muted-fg">(Optional for float-only settlement)</span>
+                      ) : (
+                        <span className="text-red-500">*</span>
+                      )}
+                    </Label>
+                    {effectiveBanksLoading && effectiveBankAccounts.length === 0 ? (
+                      <Skeleton className="h-10 w-full rounded-xl" aria-label="Loading bank accounts" />
+                    ) : effectiveBanksError && effectiveBankAccounts.length === 0 ? (
+                      <div className="h-10 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
+                        <span className="truncate" title={effectiveBanksError}>Couldn't load bank accounts.</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onRetryBanks) onRetryBanks()
+                            void fetchFallbackBanks(true)
+                          }}
+                          className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <select
+                          id="reimbursement-funding-bank"
+                          value={fundingBankId}
+                          onChange={(e) => {
+                            setFundingBankId(e.target.value)
+                            if (fieldErrors.fundingBank) {
+                              setFieldErrors((prev) => {
+                                const next = { ...prev }
+                                delete next.fundingBank
+                                return next
+                              })
+                            }
+                          }}
+                          className={cn(
+                            'w-full h-10 pl-3 pr-9 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none appearance-none cursor-pointer',
+                            fieldErrors.fundingBank ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                          )}
+                        >
+                          <option value="" disabled={!(employeeOutOfPocket === 0 && grandTotal > 0)}>
+                            Choose the bank that funds this reimbursement...
+                          </option>
+                          {(requestingCompany
+                            ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
+                            : effectiveBankAccounts
+                          ).map((acc) => (
+                            <option key={acc.id} value={acc.id}>
+                              {acc.bankName} ({acc.accountName}) [{acc.companyName}]
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                      </div>
+                    )}
+                    {fieldErrors.fundingBank && (
+                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.fundingBank}</p>
+                    )}
+                    {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : effectiveBankAccounts.length === 0) && (
+                      <p className="text-[11px] text-amber-700 font-medium">
+                        {requestingCompany
+                          ? `No bank accounts registered for ${requestingCompany}. Add a bank account for this company before endorsing with reimbursement.`
+                          : 'No bank accounts found. Add a bank account before endorsing with reimbursement.'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Pre-recorded expense checkbox */}
               <div className="pt-2 border-t border-stroke/20 space-y-2">
@@ -1292,6 +1630,9 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       setIsPreRecorded(e.target.checked)
                       if (!e.target.checked) {
                         setExistingExpenseId('')
+                        setSelectedEligibleExpense(null)
+                        setExpenseSearchQuery('')
+                        setIsExpenseDropdownOpen(false)
                         if (fieldErrors.existingExpenseId) {
                           setFieldErrors((prev) => {
                             const n = { ...prev }
@@ -1299,6 +1640,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                             return n
                           })
                         }
+                      } else {
+                        setIsExpenseDropdownOpen(true)
                       }
                     }}
                     className="mt-0.5 rounded border-stroke/50 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
@@ -1312,30 +1655,126 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 </label>
 
                 {isPreRecorded && (
-                  <div className="pl-6 space-y-1">
-                    <Label htmlFor="existing-expense-id" className="text-xs font-semibold text-focus">
-                      Existing expense ID <span className="text-red-500">*</span>
-                    </Label>
-                    <Input
-                      id="existing-expense-id"
-                      type="number"
-                      placeholder="e.g. 1024"
-                      value={existingExpenseId}
-                      onChange={(e) => {
-                        setExistingExpenseId(e.target.value)
-                        if (fieldErrors.existingExpenseId) {
-                          setFieldErrors((prev) => {
-                            const n = { ...prev }
-                            delete n.existingExpenseId
-                            return n
-                          })
-                        }
-                      }}
-                      className={cn(
-                        'h-9 max-w-xs rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs',
-                        fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                  <div ref={expenseDropdownRef} className="pl-6 space-y-1.5 relative">
+                    <Label htmlFor="eligible-expense-search" className="text-xs font-semibold text-focus flex items-center justify-between">
+                      <span>
+                        Pre-recorded Petty Cash expense <span className="text-red-500">*</span>
+                      </span>
+                      {requestingCompany && (
+                        <span className="text-[10.5px] font-normal text-muted-fg">
+                          Scoped to {requestingCompany}
+                        </span>
                       )}
-                    />
+                    </Label>
+
+                    {selectedEligibleExpense ? (
+                      <div
+                        className={cn(
+                          'flex items-center justify-between gap-2 px-3 py-2 rounded-xl border bg-white text-xs shadow-2xs',
+                          fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-emerald-300 bg-emerald-50/40'
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <div className="font-semibold text-focus truncate">
+                            #{selectedEligibleExpense.expenseId} · {selectedEligibleExpense.particulars || 'Petty Cash Expense'}
+                          </div>
+                          <div className="text-[11px] text-muted-fg flex items-center gap-2 mt-0.5">
+                            <span>{selectedEligibleExpense.expenseDate}</span>
+                            {selectedEligibleExpense.category && <span>· {selectedEligibleExpense.category}</span>}
+                            {selectedEligibleExpense.referenceNo && <span>· {selectedEligibleExpense.referenceNo}</span>}
+                            <span className="font-semibold text-emerald-700 tabular-nums">
+                              · {formatPHP(selectedEligibleExpense.amount)}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedEligibleExpense(null)
+                            setExistingExpenseId('')
+                            setIsExpenseDropdownOpen(true)
+                          }}
+                          className="p-1 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 shrink-0 cursor-pointer"
+                          title="Change selected expense"
+                          aria-label="Clear selected expense"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <Input
+                          id="eligible-expense-search"
+                          type="text"
+                          autoComplete="off"
+                          placeholder={`Search unclaimed Petty Cash expenses for ${requestingCompany || 'company'}...`}
+                          value={expenseSearchQuery}
+                          onFocus={() => setIsExpenseDropdownOpen(true)}
+                          onChange={(e) => {
+                            setExpenseSearchQuery(e.target.value)
+                            setIsExpenseDropdownOpen(true)
+                          }}
+                          className={cn(
+                            'h-9 pl-8 pr-8 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs',
+                            fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
+                          )}
+                        />
+                        <ChevronDown className="w-3.5 h-3.5 text-muted-fg absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+
+                        {isExpenseDropdownOpen && (
+                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-stroke/40 bg-white shadow-lg p-1 space-y-0.5">
+                            {eligibleLoading ? (
+                              <div className="p-2 space-y-1.5">
+                                <Skeleton className="h-8 w-full rounded-lg" />
+                                <Skeleton className="h-8 w-full rounded-lg" />
+                              </div>
+                            ) : eligibleError ? (
+                              <div className="p-2.5 rounded-lg bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
+                                <span className="truncate">{eligibleError}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => void loadEligibleExpenses(expenseSearchQuery)}
+                                  className="font-semibold underline underline-offset-2 shrink-0 cursor-pointer"
+                                >
+                                  Retry
+                                </button>
+                              </div>
+                            ) : eligibleExpenses.length === 0 ? (
+                              <div className="p-3 text-xs text-muted-fg text-center">
+                                {expenseSearchQuery.trim()
+                                  ? `No unclaimed Petty Cash expenses matching "${expenseSearchQuery.trim()}".`
+                                  : `No unclaimed Petty Cash expenses found for ${requestingCompany || 'this company'}.`}
+                              </div>
+                            ) : (
+                              eligibleExpenses.map((exp) => (
+                                <button
+                                  key={exp.expenseId}
+                                  type="button"
+                                  onClick={() => handleSelectEligibleExpense(exp)}
+                                  className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 focus:bg-slate-50 transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="text-xs font-semibold text-focus truncate">
+                                      #{exp.expenseId} · {exp.particulars || 'Petty Cash Expense'}
+                                    </div>
+                                    <div className="text-[10.5px] text-muted-fg truncate">
+                                      {exp.expenseDate}
+                                      {exp.category ? ` · ${exp.category}` : ''}
+                                      {exp.referenceNo ? ` · ${exp.referenceNo}` : ''}
+                                    </div>
+                                  </div>
+                                  <span className="text-xs font-bold text-emerald-700 tabular-nums shrink-0">
+                                    {formatPHP(exp.amount)}
+                                  </span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {fieldErrors.existingExpenseId && (
                       <p className="text-[11px] text-red-600 font-medium">{fieldErrors.existingExpenseId}</p>
                     )}
@@ -1510,7 +1949,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       <span>Submitting…</span>
                     </>
                   ) : (
-                    <span>Submit Replenishment</span>
+                    <span>Submit Reimbursement</span>
                   )}
                 </Button>
               </div>
@@ -1523,7 +1962,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       <ConfirmModal
         open={isDiscardModalOpen}
         title="Discard changes?"
-        description="You have unsaved changes in this reimbursement request. Are you sure you want to discard them?"
+        description="You have unsaved changes in this petty cash entry. Are you sure you want to discard them?"
         confirmLabel="Discard changes"
         cancelLabel="Keep editing"
         variant="destructive"

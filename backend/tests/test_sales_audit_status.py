@@ -1,6 +1,7 @@
 from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
+from fastapi import Response
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -124,7 +125,7 @@ def test_create_sale_payload_has_clean_audit_fields():
         mock_comp.company_name = "MCT"
         mock_res_comp.return_value = mock_comp
 
-        res = create_sale(sale_in=sale_in, request=mock_request, current_user=user, db=mock_db)
+        res = create_sale(sale_in=sale_in, request=mock_request, response=Response(), current_user=user, db=mock_db)
         assert res.audit_status == "Pending Audit"
 
         # Assert insert called with audit_status: Pending Audit and null audit metadata

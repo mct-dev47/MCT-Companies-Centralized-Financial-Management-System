@@ -1,3 +1,4 @@
+import logging
 from calendar import monthrange
 from datetime import date
 from decimal import Decimal
@@ -21,6 +22,8 @@ from app.schemas.bills import (
     BillStatsOut,
     BillUpdate,
 )
+
+logger = logging.getLogger(__name__)
 
 
 RECURRING_VALUES = {"daily", "monthly", "yearly", "one-time"}
@@ -257,6 +260,14 @@ class BillsService:
             None,
         )
         if not unpaid_past_or_current:
+            # Every past/current period is settled. The next (upcoming) one is still "due soon" once it is
+            # inside the reminder window, otherwise the bill counts as paid for now.
+            upcoming = next((p for p in periods if not p["paid"] and p["is_future"]), None)
+            if upcoming is not None:
+                recurring = _normalize_recurring(bill.recurring)
+                reminder_days = 0 if recurring == "daily" else (bill.due_date_reminder or 0)
+                if (upcoming["period_date"] - as_of).days <= reminder_days:
+                    return "partially paid" if upcoming.get("partially_paid") else "due soon"
             return "paid"
         if unpaid_past_or_current.get("partially_paid"):
             return "partially paid"
@@ -317,6 +328,24 @@ class BillsService:
             ],
         )
 
+    def count_bills(
+        self,
+        company_id: Optional[int] = None,
+        company_name: Optional[str] = None,
+        company_ids: Optional[List[int]] = None,
+    ) -> int:
+        query = self.db.query(Bill.bill_id)
+        if company_id:
+            query = query.filter(Bill.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved = _resolve_company(self.db, None, company_name)
+            query = query.filter(Bill.company_id == resolved.company_id)
+        elif company_ids is not None:
+            if not company_ids:
+                return 0
+            query = query.filter(Bill.company_id.in_(company_ids))
+        return query.count()
+
     def list_bills(
         self,
         company_id: Optional[int] = None,
@@ -331,7 +360,9 @@ class BillsService:
         elif company_name and company_name.lower() != "all companies":
             resolved = _resolve_company(self.db, None, company_name)
             query = query.filter(Bill.company_id == resolved.company_id)
-        elif company_ids:
+        elif company_ids is not None:
+            if not company_ids:
+                return []
             query = query.filter(Bill.company_id.in_(company_ids))
         query = query.order_by(Bill.created_at.desc(), Bill.bill_id.desc())
         if offset is not None:
@@ -496,6 +527,14 @@ class BillsService:
                 detail=f"Payment amount (₱{data.amount:,.2f}) cannot exceed the remaining balance (₱{remaining:,.2f})."
             )
 
+        # Funding source: the amount can't be more than the chosen bank / petty cash holds
+        bank_account_id = self._check_funding(bill, data)
+        payment_method = data.payment_method.strip()
+        if data.funding_source == "petty_cash":
+            payment_method = "Petty Cash"
+        elif data.funding_source == "bank" and "petty cash" in payment_method.lower():
+            payment_method = "Bank Transfer"
+
         # Record new payment transaction (independent row for installments and audit trail)
         payment = BillPayment(
             bill_id=bill_id,
@@ -503,20 +542,130 @@ class BillsService:
             payment_date=data.payment_date,
             amount=data.amount,
             billed_amount=period_billed,
-            payment_method=data.payment_method.strip(),
+            payment_method=payment_method,
             reference_no=data.reference_no.strip() if data.reference_no else None,
             notes=data.notes.strip() if data.notes else None,
+            funding_source=data.funding_source,
+            bank_account_id=bank_account_id,
         )
         self.db.add(payment)
 
         try:
+            self.db.flush()
+            if data.funding_source:
+                expense = self._create_funding_expense(bill, payment, target_period["period_label"])
+                payment.expense_id = expense.expense_id
             self.db.commit()
+        except HTTPException:
+            self.db.rollback()
+            raise
         except Exception as exc:
             self.db.rollback()
-            raise HTTPException(status_code=409, detail=f"Failed to record bill payment: {str(exc)}")
+            logger.error("Failed to record bill payment: %s", exc, exc_info=True)
+            raise HTTPException(status_code=409, detail="Failed to record bill payment. Please try again.")
+
+        if payment.expense_id:
+            # Debit the bank (no-op for petty cash: its balance is derived from Petty Cash expenses)
+            from app.api.v1.endpoints.expenses import reconcile_expense_bank
+
+            reconcile_expense_bank(self.db, expense_id=payment.expense_id)
+            system_cache.invalidate_tag("petty_cash")
 
         system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
+
+    # ── Funding source (bank / petty cash) ───────────────────────────────────
+
+    def _check_funding(self, bill: Bill, data: BillPaymentCreate) -> Optional[str]:
+        """Validate the funding source and its balance. Returns the bank account id (bank funding only)."""
+        if data.funding_source == "bank":
+            from app.models.bank import BankAccount
+
+            account_id = (data.bank_account_id or "").strip()
+            account = self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
+            if account is None:
+                raise HTTPException(status_code=400, detail="The selected bank account was not found.")
+            company = self.db.query(Company).filter(Company.company_id == bill.company_id).first()
+            company_name = (company.company_name if company else "").strip().lower()
+            owners = [n.strip().lower() for n in account.company_names]
+            if account.company_id != bill.company_id and company_name not in owners:
+                raise HTTPException(status_code=400, detail="The selected bank account does not belong to this bill's company.")
+            available = Decimal(str(account.current_balance or 0))
+            if data.amount > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Payment amount (₱{data.amount:,.2f}) is more than the balance of "
+                        f"{account.bank_name} (₱{available:,.2f})."
+                    ),
+                )
+            return account.id
+
+        if data.funding_source == "petty_cash":
+            from app.services.petty_cash_service import PettyCashService
+
+            available = PettyCashService(self.db).get_balance(bill.company_id)
+            if data.amount > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Payment amount (₱{data.amount:,.2f}) is more than the petty cash balance "
+                        f"(₱{available:,.2f})."
+                    ),
+                )
+        return None
+
+    def _create_funding_expense(self, bill: Bill, payment: BillPayment, period_label: str):
+        """The paid Expense behind a funded bill payment. A bank expense gets a linked bank withdrawal
+        (reconcile_expense_bank); a Petty Cash expense lowers the petty cash balance. Both show in Transactions."""
+        from app.models.finance import Category, Expense
+
+        category = (
+            self.db.query(Category)
+            .filter(func.lower(Category.name).in_(["bills", "utilities"]))
+            .order_by(Category.category_id)
+            .first()
+        )
+        # One plain line (no trailing parentheses), so the paid amount is the full amount
+        label = (period_label or "").replace("(", "").replace(")", "").strip()
+        description = f"Bill Payment: {bill.bill_name}" + (f" - {label}" if label else "")
+        expense = Expense(
+            company_id=bill.company_id,
+            category_id=category.category_id if category else None,
+            expense_date=payment.payment_date,
+            amount=payment.amount,
+            amount_paid=payment.amount,
+            description=description,
+            payment_method=payment.payment_method,
+            reference_no=f"BILL-{payment.bill_payment_id}",
+            cheque_no=payment.reference_no,
+            bank_account_id=payment.bank_account_id,
+            remarks=payment.notes,
+            audit_status="Pending Audit",
+        )
+        self.db.add(expense)
+        self.db.flush()
+        return expense
+
+    def _remove_funding_expense(self, payment: BillPayment) -> None:
+        """Undo a funded payment: give the money back to the bank / petty cash by removing its expense."""
+        if not payment.expense_id:
+            return
+        from app.api.v1.endpoints.expenses import reconcile_expense_bank
+        from app.models.finance import Expense
+        from app.services.bank_service import BankService
+
+        expense_id = payment.expense_id
+        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True)
+        expense = self.db.query(Expense).filter(Expense.expense_id == expense_id).first()
+        if expense is not None:
+            self.db.delete(expense)
+        self.db.flush()
+        try:
+            BankService(self.db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
+        except Exception:
+            pass
+        system_cache.invalidate_tag("petty_cash")
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
         payment = self.db.query(BillPayment).filter(
@@ -525,6 +674,7 @@ class BillsService:
         ).first()
         if not payment:
             raise HTTPException(status_code=404, detail="Bill payment not found.")
+        self._remove_funding_expense(payment)
         self.db.delete(payment)
         self.db.commit()
         system_cache.invalidate_tag("notifications")
@@ -539,6 +689,7 @@ class BillsService:
         )
         if not payment:
             raise HTTPException(status_code=404, detail="No bill payment found to undo.")
+        self._remove_funding_expense(payment)
         self.db.delete(payment)
         self.db.commit()
         system_cache.invalidate_tag("notifications")

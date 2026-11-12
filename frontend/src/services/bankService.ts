@@ -14,6 +14,8 @@ export interface BankTransaction {
   netAmount: number
   /** Which owner company this entry belongs to (matters only on shared bank accounts) */
   companyName?: string
+  /** 'manual' = typed directly in Bank Management */
+  entrySource?: string
   timestamp?: string
   createdAt?: string
 }
@@ -47,6 +49,21 @@ export function isSharedAccount(acc?: BankAccount | null): boolean {
 export function isAccountOwnedBy(acc: Pick<BankAccount, 'companyName' | 'companyNames'>, company: string): boolean {
   const owners = acc.companyNames?.length ? acc.companyNames : [acc.companyName]
   return owners.some((o) => isCompanyMatch(o || '', company))
+}
+
+/** True when `company` is the ONLY owner of the account (not a shared bank). */
+export function isSoleOwner(acc: Pick<BankAccount, 'companyName' | 'companyNames'>, company: string): boolean {
+  const owners = acc.companyNames?.length ? acc.companyNames : [acc.companyName]
+  return owners.length === 1 && isAccountOwnedBy(acc, company)
+}
+
+/**
+ * The company's banks ordered for picking a default: banks it owns alone first, then banks it shares
+ * with other companies. Order within each group is kept, so `[0]` is the right default bank.
+ */
+export function preferSoleOwnedBanks<T extends Pick<BankAccount, 'companyName' | 'companyNames'>>(accounts: T[], company: string): T[] {
+  if (!company || company === 'All Companies') return accounts
+  return [...accounts].sort((a, b) => Number(isSoleOwner(b, company)) - Number(isSoleOwner(a, company)))
 }
 
 export interface NewBankAccountInput {
@@ -86,8 +103,9 @@ const memoryBankCache = new Map<string, CachedBankAccountsEntry>()
 const inFlightRequests = new Map<string, Promise<BankAccount[]>>()
 
 function normalizeCacheKey(companyName?: string): string {
-  if (!companyName || companyName === 'All Companies') return '__ALL__'
-  return companyName.trim().toLowerCase()
+  const normalized = (companyName || '').trim().toLowerCase()
+  if (!normalized || normalized === 'all companies') return '__ALL__'
+  return normalized
 }
 
 // Purge legacy session storage to eliminate clear-text storage of bank accounts
@@ -121,6 +139,7 @@ if (typeof window !== 'undefined') {
 
 function clearBankCache(): void {
   memoryBankCache.clear()
+  inFlightRequests.clear()
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.removeItem(BANK_CACHE_STORAGE_KEY)
@@ -163,6 +182,7 @@ function mapAccountFromBackend(raw: any): BankAccount {
         category: t.category,
         netAmount: Number(t.net_amount || 0),
         companyName: t.company_name || undefined,
+        entrySource: t.entry_source || undefined,
         createdAt: t.created_at,
       }))
     : []
@@ -212,8 +232,8 @@ async function fetchAccountsFromNetwork(companyName?: string): Promise<BankAccou
   const promise = (async () => {
     try {
       const url =
-        companyName && companyName !== 'All Companies'
-          ? `/api/v1/bank-accounts?company_name=${encodeURIComponent(companyName)}`
+        companyName && companyName.trim().toLowerCase() !== 'all companies'
+          ? `/api/v1/bank-accounts?company_name=${encodeURIComponent(companyName.trim())}`
           : '/api/v1/bank-accounts'
       const res = await fetch(url, {
         headers: backendHeaders(),
@@ -250,13 +270,11 @@ export const bankService = {
     const mem = memoryBankCache.get(key)
     if (mem && mem.data.length > 0) return mem.data
 
-    // Fallback: check __ALL__ cache and filter by company name
-    if (key !== '__ALL__') {
+    // Fallback: check __ALL__ cache and filter by company name (alias + shared-owner aware)
+    if (key !== '__ALL__' && companyName) {
       const allMem = memoryBankCache.get('__ALL__')
       if (allMem && Array.isArray(allMem.data) && allMem.data.length > 0) {
-        const filtered = allMem.data.filter(
-          (b) => (b.companyNames || [b.companyName]).some((n) => (n || '').trim().toLowerCase() === key)
-        )
+        const filtered = allMem.data.filter((b) => isAccountOwnedBy(b, companyName))
         if (filtered.length > 0) return filtered
       }
     }
@@ -423,5 +441,22 @@ export const bankService = {
     const data = await res.json()
     clearBankCache()
     return mapAccountFromBackend(data)
+  },
+
+  /** Re-sync every bank with the Transactions ledger (posts only the differences). Finance / Admin. */
+  async reconcileAll(userRole?: string): Promise<{
+    sales_checked: number
+    expenses_checked: number
+    entries_posted: number
+    balances_fixed: number
+    accounts_still_off: Record<string, string>
+  }> {
+    const res = await fetch('/api/v1/bank-accounts/reconcile', {
+      method: 'POST',
+      headers: backendHeaders(userRole),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    clearBankCache()
+    return res.json()
   },
 }

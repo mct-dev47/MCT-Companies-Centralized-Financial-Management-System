@@ -113,8 +113,8 @@ def test_transaction_ids_are_unique_and_time_ordered(svc):
     assert ids[0][:16] <= ids[-1][:16]  # epoch-ms prefix never goes backwards
 
 
-def test_concurrent_balance_updates_are_not_lost():
-    """Two sessions that both loaded the account must each add their amount (no lost update)."""
+def test_concurrent_saves_on_one_bank_never_lose_an_amount():
+    """Two sessions that both loaded the account must each count their entry (no lost update)."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool
@@ -127,8 +127,152 @@ def test_concurrent_balance_updates_are_not_lost():
     s1, s2 = BankService(Session()), BankService(Session())
     a1, a2 = s1.get_account(acc.id), s2.get_account(acc.id)
     assert a1.current_balance == a2.current_balance == Decimal("1000")
-    s1._adjust_balance(a1, Decimal("300"))
-    s1.db.commit()
-    s2._adjust_balance(a2, Decimal("40"))  # a2 still holds the stale 1000 in memory
-    s2.db.commit()
-    assert BankService(Session()).get_account(acc.id).current_balance == Decimal("1340")
+    s1.deposit(a1.id, BankDepositWithdrawRequest(amount=Decimal("300")))
+    s2.deposit(a2.id, BankDepositWithdrawRequest(amount=Decimal("40")))  # a2 still held the stale 1000
+    final = BankService(Session())
+    assert final.get_account(acc.id).current_balance == Decimal("1340")
+    assert final.balance_discrepancy(acc.id) == Decimal("0.00")
+
+
+def test_balance_always_equals_starting_plus_entries(svc):
+    from app.models.bank import BankTransaction
+
+    acc = _make(svc, ["Alpha", "Beta"])  # starting 1000
+    svc.deposit(acc.id, BankDepositWithdrawRequest(amount=Decimal("300")), source_sale_id=7)
+    svc.withdraw(acc.id, BankDepositWithdrawRequest(amount=Decimal("120")))
+    svc.sync_sale_deposit(sale_id=8, target_amount=Decimal("55.50"), account_id=acc.id, company_name="Beta")
+    svc.sync_sale_deposit(sale_id=8, target_amount=Decimal("20"), account_id=acc.id, company_name="Beta")  # edit down
+    svc.sync_expense_disbursement(expense_id=3, target_amount=Decimal("45"), account_id=acc.id, company_name="Alpha")
+    assert svc.balance_discrepancy(acc.id) == Decimal("0.00")
+    assert svc.get_account(acc.id).current_balance == Decimal("1000") + 300 - 120 + 20 - 45
+
+    svc.purge_linked_entries(link_attr="source_sale_id", link_id=7)  # deleting the sale removes its entries
+    assert svc.balance_discrepancy(acc.id) == Decimal("0.00")
+    assert svc.get_account(acc.id).current_balance == Decimal("1000") - 120 + 20 - 45
+    assert svc.db.query(BankTransaction).filter(BankTransaction.source_sale_id == 7).count() == 0
+
+
+def test_recompute_all_balances_repairs_drift(svc):
+    acc = _make(svc, ["Alpha"])
+    svc.deposit(acc.id, BankDepositWithdrawRequest(amount=Decimal("100")))
+    acc = svc.get_account(acc.id)
+    acc.current_balance = Decimal("9999.99")  # simulate drift from an outside edit
+    svc.db.commit()
+    assert svc.balance_discrepancy(acc.id) != Decimal("0.00")
+    assert svc.recompute_all_balances() == 1
+    assert svc.balance_discrepancy(acc.id) == Decimal("0.00")
+    assert svc.get_account(acc.id).current_balance == Decimal("1100")
+
+
+def test_only_bank_management_entries_are_marked_manual(svc):
+    acc = _make(svc, ["Alpha"])
+    _, manual = svc.deposit(acc.id, BankDepositWithdrawRequest(amount=Decimal("50")), entry_source="manual")
+    _, manual_out = svc.withdraw(acc.id, BankDepositWithdrawRequest(amount=Decimal("20")), entry_source="manual")
+    _, loan_like = svc.deposit(acc.id, BankDepositWithdrawRequest(amount=Decimal("70")))  # loans / petty cash path
+    sale_tx = svc.sync_sale_deposit(sale_id=11, target_amount=Decimal("30"), account_id=acc.id)
+    assert svc.balance_discrepancy(acc.id) == Decimal("0.00")
+    acc_id, m_in, m_out, other, sale_id = acc.id, manual.id, manual_out.id, loan_like.id, sale_tx.id
+
+    # A fresh read (what the API serves) carries the marker on exactly the manual entries
+    svc.db.expunge_all()
+    sources = {t.id: t.entry_source_safe for t in svc.list_accounts()[0].transactions}
+    assert sources[m_in] == "manual" and sources[m_out] == "manual"
+    assert sources[other] is None and sources[sale_id] is None
+    single = {t.id: t.entry_source_safe for t in svc.get_account(acc_id, with_entries=True).transactions}
+    assert single == sources
+
+
+def test_bank_reads_and_writes_work_before_migration_0051(svc, monkeypatch):
+    """On a database without the entry_source column, banks still load and entries still save."""
+    from app.services import bank_service
+
+    monkeypatch.setattr(bank_service, "entry_source_supported", lambda db: False)
+    acc = _make(svc, ["Alpha"])
+    _, tx = svc.deposit(acc.id, BankDepositWithdrawRequest(amount=Decimal("50")), entry_source="manual")
+    svc.db.expunge_all()
+    loaded = svc.list_accounts()
+    assert [a.id for a in loaded] == [acc.id]
+    assert loaded[0].transactions[0].entry_source_safe is None  # marker simply unknown until the column exists
+    assert loaded[0].current_balance == Decimal("1050")
+
+
+def test_bank_management_endpoints_mark_entries_manual():
+    import inspect
+    from app.api.v1.endpoints import bank_accounts
+
+    src = inspect.getsource(bank_accounts)
+    assert 'service.deposit(account_id, req, entry_source="manual")' in src
+    assert 'service.withdraw(account_id, req, entry_source="manual")' in src
+
+
+def test_default_bank_is_the_one_the_company_owns_alone(svc):
+    shared = _make(svc, ["Alpha", "Beta"])  # created first, so it would win a plain "first match"
+    beta_own = svc.create_account(
+        BankAccountCreate(bank_name="BPI", account_name="Beta Own", company_name="Beta", starting_balance=Decimal("0"))
+    )
+    assert svc.find_account_for_company("Beta").id == beta_own.id
+    # Alpha has no bank of its own, so the shared bank is its default
+    assert svc.find_account_for_company("Alpha").id == shared.id
+
+
+def test_list_bank_accounts_includes_shared_and_alias_banks_for_supervisor_and_owner(svc):
+    from app.api.v1.endpoints.bank_accounts import list_bank_accounts
+    from app.models.company import Company
+
+    svc.db.add_all([
+        Company(company_id=10, company_name="Alpha Tech Inc", starting_balance=Decimal("0.00")),
+        Company(company_id=20, company_name="Beta Logistics Corp", starting_balance=Decimal("0.00")),
+        Company(company_id=30, company_name="Gamma Ventures", starting_balance=Decimal("0.00")),
+    ])
+    svc.db.commit()
+
+    alpha_sole = svc.create_account(
+        BankAccountCreate(
+            bank_name="Metrobank",
+            account_name="Alpha Sole",
+            company_name="Alpha Tech Inc",
+            starting_balance=Decimal("1000"),
+        )
+    )
+    beta_main = svc.create_account(
+        BankAccountCreate(
+            bank_name="Main Bank",
+            account_name="Beta Ops",
+            company_name="Beta Logistics Corp",
+            starting_balance=Decimal("1000"),
+        )
+    )
+    shared_joint = svc.create_account(
+        BankAccountCreate(
+            bank_name="BDO Joint",
+            account_name="Shared Treasury",
+            company_name="Alpha Tech Inc",
+            company_names=["Alpha Tech Inc", "Beta Logistics"],
+            starting_balance=Decimal("1000"),
+        )
+    )
+    gamma_sole = svc.create_account(
+        BankAccountCreate(
+            bank_name="BPI",
+            account_name="Gamma Sole",
+            company_name="Gamma Ventures",
+            starting_balance=Decimal("1000"),
+        )
+    )
+
+    supervisor_beta = {"role": "supervisor", "company_id": 20, "company_ids": [20]}
+    sup_ids = [a.id for a in list_bank_accounts(company_name=None, current_user=supervisor_beta, db=svc.db)]
+    assert sup_ids == [beta_main.id, shared_joint.id]
+    assert supervisor_beta["company_ids"] == [20]
+
+    # Filtering explicitly by company_name=Beta Logistics Corp also resolves alias "Beta Logistics"
+    scoped_ids = [
+        a.id for a in list_bank_accounts(company_name="Beta Logistics Corp", current_user=supervisor_beta, db=svc.db)
+    ]
+    assert scoped_ids == [beta_main.id, shared_joint.id]
+
+    # Owner role receives all accounts across companies when listing all banks
+    owner_user = {"role": "owner", "company_id": None, "company_ids": []}
+    owner_ids = [a.id for a in list_bank_accounts(company_name=None, current_user=owner_user, db=svc.db)]
+    assert owner_ids == [alpha_sole.id, beta_main.id, shared_joint.id, gamma_sole.id]
+

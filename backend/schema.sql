@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS sales (
     transaction_date DATE NOT NULL,
     cheque_no VARCHAR(100),
     payment_method VARCHAR(100),
+    payment_status VARCHAR(50) NOT NULL DEFAULT 'Paid',
+    deposit_status VARCHAR(50) NOT NULL DEFAULT 'Not Deposited',
+    deposit_date DATE,
+    bank_account_id VARCHAR(100),
     amount NUMERIC(15, 2) NOT NULL,
     particulars TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -231,3 +235,49 @@ CREATE TABLE IF NOT EXISTS petty_cash_wallets (
     low_balance_threshold NUMERIC(15, 2) NOT NULL DEFAULT 1000,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- 18. Bank Accounts & Transactions
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id VARCHAR(100) PRIMARY KEY,
+    bank_name VARCHAR(255) NOT NULL,
+    account_name VARCHAR(255) NOT NULL,
+    account_number VARCHAR(100) NOT NULL,
+    company_name VARCHAR(255) NOT NULL,
+    company_id INTEGER,
+    company_names TEXT,
+    card_label VARCHAR(255),
+    account_type VARCHAR(50) NOT NULL DEFAULT 'Checking',
+    branch VARCHAR(255),
+    starting_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    current_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    color_theme VARCHAR(20) NOT NULL DEFAULT 'red',
+    notes TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bank_transactions (
+    id VARCHAR(100) PRIMARY KEY,
+    bank_account_id VARCHAR(100) NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+    transaction_date VARCHAR(50) NOT NULL,
+    cheque_no VARCHAR(100),
+    particulars TEXT NOT NULL,
+    withdrawal NUMERIC(15, 2) DEFAULT 0.00,
+    deposit NUMERIC(15, 2) DEFAULT 0.00,
+    category VARCHAR(100) NOT NULL DEFAULT 'Bank Transfer',
+    net_amount NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    source_sale_id INTEGER,
+    source_expense_id INTEGER,
+    entry_source VARCHAR(30),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 19. Compound Performance Indexes (Spec 0044)
+CREATE INDEX IF NOT EXISTS idx_sales_company_transaction_date ON sales (company_id, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sales_company_deposit_status ON sales (company_id, deposit_status, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_expenses_company_expense_date ON expenses (company_id, expense_date DESC);
+CREATE INDEX IF NOT EXISTS idx_bank_transactions_account_date ON bank_transactions (bank_account_id, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_bills_company_due_date ON bills (company_id, due_date ASC);
+CREATE INDEX IF NOT EXISTS idx_loan_borrower_date ON loan (borrower, loan_date DESC);
+CREATE INDEX IF NOT EXISTS idx_loan_lender_date ON loan (lender, loan_date DESC);

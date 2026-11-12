@@ -5,6 +5,7 @@ from typing import Any, Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.cache import system_cache
 from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.core.websocket import ws_manager
 from app.db.supabase import get_supabase_admin_client
@@ -97,6 +98,9 @@ def apply_audit_review(
 
     if not remote_saved and not local_saved:
         raise HTTPException(status_code=500, detail="Could not save the audit status. Please try again.")
+
+    if supabase_table == "expenses":
+        system_cache.invalidate_tag("petty_cash")
 
     # Tell every connected Finance, Audit and company screen to reload (spec 0016, AC-4).
 

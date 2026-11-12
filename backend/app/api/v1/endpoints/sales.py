@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
@@ -20,6 +20,12 @@ from app.services.sales_receivables_sync import (
 from app.core.websocket import ws_manager
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+from app.core.idempotency import (
+    ExistingRecord,
+    find_by_client_ref_orm,
+    find_by_client_ref_supabase,
+    supabase_supports_client_ref,
+)
 
 
 class _SkipBackup(Exception):
@@ -60,6 +66,19 @@ def reconcile_sale_bank(
         force_zero=force_zero,
         legacy_particulars=legacy_particulars,
     )
+
+
+def _with_paid_amounts(db: Session, outs: List[SaleOut]) -> List[SaleOut]:
+    """Fill paid_amount: [Paid] lines plus what was collected on linked receivables (partial payments too)."""
+    try:
+        paid = SalesReceivablesSyncService(db).compute_paid_amounts(
+            (o.sales_id, o.particulars, o.amount) for o in outs
+        )
+        for o in outs:
+            o.paid_amount = paid.get(o.sales_id)
+    except Exception as e:
+        print(f"Paid amount computation skipped: {e}")
+    return outs
 
 
 def get_supabase_mappings(client):
@@ -165,7 +184,7 @@ def get_sales(
         res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
-        return [
+        return _with_paid_amounts(db, [
             SaleOut(
                 sales_id=row["sales_id"],
                 company_id=row.get("company_id"),
@@ -186,7 +205,7 @@ def get_sales(
                 **audit_fields(row)
             )
             for row in rows
-        ]
+        ])
     except HTTPException:
         raise
     except Exception:
@@ -227,7 +246,7 @@ def get_sales(
 
         rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
-        return [
+        return _with_paid_amounts(db, [
             SaleOut(
                 sales_id=sale.sales_id,
                 company_id=sale.company_id,
@@ -248,7 +267,7 @@ def get_sales(
                 **audit_fields(sale)
             )
             for sale, c_name, cat_name in rows
-        ]
+        ])
 
 
 def _to_date(val) -> Optional[date]:
@@ -349,6 +368,7 @@ def get_sales_daily_summary(
         rows = res.data or []
         for r in rows:
             raw_records.append({
+                "sales_id": r.get("sales_id"),
                 "transaction_date": r.get("transaction_date"),
                 "amount": r.get("amount") or 0.0,
                 "particulars": r.get("particulars") or r.get("description") or "",
@@ -389,6 +409,7 @@ def get_sales_daily_summary(
         rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
         for s in rows:
             raw_records.append({
+                "sales_id": s.sales_id,
                 "transaction_date": s.transaction_date,
                 "amount": s.amount,
                 "particulars": s.particulars or "",
@@ -407,6 +428,10 @@ def get_sales_daily_summary(
 
     search_term = (search or "").strip().lower()
     is_deposit_view = (view_type or "").lower() == "deposit"
+    # Partial receivable payments count as realized cash, same as the bank
+    paid_by_sale = SalesReceivablesSyncService(db).compute_paid_amounts(
+        (r["sales_id"], r["particulars"], r["amount"]) for r in raw_records if r.get("sales_id") is not None
+    )
 
     for r in raw_records:
         rec_date = _to_date(r["transaction_date"])
@@ -428,7 +453,12 @@ def get_sales_daily_summary(
         else:
             is_deposited = True
 
-        realized = compute_paid_amount_from_particulars(parts, amt) if is_deposited else Decimal("0.00")
+        if not is_deposited:
+            realized = Decimal("0.00")
+        elif r.get("sales_id") is not None and int(r["sales_id"]) in paid_by_sale:
+            realized = paid_by_sale[int(r["sales_id"])]
+        else:
+            realized = compute_paid_amount_from_particulars(parts, amt)
 
         if is_deposit_view and not is_deposited:
             continue
@@ -455,13 +485,35 @@ def get_sales_daily_summary(
 
 
 
+def _find_sale_by_client_ref(db: Session, client_ref: Optional[str]) -> Optional[ExistingRecord]:
+    """The sale already created with this client_ref, if any (spec 0038)."""
+    if not client_ref:
+        return None
+    if SalesReceivablesSyncService(db)._use_supabase():
+        try:
+            found = find_by_client_ref_supabase(get_supabase_admin_client(), "sales", "sales_id", client_ref)
+            if found:
+                return found
+        except Exception:
+            pass
+    return find_by_client_ref_orm(db, Sale, "sales_id", client_ref)
+
+
 @router.post("", response_model=SaleOut, status_code=status.HTTP_201_CREATED, summary="Record a new sale")
 def create_sale(
     sale_in: SaleCreate,
     request: Request,
+    response: Response,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    # Same client_ref sent again (retry, offline resend): return the sale that already exists
+    existing = _find_sale_by_client_ref(db, sale_in.client_ref)
+    if existing:
+        check_company_access(current_user, existing.company_id)
+        response.status_code = status.HTTP_200_OK
+        return get_sale(sales_id=existing.record_id, current_user=current_user, db=db)
+
     if sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
@@ -533,6 +585,11 @@ def create_sale(
             "audited_by": None,
             "audited_at": None,
             "audit_remarks": None,
+            **(
+                {"client_ref": sale_in.client_ref}
+                if sale_in.client_ref and supabase_supports_client_ref(client, "sales")
+                else {}
+            ),
         }).execute()
 
         if not sb_insert.data:
@@ -574,6 +631,7 @@ def create_sale(
                 audited_by=None,
                 audited_at=None,
                 audit_remarks=None,
+                client_ref=sale_in.client_ref,
             )
             db.merge(local_sale)
             db.commit()
@@ -641,6 +699,14 @@ def create_sale(
     except HTTPException:
         raise
     except Exception:
+        # The insert may have succeeded before a later step failed, or a parallel request with the same
+        # client_ref won the race: return that sale instead of inserting a second one
+        existing = _find_sale_by_client_ref(db, sale_in.client_ref)
+        if existing:
+            check_company_access(current_user, existing.company_id)
+            response.status_code = status.HTTP_200_OK
+            return get_sale(sales_id=existing.record_id, current_user=current_user, db=db)
+
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=sale_in.company_id, company_name=sale_in.company)
         check_company_access(current_user, target_company.company_id)
@@ -662,6 +728,7 @@ def create_sale(
             audited_by=None,
             audited_at=None,
             audit_remarks=None,
+            client_ref=sale_in.client_ref,
         )
         db.add(sale)
         db.commit()
@@ -742,7 +809,7 @@ def get_sale(
             if res.data:
                 row = res.data[0]
                 check_company_access(current_user, row.get("company_id"))
-                return SaleOut(
+                return _with_paid_amounts(db, [SaleOut(
                     sales_id=row["sales_id"],
                     company_id=row.get("company_id"),
                     company_name=company_map.get(row.get("company_id")) or "Unknown",
@@ -760,7 +827,7 @@ def get_sale(
                     updated_at=row.get("updated_at"),
                     remarks=row.get("remarks"),
                     **audit_fields(row)
-                )
+                )])[0]
         except HTTPException:
             raise
         except Exception:
@@ -781,7 +848,7 @@ def get_sale(
         raise HTTPException(status_code=404, detail="Sale not found")
     sale, c_name, cat_name = result
     check_company_access(current_user, sale.company_id)
-    return SaleOut(
+    return _with_paid_amounts(db, [SaleOut(
         sales_id=sale.sales_id,
         company_id=sale.company_id,
         company_name=c_name,
@@ -799,7 +866,7 @@ def get_sale(
         updated_at=sale.updated_at,
         remarks=getattr(sale, "remarks", None),
         **audit_fields(sale)
-    )
+    )])[0]
 
 
 @router.put("/{sales_id}", response_model=SaleOut, summary="Update an existing sale")
@@ -891,8 +958,24 @@ def update_sale(
         else (existing_cheque_no or "")
     )
 
+    # A Pending sale that already has money collected (partial receivable payments) may stay Deposited
+    pending_has_collected = False
+    if new_payment_status == "Pending":
+        try:
+            new_parts_for_check = (sale_in.particulars or sale_in.description) or old_particulars
+            new_amt_for_check = sale_in.amount if sale_in.amount is not None else old_amount
+            pending_has_collected = sync_svc.compute_sale_paid_amount(
+                sales_id, new_parts_for_check, new_amt_for_check
+            ) > Decimal("0.005")
+        except Exception:
+            pending_has_collected = False
+
     # AC-5: If payment status reverts to Unpaid or non-cheque Pending, auto reset deposit status to 'Not Deposited'
-    is_pending_non_cheque = (new_payment_status == "Pending" and (new_payment_method.lower() != "cheque" or not new_cheque_no))
+    is_pending_non_cheque = (
+        new_payment_status == "Pending"
+        and (new_payment_method.lower() != "cheque" or not new_cheque_no)
+        and not pending_has_collected
+    )
     if new_payment_status == "Unpaid" or is_pending_non_cheque:
         if sale_in.deposit_status is not None and sale_in.deposit_status == "Deposited":
             if new_payment_status == "Unpaid":
@@ -920,7 +1003,7 @@ def update_sale(
             status_code=422,
             detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
         )
-    if new_payment_status == "Pending" and new_deposit_status == "Deposited":
+    if new_payment_status == "Pending" and new_deposit_status == "Deposited" and not pending_has_collected:
         if new_payment_method.lower() != "cheque" or not new_cheque_no:
             raise HTTPException(
                 status_code=422,
@@ -1217,7 +1300,11 @@ def update_sale_deposit_status(
                 detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
             )
         elif cur_payment_status == "Pending":
-            if cur_payment_method != "cheque" or not cur_cheque_no:
+            sb_sale, local_sale_row = sync_svc._fetch_authoritative_sale(sales_id)
+            parts_now = (sb_sale or {}).get("particulars") or (local_sale_row.particulars if local_sale_row else "")
+            amt_now = (sb_sale or {}).get("amount") or (local_sale_row.amount if local_sale_row else 0)
+            has_collected = sync_svc.compute_sale_paid_amount(sales_id, parts_now, amt_now) > Decimal("0.005")
+            if not has_collected and (cur_payment_method != "cheque" or not cur_cheque_no):
                 raise HTTPException(
                     status_code=422,
                     detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
@@ -1390,6 +1477,7 @@ def delete_sale(
 ):
     deleted_from_supabase = False
     deleted_company_id = None
+    deleted_tx_date = None
     existing_audit_status = None
     sync_svc = SalesReceivablesSyncService(db)
     use_sb = sync_svc._use_supabase()
@@ -1400,7 +1488,7 @@ def delete_sale(
             client = get_supabase_admin_client()
             existing = (
                 client.table("sales")
-                .select("company_id, audit_status")
+                .select("company_id, audit_status, transaction_date")
                 .eq("sales_id", sales_id)
                 .limit(1)
                 .execute()
@@ -1408,6 +1496,7 @@ def delete_sale(
             if existing.data:
                 deleted_company_id = existing.data[0].get("company_id")
                 existing_audit_status = existing.data[0].get("audit_status")
+                deleted_tx_date = existing.data[0].get("transaction_date")
         except Exception as e:
             print(f"Supabase fetch before delete error: {e}")
 
@@ -1415,6 +1504,7 @@ def delete_sale(
     if sale:
         deleted_company_id = deleted_company_id or sale.company_id
         existing_audit_status = existing_audit_status or sale.audit_status
+        deleted_tx_date = deleted_tx_date or sale.transaction_date
 
     if not deleted_company_id and not sale:
         raise HTTPException(status_code=404, detail="Sale not found")
@@ -1453,6 +1543,11 @@ def delete_sale(
     except Exception as e:
         db.rollback()
         print(f"Bank entry purge error on sale delete: {e}")
+
+    # Cascade: the day's sales remark goes once no sale is left on that day
+    if deleted_tx_date:
+        from app.services.daily_remark_cascade import purge_orphan_daily_remark
+        purge_orphan_daily_remark(db, client, "sales", deleted_company_id, deleted_tx_date)
 
     try:
         log_transaction(

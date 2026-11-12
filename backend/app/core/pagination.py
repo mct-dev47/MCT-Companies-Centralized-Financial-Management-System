@@ -11,6 +11,6 @@ class PaginationParams:
         limit: int = Query(default=50, ge=1, le=100, description="Items per page (1-100, default: 50)"),
         offset: int = Query(default=0, ge=0, description="Number of items to skip (offset)"),
     ):
-        self.limit = limit
-        self.offset = offset
+        self.limit = limit if isinstance(limit, int) else 50
+        self.offset = offset if isinstance(offset, int) else 0
 
