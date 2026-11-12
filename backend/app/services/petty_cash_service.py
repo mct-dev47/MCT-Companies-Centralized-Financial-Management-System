@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, List, Optional
@@ -13,10 +14,14 @@ from app.db.supabase import get_supabase_admin_client
 from app.models.bank import BankAccount
 from app.models.company import Company
 from app.models.finance import Category, Expense
+from app.models.intercompany_transfer import IntercompanyTransfer
 from app.models.petty_cash import PettyCashTopUp, PettyCashWallet
+from app.models.user import User
 from app.schemas.bank import BankDepositWithdrawRequest
 from app.services.bank_service import BankService
+from app.services.audit_service import AuditAction, log_transaction
 from app.schemas.petty_cash import (
+    IntercompanyTransferOut,
     PettyCashLedgerEntry,
     PettyCashMovementOut,
     PettyCashSummaryOut,
@@ -28,7 +33,16 @@ from app.services.bills_service import _resolve_company
 
 PETTY_CASH_METHOD = "petty cash"
 
-LEDGER_MOVEMENT_STATUSES = {"pending audit approval", "approved"}
+LEDGER_MOVEMENT_STATUSES = {
+    "pending finance endorsement",
+    "pending finance approval",
+    "pending audit approval",
+    "approved",
+    "transfer in transit",
+    "transfer received",
+    "reimbursed",
+    "settled",
+}
 DEFAULT_LOW_BALANCE_THRESHOLD = Decimal("1000.00")
 ZERO = Decimal("0.00")
 
@@ -73,6 +87,8 @@ class PettyCashService:
     def _petty_cash_expenses(self, company_id: Optional[int] = None) -> List[dict]:
         """Expenses paid from petty cash or categorized as Petty Cash. Supabase first, local DB as fallback."""
         try:
+            if self.db.bind and self.db.bind.dialect.name == "sqlite":
+                raise RuntimeError("Use local SQLite DB")
             client = get_supabase_admin_client()
             cat_map: Dict[int, str] = {}
             petty_cat_ids = []
@@ -99,8 +115,8 @@ class PettyCashService:
                 query = query.ilike("payment_method", "%petty cash%")
 
             rows = query.execute().data or []
-            # Exclude any sample or seeded rows
-            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-")]
+            # Exclude any sample or seeded rows, reimbursement rows, and PC-EXP rows (logged via unified topup entries)
+            rows = [r for r in rows if not (r.get("reference_no") or "").upper().startswith("SEED-") and not (r.get("reference_no") or "").upper().startswith("REIMB-") and not (r.get("reference_no") or "").upper().startswith("PC-EXP-")]
 
             return [
                 {
@@ -129,7 +145,10 @@ class PettyCashService:
             )
             if company_id:
                 query = query.filter(Expense.company_id == company_id)
-            query = query.filter(~Expense.reference_no.like("SEED-%") | (Expense.reference_no == None))
+            query = query.filter(
+                (~Expense.reference_no.like("SEED-%") & ~Expense.reference_no.like("REIMB-%") & ~Expense.reference_no.like("PC-EXP-%"))
+                | (Expense.reference_no == None)
+            )
             return [
                 {
                     "expense_id": exp.expense_id,
@@ -161,13 +180,55 @@ class PettyCashService:
     def resolve_company(self, company_id: Optional[int], company_name: Optional[str]) -> Company:
         return _resolve_company(self.db, company_id, company_name)
 
+    def _get_wallet_with_lock(self, company_id: int) -> PettyCashWallet:
+        if self.db.bind and self.db.bind.dialect.name == "postgresql":
+            wallet = self.db.query(PettyCashWallet).filter(PettyCashWallet.company_id == company_id).with_for_update().first()
+        else:
+            wallet = self.db.query(PettyCashWallet).filter(PettyCashWallet.company_id == company_id).first()
+        if not wallet:
+            wallet = PettyCashWallet(company_id=company_id, balance=Decimal("0.00"), low_balance_threshold=DEFAULT_LOW_BALANCE_THRESHOLD)
+            self.db.add(wallet)
+            self.db.flush()
+        return wallet
+
+    def _get_bank_account_with_lock(self, bank_id: str) -> Optional[BankAccount]:
+        if self.db.bind and self.db.bind.dialect.name == "postgresql":
+            return self.db.query(BankAccount).filter(BankAccount.id == bank_id).with_for_update().first()
+        return self.db.query(BankAccount).filter(BankAccount.id == bank_id).first()
+
+    def get_unreserved_balance(self, company_id: int, exclude_topup_id: Optional[int] = None) -> Decimal:
+        ledger_bal = self.get_balance(company_id)
+        active_statuses = [
+            "pending finance endorsement",
+            "pending audit approval",
+            "approved",
+            "transfer in transit",
+            "return pending",
+            "transfer received",
+        ]
+        query = self.db.query(PettyCashTopUp).filter(
+            PettyCashTopUp.company_id == company_id,
+            func.lower(PettyCashTopUp.status).in_(active_statuses),
+        )
+        if exclude_topup_id:
+            query = query.filter(PettyCashTopUp.topup_id != exclude_topup_id)
+        total_reserved = sum((_to_decimal(t.reserved_amount) for t in query.all() if t.reserved_amount), ZERO)
+        return ledger_bal - total_reserved
+
     def get_balance(self, company_id: int, exclude_expense_id: Optional[int] = None) -> Decimal:
         approved_topups = [t for t in self._topups(company_id) if (t.status or "Approved").lower() == "approved"]
-        topped_up = sum((_to_decimal(t.amount) for t in approved_topups), ZERO)
+        topped_up = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement" and t.total_expenses is None),
+            ZERO,
+        )
         spent = sum(
             (e["amount"] for e in self._petty_cash_expenses(company_id) if e["expense_id"] != exclude_expense_id),
             ZERO,
-        )
+        ) + reimbursed
         return topped_up - spent
 
     def ensure_sufficient_balance(
@@ -190,10 +251,24 @@ class PettyCashService:
         end: Optional[date],
     ) -> PettyCashSummaryOut:
         approved_topups = [t for t in topups if (t.status or "Approved").lower() == "approved"]
-        total_topups = sum((_to_decimal(t.amount) for t in approved_topups), ZERO)
-        total_spent = sum((e["amount"] for e in expenses), ZERO)
-        period_topups = sum((_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end)), ZERO)
-        period_spent = sum((e["amount"] for e in expenses if _in_period(e["expense_date"], start, end)), ZERO)
+        total_topups = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement" and t.total_expenses is None),
+            ZERO,
+        )
+        total_spent = sum((e["amount"] for e in expenses), ZERO) + reimbursed
+        period_topups = sum(
+            (_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end) and (getattr(t, "request_type", "topup") or "topup").lower() != "reimbursement"),
+            ZERO,
+        )
+        period_reimbursed = sum(
+            (_to_decimal(t.amount) for t in approved_topups if _in_period(t.topup_date, start, end) and (getattr(t, "request_type", "topup") or "topup").lower() == "reimbursement" and t.total_expenses is None),
+            ZERO,
+        )
+        period_spent = sum((e["amount"] for e in expenses if _in_period(e["expense_date"], start, end)), ZERO) + period_reimbursed
         balance = total_topups - total_spent
         threshold = self._threshold(company.company_id)
         return PettyCashSummaryOut(
@@ -274,25 +349,31 @@ class PettyCashService:
             amt = _to_decimal(t.amount)
             funding = self._resolve_funding(t, banks, comp_map, name_to_id)
             funding_bank = funding["bank"] if funding else None
-            entries.append({
+            req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
+            is_reimbursement = req_type in ["reimbursement", "replenishment"]
+
+            dest_bank_name = (
+                self.db.query(BankAccount).filter(BankAccount.id == t.destination_bank_id).first().bank_name
+                if t.destination_bank_id
+                else None
+            )
+
+            common_data = {
                 "funding_bank_id": funding_bank.id if funding_bank else None,
                 "funding_bank_name": funding_bank.bank_name if funding_bank else None,
                 "funding_account_name": funding_bank.account_name if funding_bank else None,
                 "funding_company_name": funding["company_name"] if funding else None,
                 "is_own_account": bool(funding and funding["is_own_account"]),
-                "entry_id": f"topup-{t.topup_id}",
-                "entry_type": "topup" if is_approved else "request",
                 "record_id": t.topup_id,
                 "company_id": t.company_id,
                 "company_name": comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown"),
                 "entry_date": t.topup_date,
-                "description": t.description or ("Top-up from sales" if is_approved else "Petty cash replenishment request"),
-                "category": None,
                 "reference_no": t.reference_no,
-                "amount_requested": amt,
-                "amount_in": amt if is_approved else ZERO,
-                "amount_out": ZERO,
                 "status": status_val,
+                "paid_by": getattr(t, "paid_by", None),
+                "receipt_url": getattr(t, "receipt_url", None),
+                "attachments": getattr(t, "attachments", None),
+                "items": getattr(t, "items", None),
                 "endorsed_by": t.endorsed_by,
                 "endorsed_at": t.endorsed_at,
                 "finance_remark": t.finance_remark,
@@ -300,7 +381,72 @@ class PettyCashService:
                 "reviewed_by": t.reviewed_by,
                 "reviewed_at": t.reviewed_at,
                 "created_at": t.created_at,
-            })
+                "total_expenses": t.total_expenses,
+                "company_funded_amount": t.company_funded_amount or ZERO,
+                "employee_out_of_pocket": t.employee_out_of_pocket or ZERO,
+                "existing_expense_id": t.existing_expense_id,
+                "payment_method_option": t.payment_method_option,
+                "destination_bank_id": t.destination_bank_id,
+                "destination_bank_name": dest_bank_name,
+                "intercompany_transfer_id": t.intercompany_transfer_id,
+                "transfer_status": t.intercompany_transfer.transfer_status if t.intercompany_transfer else None,
+                "settlement_status": t.intercompany_transfer.settlement_status if t.intercompany_transfer else None,
+                "reimbursed_at": t.reimbursed_at,
+                "reimbursed_by": t.reimbursed_by,
+                "transfer_received_at": t.transfer_received_at,
+                "transfer_received_by": t.transfer_received_by,
+            }
+
+            if is_reimbursement:
+                pc_funded = _to_decimal(t.company_funded_amount or 0)
+                out_of_pocket = _to_decimal(t.employee_out_of_pocket if t.employee_out_of_pocket is not None else t.amount)
+                is_settled_or_reimbursed = status_val.lower() in ["approved", "reimbursed", "settled"]
+
+                added_any = False
+
+                # 1. Petty cash disbursement row (if float was paid from company petty cash and not pre-recorded)
+                if pc_funded > ZERO and not t.existing_expense_id:
+                    entries.append({
+                        **common_data,
+                        "entry_id": f"topup-{t.topup_id}-pc",
+                        "entry_type": "expense" if is_settled_or_reimbursed else "request",
+                        "description": f"[Petty Cash] {t.description}" if t.description else "Company petty cash disbursement",
+                        "category": getattr(t, "category", None) or "Petty Cash",
+                        "amount_requested": pc_funded,
+                        "amount_in": ZERO,
+                        "amount_out": pc_funded if is_settled_or_reimbursed else ZERO,
+                        "request_type": "replenishment_disbursement",
+                    })
+                    added_any = True
+
+                # 2. Replenishment reimbursement row (if employee paid out of pocket)
+                reimb_amt = out_of_pocket if t.total_expenses is not None else amt
+                if reimb_amt > ZERO or (not added_any and pc_funded <= ZERO):
+                    entries.append({
+                        **common_data,
+                        "entry_id": f"topup-{t.topup_id}-reimb",
+                        "entry_type": "request",
+                        "description": f"[Replenishment] {t.description}" if t.description else "Petty cash replenishment request",
+                        "category": getattr(t, "category", None) or "Reimbursement",
+                        "amount_requested": reimb_amt,
+                        "amount_in": ZERO,
+                        "amount_out": ZERO,
+                        "request_type": "reimbursement",
+                    })
+            else:
+                amt_in = amt if is_approved else ZERO
+                default_desc = "Top-up from sales" if is_approved else "Petty cash replenishment request"
+                entries.append({
+                    **common_data,
+                    "entry_id": f"topup-{t.topup_id}",
+                    "entry_type": "topup" if is_approved else "request",
+                    "description": t.description or default_desc,
+                    "category": getattr(t, "category", None),
+                    "amount_requested": amt,
+                    "amount_in": amt_in,
+                    "amount_out": ZERO,
+                    "request_type": req_type,
+                })
 
         for e in expenses:
             if not e["expense_date"]:
@@ -320,6 +466,11 @@ class PettyCashService:
                 "amount_in": ZERO,
                 "amount_out": amt_out,
                 "status": "Approved",
+                "request_type": "expense",
+                "paid_by": None,
+                "receipt_url": None,
+                "attachments": None,
+                "items": None,
                 "endorsed_by": None,
                 "endorsed_at": None,
                 "finance_remark": None,
@@ -383,43 +534,59 @@ class PettyCashService:
 
     def list_movements(self, company: Optional[Company] = None) -> List[PettyCashMovementOut]:
         """
-        Top-ups for the Transaction page ledger 
+        Top-ups and reimbursements for the Transaction page ledger (spec 0013 & spec 0038).
         """
         topups = [
             t for t in self._topups(None)
             if (t.status or "").strip().lower() in LEDGER_MOVEMENT_STATUSES
-            and (t.bank_account_id or "").strip()
         ]
         if not topups:
             return []
 
         comp_names = {c.company_id: c.company_name for c in self.db.query(Company).all()}
         name_to_id = {(name or "").strip().lower(): cid for cid, name in comp_names.items()}
+        user_names = {u.user_id: u.name for u in self.db.query(User.user_id, User.name).all()}
 
-        banks = self._banks_by_id({t.bank_account_id for t in topups})
+        bank_ids = {t.bank_account_id for t in topups if (t.bank_account_id or "").strip()}
+        banks = self._banks_by_id(bank_ids)
 
         movements: List[PettyCashMovementOut] = []
         for t in topups:
-            funding = self._resolve_funding(t, banks, comp_names, name_to_id)
-            if funding is None:
-                # Funding bank cannot be found: nothing reliable to show for either side.
-                continue
+            requesting_name = comp_names.get(t.company_id) or f"Company #{t.company_id}"
+            req_type = (t.request_type or "topup").strip().lower()
 
-            bank = funding["bank"]
-            funding_company_id = funding["company_id"]
-            funding_company_name = funding["company_name"]
-            requesting_name = comp_names.get(t.company_id)
-            is_own_account = funding["is_own_account"]
+            funding = None
+            if (t.bank_account_id or "").strip():
+                funding = self._resolve_funding(t, banks, comp_names, name_to_id)
+
+            if funding:
+                funding_company_id = funding["company_id"]
+                funding_company_name = funding["company_name"]
+                is_own_account = funding["is_own_account"]
+            else:
+                funding_company_id = t.company_id
+                funding_company_name = requesting_name
+                is_own_account = True
 
             if company is not None and company.company_id not in (t.company_id, funding_company_id):
                 continue
+
+            # Amount to show for the movement
+            move_amt = _to_decimal(t.amount)
+            if req_type in ("reimbursement", "replenishment"):
+                if move_amt <= ZERO and t.company_funded_amount is not None and _to_decimal(t.company_funded_amount) > ZERO:
+                    move_amt = _to_decimal(t.company_funded_amount)
+                elif move_amt <= ZERO and t.total_expenses is not None:
+                    move_amt = _to_decimal(t.total_expenses)
+
+            creator_name = user_names.get(t.created_by) or t.paid_by or "Staff"
 
             movements.append(
                 PettyCashMovementOut(
                     topup_id=t.topup_id,
                     reference_no=t.reference_no,
                     topup_date=t.topup_date,
-                    amount=_to_decimal(t.amount),
+                    amount=move_amt,
                     description=t.description,
                     status=t.status,
                     company_id=t.company_id,
@@ -428,6 +595,28 @@ class PettyCashService:
                     funding_company_name=funding_company_name,
                     is_own_account=is_own_account,
                     created_at=t.created_at,
+                    request_type=req_type,
+                    paid_by=t.paid_by,
+                    category=t.category,
+                    total_expenses=t.total_expenses,
+                    company_funded_amount=t.company_funded_amount,
+                    employee_out_of_pocket=t.employee_out_of_pocket,
+                    amount_reimbursed=t.amount_reimbursed,
+                    endorsed_by=t.endorsed_by,
+                    endorsed_at=t.endorsed_at,
+                    finance_remark=t.finance_remark,
+                    reviewed_by=t.reviewed_by,
+                    reviewed_at=t.reviewed_at,
+                    remark=t.remark,
+                    created_by=t.created_by,
+                    created_by_name=creator_name,
+                    reimbursed_by=t.reimbursed_by,
+                    reimbursed_at=t.reimbursed_at,
+                    transfer_received_by=t.transfer_received_by,
+                    transfer_received_at=t.transfer_received_at,
+                    items=t.items,
+                    attachments=t.attachments,
+                    receipt_url=t.receipt_url,
                 )
             )
 
@@ -439,10 +628,87 @@ class PettyCashService:
     def _topup_output(self, topup: PettyCashTopUp) -> PettyCashTopUpOut:
         output = PettyCashTopUpOut.model_validate(topup)
         output.company_name = topup.company.company_name if topup.company else None
+        if topup.bank_account_id:
+            b = self.db.query(BankAccount).filter(BankAccount.id == topup.bank_account_id).first()
+            if b:
+                output.funding_bank_name = b.bank_name
+        if topup.destination_bank_id:
+            db_acc = self.db.query(BankAccount).filter(BankAccount.id == topup.destination_bank_id).first()
+            if db_acc:
+                output.destination_bank_name = db_acc.bank_name
+        if topup.intercompany_transfer_id:
+            ict = self.db.query(IntercompanyTransfer).filter(IntercompanyTransfer.transfer_id == topup.intercompany_transfer_id).first()
+            if ict:
+                output.transfer_status = ict.transfer_status
+                output.settlement_status = ict.settlement_status
         return output
 
     def create_topup(self, topup_in: PettyCashTopUpCreate, current_user: Optional[AuthenticatedUser] = None) -> PettyCashTopUpOut:
         company = self.resolve_company(topup_in.company_id, topup_in.company_name or topup_in.company)
+        req_type = (topup_in.request_type or "topup").strip().lower()
+
+        total_expenses = topup_in.total_expenses
+        company_funded = topup_in.company_funded_amount if topup_in.company_funded_amount is not None else ZERO
+        employee_out_of_pocket = topup_in.employee_out_of_pocket if topup_in.employee_out_of_pocket is not None else ZERO
+        reserved_amount = ZERO
+        existing_exp_id = topup_in.existing_expense_id
+
+        if req_type == "reimbursement":
+            if total_expenses is None:
+                total_expenses = topup_in.amount
+            E = _to_decimal(total_expenses)
+            C = _to_decimal(company_funded)
+            if E <= ZERO:
+                raise HTTPException(status_code=422, detail="Total business expenses must be greater than zero.")
+            if C < ZERO:
+                raise HTTPException(status_code=422, detail="Company funded amount cannot be negative.")
+            if C > E:
+                raise HTTPException(status_code=422, detail="Company funded amount cannot exceed total expenses.")
+            employee_out_of_pocket = E - C
+            payable_amount = employee_out_of_pocket
+
+            # Coordinate under wallet lock
+            self._get_wallet_with_lock(company.company_id)
+
+            if existing_exp_id:
+                # Pre-recorded expense validation under lock (AC-2)
+                exp = self.db.query(Expense).filter(Expense.expense_id == existing_exp_id).first()
+                if not exp:
+                    raise HTTPException(status_code=422, detail="Linked expense record not found.")
+                if exp.company_id != company.company_id:
+                    raise HTTPException(status_code=422, detail="Linked expense belongs to a different company.")
+                if not (exp.payment_method and "petty cash" in exp.payment_method.lower()):
+                    raise HTTPException(status_code=422, detail="Linked expense must have payment method 'Petty Cash'.")
+                if _to_decimal(exp.amount) != C:
+                    raise HTTPException(status_code=422, detail=f"Linked expense amount (₱{exp.amount:,.2f}) does not match company funded amount (₱{C:,.2f}).")
+                if exp.linked_topup_id is not None:
+                    raise HTTPException(status_code=422, detail="Linked expense is already associated with another reimbursement claim.")
+
+                # Check if another active topup is already claiming this existing expense
+                active_statuses = ["pending finance endorsement", "pending audit approval", "approved", "transfer in transit", "return pending", "transfer received", "reimbursed", "settled"]
+                conflict = self.db.query(PettyCashTopUp).filter(
+                    PettyCashTopUp.existing_expense_id == existing_exp_id,
+                    func.lower(PettyCashTopUp.status).in_(active_statuses),
+                ).first()
+                if conflict:
+                    raise HTTPException(status_code=422, detail="Linked expense is already claimed by an active reimbursement request.")
+
+                reserved_amount = ZERO
+            else:
+                # Unrecorded cash spending: reservation logic under lock (AC-2)
+                if C > ZERO:
+                    unreserved = self.get_unreserved_balance(company.company_id)
+                    if C > unreserved:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"Insufficient unreserved petty cash float. Available unreserved balance: ₱{unreserved:,.2f}, requested company funding: ₱{C:,.2f}."
+                        )
+                    reserved_amount = C
+        else:
+            payable_amount = topup_in.amount
+            if payable_amount < Decimal("1.00"):
+                raise HTTPException(status_code=422, detail="Top-up amount must be at least 1.00.")
+
         role = (current_user.get("role") or "").lower() if current_user else ""
         is_finance = role in ("finance", "admin", "superadmin")
         is_direct_endorse = (
@@ -466,12 +732,24 @@ class PettyCashService:
 
         topup = PettyCashTopUp(
             company_id=company.company_id,
-            amount=topup_in.amount,
+            amount=payable_amount,
             topup_date=topup_in.topup_date,
             reference_no=(topup_in.reference_no or "").strip() or None,
             description=(topup_in.description or "").strip() or None,
             bank_account_id=bank_id,
             status=status_to_use,
+            request_type=req_type,
+            paid_by=(topup_in.paid_by or "").strip() or None,
+            receipt_url=topup_in.receipt_url,
+            attachments=topup_in.attachments,
+            items=topup_in.items,
+            category=(topup_in.category or "").strip() or None,
+            total_expenses=total_expenses,
+            company_funded_amount=company_funded,
+            employee_out_of_pocket=employee_out_of_pocket,
+            reserved_amount=reserved_amount,
+            amount_reimbursed=ZERO,
+            existing_expense_id=existing_exp_id,
             endorsed_by=endorser_name,
             endorsed_at=endorsed_time,
             finance_remark=fin_remark,
@@ -483,6 +761,25 @@ class PettyCashService:
         self.db.add(topup)
         self.db.commit()
         self.db.refresh(topup)
+        try:
+            actor_name = (current_user.get("full_name") or current_user.get("name") or current_user.get("email")) if current_user else (topup.paid_by or "Staff")
+            log_transaction(
+                self.db,
+                AuditAction.PETTY_CASH_TOPUP_CREATED,
+                user_id=topup.created_by,
+                company_id=topup.company_id,
+                ip_address="internal",
+                record_id=topup.topup_id,
+                record_type="petty_cash",
+                extra={
+                    "amount": float(topup.amount),
+                    "request_type": topup.request_type,
+                    "paid_by": topup.paid_by,
+                    "actor_name": actor_name,
+                },
+            )
+        except Exception:
+            pass
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
@@ -493,6 +790,9 @@ class PettyCashService:
         topup_id: int,
         amount: Optional[Decimal] = None,
         description: Optional[str] = None,
+        total_expenses: Optional[Decimal] = None,
+        company_funded_amount: Optional[Decimal] = None,
+        existing_expense_id: Optional[int] = None,
     ) -> PettyCashTopUpOut:
         topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
         if not topup:
@@ -505,16 +805,83 @@ class PettyCashService:
                 detail=f"This request has already been reviewed by finance ({topup.status}) and cannot be edited."
             )
 
-        if amount is not None:
-            if amount < Decimal("1.00"):
-                raise HTTPException(status_code=400, detail="Amount must be at least 1.00.")
-            topup.amount = amount
+        req_type = (topup.request_type or "topup").lower()
+        if req_type == "reimbursement":
+            new_e = total_expenses if total_expenses is not None else topup.total_expenses
+            new_c = company_funded_amount if company_funded_amount is not None else topup.company_funded_amount
+            new_existing = existing_expense_id if existing_expense_id is not None else topup.existing_expense_id
+
+            if new_e is not None and new_c is not None:
+                E = _to_decimal(new_e)
+                C = _to_decimal(new_c)
+                if E <= ZERO:
+                    raise HTTPException(status_code=422, detail="Total business expenses must be greater than zero.")
+                if C < ZERO:
+                    raise HTTPException(status_code=422, detail="Company funded amount cannot be negative.")
+                if C > E:
+                    raise HTTPException(status_code=422, detail="Company funded amount cannot exceed total expenses.")
+                O = E - C
+                topup.total_expenses = E
+                topup.company_funded_amount = C
+                topup.employee_out_of_pocket = O
+                topup.amount = O
+
+                # Revalidate under lock
+                self._get_wallet_with_lock(topup.company_id)
+                if new_existing:
+                    exp = self.db.query(Expense).filter(Expense.expense_id == new_existing).first()
+                    if not exp:
+                        raise HTTPException(status_code=422, detail="Linked expense record not found.")
+                    if exp.company_id != topup.company_id:
+                        raise HTTPException(status_code=422, detail="Linked expense belongs to a different company.")
+                    if _to_decimal(exp.amount) != C:
+                        raise HTTPException(status_code=422, detail=f"Linked expense amount does not match company funded amount.")
+                    topup.existing_expense_id = new_existing
+                    topup.reserved_amount = ZERO
+                else:
+                    topup.existing_expense_id = None
+                    if C > ZERO:
+                        unreserved = self.get_unreserved_balance(topup.company_id, exclude_topup_id=topup.topup_id)
+                        if C > unreserved:
+                            raise HTTPException(
+                                status_code=422,
+                                detail=f"Insufficient unreserved petty cash float. Available unreserved balance: ₱{unreserved:,.2f}, requested company funding: ₱{C:,.2f}."
+                            )
+                        topup.reserved_amount = C
+                    else:
+                        topup.reserved_amount = ZERO
+        else:
+            if amount is not None:
+                if amount < Decimal("1.00"):
+                    raise HTTPException(status_code=400, detail="Amount must be at least 1.00.")
+                topup.amount = amount
 
         if description is not None:
             topup.description = description.strip() or None
 
         self.db.commit()
         self.db.refresh(topup)
+        try:
+            log_transaction(
+                self.db,
+                AuditAction.PETTY_CASH_WALLET_UPDATED,
+                user_id=None,
+                company_id=topup.company_id,
+                ip_address="internal",
+                record_id=topup.topup_id,
+                record_type="petty_cash",
+                extra={
+                    "action": "edit",
+                    "amount": float(topup.amount),
+                    "description": topup.description,
+                    "changes": {
+                        "amount": str(topup.amount),
+                        "description": topup.description or "",
+                    },
+                },
+            )
+        except Exception:
+            pass
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
@@ -527,13 +894,15 @@ class PettyCashService:
         remark: str,
         endorser_name: Optional[str] = None,
         bank_account_id: Optional[str] = None,
+        payment_method_option: Optional[str] = None,
+        destination_bank_id: Optional[str] = None,
     ) -> PettyCashTopUpOut:
         topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
         if not topup:
             raise HTTPException(status_code=404, detail="Petty cash transaction not found.")
 
         current_status = (topup.status or "").lower()
-        if current_status == "approved":
+        if current_status in ["approved", "reimbursed", "settled"]:
             raise HTTPException(status_code=400, detail="This transaction is already approved and cannot be changed.")
 
         if not remark or not remark.strip():
@@ -541,17 +910,75 @@ class PettyCashService:
 
         is_endorse = action.lower() == "endorse"
 
-        #Finance must choose a funding bank before endorsing (not required for a rejection).
-        if is_endorse and not (bank_account_id and str(bank_account_id).strip()):
-            raise HTTPException(status_code=422, detail="Please choose a funding bank account before endorsing.")
+        if not is_endorse:
+            topup.status = "Rejected by Finance"
+            topup.reserved_amount = ZERO
+            topup.finance_remark = remark.strip()
+            topup.endorsed_by = endorser_name or "Finance Officer"
+            topup.endorsed_at = func.now()
+            self.db.commit()
+            self.db.refresh(topup)
+            system_cache.invalidate_tag("petty_cash")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+            return self._topup_output(topup)
 
-        new_status = "Pending Audit Approval" if is_endorse else "Rejected by Finance"
-        topup.status = new_status
+        is_reimbursement = (getattr(topup, "request_type", "topup") or "topup").lower() == "reimbursement"
+        is_zero_excess = is_reimbursement and (_to_decimal(topup.amount) == ZERO or _to_decimal(topup.employee_out_of_pocket) == ZERO)
+
+        if is_zero_excess:
+            if bank_account_id and str(bank_account_id).strip():
+                topup.bank_account_id = str(bank_account_id).strip()
+        else:
+            if not (bank_account_id and str(bank_account_id).strip()):
+                raise HTTPException(status_code=422, detail="Please choose a funding bank account before endorsing.")
+
+            source_acc = self.db.query(BankAccount).filter(BankAccount.id == str(bank_account_id).strip()).first()
+            if not source_acc:
+                raise HTTPException(status_code=422, detail="Selected funding bank account not found.")
+
+            topup.bank_account_id = source_acc.id
+
+            company = self.db.query(Company).filter(Company.company_id == topup.company_id).first()
+            company_name = company.company_name if company else None
+            is_own_account = (source_acc.company_id == topup.company_id)
+            if not is_own_account and source_acc.company_id is None and company_name:
+                is_own_account = (source_acc.company_name or "").strip().lower() == company_name.strip().lower()
+
+            if is_own_account:
+                topup.payment_method_option = None
+                topup.destination_bank_id = None
+            else:
+                opt = (payment_method_option or "").strip().lower()
+                if opt not in ("direct", "transfer_first"):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Please select a payment method option ('direct' or 'transfer_first') for cross-company funding."
+                    )
+                topup.payment_method_option = opt
+
+                if opt == "transfer_first":
+                    if not (destination_bank_id and str(destination_bank_id).strip()):
+                        raise HTTPException(
+                            status_code=422,
+                            detail="Please choose an eligible destination bank account belonging to the requesting company."
+                        )
+                    dest_acc = self.db.query(BankAccount).filter(BankAccount.id == str(destination_bank_id).strip()).first()
+                    if not dest_acc:
+                        raise HTTPException(status_code=422, detail="Selected destination bank account not found.")
+                    is_dest_own = (dest_acc.company_id == topup.company_id)
+                    if not is_dest_own and dest_acc.company_id is None and company_name:
+                        is_dest_own = (dest_acc.company_name or "").strip().lower() == company_name.strip().lower()
+                    if not is_dest_own:
+                        raise HTTPException(status_code=422, detail="Destination bank account must belong to the requesting company.")
+                    topup.destination_bank_id = dest_acc.id
+                else:
+                    topup.destination_bank_id = None
+
+        topup.status = "Pending Audit Approval"
         topup.finance_remark = remark.strip()
         topup.endorsed_by = endorser_name or "Finance Officer"
         topup.endorsed_at = func.now()
-        if is_endorse:
-            topup.bank_account_id = str(bank_account_id).strip()
 
         self.db.commit()
         self.db.refresh(topup)
@@ -572,30 +999,593 @@ class PettyCashService:
             raise HTTPException(status_code=404, detail="Petty cash transaction not found.")
 
         current_status = (topup.status or "").lower()
-        if current_status == "approved":
+        if current_status in ["approved", "reimbursed", "settled"]:
             raise HTTPException(status_code=400, detail="This transaction is already approved and cannot be changed.")
 
         if not remark or not remark.strip():
             raise HTTPException(status_code=422, detail="A remark is required when approving or disapproving.")
 
         is_approve = action.lower() == "approve"
-        new_status = "Approved" if is_approve else "Disapproved by Audit"
-        topup.status = new_status
+        if not is_approve:
+            topup.status = "Disapproved by Audit"
+            topup.reserved_amount = ZERO
+            topup.remark = remark.strip()
+            topup.reviewed_by = reviewer_name or "Internal Auditor"
+            topup.reviewed_at = func.now()
+            self.db.commit()
+            self.db.refresh(topup)
+            system_cache.invalidate_tag("petty_cash")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+            return self._topup_output(topup)
+
+        topup.status = "Approved"
         topup.remark = remark.strip()
         topup.reviewed_by = reviewer_name or "Internal Auditor"
         topup.reviewed_at = func.now()
-
         self.db.commit()
         self.db.refresh(topup)
 
-        # Disapproval moves nothing.
-        if is_approve:
+        req_type = (getattr(topup, "request_type", "topup") or "topup").lower()
+        if req_type == "topup" and topup.bank_account_id:
             self._disburse_to_bank(topup)
 
         system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
+
+    def finalize_settlement(
+        self,
+        topup_id: int,
+        notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "settled":
+            return self._topup_output(topup)
+
+        if (topup.status or "").lower() != "approved":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Claim in status '{topup.status}' cannot be finalized. It must be in 'Approved' status."
+            )
+
+        O = _to_decimal(topup.amount)
+        if O > ZERO:
+            raise HTTPException(
+                status_code=400,
+                detail="This claim has positive employee out-of-pocket expenses. Use Reimburse instead of Finalize Settlement."
+            )
+
+        C = _to_decimal(topup.company_funded_amount) if topup.company_funded_amount is not None else _to_decimal(topup.total_expenses)
+
+        # Coordinate under wallet lock
+        self._get_wallet_with_lock(topup.company_id)
+
+        if topup.existing_expense_id:
+            existing_exp = self.db.query(Expense).filter(Expense.expense_id == topup.existing_expense_id).first()
+            if existing_exp:
+                existing_exp.linked_topup_id = topup.topup_id
+            topup.petty_cash_expense_id = topup.existing_expense_id
+        else:
+            cat_obj = None
+            if topup.category:
+                cat_obj = self.db.query(Category).filter(func.lower(Category.name) == topup.category.strip().lower()).first()
+            new_exp = Expense(
+                company_id=topup.company_id,
+                category_id=cat_obj.category_id if cat_obj else None,
+                expense_date=topup.topup_date or date.today(),
+                amount=C,
+                description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
+                payment_method="Petty Cash",
+                reference_no=f"PC-EXP-{topup.topup_id}",
+                linked_topup_id=topup.topup_id,
+            )
+            self.db.add(new_exp)
+            self.db.flush()
+            topup.petty_cash_expense_id = new_exp.expense_id
+
+        topup.reserved_amount = ZERO
+        topup.status = "Settled"
+        topup.reimbursed_at = func.now()
+        topup.reimbursed_by = current_user.get("full_name") if current_user else "Finance Officer"
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def reimburse(
+        self,
+        topup_id: int,
+        notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "reimbursed":
+            return self._topup_output(topup)
+
+        is_transfer_first = (topup.payment_method_option or "").lower() == "transfer_first"
+        current_status = (topup.status or "").lower()
+
+        if is_transfer_first:
+            if current_status != "transfer received":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Transfer first reimbursement requires funds to be received first (current status: '{topup.status}')."
+                )
+            funding_bank_id = topup.destination_bank_id
+        else:
+            if current_status != "approved":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Claim in status '{topup.status}' cannot be reimbursed. It must be in 'Approved' status."
+                )
+            funding_bank_id = topup.bank_account_id
+
+        if not funding_bank_id:
+            raise HTTPException(status_code=400, detail="No funding bank account configured for reimbursement.")
+
+        # Lock funding bank account and validate balance (AC-14)
+        bank_acc = self._get_bank_account_with_lock(funding_bank_id)
+        if not bank_acc:
+            raise HTTPException(status_code=400, detail="Funding bank account not found.")
+
+        O = _to_decimal(topup.amount)
+        if _to_decimal(bank_acc.current_balance) < O:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient bank funds in {bank_acc.bank_name}. Available balance: ₱{bank_acc.current_balance:,.2f}, required: ₱{O:,.2f}."
+            )
+
+        # Coordinate under wallet lock
+        self._get_wallet_with_lock(topup.company_id)
+
+        # 1. Execute bank withdrawal
+        bank_svc = BankService(self.db)
+        ref_no = topup.reference_no or f"REIMB-{topup.topup_id}"
+        tx_date = datetime.now().strftime("%m/%d/%y")
+        withdraw_req = BankDepositWithdrawRequest(
+            amount=O,
+            date=tx_date,
+            particulars=f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'} (Ref: {ref_no})",
+            category="Bank Transfer" if topup.payment_method_option == "direct" else "Cheque",
+            reference_no=ref_no,
+        )
+        _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req)
+
+        # 2. Method A (Direct Payment): record intercompany transfer
+        if topup.payment_method_option == "direct":
+            ict_ref = f"ICT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+            transfer = IntercompanyTransfer(
+                source_company_id=bank_acc.company_id,
+                destination_company_id=topup.company_id,
+                source_bank_id=bank_acc.id,
+                source_bank_tx_id=tx.id,
+                amount=O,
+                transfer_type="reimbursement_direct",
+                reference_no=ict_ref,
+                transfer_status="NOT_APPLICABLE",
+                settlement_status="UNSETTLED",
+                initiated_by=current_user.get("full_name") if current_user else "Finance Officer",
+                linked_topup_id=topup.topup_id,
+                notes=notes,
+            )
+            self.db.add(transfer)
+            self.db.flush()
+            topup.intercompany_transfer_id = transfer.transfer_id
+
+        # 3. Finalize expenses (AC-3)
+        C = _to_decimal(topup.company_funded_amount) if topup.company_funded_amount is not None else ZERO
+        cat_obj = None
+        if topup.category:
+            cat_obj = self.db.query(Category).filter(func.lower(Category.name) == topup.category.strip().lower()).first()
+
+        if topup.existing_expense_id:
+            existing_exp = self.db.query(Expense).filter(Expense.expense_id == topup.existing_expense_id).first()
+            if existing_exp:
+                existing_exp.linked_topup_id = topup.topup_id
+            topup.petty_cash_expense_id = topup.existing_expense_id
+        elif C > ZERO:
+            new_pc_exp = Expense(
+                company_id=topup.company_id,
+                category_id=cat_obj.category_id if cat_obj else None,
+                expense_date=topup.topup_date or date.today(),
+                amount=C,
+                description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
+                payment_method="Petty Cash",
+                reference_no=f"PC-EXP-{topup.topup_id}",
+                linked_topup_id=topup.topup_id,
+            )
+            self.db.add(new_pc_exp)
+            self.db.flush()
+            topup.petty_cash_expense_id = new_pc_exp.expense_id
+
+        if O > ZERO:
+            new_reimb_exp = Expense(
+                company_id=topup.company_id,
+                category_id=cat_obj.category_id if cat_obj else None,
+                expense_date=topup.topup_date or date.today(),
+                amount=O,
+                description=topup.description or f"Reimbursement Payout for {topup.paid_by or 'Employee'}",
+                payment_method="Bank Reimbursement",
+                reference_no=f"REIMB-{topup.topup_id}",
+                linked_topup_id=topup.topup_id,
+            )
+            self.db.add(new_reimb_exp)
+            self.db.flush()
+            topup.reimbursement_expense_id = new_reimb_exp.expense_id
+
+        topup.reserved_amount = ZERO
+        topup.status = "Reimbursed"
+        topup.amount_reimbursed = O
+        topup.reimbursed_at = func.now()
+        topup.reimbursed_by = current_user.get("full_name") if current_user else "Finance Officer"
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def initiate_transfer(
+        self,
+        topup_id: int,
+        notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "transfer in transit":
+            return self._topup_output(topup)
+
+        if (topup.status or "").lower() != "approved":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transfer cannot be initiated in status '{topup.status}'. It must be in 'Approved' status."
+            )
+
+        if (topup.payment_method_option or "").lower() != "transfer_first":
+            raise HTTPException(status_code=400, detail="This claim is not configured for 'transfer_first'.")
+
+        if not topup.bank_account_id or not topup.destination_bank_id:
+            raise HTTPException(status_code=400, detail="Source and destination bank accounts must be configured.")
+
+        source_acc = self._get_bank_account_with_lock(topup.bank_account_id)
+        dest_acc = self.db.query(BankAccount).filter(BankAccount.id == topup.destination_bank_id).first()
+        if not source_acc or not dest_acc:
+            raise HTTPException(status_code=400, detail="Configured source or destination bank account not found.")
+
+        O = _to_decimal(topup.amount)
+        if _to_decimal(source_acc.current_balance) < O:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient bank funds in funding bank {source_acc.bank_name}. Available balance: ₱{source_acc.current_balance:,.2f}, required: ₱{O:,.2f}."
+            )
+
+        # Withdraw from source bank (Company B)
+        bank_svc = BankService(self.db)
+        ict_ref = f"ICT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
+        tx_date = datetime.now().strftime("%m/%d/%y")
+        withdraw_req = BankDepositWithdrawRequest(
+            amount=O,
+            date=tx_date,
+            particulars=f"Intercompany Transfer for Reimbursement {topup.reference_no or f'REIMB-{topup.topup_id}'} (Ref: {ict_ref})",
+            category="Bank Transfer",
+            reference_no=ict_ref,
+        )
+        _, tx = bank_svc.withdraw(source_acc.id, withdraw_req)
+
+        transfer = IntercompanyTransfer(
+            source_company_id=source_acc.company_id,
+            destination_company_id=topup.company_id,
+            source_bank_id=source_acc.id,
+            destination_bank_id=dest_acc.id,
+            source_bank_tx_id=tx.id,
+            amount=O,
+            transfer_type="reimbursement_transfer_first",
+            reference_no=ict_ref,
+            transfer_status="IN_TRANSIT",
+            settlement_status="UNSETTLED",
+            initiated_by=current_user.get("full_name") if current_user else "Finance Officer",
+            linked_topup_id=topup.topup_id,
+            notes=notes,
+        )
+        self.db.add(transfer)
+        self.db.flush()
+
+        topup.intercompany_transfer_id = transfer.transfer_id
+        topup.status = "Transfer In Transit"
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def confirm_transfer(
+        self,
+        topup_id: int,
+        notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "transfer received":
+            return self._topup_output(topup)
+
+        if (topup.status or "").lower() != "transfer in transit":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transfer cannot be confirmed in status '{topup.status}'. It must be 'Transfer In Transit'."
+            )
+
+        transfer = self.db.query(IntercompanyTransfer).filter(IntercompanyTransfer.transfer_id == topup.intercompany_transfer_id).first()
+        if not transfer or transfer.transfer_status != "IN_TRANSIT":
+            raise HTTPException(status_code=400, detail="Active in-transit transfer record not found.")
+
+        # Deposit into destination bank (Company A)
+        bank_svc = BankService(self.db)
+        tx_date = datetime.now().strftime("%m/%d/%y")
+        deposit_req = BankDepositWithdrawRequest(
+            amount=_to_decimal(transfer.amount),
+            date=tx_date,
+            particulars=f"Intercompany Transfer Received (Ref: {transfer.reference_no})",
+            category="Bank Transfer",
+            reference_no=transfer.reference_no,
+        )
+        _, tx = bank_svc.deposit(transfer.destination_bank_id, deposit_req)
+
+        officer = current_user.get("full_name") if current_user else "Receiving Officer"
+        transfer.destination_bank_tx_id = tx.id
+        transfer.transfer_status = "RECEIVED"
+        transfer.received_by = officer
+        transfer.received_at = func.now()
+
+        topup.status = "Transfer Received"
+        topup.transfer_received_by = officer
+        topup.transfer_received_at = func.now()
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def cancel_transfer(
+        self,
+        topup_id: int,
+        reason: str,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "return pending":
+            return self._topup_output(topup)
+
+        if (topup.status or "").lower() in ["transfer received", "reimbursed"]:
+            raise HTTPException(status_code=400, detail="Cannot cancel transfer that has already been received or reimbursed.")
+
+        if (topup.status or "").lower() != "transfer in transit":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transfer cannot be cancelled in status '{topup.status}'. It must be 'Transfer In Transit'."
+            )
+
+        transfer = self.db.query(IntercompanyTransfer).filter(IntercompanyTransfer.transfer_id == topup.intercompany_transfer_id).first()
+        if not transfer or transfer.transfer_status != "IN_TRANSIT":
+            raise HTTPException(status_code=400, detail="Active in-transit transfer record not found.")
+
+        transfer.transfer_status = "RETURN_PENDING"
+        transfer.notes = f"{transfer.notes or ''}\nCancellation reason: {reason.strip()}".strip()
+
+        topup.status = "Return Pending"
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def confirm_reversal(
+        self,
+        topup_id: int,
+        verification_notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpOut:
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash claim not found.")
+
+        if (topup.status or "").lower() == "cancelled":
+            return self._topup_output(topup)
+
+        if (topup.status or "").lower() != "return pending":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Reversal cannot be confirmed in status '{topup.status}'. It must be in 'Return Pending'."
+            )
+
+        transfer = self.db.query(IntercompanyTransfer).filter(IntercompanyTransfer.transfer_id == topup.intercompany_transfer_id).first()
+        if not transfer or transfer.transfer_status != "RETURN_PENDING":
+            raise HTTPException(status_code=400, detail="Transfer is not in RETURN_PENDING status.")
+
+        # Post reversal deposit to Company B bank account
+        bank_svc = BankService(self.db)
+        rev_ref = f"REV-{transfer.reference_no}"
+        tx_date = datetime.now().strftime("%m/%d/%y")
+        deposit_req = BankDepositWithdrawRequest(
+            amount=_to_decimal(transfer.amount),
+            date=tx_date,
+            particulars=f"Intercompany Transfer Reversal for {transfer.reference_no}",
+            category="Intercompany Transfer Reversal",
+            reference_no=rev_ref,
+        )
+        _, tx = bank_svc.deposit(transfer.source_bank_id, deposit_req)
+
+        transfer.reversal_bank_tx_id = tx.id
+        transfer.transfer_status = "CANCELLED"
+        if verification_notes:
+            transfer.notes = f"{transfer.notes or ''}\nReversal notes: {verification_notes.strip()}".strip()
+
+        # Invalidate previous approvals per AC-12
+        topup.status = "Pending Finance Endorsement"
+        topup.endorsed_by = None
+        topup.endorsed_at = None
+        topup.finance_remark = None
+        topup.reviewed_by = None
+        topup.reviewed_at = None
+        topup.remark = None
+        topup.payment_method_option = None
+        topup.destination_bank_id = None
+
+        self.db.commit()
+        self.db.refresh(topup)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        return self._topup_output(topup)
+
+    def list_intercompany_transfers(
+        self,
+        company_id: Optional[int] = None,
+        settlement_status: Optional[str] = None,
+    ) -> List[IntercompanyTransferOut]:
+        query = self.db.query(IntercompanyTransfer)
+        if company_id:
+            query = query.filter(
+                (IntercompanyTransfer.source_company_id == company_id) | (IntercompanyTransfer.destination_company_id == company_id)
+            )
+        if settlement_status:
+            query = query.filter(func.lower(IntercompanyTransfer.settlement_status) == settlement_status.strip().lower())
+
+        query = query.order_by(IntercompanyTransfer.initiated_at.desc())
+        transfers = query.all()
+
+        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
+
+        results = []
+        for t in transfers:
+            item = IntercompanyTransferOut.model_validate(t)
+            item.source_company_name = comp_map.get(t.source_company_id)
+            item.destination_company_name = comp_map.get(t.destination_company_id)
+            item.source_bank_name = bank_map.get(t.source_bank_id)
+            item.destination_bank_name = bank_map.get(t.destination_bank_id) if t.destination_bank_id else None
+            results.append(item)
+        return results
+
+    def settle_intercompany_transfer(
+        self,
+        transfer_id: int,
+        source_bank_id: str,
+        destination_bank_id: str,
+        notes: Optional[str] = None,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> IntercompanyTransferOut:
+        transfer = self.db.query(IntercompanyTransfer).filter(IntercompanyTransfer.transfer_id == transfer_id).first()
+        if not transfer:
+            raise HTTPException(status_code=404, detail="Intercompany transfer not found.")
+
+        if transfer.settlement_status == "SETTLED":
+            comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+            bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
+            item = IntercompanyTransferOut.model_validate(transfer)
+            item.source_company_name = comp_map.get(transfer.source_company_id)
+            item.destination_company_name = comp_map.get(transfer.destination_company_id)
+            item.source_bank_name = bank_map.get(transfer.source_bank_id)
+            item.destination_bank_name = bank_map.get(transfer.destination_bank_id) if transfer.destination_bank_id else None
+            return item
+
+        if transfer.transfer_status not in ("NOT_APPLICABLE", "RECEIVED"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transfer in status '{transfer.transfer_status}' cannot be settled. Only completed transfers can be repaid."
+            )
+
+        source_bank = self._get_bank_account_with_lock(source_bank_id)
+        dest_bank = self.db.query(BankAccount).filter(BankAccount.id == destination_bank_id).first()
+        if not source_bank or not dest_bank:
+            raise HTTPException(status_code=422, detail="Source or destination bank account not found.")
+
+        if source_bank.company_id != transfer.destination_company_id:
+            raise HTTPException(status_code=422, detail="Source bank account must belong to the debtor company (Company A).")
+
+        if dest_bank.company_id != transfer.source_company_id:
+            raise HTTPException(status_code=422, detail="Destination bank account must belong to the creditor company (Company B).")
+
+        amt = _to_decimal(transfer.amount)
+        if _to_decimal(source_bank.current_balance) < amt:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient bank funds in {source_bank.bank_name}. Available balance: ₱{source_bank.current_balance:,.2f}, required: ₱{amt:,.2f}."
+            )
+
+        bank_svc = BankService(self.db)
+        tx_date = datetime.now().strftime("%m/%d/%y")
+        settle_ref = f"SETTLE-{transfer.reference_no}"
+
+        # 1. Withdrawal from Company A bank
+        withdraw_req = BankDepositWithdrawRequest(
+            amount=amt,
+            date=tx_date,
+            particulars=f"Intercompany Repayment to {dest_bank.company_name} (Ref: {settle_ref})",
+            category="Bank Transfer",
+            reference_no=settle_ref,
+        )
+        _, tx_w = bank_svc.withdraw(source_bank.id, withdraw_req)
+
+        # 2. Deposit into Company B bank
+        deposit_req = BankDepositWithdrawRequest(
+            amount=amt,
+            date=tx_date,
+            particulars=f"Intercompany Repayment from {source_bank.company_name} (Ref: {settle_ref})",
+            category="Bank Transfer",
+            reference_no=settle_ref,
+        )
+        _, tx_d = bank_svc.deposit(dest_bank.id, deposit_req)
+
+        transfer.repayment_source_bank_tx_id = tx_w.id
+        transfer.repayment_destination_bank_tx_id = tx_d.id
+        transfer.settlement_status = "SETTLED"
+        transfer.settled_at = func.now()
+        transfer.repaid_by = current_user.get("full_name") if current_user else "Finance Officer"
+        if notes:
+            transfer.notes = f"{transfer.notes or ''}\nSettlement notes: {notes.strip()}".strip()
+
+        self.db.commit()
+        self.db.refresh(transfer)
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+
+        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
+        item = IntercompanyTransferOut.model_validate(transfer)
+        item.source_company_name = comp_map.get(transfer.source_company_id)
+        item.destination_company_name = comp_map.get(transfer.destination_company_id)
+        item.source_bank_name = bank_map.get(transfer.source_bank_id)
+        item.destination_bank_name = bank_map.get(transfer.destination_bank_id) if transfer.destination_bank_id else None
+        return item
 
     def _disburse_to_bank(self, topup: PettyCashTopUp) -> None:
 

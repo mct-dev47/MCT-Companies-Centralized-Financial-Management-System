@@ -1,0 +1,5 @@
+-- 0043_sales_deposit_date.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE sales ADD COLUMN deposit_date DATE NULL;
+-- UPDATE sales SET deposit_date = transaction_date WHERE deposit_status = 'Deposited' AND deposit_date IS NULL;

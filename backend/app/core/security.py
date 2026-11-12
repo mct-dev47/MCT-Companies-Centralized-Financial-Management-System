@@ -6,7 +6,10 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any, Annotated
+
+from sqlalchemy import or_
 
 from app.core.config import settings, unwrap_secret
 
@@ -16,13 +19,55 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 _SUPPORTED_ALGORITHM = "HS256"
-_revoked_tokens: set[str] = set()
+_revoked_tokens: dict[str, float] = {}
 _valid_token_cache: dict[str, float] = {}
 
 
-def revoke_access_token(token: str, db: Any | None = None) -> None:
+def _extract_token_expiry(token: str, now_ts: float) -> tuple[datetime, float]:
+    """Extract the `exp` claim from a JWT if present and numeric; otherwise fall back to ACCESS_TOKEN_EXPIRE_SECONDS."""
+    default_exp_ts = now_ts + float(getattr(settings, "ACCESS_TOKEN_EXPIRE_SECONDS", 300))
+    try:
+        parts = token.split(".")
+        if len(parts) == 3:
+            payload = _decode_json_segment(parts[1])
+            exp_val = payload.get("exp")
+            if not isinstance(exp_val, bool) and isinstance(exp_val, (int, float)) and exp_val > 0:
+                return datetime.fromtimestamp(float(exp_val), tz=timezone.utc), float(exp_val)
+    except Exception:
+        pass
+    return datetime.fromtimestamp(default_exp_ts, tz=timezone.utc), default_exp_ts
+
+
+def _extract_token_user_id(token: str) -> int | None:
+    try:
+        parts = token.split(".")
+        if len(parts) == 3:
+            payload = _decode_json_segment(parts[1])
+            sub = payload.get("sub")
+            if isinstance(sub, int) or (isinstance(sub, str) and sub.isdigit()):
+                return int(sub)
+    except Exception:
+        pass
+    return None
+
+
+def _prune_revoked_cache(now_ts: float) -> None:
+    if len(_revoked_tokens) > 5000:
+        expired = [k for k, exp_ts in list(_revoked_tokens.items()) if exp_ts <= now_ts]
+        for k in expired:
+            _revoked_tokens.pop(k, None)
+        if len(_revoked_tokens) > 5000:
+            _revoked_tokens.clear()
+
+
+def revoke_access_token(token: str, db: Any | None = None, user_id: int | None = None) -> None:
+    now_ts = time.time()
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    _revoked_tokens.add(token_hash)
+    expires_at_dt, expires_at_ts = _extract_token_expiry(token, now_ts)
+    resolved_user_id = user_id if user_id is not None else _extract_token_user_id(token)
+
+    _prune_revoked_cache(now_ts)
+    _revoked_tokens[token_hash] = expires_at_ts
     _valid_token_cache.pop(token_hash, None)
     try:
         from app.db.session import SessionLocal
@@ -31,8 +76,16 @@ def revoke_access_token(token: str, db: Any | None = None) -> None:
         try:
             existing = session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first()
             if not existing:
-                session.add(RevokedToken(token_hash=token_hash))
-                session.commit()
+                session.add(
+                    RevokedToken(
+                        token_hash=token_hash,
+                        user_id=resolved_user_id,
+                        expires_at=expires_at_dt,
+                    )
+                )
+            elif existing.expires_at is None:
+                existing.expires_at = expires_at_dt
+            session.commit()
         finally:
             if db is None:
                 session.close()
@@ -67,11 +120,15 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
     if not secret or len(secret.strip()) < 32:
         raise RuntimeError("SUPABASE_JWT_SECRET is missing, empty, or shorter than 32 characters.")
 
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    if token_hash in _revoked_tokens:
-        raise _invalid_token("Access token has been revoked.")
-
     now = time.time()
+    now_utc = datetime.fromtimestamp(now, tz=timezone.utc)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    cached_exp = _revoked_tokens.get(token_hash)
+    if cached_exp is not None:
+        if cached_exp > now:
+            raise _invalid_token("Access token has been revoked.")
+        _revoked_tokens.pop(token_hash, None)
+
     last_verified = _valid_token_cache.get(token_hash)
     if last_verified is None or (now - last_verified) > 60.0:
         if len(_valid_token_cache) > 5000:
@@ -80,8 +137,25 @@ def verify_token(token: Annotated[str, Depends(get_access_token)]) -> dict[str, 
             from app.db.session import SessionLocal
             from app.models.security import RevokedToken
             with SessionLocal() as db_session:
-                if db_session.query(RevokedToken).filter(RevokedToken.token_hash == token_hash).first():
-                    _revoked_tokens.add(token_hash)
+                revoked_row = (
+                    db_session.query(RevokedToken)
+                    .filter(
+                        RevokedToken.token_hash == token_hash,
+                        or_(
+                            RevokedToken.expires_at.is_(None),
+                            RevokedToken.expires_at > now_utc,
+                        ),
+                    )
+                    .first()
+                )
+                if revoked_row is not None:
+                    if revoked_row.expires_at is not None:
+                        exp_dt = revoked_row.expires_at
+                        if exp_dt.tzinfo is None:
+                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                        _revoked_tokens[token_hash] = exp_dt.timestamp()
+                    else:
+                        _revoked_tokens[token_hash] = now + float(getattr(settings, "SESSION_ABSOLUTE_LIFETIME_SECONDS", 28800))
                     _valid_token_cache.pop(token_hash, None)
                     raise _invalid_token("Access token has been revoked.")
                 _valid_token_cache[token_hash] = now

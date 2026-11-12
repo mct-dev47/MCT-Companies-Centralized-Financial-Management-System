@@ -43,6 +43,7 @@ export interface DashboardTransactionItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   attachments?: string[]
   items?: ParticularItem[]
   /** The other side of a record shown for another company (lender loan row, petty cash rows). Read only. */
@@ -51,6 +52,16 @@ export interface DashboardTransactionItem {
   awaitingAudit?: boolean
   /** The paid part of a sale or expense (spec 0013, AC-10). Used by the cash ledger tab. */
   paidAmount?: number
+  bankAccountId?: string
+  bankName?: string
+  remarks?: string
+  depositStatus?: 'Deposited' | 'Not Deposited'
+  deposit_status?: 'Deposited' | 'Not Deposited'
+  /** Day the money reached the bank (YYYY-MM-DD); only set for deposited sales. */
+  deposit_date?: string | null
+  depositDate?: string | null
+  /** Day of the sale itself (YYYY-MM-DD), kept alongside the deposit date. */
+  saleDate?: string
 }
 
 /**
@@ -119,7 +130,7 @@ export const dashboardService = {
             category: 'Rental Income',
             paymentMethod: p.method,
             status: 'Paid',
-            auditStatus: (lease.auditStatus as any) || 'Verified',
+            auditStatus: (lease.auditStatus as any) || 'Pending Audit',
             auditedBy: lease.auditedBy,
             auditNotes: lease.auditRemarks,
             auditDate: lease.auditDate,
@@ -143,7 +154,7 @@ export const dashboardService = {
           category: 'Rental Income',
           paymentMethod: 'Cash',
           status: 'Paid',
-          auditStatus: (lease.auditStatus as any) || 'Verified',
+          auditStatus: (lease.auditStatus as any) || 'Pending Audit',
           auditedBy: lease.auditedBy,
           auditNotes: lease.auditRemarks,
           auditDate: lease.auditDate,

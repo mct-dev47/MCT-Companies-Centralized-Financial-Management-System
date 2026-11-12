@@ -239,5 +239,34 @@ def test_monthly_terms_calculation_single_month():
     assert terms["due_date"] == "2026-11-30"
 
 
+def test_payment_schema_validation_and_recorded_by():
+    from app.schemas.lending import LendingPaymentCreateRequest
+    from pydantic import ValidationError
+
+    # Valid request with recorded_by and short notes
+    req = LendingPaymentCreateRequest(
+        borrower_id=1,
+        payment_date="2026-11-06",
+        amount=Decimal("1500.00"),
+        notes="Partial collection on morning route",
+        recorded_by="Princess Tayam",
+    )
+    assert req.recorded_by == "Princess Tayam"
+    assert req.notes == "Partial collection on morning route"
+
+    # Notes exceeding 50 characters should fail validation
+    try:
+        LendingPaymentCreateRequest(
+            borrower_id=1,
+            payment_date="2026-11-06",
+            amount=Decimal("1500.00"),
+            notes="This note is deliberately way longer than fifty characters to test the validation constraint",
+        )
+        assert False, "Should have raised ValidationError for notes > 50 chars"
+    except ValidationError:
+        pass
+
+
+
 
 

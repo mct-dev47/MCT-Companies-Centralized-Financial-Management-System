@@ -4,7 +4,8 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
-import { TablePagination, TableEmptyState } from '@/components/common'
+import { ConfirmModal, TablePagination, TableEmptyState } from '@/components/common'
+import { notifySuccess } from '@/utils/errorUtils'
 import {
   Table,
   TableBody,
@@ -52,7 +53,6 @@ import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 import { useReceivables } from '@/hooks/useReceivables'
 import { RecordUtangPaymentModal } from '@/components/receivables/RecordUtangPaymentModal'
-import { PersonLedgerDrawer } from '@/components/receivables/PersonLedgerDrawer'
 import { PersonLedgerPageView } from '@/components/receivables/PersonLedgerPageView'
 import type {
   CustomerType,
@@ -70,6 +70,7 @@ export const ReceivablesPage: React.FC = () => {
   const isAudit =
     normalizedUserRole === 'audit' || normalizedUserRole.includes('auditor')
   const isAdmin = normalizedUserRole === 'admin'
+  const isOwner = normalizedUserRole === 'owner'
   const isFinance = normalizedUserRole === 'finance'
   const assignedCompany = user?.assignedCompany || ''
 
@@ -106,13 +107,6 @@ export const ReceivablesPage: React.FC = () => {
 
   const [companyList, setCompanyList] = React.useState<string[]>([
     'All Companies',
-    'MyCity.Kitchen Corporation',
-    'MCTolentino Hospitality Business Corporation',
-    'JK Global Headways Inc.',
-    'Speedfire Construction',
-    'JK Property and Ventures',
-    'FilCap Prime Holdings Corp.',
-    'MCT Group of Companies',
   ])
 
   React.useEffect(() => {
@@ -371,13 +365,8 @@ export const ReceivablesPage: React.FC = () => {
   const companyPos = useDropdownPosition(companyDropdownRef, isCompanyDropdownOpen)
 
   // Feedback banner
-  const [toastMessage, setToastMessage] = React.useState<string | null>(null)
-
   const showToast = (msg: string) => {
-    setToastMessage(msg)
-    setTimeout(() => {
-      setToastMessage(null)
-    }, 4500)
+    notifySuccess(msg)
   }
 
   React.useEffect(() => {
@@ -578,23 +567,26 @@ export const ReceivablesPage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
-      {/* Toast Confirmation Banner */}
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 p-4 rounded-2xl bg-emerald-700 text-white shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200">
-          <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
-          <span className="text-xs sm:text-sm font-semibold">{toastMessage}</span>
-          <button
-            type="button"
-            onClick={() => setToastMessage(null)}
-            className="p-1 rounded-lg hover:bg-emerald-600/80 text-white ml-2 cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* 1. Header Row */}
-      <div className="space-y-4">
+      {selectedPersonForLedger ? (
+        <PersonLedgerPageView
+          person={selectedPersonForLedger}
+          onBack={() => setSelectedPersonForLedger(null)}
+          onOpenRecordPayment={handleOpenPayment}
+          onOpenEditProfile={handleOpenEditPerson}
+          onSettlePayrollDeduction={handleSettlePayroll}
+          isAudit={isAudit || isOwner}
+          canEdit={canManageCompany(
+            selectedPersonForLedger.company,
+            selectedPersonForLedger.company_id
+          )}
+          onEditSale={editSale}
+          onDeleteSale={deleteSale}
+          onDeletePayment={deletePayment}
+        />
+      ) : (
+        <>
+          {/* 1. Header Row */}
+          <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <div className="flex items-center gap-2.5 flex-wrap">
@@ -1200,78 +1192,38 @@ export const ReceivablesPage: React.FC = () => {
 
                       {/* 7. Actions (Standard 3-dots Menu matching system) */}
                       <TableCell
-className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
+                        className="w-[10%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-center gap-1.5">
-                          {hasOwed && rowCanEdit && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={p.all_locked || unlockedOwed <= 0.005}
-                              onClick={() => handleOpenPayment(p)}
-                              className="h-8 px-2.5 sm:px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs flex items-center gap-1 shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                              title={
-                                p.all_locked
-                                  ? 'Locked: linked sale has been Verified by an Auditor'
-                                  : 'Record payment remittance'
-                              }
-                            >
-                              <Coins className="w-3.5 h-3.5" />
-                              <span>Pay</span>
-                            </Button>
-                          )}
-
+                        <div className="flex items-center justify-center">
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
-                            onClick={() => setSelectedPersonForLedger(p)}
-                            className="h-8 px-2.5 rounded-lg text-xs font-semibold text-focus hover:bg-slate-100 cursor-pointer"
-                            title={rowCanEdit ? 'View account ledger' : 'View debtor account history'}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuPersonName === p.key) {
+                                setOpenMenuPersonName(null)
+                                setMenuPosition(null)
+                                setActiveMenuPerson(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 180 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuPerson(p)
+                                setOpenMenuPersonName(p.key)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Row Actions"
+                            aria-label={`Actions for ${p.name}`}
                           >
-                            <span>{rowCanEdit ? 'Ledger' : 'View'}</span>
+                            <MoreVertical className="w-4 h-4" />
                           </Button>
-
-                          {rowCanEdit && (
-                            <>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={p.all_locked}
-                                onClick={() => handleOpenEditPerson(p)}
-                                className="h-8 w-8 p-0 rounded-lg text-slate-600 hover:text-focus hover:bg-slate-100 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={
-                                  p.all_locked
-                                    ? 'Locked: all linked sales are Verified'
-                                    : 'Edit debtor profile'
-                                }
-                                aria-label={`Edit debtor ${p.name}`}
-                              >
-                                <Edit2 className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={p.has_locked}
-                                onClick={() => {
-                                  setPersonDeleteError(null)
-                                  setDeletingPerson(p)
-                                }}
-                                className="h-8 w-8 p-0 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                                title={
-                                  p.has_locked
-                                    ? 'Locked: one or more linked sales are Verified'
-                                    : 'Delete debtor account'
-                                }
-                                aria-label={`Delete debtor ${p.name}`}
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1297,7 +1249,7 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
       {openMenuPersonName && activeMenuPerson && menuPosition && typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-48 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-52 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -1318,30 +1270,68 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
                 setActiveMenuPerson(null)
                 setSelectedPersonForLedger(target)
               }}
-              className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-medium text-focus hover:bg-slate-50 rounded-lg transition-colors cursor-pointer text-left"
+              className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-focus hover:bg-slate-50 rounded-lg transition-colors cursor-pointer text-left"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-              <span>{isAudit ? 'View Account History' : 'View Account Ledger'}</span>
+              <span>{isAudit || isOwner ? 'View Account History' : 'View Account Ledger'}</span>
             </button>
 
-            {activeMenuPerson.total_owed > 0 && !isAudit && (
+            {activeMenuPerson.total_owed > 0.005 && !isAudit && !isOwner && canManageCompany(activeMenuPerson.company, activeMenuPerson.company_id) && (
               <button
                 type="button"
+                disabled={activeMenuPerson.all_locked || activeMenuPerson.sales.filter((s) => !s.is_locked).reduce((acc, s) => acc + s.balance, 0) <= 0.005}
                 onClick={() => {
                   const target = activeMenuPerson
                   setOpenMenuPersonName(null)
                   setActiveMenuPerson(null)
                   handleOpenPayment(target)
                 }}
-                className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer text-left"
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer text-left disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Coins className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <span>Record Payment</span>
               </button>
             )}
+
+            {!isAudit && !isOwner && canManageCompany(activeMenuPerson.company, activeMenuPerson.company_id) && (
+              <>
+                <button
+                  type="button"
+                  disabled={activeMenuPerson.all_locked}
+                  onClick={() => {
+                    const target = activeMenuPerson
+                    setOpenMenuPersonName(null)
+                    setActiveMenuPerson(null)
+                    handleOpenEditPerson(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-focus hover:bg-slate-50 rounded-lg transition-colors cursor-pointer text-left border-t border-slate-100 mt-1 pt-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Edit2 className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>Edit Debtor Profile</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={activeMenuPerson.has_locked}
+                  onClick={() => {
+                    const target = activeMenuPerson
+                    setOpenMenuPersonName(null)
+                    setActiveMenuPerson(null)
+                    setPersonDeleteError(null)
+                    setDeletingPerson(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer text-left disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Delete Debtor Account</span>
+                </button>
+              </>
+            )}
           </div>,
           document.body
         )}
+        </>
+      )}
 
       {/* Record Payment Modal */}
       <RecordUtangPaymentModal
@@ -1354,39 +1344,25 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
           showToast(msg)
         }}
       />
-      {/* Person Ledger Drawer */}
-      <PersonLedgerDrawer
-        open={Boolean(selectedPersonForLedger)}
-        onOpenChange={(open) => !open && setSelectedPersonForLedger(null)}
-        person={selectedPersonForLedger}
-        onOpenRecordPayment={handleOpenPayment}
-        onSettlePayrollDeduction={handleSettlePayroll}
-        isAudit={isAudit}
-        canEdit={
-          selectedPersonForLedger
-            ? canManageCompany(
-                selectedPersonForLedger.company,
-                selectedPersonForLedger.company_id
-              )
-            : false
-        }
-        onEditSale={editSale}
-        onDeleteSale={deleteSale}
-        onDeletePayment={deletePayment}
-      />
 
       {/* Dialog: Edit Debtor Profile (AC-2, AC-3, AC-9) */}
       {editingPerson && (
         <Dialog open={Boolean(editingPerson)} onOpenChange={(o) => !o && setEditingPerson(null)}>
-          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-[#960C01]" />
-                <span>Edit Debtor Profile</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Update debtor name or customer classification across all non-locked receivable orders for this account.
-              </DialogDescription>
+          <DialogContent className="sm:max-w-[460px] p-6 sm:p-7 rounded-[24px] bg-white border border-stroke/50 shadow-modal">
+            <DialogHeader className="text-left space-y-1.5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                  <Edit2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <DialogTitle className="text-lg font-extrabold text-focus">
+                    Edit Debtor Profile
+                  </DialogTitle>
+                  <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                    Update debtor name or customer classification across all non-locked receivable orders for this account.
+                  </DialogDescription>
+                </div>
+              </div>
             </DialogHeader>
 
             {personEditError && (
@@ -1405,7 +1381,7 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
                   type="text"
                   value={editPersonName}
                   onChange={(e) => setEditPersonName(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 />
               </div>
 
@@ -1416,7 +1392,7 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
                   onChange={(e) =>
                     setEditPersonType(e.target.value === 'Staff' ? 'Staff' : 'External')
                   }
-                  className="w-full h-10 px-3 rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-[#960C01]"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                 >
                   <option value="External">External</option>
                   <option value="Staff">Staff</option>
@@ -1424,24 +1400,23 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-stroke/30">
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 onClick={() => setEditingPerson(null)}
-                disabled={isUpdatingPerson}
+                disabled={isSavingPersonEdit}
+                className="h-10 px-4 rounded-xl text-xs font-semibold"
               >
                 Cancel
               </Button>
               <Button
                 type="button"
-                size="sm"
-                onClick={handleConfirmEditPerson}
-                disabled={isUpdatingPerson}
-                className="bg-[#960C01] hover:bg-[#7d0a00] text-white"
+                onClick={handleSavePersonEdit}
+                disabled={isSavingPersonEdit}
+                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold"
               >
-                {isUpdatingPerson ? 'Updating...' : 'Save Changes'}
+                {isSavingPersonEdit ? 'Updating...' : 'Save Changes'}
               </Button>
             </div>
           </DialogContent>
@@ -1449,50 +1424,29 @@ className="w-[13%] px-3.5 py-3.5 text-center whitespace-nowrap"
       )}
 
       {/* Dialog: Confirm Delete Debtor Account (AC-3, AC-9) */}
-      {deletingPerson && (
-        <Dialog open={Boolean(deletingPerson)} onOpenChange={(o) => !o && setDeletingPerson(null)}>
-          <DialogContent className="sm:max-w-[440px] p-5 rounded-2xl bg-white shadow-xl">
-            <DialogHeader className="text-left space-y-1">
-              <DialogTitle className="text-base font-bold text-rose-600 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-600" />
-                <span>Delete Debtor Account?</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg">
-                Are you sure you want to delete all receivable records for{' '}
-                <strong>{deletingPerson.name}</strong>? Linked sale lines and deposited payments will be reversed automatically.
-              </DialogDescription>
-            </DialogHeader>
-
+      <ConfirmModal
+        open={Boolean(deletingPerson)}
+        onOpenChange={(o) => !o && setDeletingPerson(null)}
+        title="Delete Debtor Account?"
+        description={
+          <>
+            Are you sure you want to delete all receivable records for{' '}
+            <strong className="text-focus">{deletingPerson?.name}</strong>? Linked sale lines and deposited payments will be reversed automatically.
             {personDeleteError && (
-              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+              <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2 text-left">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                 <span>{personDeleteError}</span>
               </div>
             )}
-
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setDeletingPerson(null)}
-                disabled={isDeletingPerson}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleConfirmDeletePerson}
-                disabled={isDeletingPerson}
-                className="bg-rose-600 hover:bg-rose-700 text-white"
-              >
-                {isDeletingPerson ? 'Deleting...' : 'Confirm Delete'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+          </>
+        }
+        confirmLabel="Confirm Delete"
+        loadingLabel="Deleting..."
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingPerson}
+        onConfirm={handleConfirmDeletePerson}
+      />
     </div>
   )
 }

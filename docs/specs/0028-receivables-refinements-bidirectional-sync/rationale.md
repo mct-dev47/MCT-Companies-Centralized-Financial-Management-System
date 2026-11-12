@@ -10,6 +10,11 @@ Second, `/receivables` and its backend `PUT` and `DELETE` routes restrict editin
 
 Third, recording a payment or updating a receivable in `ReceivablesService` updates only the `receivables` table and broadcasts `RECEIVABLES_UPDATED`. It never updates the linked `sales` row in Supabase (`client.table("sales")`), never flips the line tag in `sales.particulars` from `[Unpaid]` to `[Pending]` or `[Paid]`, and never emits `SALES_UPDATED`. On the frontend, `SalesPage.tsx` listens only to `AUDIT_UPDATED`, leaving the Sales Record view and **Total Cash** KPI stale until a manual reload or manual edit. Conversely, editing or deleting a sale on `/sales` does not reconcile its linked receivables, and neither side enforces a mutual read only lock once an auditor marks the sale `Verified`.
 
+Fourth, when testing real edits on `/receivables`, three structural defects prevented edits from reflecting on `/sales`:
+1. Standalone or legacy receivables with `sale_id == NULL` were immediately skipped by `sales_receivables_sync.py`, leaving them completely untracked on the Sales page.
+2. In `AddTransactionSheetPage.tsx`, edit mode only updated the first line and called `addSale` for subsequent lines, truncating parent sale particulars and causing backend sync to cascade delete linked receivables. Unpaid assignments were also skipped during edit mode.
+3. Local SQLite `sales` table was missing the `payment_method` column added in later SQLAlchemy models, causing operational errors whenever remote Supabase pooler timeouts fell back to local SQLite queries.
+
 ## Options considered
 
 ### Option 1: In Place Enhancement with Internal Domain Sync Service and WebSocket Push

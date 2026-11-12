@@ -47,11 +47,13 @@ def decrypt_payload(encrypted_str: str) -> dict:
         )
 
 
-def encrypt_invitation_token(raw_token: str, user_id: int | None = None) -> str:
+def encrypt_invitation_token(raw_token: str, user_id: int | None = None, purpose: str | None = None) -> str:
     """Encrypt an invitation token into a Fernet URL-safe ciphertext payload."""
     payload = {"token": raw_token}
     if user_id is not None:
         payload["uid"] = user_id
+    if purpose is not None:
+        payload["purpose"] = purpose
     return encrypt_payload(payload)
 
 

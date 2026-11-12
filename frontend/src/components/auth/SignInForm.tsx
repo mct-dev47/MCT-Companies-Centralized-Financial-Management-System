@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { Mail, Loader2, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -17,13 +17,73 @@ import { IconInput } from '@/components/auth/IconInput'
 import { PasswordInput } from '@/components/auth/PasswordInput'
 import { signInSchema, type SignInFormValues } from '@/lib/validation/auth'
 import { useSession } from '@/hooks/useSession'
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { authService } from '@/services/authService'
+import { formatUserFriendlyErrorMessage, formatSecondsToMMSS } from '@/utils/errorUtils'
 
 export const SignInForm: React.FC = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const { signIn } = useSession()
   const [serverError, setServerError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
+  const [lockoutRemaining, setLockoutRemaining] = React.useState<number>(0)
+
+  const checkServerLockout = React.useCallback(async (targetEmail?: string) => {
+    try {
+      const status = await authService.getRateLimitStatus(targetEmail)
+      if (status.locked && status.retry_after > 0) {
+        setLockoutRemaining(status.retry_after)
+        setServerError(`Too many attempts. Please try again in ${formatSecondsToMMSS(status.retry_after)}.`)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  // Restore lockout timer on mount from authoritative server state (AC-9)
+  React.useEffect(() => {
+    checkServerLockout()
+  }, [checkServerLockout])
+
+  // Live countdown timer ticking every second
+  React.useEffect(() => {
+    if (lockoutRemaining <= 0) return
+    const interval = setInterval(() => {
+      setLockoutRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval)
+          setServerError(null)
+          return 0
+        }
+        const next = prev - 1
+        setServerError(`Too many attempts. Please try again in ${formatSecondsToMMSS(next)}.`)
+        return next
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [lockoutRemaining])
+
+  const reasonParam = React.useMemo(() => {
+    try {
+      const params = new URLSearchParams(location.search)
+      return params.get('reason')
+    } catch {
+      return null
+    }
+  }, [location.search])
+
+  const expirationNotice = React.useMemo(() => {
+    if (reasonParam === 'inactivity') {
+      return 'Your session has ended due to 30 minutes of inactivity. Please sign in again.'
+    }
+    if (reasonParam === 'max_duration') {
+      return 'Your session reached the maximum duration of 8 hours. Please sign in again.'
+    }
+    if (reasonParam === 'revoked') {
+      return 'Your session was invalidated due to a security update or password change. Please sign in again.'
+    }
+    return null
+  }, [reasonParam])
 
   const form = useForm<SignInFormValues>({
     resolver: zodResolver(signInSchema),
@@ -36,6 +96,15 @@ export const SignInForm: React.FC = () => {
     },
   })
 
+  // Ensure Remember Me is always unchecked and fields are reset upon entering sign-in
+  React.useEffect(() => {
+    form.reset({
+      email: '',
+      password: '',
+      rememberMe: false,
+    })
+  }, [form])
+
   const onSubmit = async (values: SignInFormValues) => {
     try {
       setServerError(null)
@@ -46,7 +115,8 @@ export const SignInForm: React.FC = () => {
         const role = (response.user.role || '').toLowerCase()
         const assignedCount = Math.max(
           response.user.companyIds?.length || 0,
-          response.user.companyNames?.length || 0
+          response.user.companyNames?.length || 0,
+          response.user.assignedCompanies?.length || 0
         )
 
         if (role === 'admin') {
@@ -67,8 +137,15 @@ export const SignInForm: React.FC = () => {
         navigate('/verify-2fa', { state: { email: response.email } })
       }
     } catch (err: unknown) {
-      // Generic server error for bad credentials; never reveal which field failed
-      setServerError(formatUserFriendlyErrorMessage(err, 'Invalid email or password.'))
+      const anyErr = err as any
+      const retrySec = anyErr?.retry_after || anyErr?.response?.data?.retry_after || anyErr?.data?.retry_after
+      if (retrySec && Number(retrySec) > 0) {
+        const sec = Number(retrySec)
+        setLockoutRemaining(sec)
+        setServerError(`Too many attempts. Please try again in ${formatSecondsToMMSS(sec)}.`)
+      } else {
+        setServerError(formatUserFriendlyErrorMessage(err, 'Invalid email or password.'))
+      }
     } finally {
       setIsLoading(false)
     }
@@ -85,6 +162,18 @@ export const SignInForm: React.FC = () => {
           Sign in to access MCT Financial Management System
         </p>
       </div>
+
+      {/* Session Expiration Notice Alert Banner (AC-13) */}
+      {expirationNotice && !serverError && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="mb-4 sm:mb-6 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 sm:p-4 text-xs sm:text-sm text-amber-800 dark:text-amber-200"
+        >
+          <AlertCircle className="h-4 sm:h-5 w-4 sm:w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <span>{expirationNotice}</span>
+        </div>
+      )}
 
       {/* Server Error Alert Banner */}
       {serverError && (
@@ -119,6 +208,12 @@ export const SignInForm: React.FC = () => {
                     leadingIcon={<Mail className="h-4 sm:h-5 w-4 sm:w-5" />}
                     error={!!fieldState.error}
                     {...field}
+                    onBlur={(e) => {
+                      field.onBlur()
+                      if (e.target.value) {
+                        checkServerLockout(e.target.value)
+                      }
+                    }}
                   />
                 </FormControl>
                 <FormMessage />
@@ -183,14 +278,16 @@ export const SignInForm: React.FC = () => {
           <div className="pt-1.5 sm:pt-2">
             <Button
               type="submit"
-              disabled={isLoading}
-              className="w-full h-11 sm:h-12 md:h-14 rounded-xl text-sm sm:text-base md:text-lg font-bold shadow-md shadow-[#960C01]/20 hover:shadow-lg bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white transition-all cursor-pointer"
+              disabled={isLoading || lockoutRemaining > 0}
+              className="w-full h-11 sm:h-12 md:h-14 rounded-xl text-sm sm:text-base md:text-lg font-bold shadow-md shadow-[#960C01]/20 hover:shadow-lg bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 sm:h-5 w-4 sm:w-5 animate-spin" />
                   Signing in…
                 </>
+              ) : lockoutRemaining > 0 ? (
+                `Locked (${formatSecondsToMMSS(lockoutRemaining)})`
               ) : (
                 'Sign In'
               )}

@@ -6,11 +6,13 @@ import {
   Building2,
   Shield,
   User as UserIcon,
+  ArrowUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ConfirmModal, ErrorBanner } from '@/components/common'
+import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { CreateUserModal } from '@/components/employee/CreateUserModal'
 import { ViewUserModal } from '@/components/employee/ViewUserModal'
 import {
@@ -23,8 +25,17 @@ import {
   notifySuccess,
 } from '@/utils/errorUtils'
 
+type SortOption = 'recent' | 'asc' | 'desc'
+
+const SORT_OPTIONS: DropdownFilterOption<SortOption>[] = [
+  { value: 'recent', label: 'Recently Added' },
+  { value: 'asc', label: 'A-Z' },
+  { value: 'desc', label: 'Z-A' },
+]
+
 export const UserManagementPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
+  const [sortBy, setSortBy] = React.useState<SortOption>('recent')
 
   // Users & Companies data state
   const [users, setUsers] = React.useState<EmployeeUser[]>([])
@@ -35,14 +46,6 @@ export const UserManagementPage: React.FC = () => {
   const [isCreateUserOpen, setIsCreateUserOpen] = React.useState(false)
   const [isViewUserOpen, setIsViewUserOpen] = React.useState(false)
   const [selectedUser, setSelectedUser] = React.useState<EmployeeUser | null>(null)
-
-  // Helper formatter for company list
-  const formatCompanyList = (names: string[]): string => {
-    if (!names || names.length === 0) return 'no company'
-    if (names.length === 1) return names[0]
-    if (names.length === 2) return `${names[0]} and ${names[1]}`
-    return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
-  }
 
   // Success message toast/banner & confirmation modal
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
@@ -89,9 +92,9 @@ export const UserManagementPage: React.FC = () => {
     document.title = 'User Management - MCT Centralized Financial System'
   }, [])
 
-  // Filtered users based on search query
+  // Filtered and sorted users
   const filteredUsers = React.useMemo(() => {
-    let result = users
+    let result = [...users]
     const q = searchQuery.toLowerCase().trim()
     if (q) {
       result = result.filter(
@@ -103,8 +106,22 @@ export const UserManagementPage: React.FC = () => {
           (u.role && u.role.toLowerCase().includes(q))
       )
     }
-    return result
-  }, [users, searchQuery])
+    return result.sort((a, b) => {
+      if (sortBy === 'asc') {
+        return a.fullName.localeCompare(b.fullName, undefined, { sensitivity: 'base', numeric: true })
+      }
+      if (sortBy === 'desc') {
+        return b.fullName.localeCompare(a.fullName, undefined, { sensitivity: 'base', numeric: true })
+      }
+      // 'recent': newest created first
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
+        return timeB - timeA
+      }
+      return Number(b.id) - Number(a.id)
+    })
+  }, [users, searchQuery, sortBy])
 
   const handleCardClickUser = (usr: EmployeeUser) => {
     setSelectedUser(usr)
@@ -267,9 +284,9 @@ export const UserManagementPage: React.FC = () => {
         isRetrying={loading}
       />
 
-      {/* Filters Toolbar - Extended full-width search bar */}
-      <div className="w-full">
-        <div className="relative w-full">
+      {/* Filters Toolbar - Search bar and Sort Filter */}
+      <div className="flex flex-col sm:flex-row items-center gap-3 w-full">
+        <div className="relative flex-1 w-full">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
           <Input
             type="text"
@@ -288,6 +305,18 @@ export const UserManagementPage: React.FC = () => {
               <X className="h-4 w-4" />
             </button>
           )}
+        </div>
+
+        <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+          <DropdownFilter
+            value={sortBy}
+            options={SORT_OPTIONS}
+            onChange={(val) => setSortBy(val as SortOption)}
+            icon={ArrowUpDown}
+            menuTitle="Sort By"
+            className="h-11 sm:h-12 rounded-2xl bg-white border border-stroke/50 shadow-xs"
+            ariaLabel="Sort users"
+          />
         </div>
       </div>
 

@@ -31,18 +31,58 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
   const [code, setCode] = React.useState('')
   const [error, setError] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(false)
+  const [isResending, setIsResending] = React.useState(false)
   const [isSuccess, setIsSuccess] = React.useState(false)
   const inputRef = React.useRef<HTMLInputElement | null>(null)
-  const resendCountdown = useCountdown({ initialSeconds: 120 })
+  const resendCountdown = useCountdown({ initialSeconds: 120, autoStart: false })
+  const lockoutCountdown = useCountdown({ initialSeconds: 0, autoStart: false })
 
   const challengeEmail = (location.state as { email?: string })?.email
+  const resendStop = resendCountdown.stop
+  const lockoutStop = lockoutCountdown.stop
+  const resendStart = resendCountdown.start
+  const lockoutStart = lockoutCountdown.start
+
+  // Synchronize server authoritative cooldown and resend lockout state on mount (AC-15, AC-19)
+  React.useEffect(() => {
+    let isCurrent = true
+    async function syncStatus() {
+      try {
+        const st = await authService.getRateLimitStatus(challengeEmail)
+        if (!isCurrent) return
+        if (st.resend_locked && st.resend_retry_after > 0) {
+          resendStop()
+          lockoutStart(st.resend_retry_after)
+        } else if (st.cooldown_remaining > 0) {
+          resendStart(st.cooldown_remaining)
+        } else {
+          resendStop()
+        }
+      } catch {
+        // keep fallback 120 running
+      }
+    }
+    if (open) {
+      resendStart(120)
+      syncStatus()
+    } else {
+      resendStop()
+      lockoutStop()
+    }
+    return () => {
+      isCurrent = false
+    }
+  }, [open, challengeEmail, resendStart, resendStop, lockoutStart, lockoutStop])
 
   const resetState = React.useCallback(() => {
     setCode('')
     setError(null)
     setIsLoading(false)
+    setIsResending(false)
     setIsSuccess(false)
-  }, [])
+    resendStop()
+    lockoutStop()
+  }, [resendStop, lockoutStop])
 
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
@@ -53,7 +93,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
 
   const handleVerify = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
-    if (code.length !== 6 || isLoading) return
+    if (code.length !== 6 || isLoading || isResending) return
 
     try {
       setError(null)
@@ -78,7 +118,8 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     const role = (sessionUser?.role || '').toLowerCase()
     const assignedCount = Math.max(
       sessionUser?.companyIds?.length || 0,
-      sessionUser?.companyNames?.length || 0
+      sessionUser?.companyNames?.length || 0,
+      sessionUser?.assignedCompanies?.length || 0
     )
 
     if (role === 'admin') {
@@ -96,7 +137,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     }
   }
 
-  const isVerifyDisabled = code.length !== 6 || isLoading
+  const isVerifyDisabled = code.length !== 6 || isLoading || isResending
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -156,7 +197,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
 
             {/* 6-digit OTP Form */}
             <form onSubmit={handleVerify} className="space-y-6">
-              <div className="flex flex-col items-center justify-center space-y-4">
+              <div className="flex flex-col items-center justify-center space-y-3">
                 <InputOTP
                   ref={inputRef}
                   maxLength={6}
@@ -168,7 +209,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                   pattern="^[0-9]*$"
                   autoComplete="one-time-code"
                   aria-label="6-digit two-factor authentication code"
-                  disabled={isLoading}
+                  disabled={isLoading || isResending}
                 >
                   <InputOTPGroup aria-label="First 3 digits">
                     <InputOTPSlot index={0} isError={!!error} />
@@ -182,20 +223,18 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                     <InputOTPSlot index={5} isError={!!error} />
                   </InputOTPGroup>
                 </InputOTP>
-              </div>
 
-              <div className="text-center text-xs sm:text-sm text-muted-fg font-medium">
-                {resendCountdown.isExpired
-                  ? 'You can request a new code.'
-                  : `Resend available in ${resendCountdown.formattedTime}`}
+                <p className="text-xs text-muted-fg font-medium">
+                  Code is valid for 3 minutes
+                </p>
               </div>
 
               {/* Action Buttons */}
-              <div className="space-y-2.5 w-full pt-1">
+              <div className="space-y-3 w-full pt-1">
                 <Button
                   type="submit"
                   disabled={isVerifyDisabled}
-                  className="w-full h-11 text-sm font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs transition-all cursor-pointer"
+                  className="w-full h-11 text-sm font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs transition-all cursor-pointer disabled:opacity-50"
                 >
                   {isLoading ? (
                     <>
@@ -207,24 +246,51 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                   )}
                 </Button>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      setError(null)
-                      const result = await resend2FA()
-                      setCode('')
-                      resendCountdown.start(result.resendAvailableIn)
-                    } catch (err: unknown) {
-                      setError(formatUserFriendlyErrorMessage(err, 'Unable to resend the code.'))
-                    }
-                  }}
-                  disabled={!resendCountdown.isExpired || isLoading}
-                  className="w-full h-11 text-xs sm:text-sm font-semibold rounded-xl border-stroke/40 hover:bg-surface text-focus transition-all cursor-pointer disabled:opacity-50"
-                >
-                  Resend Code
-                </Button>
+                <div className="space-y-1.5 w-full">
+                  <div className="text-center text-xs sm:text-sm text-muted-fg font-medium">
+                    {lockoutCountdown.secondsLeft > 0
+                      ? `Resend locked. Try again in ${lockoutCountdown.formattedTime}`
+                      : resendCountdown.secondsLeft > 0
+                      ? `Resend code in ${resendCountdown.formattedTime}`
+                      : 'You can request a new code.'}
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        setIsResending(true)
+                        setError(null)
+                        const result = await resend2FA()
+                        setCode('')
+                        resendStart(result.resendAvailableIn || 120)
+                      } catch (err: unknown) {
+                        const anyErr = err as any
+                        const retrySec = anyErr?.retry_after || anyErr?.response?.data?.retry_after || anyErr?.data?.retry_after
+                        if (anyErr?.code === 'OTP_RESEND_LOCKED' || (retrySec && Number(retrySec) > 120)) {
+                          lockoutStart(Number(retrySec || 900))
+                        } else if (retrySec && Number(retrySec) > 0) {
+                          resendStart(Number(retrySec))
+                        }
+                        setError(formatUserFriendlyErrorMessage(err, 'Unable to resend the code.'))
+                      } finally {
+                        setIsResending(false)
+                      }
+                    }}
+                    disabled={lockoutCountdown.secondsLeft > 0 || resendCountdown.secondsLeft > 0 || isLoading || isResending}
+                    className="w-full h-11 text-xs sm:text-sm font-semibold rounded-xl border-stroke/40 hover:bg-surface text-focus transition-all cursor-pointer disabled:opacity-50"
+                  >
+                    {isResending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Resending…
+                      </>
+                    ) : (
+                      'Resend Code'
+                    )}
+                  </Button>
+                </div>
               </div>
             </form>
           </div>

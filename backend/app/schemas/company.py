@@ -2,16 +2,22 @@ from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from app.core.ssrf import validate_safe_url
 
 class CompanyBase(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     location: str = Field(min_length=1, max_length=100)
     contact_number: Optional[str] = Field(default=None, max_length=11)
     phone: Optional[str] = Field(default=None, max_length=8)
-    starting_balance: Decimal = Field(decimal_places=2)
+    starting_balance: Decimal = Field(default=Decimal("0.00"), decimal_places=2)
     petty_cash: Optional[Decimal] = Field(default=Decimal("0.00"), decimal_places=2)
-    logo_url: Optional[str] = None
+    logo_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("logo_url")
+    @classmethod
+    def validate_logo_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
 
 class CompanyCreate(CompanyBase):
     pass
@@ -23,7 +29,12 @@ class CompanyUpdate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=8)
     starting_balance: Optional[Decimal] = Field(default=None, decimal_places=2)
     petty_cash: Optional[Decimal] = Field(default=None, decimal_places=2)
-    logo_url: Optional[str] = None
+    logo_url: Optional[str] = Field(default=None, max_length=2048)
+
+    @field_validator("logo_url")
+    @classmethod
+    def validate_logo_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
 
 class CompanyOut(BaseModel):
     id: int

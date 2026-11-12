@@ -1,4 +1,5 @@
 import type { DashboardTransactionItem } from './dashboardService'
+import type { DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { formatCreatedAt } from '@/utils/dateUtils'
 import { removeLegacyAuditStorage, saveAuditReview } from './auditReviewApi'
 import {
@@ -49,8 +50,20 @@ export interface ExpenseItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
   type: 'Expense'
   bankAccountId?: string
+  bankName?: string
+  remarks?: string
+}
+
+export interface DailyExpenseSummaryOut {
+  date: string
+  day_of_week: string
+  transaction_count: number
+  gross_total: number | string
+  realized_cash: number | string
+  audit_status: string
 }
 
 export interface NewExpenseInput {
@@ -64,6 +77,10 @@ export interface NewExpenseInput {
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
   items?: ParticularItem[]
   bankAccountId?: string
+  remarks?: string
+  createdBy?: string
+  updatedBy?: string
+  updatedAt?: string
 }
 
 const EXPENSES_STORAGE_KEY = 'mct_expense_records_v1'
@@ -130,8 +147,13 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     auditDate: exp.audited_at ? formatCreatedAt(exp.audited_at) : undefined,
     auditNotes: exp.audit_remarks || undefined,
     type: 'Expense',
+    bankAccountId: exp.bank_account_id || exp.bankAccountId || undefined,
+    bankName: exp.bank_name || exp.bankName || undefined,
+    remarks: exp.remarks || undefined,
+    createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
     createdAt: exp.created_at || new Date().toISOString(),
-    updatedAt: exp.updated_at || new Date().toISOString(),
+    updatedAt: exp.updated_at || undefined,
+    updatedBy: exp.updated_by || exp.updated_by_name || undefined,
   }
 }
 
@@ -141,6 +163,43 @@ const EXPENSE_CACHE_TTL = 30000
 export const expenseService = {
   invalidateCache(): void {
     expenseCache.clear()
+  },
+
+  async getDailySummary(params?: {
+    company?: string
+    startDate?: string
+    endDate?: string
+    viewType?: string
+    search?: string
+  }): Promise<DailyExpenseSummaryOut[]> {
+    try {
+      const query = new URLSearchParams()
+      if (params?.company && params.company !== 'All Companies') {
+        query.append('company_name', params.company)
+      }
+      if (params?.startDate) query.append('start_date', params.startDate)
+      if (params?.endDate) query.append('end_date', params.endDate)
+      if (params?.viewType) query.append('view_type', params.viewType)
+      if (params?.search) query.append('search', params.search)
+
+      const token =
+        typeof window !== 'undefined'
+          ? sessionStorage.getItem('mct_access_token')
+          : null
+
+      const res = await fetch(`/api/v1/expenses/daily-summary?${query.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      if (res.ok) {
+        return await res.json()
+      }
+    } catch (err) {
+      console.warn('Failed to fetch expenses daily summary:', err)
+    }
+    return []
   },
 
   async getCategories(): Promise<{ category_id: number; name: string }[]> {
@@ -276,7 +335,17 @@ export const expenseService = {
 
   async addExpense(input: NewExpenseInput): Promise<ExpenseItem> {
     this.invalidateCache()
-    const rawDate = input.date
+    let rawDate = input.date
+    if (rawDate && rawDate.includes('/')) {
+      const p = rawDate.split('/')
+      if (p.length === 3) {
+        const m = p[0].padStart(2, '0')
+        const d = p[1].padStart(2, '0')
+        const y = p[2].length === 2 ? `20${p[2]}` : p[2]
+        rawDate = `${y}-${m}-${d}`
+      }
+    }
+
     const parts = rawDate.split('-')
     const formattedDate =
       parts.length === 3
@@ -285,6 +354,7 @@ export const expenseService = {
 
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
+    const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
 
     try {
       const token =
@@ -294,15 +364,16 @@ export const expenseService = {
 
       const payload = {
         company: input.company,
-        expense_date: input.date,
+        expense_date: rawDate,
         particulars: input.particulars,
         description: input.particulars,
-        amount: input.amount,
+        amount: cleanAmount,
         category: input.category,
         payment_method: input.paymentMethod || null,
         cheque_no: input.chequeNo || null,
         reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
+        remarks: input.remarks || undefined,
       }
 
       const res = await fetch('/api/v1/expenses', {
@@ -334,9 +405,21 @@ export const expenseService = {
         return mapped
       } else {
         const errData = await res.json().catch(() => ({}))
-        const errorMsg =
-          errData.detail ||
-          (typeof errData === 'string' ? errData : 'Failed to record expense entry.')
+        let errorMsg = 'Failed to record expense entry.'
+        if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail
+            .map((d: any) => {
+              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+            })
+            .join('; ')
+        } else if (errData.detail && typeof errData.detail === 'object') {
+          errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+        } else if (typeof errData.message === 'string') {
+          errorMsg = errData.message
+        }
         throw new Error(errorMsg)
       }
     } catch (err: any) {
@@ -372,9 +455,10 @@ export const expenseService = {
       ),
       auditStatus: 'Pending Audit',
       auditNotes: 'Newly recorded expense transaction.',
-      createdBy: 'Finance Staff',
+      createdBy: input.createdBy || 'Carlos Tan (Supervisor)',
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      updatedBy: input.updatedBy,
+      updatedAt: input.updatedAt,
       type: 'Expense',
     }
 
@@ -421,6 +505,9 @@ export const expenseService = {
     if (updates.chequeNo !== undefined) {
       payload.cheque_no = updates.chequeNo
     }
+    if (updates.remarks !== undefined) {
+      payload.remarks = updates.remarks
+    }
 
     try {
       const token =
@@ -440,6 +527,12 @@ export const expenseService = {
       if (res.ok) {
         const updated = await res.json()
         const mapped = mapBackendExpenseToItem(updated)
+        if (updates.updatedBy) {
+          mapped.updatedBy = updates.updatedBy
+        }
+        if (updates.updatedAt) {
+          mapped.updatedAt = updates.updatedAt
+        }
         if (updates.items && updates.items.length > 0) {
           mapped.items = updates.items
           mapped.status = deriveRecordStatusFromParticulars(
@@ -516,6 +609,7 @@ export const expenseService = {
       rawDate: rawDate,
       withdrawal: finalWithdrawal,
       netAmount: finalWithdrawal,
+      updatedBy: exp.updatedBy,
       updatedAt: new Date().toISOString(),
     }
 
@@ -567,6 +661,7 @@ export const expenseService = {
       outstandingBalance: newRemaining,
       status: newStatus,
       repayments: [repRecord, ...(exp.repayments || [])],
+      updatedBy: exp.updatedBy,
       updatedAt: new Date().toISOString(),
     }
 
@@ -574,6 +669,38 @@ export const expenseService = {
     saveStoredExpenses(inMemoryExpenses)
     this.invalidateCache()
     return updated
+  },
+
+  async updateExpenseRemarks(id: string, remarks: string): Promise<ExpenseItem> {
+    this.invalidateCache()
+    const numericId = id.replace(/^exp_/, '')
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/expenses/${numericId}/remarks`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ remarks }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendExpenseToItem(updated)
+      inMemoryExpenses = inMemoryExpenses.map((e) =>
+        e.id === id || e.id === `exp_${numericId}` ? mapped : e
+      )
+      saveStoredExpenses(inMemoryExpenses)
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Failed to update remarks.')
+    }
   },
 
   async deleteExpense(id: string): Promise<boolean> {
@@ -635,7 +762,8 @@ export const expenseService = {
         auditedBy: mapped.auditedBy,
         auditDate: mapped.auditDate,
         auditNotes: mapped.auditNotes,
-        updatedAt: new Date().toISOString(),
+        updatedBy: inMemoryExpenses[index].updatedBy,
+        updatedAt: inMemoryExpenses[index].updatedAt,
       }
       inMemoryExpenses[index] = updated
       saveStoredExpenses(inMemoryExpenses)
@@ -758,6 +886,129 @@ export const expenseService = {
     `)
     printWindow.document.close()
   },
+
+  exportDailySummaryCsv(groups: DailyGroupSummary<ExpenseItem>[], filename = 'expense_daily_summary.csv') {
+    const headers = [
+      'Date',
+      'Day of Week',
+      'Transaction Count',
+      'Gross Total',
+      'Realized Cash Disbursement',
+      'Audit Status',
+    ]
+
+    const rows = groups.map((g) => [
+      g.date,
+      g.dayOfWeek,
+      g.transactionCount,
+      g.grossTotal.toFixed(2),
+      g.realizedCash.toFixed(2),
+      g.auditStatus,
+    ])
+
+    const csvContent =
+      '\uFEFF' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\r\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.setAttribute('href', url)
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  },
+
+  exportDailySummaryPdf(groups: DailyGroupSummary<ExpenseItem>[], company = 'MCT Kitchen') {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+
+    const totalGross = groups.reduce((sum, g) => sum + (g.grossTotal || 0), 0)
+    const totalRealized = groups.reduce((sum, g) => sum + (g.realizedCash || 0), 0)
+    const totalTransactions = groups.reduce((sum, g) => sum + (g.transactionCount || 0), 0)
+
+    const rowsHtml =
+      groups.length === 0
+        ? `<tr><td colspan="6" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No daily expense records available for this selection.</td></tr>`
+        : groups
+            .map(
+              (g) => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${g.formattedDate || g.date}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${g.dayOfWeek}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${g.transactionCount}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #dc2626; font-weight: 600;">₱${g.grossTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">₱${g.realizedCash.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+          <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; ${
+            g.auditStatus === 'All Verified'
+              ? 'background: #dcfce7; color: #15803d;'
+              : g.auditStatus === 'Discrepancy'
+              ? 'background: #ffe4e6; color: #be123c;'
+              : 'background: #fef3c7; color: #b45309;'
+          }">
+            ${g.auditStatus}
+          </span>
+        </td>
+      </tr>
+    `
+            )
+            .join('')
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Daily Expense Summary Report — ${company}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
+            h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
+            p { font-size: 12px; color: #64748B; margin: 0 0 16px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th { background-color: #F8FAFC; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; border-bottom: 2px solid #CBD5E1; }
+            .summary { margin-top: 20px; padding: 12px 16px; background-color: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; font-size: 12px; }
+            @media print {
+              body { padding: 10px; }
+              @page { size: landscape; margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>MCT Group of Companies</h1>
+          <p>Daily Expense Summary Report for <strong>${company}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Day</th>
+                <th style="text-align: center;">Transactions</th>
+                <th style="text-align: right;">Gross Expenses</th>
+                <th style="text-align: right;">Realized Cash</th>
+                <th>Audit Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div><strong>Total Days:</strong> ${groups.length} (Total Tx: ${totalTransactions})</div>
+            <div><strong>Total Gross Expenses:</strong> ₱${totalGross.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+            <div><strong>Total Realized Cash:</strong> ₱${totalRealized.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+  },
+
 
   toDashboardTransaction(expense: ExpenseItem): DashboardTransactionItem {
     return {

@@ -9,7 +9,7 @@ MAX_MONEY = 99_999_999_999.0
 
 RepeatMode = Literal["None", "Daily", "Monthly", "Quarterly", "Annually"]
 LeaseStatus = Literal["Active", "Completed", "Overdue", "Pending"]
-PaymentStatus = Literal["Paid", "Missed"]
+PaymentStatus = Literal["Paid", "Missed", "Partially Paid"]
 
 
 class LeaseCreate(BaseModel):
@@ -68,6 +68,7 @@ class PaymentOut(BaseModel):
     missed_reason: Optional[str] = None
     period_index: Optional[int] = None
     created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
     created_at: Optional[str] = None
 
 
@@ -94,6 +95,7 @@ class LeaseOut(BaseModel):
     audited_at: Optional[str] = None
     audit_remarks: Optional[str] = None
     created_by: Optional[int] = None
+    created_by_name: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     payments: List[PaymentOut] = []

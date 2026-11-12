@@ -108,12 +108,22 @@ class InvitationDispatcher:
         now = datetime.now(timezone.utc)
         claim_token = job.claim_token
 
-        # 1. Verify parent invitation is still valid and PENDING
+        # 1. Verify parent invitation is still valid, unexpired, and PENDING
         parent_invitation = (
             self.db.query(UserInvitation)
             .filter(UserInvitation.invitation_id == job.invitation_id)
             .first()
         )
+        parent_exp = parent_invitation.expires_at if parent_invitation else None
+        if parent_exp is not None and parent_exp.tzinfo is None:
+            parent_exp = parent_exp.replace(tzinfo=timezone.utc)
+        if parent_invitation and parent_exp is not None and parent_exp <= now and parent_invitation.status in ("PENDING", "CLAIMED"):
+            self.db.query(UserInvitation).filter(
+                UserInvitation.invitation_id == parent_invitation.invitation_id
+            ).update({"status": "EXPIRED", "token_hash": None}, synchronize_session=False)
+            self.db.commit()
+            parent_invitation.status = "EXPIRED"
+
         if not parent_invitation or parent_invitation.status in ("ACCEPTED", "REVOKED", "EXPIRED"):
             logger.info(
                 "Cancelling outbox job %s: Parent invitation status is %s.",
@@ -161,6 +171,7 @@ class InvitationDispatcher:
             payload_data = decrypt_payload(job.encrypted_payload)
             setup_url = payload_data.get("setup_url", "")
             user_name = payload_data.get("user_name", "Valued Employee")
+            purpose = payload_data.get("purpose") or (parent_invitation.purpose if parent_invitation else "initial_password_setup")
         except Exception as exc:
             logger.error("Payload decryption failed for job %s: %s. Marking DEAD_LETTER.", job.job_id, exc)
             self._update_job_status(
@@ -182,30 +193,57 @@ class InvitationDispatcher:
             return self._finalize_success(job.job_id, claim_token, job.user_id)
 
         safe_user_name = html.escape(user_name)
-        email_body_html = f"""
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
-            <h2 style="color: #0f172a;">Welcome to MCT Financial Management System</h2>
-            <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
-            <p style="color: #334155; font-size: 15px;">
-                An account has been created for you. To complete your account activation and access the system, please set your personal password by clicking the link below:
-            </p>
-            <div style="margin: 24px 0;">
-                <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
-                    Set Up Your Password
-                </a>
+
+        if purpose == "password_reset":
+            email_subject = "Reset Your Password - MCT Financial Management System"
+            email_body_html = f"""
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #0f172a;">Reset Your Password</h2>
+                <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
+                <p style="color: #334155; font-size: 15px;">
+                    We received a request to reset your password for the MCT Financial Management System. Click the link below to choose a new password:
+                </p>
+                <div style="margin: 24px 0;">
+                    <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                        Reset Your Password
+                    </a>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">
+                    This single-use link expires in 30 minutes. If you did not request a password reset, you can safely ignore this email.
+                </p>
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+                <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
             </div>
-            <p style="color: #64748b; font-size: 13px;">
-                This single-use link expires in 24 hours. For security reasons, do not share this link with anyone.
-            </p>
-            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-            <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
-        </div>
-        """
+            """
+            email_text_content = f"Hello {user_name}! Reset your password here: {setup_url} (Expires in 30 minutes)"
+        else:
+            email_subject = "Complete Your Account Setup - MCT Financial Management System"
+            email_body_html = f"""
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+                <h2 style="color: #0f172a;">Welcome to MCT Financial Management System</h2>
+                <p style="color: #334155; font-size: 15px;">Hello {safe_user_name},</p>
+                <p style="color: #334155; font-size: 15px;">
+                    An account has been created for you. To complete your account activation and access the system, please set your personal password by clicking the link below:
+                </p>
+                <div style="margin: 24px 0;">
+                    <a href="{setup_url}" style="background-color: #0284c7; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                        Set Up Your Password
+                    </a>
+                </div>
+                <p style="color: #64748b; font-size: 13px;">
+                    This single-use link expires in 24 hours. For security reasons, do not share this link with anyone.
+                </p>
+                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
+                <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
+            </div>
+            """
+            email_text_content = f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)"
 
         # Log invitation setup link with masked PII and redacted sensitive token in server logs
         logger.info(
-            "Account setup link generated for %s: %s",
+            "Account link generated for %s (purpose=%s): %s",
             mask_email(job.recipient_email),
+            purpose,
             mask_sensitive_url(setup_url),
         )
 
@@ -220,9 +258,9 @@ class InvitationDispatcher:
                     "name": safe_user_name,
                 }
             ],
-            "subject": "Complete Your Account Setup - MCT Financial Management System",
+            "subject": email_subject,
             "htmlContent": email_body_html,
-            "textContent": f"Welcome {user_name}! Complete your account setup here: {setup_url} (Expires in 24 hours)",
+            "textContent": email_text_content,
             "headers": {
                 "X-Mailin-Track": "0",
             },
@@ -270,43 +308,52 @@ class InvitationDispatcher:
                 except Exception as supa_err:
                     logger.warning("Supabase Auth direct invite failed for %s: %s", mask_email(job.recipient_email), supa_err)
 
-                # Send copy to registered admin email if configured
+                # Send copy to registered admin email if configured in settings or database
                 try:
-                    admin_recipient = "gonzaga.reymie.lovete@gmail.com"
-                    admin_notice_payload = json.dumps({
-                        "sender": {
-                            "name": from_name,
-                            "email": from_email,
-                        },
-                        "to": [{"email": admin_recipient}],
-                        "subject": f"[Setup Link for {mask_email(job.recipient_email)}] MCT Financial Management System",
-                        "htmlContent": f"""
-                        <div style="font-family: sans-serif; padding: 20px;">
-                            <h2>User Invitation Setup Link</h2>
-                            <p>An account was created for <strong>{safe_user_name}</strong> ({html.escape(job.recipient_email)}).</p>
-                            <p>Direct setup link:</p>
-                            <p><a href="{setup_url}">{setup_url}</a></p>
-                        </div>
-                        """,
-                        "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
-                        "headers": {
-                            "X-Mailin-Track": "0",
-                        },
-                    }).encode("utf-8")
-                    admin_req = urllib.request.Request(
-                        "https://api.brevo.com/v3/smtp/email",
-                        data=admin_notice_payload,
-                        headers={
-                            "api-key": api_key,
-                            "Content-Type": "application/json",
-                            "Accept": "application/json",
-                            "User-Agent": "MCT-Financial-Management-System",
-                        },
-                        method="POST",
-                    )
-                    with urllib.request.urlopen(admin_req, timeout=5.0):
-                        logger.info("Delivered invitation notice to admin inbox for %s", mask_email(job.recipient_email))
-                        sent_via_fallback = True
+                    admin_recipient = getattr(settings, "ADMIN_EMAIL", "") or ""
+                    if not admin_recipient:
+                        admin_user = (
+                            self.db.query(User)
+                            .filter(or_(User.role == "admin", User.is_admin.is_(True)))
+                            .first()
+                        )
+                        if admin_user and admin_user.email:
+                            admin_recipient = admin_user.email
+                    if admin_recipient:
+                        admin_notice_payload = json.dumps({
+                            "sender": {
+                                "name": from_name,
+                                "email": from_email,
+                            },
+                            "to": [{"email": admin_recipient}],
+                            "subject": f"[Setup Link for {mask_email(job.recipient_email)}] MCT Financial Management System",
+                            "htmlContent": f"""
+                            <div style="font-family: sans-serif; padding: 20px;">
+                                <h2>User Invitation Setup Link</h2>
+                                <p>An account was created for <strong>{safe_user_name}</strong> ({html.escape(job.recipient_email)}).</p>
+                                <p>Direct setup link:</p>
+                                <p><a href="{setup_url}">{setup_url}</a></p>
+                            </div>
+                            """,
+                            "textContent": f"User {user_name} ({job.recipient_email}) setup link: {setup_url}",
+                            "headers": {
+                                "X-Mailin-Track": "0",
+                            },
+                        }).encode("utf-8")
+                        admin_req = urllib.request.Request(
+                            "https://api.brevo.com/v3/smtp/email",
+                            data=admin_notice_payload,
+                            headers={
+                                "api-key": api_key,
+                                "Content-Type": "application/json",
+                                "Accept": "application/json",
+                                "User-Agent": "MCT-Financial-Management-System",
+                            },
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(admin_req, timeout=5.0):
+                            logger.info("Delivered invitation notice to admin inbox for %s", mask_email(job.recipient_email))
+                            sent_via_fallback = True
                 except Exception as admin_err:
                     logger.warning("Could not dispatch admin copy via Brevo: %s", admin_err)
 
@@ -472,3 +519,115 @@ def process_pending_outbox_batch(batch_size: int = 10) -> int:
         return processed_count
     finally:
         db.close()
+
+
+def cleanup_invitation_tables(
+    db: Session,
+    retention_days: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> dict[str, int]:
+    """
+    1. Marks expired PENDING/CLAIMED UserInvitation rows as EXPIRED and scrubs token_hash = None in batches.
+    2. Scrubs token_hash = None on any terminal UserInvitation rows (ACCEPTED, EXPIRED, REVOKED).
+    3. Deletes DISPATCHED_TO_PROVIDER and CANCELLED InvitationOutbox rows older than retention_days in batches.
+       Unresolved DEAD_LETTER rows and active (PENDING, CLAIMED, FAILED) rows are NEVER deleted.
+    """
+    from sqlalchemy import delete, select
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    resolved_days = (
+        retention_days
+        if retention_days is not None
+        else getattr(settings, "INVITATION_OUTBOX_RETENTION_DAYS", 60)
+    )
+    resolved_batch = (
+        batch_size
+        if batch_size is not None
+        else getattr(settings, "RETENTION_PURGE_BATCH_SIZE", 1000)
+    )
+    cutoff = now - timedelta(days=resolved_days)
+    invitations_scrubbed = 0
+    outbox_deleted = 0
+
+    try:
+        # 1. Transition expired PENDING/CLAIMED invitations and scrub token_hash
+        while True:
+            exp_ids = db.scalars(
+                select(UserInvitation.invitation_id)
+                .where(
+                    UserInvitation.status.in_(["PENDING", "CLAIMED"]),
+                    UserInvitation.expires_at <= now,
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not exp_ids:
+                break
+            updated = (
+                db.query(UserInvitation)
+                .filter(UserInvitation.invitation_id.in_(exp_ids))
+                .update(
+                    {"status": "EXPIRED", "token_hash": None},
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            invitations_scrubbed += updated or 0
+            if len(exp_ids) < resolved_batch:
+                break
+
+        # 2. Scrub any terminal invitations that still have a non-null token_hash
+        while True:
+            unscrubbed_ids = db.scalars(
+                select(UserInvitation.invitation_id)
+                .where(
+                    UserInvitation.status.in_(["ACCEPTED", "EXPIRED", "REVOKED"]),
+                    UserInvitation.token_hash.isnot(None),
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not unscrubbed_ids:
+                break
+            updated = (
+                db.query(UserInvitation)
+                .filter(UserInvitation.invitation_id.in_(unscrubbed_ids))
+                .update({"token_hash": None}, synchronize_session=False)
+            )
+            db.commit()
+            invitations_scrubbed += updated or 0
+            if len(unscrubbed_ids) < resolved_batch:
+                break
+
+        # 3. Delete resolved InvitationOutbox rows older than retention_days in batches
+        while True:
+            job_ids = db.scalars(
+                select(InvitationOutbox.job_id)
+                .where(
+                    InvitationOutbox.status.in_(["DISPATCHED_TO_PROVIDER", "CANCELLED"]),
+                    InvitationOutbox.updated_at < cutoff,
+                )
+                .limit(resolved_batch)
+            ).all()
+            if not job_ids:
+                break
+            res = db.execute(
+                delete(InvitationOutbox).where(InvitationOutbox.job_id.in_(job_ids))
+            )
+            db.commit()
+            deleted = res.rowcount or 0
+            outbox_deleted += deleted
+            if deleted < resolved_batch:
+                break
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to cleanup invitation tables: %s", exc)
+
+    return {
+        "user_invitations_scrubbed": invitations_scrubbed,
+        "invitation_outbox_deleted": outbox_deleted,
+    }
+

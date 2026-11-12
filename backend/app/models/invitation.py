@@ -24,8 +24,15 @@ class UserInvitation(Base):
     user_id = Column(
         Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True
     )
-    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    token_hash = Column(String(64), nullable=True, unique=True, index=True)
     status = Column(String(20), nullable=False, default="PENDING", index=True)
+    purpose = Column(
+        String(30),
+        nullable=False,
+        default="initial_password_setup",
+        server_default="initial_password_setup",
+        index=True,
+    )
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
     claimed_at = Column(DateTime(timezone=True), nullable=True)
     accepted_at = Column(DateTime(timezone=True), nullable=True)
@@ -41,7 +48,12 @@ class UserInvitation(Base):
             "status IN ('PENDING', 'CLAIMED', 'ACCEPTED', 'EXPIRED', 'REVOKED')",
             name="chk_invitation_status",
         ),
+        CheckConstraint(
+            "purpose IN ('initial_password_setup', 'password_reset')",
+            name="chk_invitation_purpose",
+        ),
         Index("idx_user_invitations_token_status", "token_hash", "status"),
+        Index("idx_user_invitations_user_purpose", "user_id", "purpose", "status"),
     )
 
 

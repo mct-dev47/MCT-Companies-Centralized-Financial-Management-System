@@ -27,10 +27,22 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       document.title = 'Loan - MCT Centralized Financial System'
     } else if (path.startsWith('/lending')) {
       document.title = 'Lending - MCT Centralized Financial System'
+    } else if (path.startsWith('/tenant')) {
+      document.title = 'Tenants - MCT Centralized Financial System'
+    } else if (path.startsWith('/receivables') || path.startsWith('/utang')) {
+      document.title = 'Receivables - MCT Centralized Financial System'
+    } else if (path.startsWith('/bank-management')) {
+      document.title = 'Bank Management - MCT Centralized Financial System'
+    } else if (path.startsWith('/petty-cash')) {
+      document.title = 'Petty Cash - MCT Centralized Financial System'
     } else if (path.startsWith('/bills')) {
       document.title = 'Bills - MCT Centralized Financial System'
     } else if (path.startsWith('/transaction')) {
       document.title = 'Transactions - MCT Centralized Financial System'
+    } else if (path.startsWith('/employee')) {
+      document.title = 'Companies - MCT Centralized Financial System'
+    } else if (path.startsWith('/users') || path.startsWith('/user-management')) {
+      document.title = 'User Management - MCT Centralized Financial System'
     } else if (path.startsWith('/activity-log')) {
       document.title = 'Activity Log - MCT Centralized Financial System'
     } else if (path.startsWith('/settings')) {
@@ -43,17 +55,20 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       {/* Mobile Top Bar with Sheet Drawer (< lg) */}
       <MobileTopBar />
 
-      {/* Desktop Persistent Sidebar Rail (>= lg) */}
-      <div className="hidden lg:block shrink-0 w-[72px] min-h-screen self-stretch relative z-50">
+      {/* Desktop Persistent Sidebar Spacer Rail (>= lg) */}
+      <div className="hidden lg:block shrink-0 w-[72px]" aria-hidden="true" />
+
+      {/* Desktop Persistent Sticky Sidebar (>= lg) */}
+      <div className="hidden lg:block">
         <AppSidebar />
       </div>
 
       {/* Right Column: Top Notification Header + Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        <div className="hidden lg:block">
+        <div className="hidden lg:block sticky top-0 z-30">
           <TopHeader />
         </div>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 bg-surface overflow-x-hidden">
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 bg-surface">
           {children || <Outlet />}
         </main>
       </div>

@@ -1,0 +1,26 @@
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel, ConfigDict
+
+
+class CompanyParticularBase(BaseModel):
+    name: str
+    company_name: Optional[str] = None
+    company_id: Optional[int] = None
+    transaction_type: Optional[str] = "Sales"
+
+
+class CompanyParticularCreate(CompanyParticularBase):
+    pass
+
+
+class CompanyParticularOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    company_name: Optional[str] = None
+    company_id: Optional[int] = None
+    transaction_type: Optional[str] = "Sales"
+    created_at: Optional[datetime] = None
+

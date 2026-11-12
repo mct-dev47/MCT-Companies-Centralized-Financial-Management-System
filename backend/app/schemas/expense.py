@@ -1,26 +1,51 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
 
-class ExpenseBase(BaseModel):
+from app.schemas.base import StrictBaseModel
+
+class ExpenseBase(StrictBaseModel):
     company_id: Optional[int] = None
     category_id: Optional[int] = None
     created_by: Optional[int] = None
     expense_date: date
-    reference_no: Optional[str] = None
-    cheque_no: Optional[str] = None
+    reference_no: Optional[str] = Field(None, max_length=100)
+    cheque_no: Optional[str] = Field(None, max_length=100)
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Withdrawal amount must be at least 1.00 (cannot be negative or zero)")
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
-    particulars: Optional[str] = Field(None, description="Particulars / description")
-    description: Optional[str] = None
+    particulars: Optional[str] = Field(None, max_length=500, description="Particulars / description")
+    description: Optional[str] = Field(None, max_length=500)
+    remarks: Optional[str] = Field(None, max_length=500, description="Operational remarks by supervisor/finance")
+
+    @field_validator('amount', mode='before')
+    @classmethod
+    def round_amount(cls, v):
+        if v is not None:
+            try:
+                return Decimal(str(round(float(v), 2)))
+            except Exception:
+                return v
+        return v
+
+    @field_validator('expense_date', mode='before')
+    @classmethod
+    def parse_expense_date(cls, v):
+        if isinstance(v, str) and '/' in v:
+            parts = v.strip().split('/')
+            if len(parts) == 3:
+                m, d, y = parts
+                if len(y) == 2:
+                    y = '20' + y
+                return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+        return v
 
 class ExpenseCreate(ExpenseBase):
-    company: Optional[str] = None
-    category: Optional[str] = None
-    chequeNo: Optional[str] = None
-    payment_method: Optional[str] = None
-    bank_account_id: Optional[str] = None
+    company: Optional[str] = Field(None, max_length=150)
+    category: Optional[str] = Field(None, max_length=150)
+    chequeNo: Optional[str] = Field(None, max_length=100)
+    payment_method: Optional[str] = Field(None, max_length=50)
+    bank_account_id: Optional[str] = Field(None, max_length=50)
 
     @model_validator(mode="after")
     def validate_required_fields(self):
@@ -29,6 +54,11 @@ class ExpenseCreate(ExpenseBase):
             raise ValueError("Particulars is required and cannot be blank.")
         self.particulars = parts.strip()
         self.description = self.particulars
+
+        if not self.category_id and (not self.category or not self.category.strip()):
+            raise ValueError("Category is required and cannot be blank.")
+        if self.category and self.category.strip():
+            self.category = self.category.strip()
 
         if self.amount < Decimal("1.00"):
             raise ValueError("Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
@@ -45,19 +75,42 @@ class ExpenseCreate(ExpenseBase):
 
         return self
 
-class ExpenseUpdate(BaseModel):
+class ExpenseUpdate(StrictBaseModel):
     category_id: Optional[int] = None
-    category: Optional[str] = None
-    payment_method: Optional[str] = None
+    category: Optional[str] = Field(None, max_length=150)
+    payment_method: Optional[str] = Field(None, max_length=50)
     expense_date: Optional[date] = None
-    reference_no: Optional[str] = None
-    cheque_no: Optional[str] = None
-    chequeNo: Optional[str] = None
+    reference_no: Optional[str] = Field(None, max_length=100)
+    cheque_no: Optional[str] = Field(None, max_length=100)
+    chequeNo: Optional[str] = Field(None, max_length=100)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     withdrawal: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     amount_paid: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    particulars: Optional[str] = None
-    description: Optional[str] = None
+    particulars: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(None, max_length=500)
+    remarks: Optional[str] = Field(None, max_length=500)
+
+    @field_validator('amount', 'withdrawal', mode='before')
+    @classmethod
+    def round_update_amount(cls, v):
+        if v is not None:
+            try:
+                return Decimal(str(round(float(v), 2)))
+            except Exception:
+                return v
+        return v
+
+    @field_validator('expense_date', mode='before')
+    @classmethod
+    def parse_update_expense_date(cls, v):
+        if isinstance(v, str) and '/' in v:
+            parts = v.strip().split('/')
+            if len(parts) == 3:
+                m, d, y = parts
+                if len(y) == 2:
+                    y = '20' + y
+                return f"{y}-{m.zfill(2)}-{d.zfill(2)}"
+        return v
 
     @model_validator(mode="after")
     def validate_update_fields(self):
@@ -76,10 +129,19 @@ class ExpenseUpdate(BaseModel):
 
         parts = self.particulars or self.description
         if parts is not None:
+            if not parts.strip():
+                raise ValueError("Particulars cannot be blank.")
             self.particulars = parts.strip()
             self.description = self.particulars
 
+        if self.category is not None and not self.category.strip():
+            raise ValueError("Category cannot be blank.")
+
         return self
+
+class RemarksUpdate(BaseModel):
+    remarks: Optional[str] = None
+
 
 class ExpenseOut(BaseModel):
     expense_id: int
@@ -103,6 +165,20 @@ class ExpenseOut(BaseModel):
     audited_by: Optional[str] = None
     audited_at: Optional[datetime] = None
     audit_remarks: Optional[str] = None
+    remarks: Optional[str] = None
+    bank_account_id: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DailyExpenseSummaryOut(BaseModel):
+    date: date
+    day_of_week: str
+    transaction_count: int
+    gross_total: Decimal = Field(default=Decimal("0.00"))
+    realized_cash: Decimal = Field(default=Decimal("0.00"))
+    audit_status: str = "Pending Audit"
+
+    model_config = ConfigDict(from_attributes=True)
+
 

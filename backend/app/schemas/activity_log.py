@@ -7,8 +7,8 @@ Pydantic schemas for Activity Logs, filters, and data retention responses.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ActivityLogBase(BaseModel):
@@ -35,8 +35,15 @@ class ActivityLogOut(ActivityLogBase):
     module: str = "General"
     target: str = "-"
 
-    class Config:
-        from_attributes = True
+    # Enriched change tracking and network metadata
+    severity: str = "INFO"
+    record_type: Optional[str] = None
+    record_id: Optional[Union[str, int]] = None
+    record_ref: Optional[str] = None
+    user_agent: Optional[str] = None
+    changes: Optional[Dict[str, Dict[str, Any]]] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PaginatedActivityLogs(BaseModel):
@@ -50,4 +57,21 @@ class RetentionPurgeResponse(BaseModel):
     purged_count: int = Field(..., description="Number of expired log entries deleted")
     cutoff_date: str = Field(..., description="ISO 8601 cutoff timestamp (older records deleted)")
     message: str = Field(..., description="Human-readable status summary")
+
+
+class TimelineEventOut(BaseModel):
+    id: str
+    action: str
+    event_type: str = "general"  # created | edited | endorsed | audited | disbursed | status_change | payment
+    title: str
+    actor_name: str
+    actor_role: Optional[str] = None
+    timestamp: Optional[str] = None
+    description: str
+    changes: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+    status_badge: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 

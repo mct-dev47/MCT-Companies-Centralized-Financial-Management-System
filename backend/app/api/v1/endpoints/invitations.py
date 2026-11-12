@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import AdminUser
+from app.core.network import get_trusted_client_ip
 from app.db.session import get_db
 from app.models.invitation import InvitationOutbox
 from app.schemas.auth import MessageResponse
+from app.services.rate_limiter import check_invitation_rate_limit, record_invitation_attempt
 from app.services.user_service import UserService, UserValidationError
 
 router = APIRouter()
@@ -13,7 +15,8 @@ router = APIRouter()
 @router.post("/{job_id}/replay", response_model=MessageResponse, summary="Administrative replay for dead-letter invitation job")
 def replay_invitation_job(
     job_id: int,
-    _: AdminUser,
+    current_admin: AdminUser,
+    request: Request,
     db: Session = Depends(get_db),
 ):
     """
@@ -21,6 +24,10 @@ def replay_invitation_job(
     Validates current user state, revokes obsolete invitations,
     and enqueues a fresh invitation and outbox job.
     """
+    admin_id = int(current_admin.get("user_id") or current_admin.get("auth_user_id") or 1)
+    client_ip = get_trusted_client_ip(request)
+    check_invitation_rate_limit(db, admin_id=admin_id, ip=client_ip)
+
     job = db.query(InvitationOutbox).filter(InvitationOutbox.job_id == job_id).first()
     if not job:
         raise HTTPException(
@@ -30,6 +37,7 @@ def replay_invitation_job(
 
     try:
         UserService(db).reinvite_user(job.user_id)
+        record_invitation_attempt(db, admin_id=admin_id, ip=client_ip)
         return MessageResponse(
             message=f"Fresh invitation successfully generated and enqueued for user {job.user_id}.",
             success=True,

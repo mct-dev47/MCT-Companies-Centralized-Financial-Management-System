@@ -2,23 +2,68 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
+from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Expense, Category
 from app.models.company import Company
-from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate
+from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyExpenseSummaryOut, RemarksUpdate
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
+from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
+from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
+from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+
+
+class _SkipBackup(Exception):
+    """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
 
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
+from app.core.pagination import PaginationParams
 from app.core.cache import get_cached, set_cached
+
+def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
+    """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
+    has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
+    Petty cash expenses never touch a bank."""
+    try:
+        from app.services.bank_service import BankService
+        from app.core.websocket import ws_manager
+
+        expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+        if expense is None:
+            return
+        is_petty = (expense.payment_method or "").strip().lower() == "petty cash"
+        target = (
+            Decimal("0.00")
+            if force_zero or is_petty
+            else compute_paid_amount_from_particulars(expense.description, expense.amount)
+        )
+        company = db.query(Company).filter(Company.company_id == expense.company_id).first()
+        company_name = company.company_name if company else None
+        exp_date = expense.expense_date
+        BankService(db).sync_expense_disbursement(
+            expense_id=expense_id,
+            target_amount=target,
+            company_name=company_name,
+            account_id=expense.bank_account_id,
+            particulars=f"Expense Disbursement: {expense.description}",
+            reference_no=expense.cheque_number or expense.cheque_no or expense.reference_no,
+            tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
+            legacy_particulars=expense.description,
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
+    except Exception as exc:  # never block saving an expense on a bank sync problem
+        import logging
+        logging.getLogger(__name__).warning("Bank reconcile skipped for expense %s: %s", expense_id, exc)
+
 
 def get_supabase_mappings(client=None, db: Optional[Session] = None):
     cached = get_cached("supabase_mappings")
@@ -95,6 +140,7 @@ def get_expenses(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
+    pagination: PaginationParams = Depends(),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
@@ -135,7 +181,8 @@ def get_expenses(
         if end_date:
             sb_query = sb_query.lte("expense_date", end_date.isoformat())
 
-        res = sb_query.order("expense_date", desc=True).order("expense_id", desc=True).execute()
+        sb_query = sb_query.order("expense_date", desc=True).order("expense_id", desc=True)
+        res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
         return [
@@ -157,6 +204,7 @@ def get_expenses(
                 description=row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
             for row in rows
@@ -201,7 +249,7 @@ def get_expenses(
         if end_date:
             query = query.filter(Expense.expense_date <= end_date)
 
-        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
         return [
             ExpenseOut(
@@ -222,10 +270,206 @@ def get_expenses(
                 description=exp.description or "",
                 created_at=exp.created_at,
                 updated_at=exp.updated_at,
+                remarks=getattr(exp, "remarks", None),
                 **audit_fields(exp)
             )
             for exp, c_name, cat_name in rows
         ]
+
+
+def _to_date(val) -> Optional[date]:
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str) and val.strip():
+        try:
+            return date.fromisoformat(val.strip().split("T")[0])
+        except Exception:
+            try:
+                parts = val.strip().split("/")
+                if len(parts) == 3:
+                    m, d, y = parts
+                    if len(y) == 2:
+                        y = "20" + y
+                    return date(int(y), int(m), int(d))
+            except Exception:
+                pass
+    return None
+
+
+def _rollup_audit_status(statuses: List[str]) -> str:
+    if not statuses:
+        return "Pending Audit"
+    cleaned = [s.strip() for s in statuses if s]
+    if any(s.lower() in ("discrepancy", "flagged") for s in cleaned):
+        return "Discrepancy"
+    if all(s.lower() in ("verified", "all verified") for s in cleaned):
+        return "All Verified"
+    return "Pending Audit"
+
+
+@router.get("/daily-summary", response_model=List[DailyExpenseSummaryOut], summary="Daily expense aggregation summary")
+def get_expenses_daily_summary(
+    company_id: Optional[int] = Query(None, description="Filter by Company ID"),
+    company_name: Optional[str] = Query(None, description="Filter by Company Name"),
+    category_id: Optional[int] = Query(None, description="Filter by Category ID"),
+    start_date: Optional[date] = Query(None, description="Filter from date"),
+    end_date: Optional[date] = Query(None, description="Filter to date"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    view_type: Optional[str] = Query(None, description="View type ('withdraw' or 'expense')"),
+    search: Optional[str] = Query(None, description="Search keyword"),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db)
+):
+    user_role = (current_user.get("role") or "").lower()
+    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    raw_records = []
+    use_sb = False
+    try:
+        from app.services.sales_receivables_sync import SalesReceivablesSyncService
+        use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    except Exception:
+        use_sb = True
+
+    try:
+        if not use_sb:
+            raise RuntimeError("In-memory SQLite session")
+        client = get_supabase_admin_client()
+
+        sb_query = client.table("expenses").select("*")
+
+        resolved_company_id = normalize_company_id(company_id)
+        if resolved_company_id:
+            check_company_access(current_user, resolved_company_id)
+            sb_query = sb_query.eq("company_id", resolved_company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved_comp = resolve_company(db, company_name=company_name)
+            target_cid = resolved_comp.company_id
+            check_company_access(current_user, target_cid)
+            sb_query = sb_query.eq("company_id", target_cid)
+        elif user_company_ids:
+            if len(user_company_ids) == 1:
+                sb_query = sb_query.eq("company_id", user_company_ids[0])
+            else:
+                sb_query = sb_query.in_("company_id", user_company_ids)
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            sb_query = sb_query.eq("category_id", category_id)
+        if start_date:
+            sb_query = sb_query.gte("expense_date", start_date.isoformat())
+        if end_date:
+            sb_query = sb_query.lte("expense_date", end_date.isoformat())
+
+        res = sb_query.order("expense_date", desc=True).order("expense_id", desc=True).execute()
+        rows = res.data or []
+        for r in rows:
+            raw_records.append({
+                "expense_date": r.get("expense_date"),
+                "amount": r.get("amount") or 0.0,
+                "amount_paid": r.get("amount_paid") or 0.0,
+                "particulars": r.get("description") or r.get("particulars") or "",
+                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
+                "audit_status": r.get("audit_status") or "Pending Audit",
+            })
+    except HTTPException:
+        raise
+    except Exception:
+        query = db.query(Expense)
+        if company_id:
+            check_company_access(current_user, company_id)
+            query = query.filter(Expense.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Expense.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.join(Company, Expense.company_id == Company.company_id).filter(
+                    func.lower(Company.company_name) == func.lower(company_name.strip())
+                )
+                if not is_privileged:
+                    query = query.filter(Expense.company_id.in_(user_company_ids))
+        elif user_company_ids:
+            query = query.filter(Expense.company_id.in_(user_company_ids))
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            query = query.filter(Expense.category_id == category_id)
+        if start_date:
+            query = query.filter(Expense.expense_date >= start_date)
+        if end_date:
+            query = query.filter(Expense.expense_date <= end_date)
+
+        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+        for e in rows:
+            raw_records.append({
+                "expense_date": e.expense_date,
+                "amount": e.amount,
+                "amount_paid": e.amount_paid or 0.0,
+                "particulars": e.description or "",
+                "cheque_no": e.cheque_number or e.cheque_no or e.reference_no or "",
+                "audit_status": e.audit_status or "Pending Audit",
+            })
+
+    # Group by date
+    daily_groups = defaultdict(lambda: {
+        "count": 0,
+        "gross_total": Decimal("0.00"),
+        "realized_cash": Decimal("0.00"),
+        "audit_statuses": []
+    })
+
+    search_term = (search or "").strip().lower()
+    is_withdraw_view = (view_type or "").lower() == "withdraw"
+
+    for r in raw_records:
+        rec_date = _to_date(r["expense_date"])
+        if not rec_date:
+            continue
+
+        parts = r["particulars"]
+        chq = r["cheque_no"]
+
+        if search_term:
+            if search_term not in parts.lower() and search_term not in chq.lower():
+                continue
+
+        amt = Decimal(str(r["amount"] or 0))
+        amt_paid = Decimal(str(r["amount_paid"] or 0))
+        realized_from_particulars = compute_paid_amount_from_particulars(parts, amt)
+        realized = max(amt_paid, realized_from_particulars)
+
+        if is_withdraw_view and realized <= Decimal("0.00"):
+            continue
+
+        gross = realized if is_withdraw_view else amt
+
+        daily_groups[rec_date]["count"] += 1
+        daily_groups[rec_date]["gross_total"] += gross
+        daily_groups[rec_date]["realized_cash"] += realized
+        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+
+    result = [
+        DailyExpenseSummaryOut(
+            date=d,
+            day_of_week=d.strftime("%A"),
+            transaction_count=data["count"],
+            gross_total=data["gross_total"],
+            realized_cash=data["realized_cash"],
+            audit_status=_rollup_audit_status(data["audit_statuses"])
+        )
+        for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
+    ]
+    return result
+
 
 @router.post("", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED, summary="Record a new expense")
 def create_expense(
@@ -236,14 +480,18 @@ def create_expense(
 ):
 
     if expense_in.amount < Decimal("1.00"):
-        raise HTTPException(status_code=400, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
+        raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
     if expense_in.expense_date > date.today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")
 
     parts = (expense_in.particulars or expense_in.description or "").strip()
     if not parts:
-        raise HTTPException(status_code=400, detail="Particulars is required.")
+        raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
+
+    cat_str = (expense_in.category or "").strip()
+    if not expense_in.category_id and not cat_str:
+        raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
@@ -286,17 +534,24 @@ def create_expense(
 
         # 3. Insert into Supabase
         payment_method_str = (expense_in.payment_method or "").strip() or None
+        creator_id = expense_in.created_by or current_user.get("user_id")
         sb_insert = client.table("expenses").insert({
             "company_id": target_company_id,
             "category_id": resolved_category_id,
             "payment_method": payment_method_str,
-            "created_by": expense_in.created_by,
+            "created_by": creator_id,
             "expense_date": expense_in.expense_date.isoformat(),
             "reference_no": ref,
             "cheque_number": cheque,
             "amount": float(expense_in.amount),
             "amount_paid": float(expense_in.amount_paid or 0.0),
             "description": parts,
+            "remarks": expense_in.remarks,
+            "bank_account_id": expense_in.bank_account_id,
+            "audit_status": "Pending Audit",
+            "audited_by": None,
+            "audited_at": None,
+            "audit_remarks": None,
         }).execute()
 
         if not sb_insert.data:
@@ -305,8 +560,10 @@ def create_expense(
         created_row = sb_insert.data[0]
         sb_expense_id = created_row["expense_id"]
 
-        # Also backup to local SQLite
+        # Also backup to the ORM database, unless it IS the Supabase database (then the row is already there)
         try:
+            if rest_and_orm_share_database():
+                raise _SkipBackup()
             local_comp = db.query(Company).filter(Company.company_id == target_company_id).first()
             if not local_comp:
                 local_comp = Company(
@@ -323,52 +580,45 @@ def create_expense(
                 company_id=target_company_id,
                 category_id=resolved_category_id,
                 payment_method=payment_method_str,
-                created_by=expense_in.created_by,
+                created_by=creator_id,
                 expense_date=expense_in.expense_date,
                 reference_no=ref,
                 cheque_no=cheque,
                 cheque_number=cheque,
                 amount=expense_in.amount,
                 amount_paid=expense_in.amount_paid or Decimal("0.00"),
-                description=parts
+                description=parts,
+                remarks=expense_in.remarks,
+                bank_account_id=expense_in.bank_account_id,
+                audit_status="Pending Audit",
+                audited_by=None,
+                audited_at=None,
+                audit_remarks=None,
             )
             db.merge(local_exp)
             db.commit()
+        except _SkipBackup:
+            pass
         except Exception:
             db.rollback()
 
-        # Auto-withdrawal from company bank account for settled expenses (unless Petty Cash)
-        if (payment_method_str or "").lower() != "petty cash":
-            try:
-                from app.services.bank_service import BankService
-                from app.core.websocket import ws_manager
-                bank_svc = BankService(db)
-                if expense_in.bank_account_id:
-                    bank_svc.record_withdrawal_by_account_id(
-                        account_id=expense_in.bank_account_id,
-                        amount=expense_in.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense_in.expense_date.strftime("%m/%d/%y") if hasattr(expense_in.expense_date, "strftime") else str(expense_in.expense_date),
-                    )
-                else:
-                    bank_svc.record_expense_cash_withdrawal(
-                        company_name=target_company_name,
-                        amount=expense_in.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense_in.expense_date.strftime("%m/%d/%y") if hasattr(expense_in.expense_date, "strftime") else str(expense_in.expense_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company_name}})
-            except Exception:
-                pass
+        # Debit the bank only for the PAID part (matches the Transactions ledger)
+        reconcile_expense_bank(db, expense_id=sb_expense_id)
 
-        log_transaction(
-            db, AuditAction.EXPENSE_CREATED,
-            user_id=None, company_id=target_company_id,
+        # Particulars library + audit log don't change the response: do them after it is sent
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+        schedule_created_side_effects(
+            db,
+            company_id=target_company_id,
+            company_name=target_company_name,
+            particulars_text=parts,
+            particulars_type="Expense",
+            audit_action=AuditAction.EXPENSE_CREATED,
+            user_id=current_user.get("user_id"),
             ip_address=request.client.host if request.client else "unknown",
-            record_id=sb_expense_id, record_type="expense",
-            extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat()},
+            record_id=sb_expense_id,
+            record_type="expense",
+            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
         )
 
         try:
@@ -402,6 +652,7 @@ def create_expense(
             description=created_row.get("description"),
             created_at=created_row.get("created_at"),
             updated_at=created_row.get("updated_at"),
+            remarks=created_row.get("remarks"),
             **audit_fields(created_row)
         )
 
@@ -424,45 +675,38 @@ def create_expense(
             amount=expense_in.amount,
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
+            remarks=expense_in.remarks,
+            bank_account_id=expense_in.bank_account_id,
+            audit_status="Pending Audit",
+            audited_by=None,
+            audited_at=None,
+            audit_remarks=None,
         )
         db.add(expense)
         db.commit()
         db.refresh(expense)
 
-        # Auto-withdrawal from company bank account for settled expenses (unless Petty Cash)
-        if (expense_in.payment_method or "").lower() != "petty cash":
-            try:
-                from app.services.bank_service import BankService
-                from app.core.websocket import ws_manager
-                bank_svc = BankService(db)
-                if expense_in.bank_account_id:
-                    bank_svc.record_withdrawal_by_account_id(
-                        account_id=expense_in.bank_account_id,
-                        amount=expense.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense.expense_date.strftime("%m/%d/%y") if hasattr(expense.expense_date, "strftime") else str(expense.expense_date),
-                    )
-                else:
-                    bank_svc.record_expense_cash_withdrawal(
-                        company_name=target_company.company_name,
-                        amount=expense.amount,
-                        particulars=f"Expense Disbursement: {parts}",
-                        cheque_no=cheque or ref,
-                        tx_date=expense.expense_date.strftime("%m/%d/%y") if hasattr(expense.expense_date, "strftime") else str(expense.expense_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company.company_name}})
-            except Exception:
-                pass
+        # Debit the bank only for the PAID part (matches the Transactions ledger)
+        reconcile_expense_bank(db, expense_id=expense.expense_id)
+
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company_id, target_company_name, p_name, "Expense"
+                )
+        except Exception:
+            pass
 
         cat = db.query(Category).filter(Category.category_id == expense.category_id).first() if expense.category_id else None
 
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_CREATED,
-            user_id=None, company_id=target_company.company_id,
+            user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense.expense_id, record_type="expense",
-            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat()},
+            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
         )
 
         try:
@@ -495,6 +739,7 @@ def create_expense(
             description=expense.description,
             created_at=expense.created_at,
             updated_at=expense.updated_at,
+            remarks=getattr(expense, "remarks", None),
             **audit_fields(expense)
         )
 
@@ -530,6 +775,7 @@ def get_expense(
                 description=row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
     except HTTPException:
@@ -570,6 +816,7 @@ def get_expense(
         description=exp.description or "",
         created_at=exp.created_at,
         updated_at=exp.updated_at,
+        remarks=getattr(exp, "remarks", None),
         **audit_fields(exp)
     )
 
@@ -585,7 +832,7 @@ def update_expense(
 
     target_amt = expense_in.amount if expense_in.amount is not None else expense_in.withdrawal
     if target_amt is not None and target_amt < Decimal("1.00"):
-        raise HTTPException(status_code=400, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
+        raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
     if expense_in.expense_date is not None and expense_in.expense_date > date.today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")
@@ -624,6 +871,8 @@ def update_expense(
             update_payload["reference_no"] = chq_val
     elif expense_in.reference_no is not None:
         update_payload["reference_no"] = expense_in.reference_no.strip() if expense_in.reference_no.strip() else None
+    if expense_in.remarks is not None:
+        update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
     # Update in Supabase
     updated_row = None
@@ -679,17 +928,35 @@ def update_expense(
             expense.category_id = update_payload["category_id"]
         if "payment_method" in update_payload:
             expense.payment_method = update_payload["payment_method"]
+        if "remarks" in update_payload:
+            expense.remarks = update_payload["remarks"]
         db.commit()
         db.refresh(expense)
+
+    # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
+    reconcile_expense_bank(db, expense_id=expense_id)
+
+    # Auto-save updated particulars to company library
+    if parts:
+        try:
+            target_cid = (updated_row.get("company_id") if updated_row else None) or (expense.company_id if expense else None)
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_cid, None, p_name, "Expense"
+                )
+        except Exception:
+            pass
 
     if updated_row:
         client = get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client, db=db)
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.EXPENSE_UPDATED,
             user_id=current_user.get("user_id"), company_id=updated_row.get("company_id"),
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense_id, record_type="expense",
+            extra={"changes": {k: str(v) for k, v in update_payload.items()}, "actor_name": actor_name},
         )
 
         try:
@@ -721,6 +988,7 @@ def update_expense(
             description=updated_row.get("description"),
             created_at=updated_row.get("created_at"),
             updated_at=updated_row.get("updated_at"),
+            remarks=updated_row.get("remarks"),
             **audit_fields(updated_row)
         )
 
@@ -730,11 +998,13 @@ def update_expense(
     company = db.query(Company).filter(Company.company_id == expense.company_id).first()
     category = db.query(Category).filter(Category.category_id == expense.category_id).first() if expense.category_id else None
 
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
     log_transaction(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=expense.company_id,
         ip_address=request.client.host if request.client else "unknown",
         record_id=expense_id, record_type="expense",
+        extra={"changes": {k: str(v) for k, v in update_payload.items()}, "actor_name": actor_name},
     )
 
     try:
@@ -766,8 +1036,65 @@ def update_expense(
         description=expense.description,
         created_at=expense.created_at,
         updated_at=expense.updated_at,
+        remarks=getattr(expense, "remarks", None),
         **audit_fields(expense)
     )
+
+
+@router.patch("/{expense_id}/remarks", response_model=ExpenseOut, summary="Update operational remarks of an expense")
+def update_expense_remarks(
+    expense_id: int,
+    remarks_in: RemarksUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
+
+    current = _current_expense_row(db, expense_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Expense not found")
+
+    existing_company_id = current.get("company_id")
+    check_company_access(current_user, existing_company_id)
+
+    try:
+        client = get_supabase_admin_client()
+        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", expense_id).execute()
+    except Exception as e:
+        pass
+
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    if expense:
+        expense.remarks = target_remarks
+        db.commit()
+        db.refresh(expense)
+
+    try:
+        from app.core.websocket import ws_manager
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_UPDATED",
+            "payload": {
+                "expense_id": expense_id,
+                "company_id": existing_company_id,
+                "action": "remarks_updated",
+                "remarks": target_remarks,
+            }
+        })
+    except Exception:
+        pass
+
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+    log_transaction(
+        db, AuditAction.EXPENSE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=expense_id, record_type="expense",
+        extra={"remarks": target_remarks, "actor_name": actor_name},
+    )
+
+    return get_expense(expense_id, current_user, db)
+
 
 @router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Auditor only)")
 def review_expense_audit(
@@ -839,8 +1166,17 @@ def delete_expense(
             print(f"Supabase delete expense error: {e}")
 
     if expense:
+        # Undo the bank debit first, while the expense (and its bank entries) can still be found
+        reconcile_expense_bank(db, expense_id=expense_id, force_zero=True)
         db.delete(expense)
         db.commit()
+        # The expense is gone, so none of its bank entries (originals or reversals) should remain
+        try:
+            from app.services.bank_service import BankService
+            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
+        except Exception as e:
+            db.rollback()
+            print(f"Bank entry purge error on expense delete: {e}")
 
     try:
         log_transaction(

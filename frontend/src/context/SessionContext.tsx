@@ -51,7 +51,10 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
     if (status === 'authenticated') {
       idleTimer.current = window.setTimeout(() => {
         void handleSignOut()
-      }, 2 * 60 * 60 * 1000)
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login?reason=inactivity'
+        }
+      }, 30 * 60 * 1000) // AC-5: 30 minutes idle timeout
     }
   }, [status])
 
@@ -66,22 +69,25 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [status, resetIdleTimer])
 
-  // Bootstrap session from in-memory service on initial load
+  // Bootstrap session from in-memory service on initial load (AC-13)
   React.useEffect(() => {
     let isMounted = true
 
     const bootstrapSession = async () => {
       try {
-        const sessionUser = await authService.getSession()
+        const sessionResult = await authService.initSession()
         if (!isMounted) return
 
-        if (sessionUser) {
-          setUser(sessionUser)
+        if (sessionResult.user) {
+          setUser(sessionResult.user)
           setStatus('authenticated')
         } else {
           setUser(null)
           clearNotificationCache()
           setStatus('unauthenticated')
+          if (sessionResult.reason && typeof window !== 'undefined' && window.location.pathname !== '/login') {
+            window.location.href = `/login?reason=${sessionResult.reason}`
+          }
         }
       } catch {
         if (!isMounted) return
@@ -135,6 +141,17 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
       // Regardless of outcome, clear session state in memory
       setUser(null)
       clearNotificationCache()
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('mct_active_company_session')
+          sessionStorage.removeItem('mct_dynamic_companies_cache')
+          sessionStorage.removeItem('mct_selected_company')
+          sessionStorage.removeItem('mct_tab_session')
+          localStorage.removeItem('mct_remember_me')
+        } catch {
+          // ignore cleanup errors
+        }
+      }
       setStatus('unauthenticated')
     }
   }, [])

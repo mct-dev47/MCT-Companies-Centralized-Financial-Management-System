@@ -1,6 +1,6 @@
 import json
 from calendar import monthrange
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
@@ -11,6 +11,8 @@ from app.core.cache import system_cache
 from app.models.loan import Loan, LoanRepayment
 from app.models.company import Company
 from app.models.lending import Borrower, LendingTransaction
+
+MANILA_TZ = timezone(timedelta(hours=8))
 
 
 def quantize(value: Decimal | float | int | str) -> Decimal:
@@ -666,6 +668,7 @@ class LendingService:
                 txs = sorted(
                     b.transactions or [],
                     key=lambda t: (
+                        t.cycle_due_date or t.payment_date or date.min,
                         t.payment_date or date.min,
                         (t.created_at.replace(tzinfo=None) if t.created_at and t.created_at.tzinfo else (t.created_at or datetime.min)),
                         t.transaction_id or 0,
@@ -693,6 +696,8 @@ class LendingService:
                         "notes": t.notes or "-",
                         "status": "Paid" if (t.status or "").lower() == "completed" else (t.status or "Paid"),
                         "timestamp": t.created_at.isoformat() if t.created_at else "",
+                        "recorded_by": t.recorded_by,
+                        "recordedBy": t.recorded_by,
                     }
                     for t in txs
                 ]
@@ -746,6 +751,37 @@ class LendingService:
                 else:
                     derived_status = b.status or "Active"
 
+                audited_at_val = b.audited_at.isoformat() if getattr(b, "audited_at", None) else None
+                audit_date_str = None
+                if getattr(b, "audited_at", None):
+                    try:
+                        dt = b.audited_at
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        dt_local = dt.astimezone(MANILA_TZ)
+                        audit_date_str = dt_local.strftime("%m/%d/%y, %I:%M %p")
+                    except Exception:
+                        audit_date_str = str(b.audited_at)
+
+                audit_st = getattr(b, "audit_status", None) or "Pending Audit"
+                audit_status_disp = audit_st if audit_st in ("Verified", "Flagged") else None
+                audited_by_val = getattr(b, "audited_by", None) if audit_status_disp else None
+                if audited_by_val and "@" in str(audited_by_val):
+                    try:
+                        from app.models.user import User
+                        db_user = db.query(User).filter(func.lower(User.email) == str(audited_by_val).lower().strip()).first()
+                        if db_user and db_user.name:
+                            audited_by_val = db_user.name
+                        else:
+                            from app.db.supabase import get_supabase_admin_client
+                            client = get_supabase_admin_client()
+                            if client:
+                                res = client.table("users").select("name").ilike("email", str(audited_by_val).lower().strip()).limit(1).execute()
+                                if res.data and res.data[0].get("name"):
+                                    audited_by_val = res.data[0]["name"]
+                    except Exception:
+                        pass
+
                 results.append({
                     "id": str(b.borrower_id),
                     "borrower_id": b.borrower_id,
@@ -775,6 +811,15 @@ class LendingService:
                     "complianceStatus": compliance_status,
                     "missedCyclesCount": missed_cycles_count,
                     "notes": b.notes or "",
+                    "audit_status": audit_st,
+                    "auditStatus": audit_status_disp,
+                    "audited_by": audited_by_val,
+                    "auditedBy": audited_by_val,
+                    "audited_at": audited_at_val,
+                    "auditedAt": audited_at_val,
+                    "auditDate": audit_date_str if audit_status_disp else None,
+                    "audit_remarks": getattr(b, "audit_remarks", None),
+                    "auditRemarks": getattr(b, "audit_remarks", None),
                     "dailyPayments": repayment_dicts,
                 })
             return results
@@ -886,6 +931,15 @@ class LendingService:
                 "complianceStatus": compliance_status,
                 "missedCyclesCount": missed_cycles_count,
                 "notes": meta.get("notes", ""),
+                "audit_status": "Pending Audit",
+                "auditStatus": None,
+                "audited_by": None,
+                "auditedBy": None,
+                "audited_at": None,
+                "auditedAt": None,
+                "auditDate": None,
+                "audit_remarks": None,
+                "auditRemarks": None,
                 "dailyPayments": repayment_dicts,
             })
 
@@ -939,6 +993,8 @@ class LendingService:
                     "notes": t.notes or "-",
                     "status": "Paid" if (t.status or "").lower() == "completed" else (t.status or "Paid"),
                     "timestamp": t.created_at.isoformat() if t.created_at else "",
+                    "recorded_by": t.recorded_by,
+                    "recordedBy": t.recorded_by,
                 }
                 for t in txs
             ]
@@ -1226,6 +1282,15 @@ class LendingService:
             "complianceStatus": "Compliant",
             "missedCyclesCount": 0,
             "notes": notes or "",
+            "audit_status": "Pending Audit",
+            "auditStatus": None,
+            "audited_by": None,
+            "auditedBy": None,
+            "audited_at": None,
+            "auditedAt": None,
+            "auditDate": None,
+            "audit_remarks": None,
+            "auditRemarks": None,
             "dailyPayments": [],
         })
 
@@ -1325,6 +1390,21 @@ class LendingService:
 
         db.commit()
         db.refresh(b)
+
+        # Also update remote Supabase table if Supabase client is configured
+        try:
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            if client:
+                client.table("borrowers").update({
+                    "audit_status": b.audit_status,
+                    "audited_by": b.audited_by,
+                    "audited_at": b.audited_at.isoformat() if b.audited_at else None,
+                    "audit_remarks": b.audit_remarks,
+                }).eq("borrower_id", borrower_id).execute()
+        except Exception:
+            pass
+
         system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower_id)
 
@@ -1347,6 +1427,70 @@ class LendingService:
             return {"success": True, "message": "Borrower deleted successfully."}
 
         raise HTTPException(status_code=404, detail="Borrower not found.")
+
+    @classmethod
+    def save_audit_review(
+        cls,
+        db: Session,
+        borrower_id: int,
+        audit_status: str,
+        remarks: Optional[str] = None,
+        auditor_name: Optional[str] = "Auditor",
+    ) -> Dict[str, Any]:
+        """Save the audit review for a borrower facility."""
+        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        if not b:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+
+        if audit_status == "Pending Audit":
+            b.audit_status = "Pending Audit"
+            b.audited_by = None
+            b.audited_at = None
+            b.audit_remarks = None
+        else:
+            b.audit_status = audit_status
+            resolved_auditor_name = auditor_name
+            if resolved_auditor_name and "@" in str(resolved_auditor_name):
+                try:
+                    from app.models.user import User
+                    db_user = db.query(User).filter(func.lower(User.email) == str(resolved_auditor_name).lower().strip()).first()
+                    if db_user and db_user.name:
+                        resolved_auditor_name = db_user.name
+                    else:
+                        from app.db.supabase import get_supabase_admin_client
+                        client = get_supabase_admin_client()
+                        if client:
+                            res = client.table("users").select("name").ilike("email", str(resolved_auditor_name).lower().strip()).limit(1).execute()
+                            if res.data and res.data[0].get("name"):
+                                resolved_auditor_name = res.data[0]["name"]
+                except Exception:
+                    pass
+            b.audited_by = resolved_auditor_name
+            b.audited_at = datetime.now(timezone.utc)
+            if audit_status == "Verified":
+                b.audit_remarks = None
+            else:
+                b.audit_remarks = (remarks or "").strip() or None
+
+        db.commit()
+        db.refresh(b)
+
+        # Also update remote Supabase table if Supabase client is configured
+        try:
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            if client:
+                client.table("borrowers").update({
+                    "audit_status": b.audit_status,
+                    "audited_by": b.audited_by,
+                    "audited_at": b.audited_at.isoformat() if b.audited_at else None,
+                    "audit_remarks": b.audit_remarks,
+                }).eq("borrower_id", borrower_id).execute()
+        except Exception:
+            pass
+
+        system_cache.invalidate_tag("notifications")
+        return cls.get_borrower(db=db, borrower_id=borrower_id)
 
     @hybrid_method
     def record_payment(
@@ -1520,7 +1664,12 @@ class LendingService:
                 reference_no=ref_clean,
                 status=tx_db_status,
                 notes=(notes or "").strip(),
+                recorded_by=recorded_by,
             )
+            if db.bind and db.bind.dialect.name == "sqlite":
+                from sqlalchemy import func
+                max_t_id = db.query(func.max(LendingTransaction.transaction_id)).scalar() or 0
+                new_tx.transaction_id = max_t_id + 1
             db.add(new_tx)
 
             # If now settled on this cycle date, mark any earlier partial transactions as Completed
@@ -1569,6 +1718,8 @@ class LendingService:
                 "payment_method": new_tx.payment_method,
                 "reference_no": ref_clean or "",
                 "notes": notes or "",
+                "recorded_by": new_tx.recorded_by,
+                "recordedBy": new_tx.recorded_by,
             })
 
         # Fallback to legacy loan table
@@ -1677,6 +1828,208 @@ class LendingService:
         })
 
     @classmethod
+    def update_payment(
+        cls,
+        db: Session,
+        transaction_id: int,
+        payload: Dict[str, Any],
+        user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Update an existing payment remittance and recalculate borrower balances and installment settlement statuses."""
+        tx = db.query(LendingTransaction).filter(LendingTransaction.transaction_id == transaction_id).first()
+        if not tx:
+            rep = db.query(LoanRepayment).filter(LoanRepayment.loan_repayment_id == transaction_id).first()
+            if not rep:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment remittance not found.")
+            loan = db.query(Loan).filter(Loan.loan_id == rep.loan_id).first()
+            if not loan:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Loan facility not found.")
+            if "payment_date" in payload and payload["payment_date"]:
+                rep.payment_date = parse_date(payload["payment_date"]) or rep.payment_date
+            if "amount" in payload and payload["amount"] is not None:
+                rep.amount = quantize(payload["amount"])
+            if "reference_no" in payload:
+                rep.reference_no = payload["reference_no"] or "-"
+            if "notes" in payload:
+                rep.notes = payload["notes"] or "-"
+            db.commit()
+            db.expire_all()
+            system_cache.invalidate_tag("notifications")
+            return cls.get_borrower(db=db, borrower_id=loan.loan_id)
+
+        borrower = db.query(Borrower).filter(Borrower.borrower_id == tx.borrower_id).first()
+        if not borrower:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+
+        # Update transaction fields
+        if "payment_date" in payload and payload["payment_date"]:
+            tx.payment_date = parse_date(payload["payment_date"]) or tx.payment_date
+        if "cycle_due_date" in payload and payload["cycle_due_date"]:
+            tx.cycle_due_date = parse_date(payload["cycle_due_date"]) or tx.cycle_due_date
+        if "cycle_index" in payload:
+            tx.cycle_index = payload["cycle_index"]
+        if "amount" in payload and payload["amount"] is not None:
+            tx.amount = quantize(payload["amount"])
+        if "penalty_amount" in payload and payload["penalty_amount"] is not None:
+            tx.penalty_portion = quantize(payload["penalty_amount"])
+        elif "penalty_portion" in payload and payload["penalty_portion"] is not None:
+            tx.penalty_portion = quantize(payload["penalty_portion"])
+        if "method" in payload and payload["method"]:
+            tx.payment_method = payload["method"].strip()
+        if "reference_no" in payload:
+            ref = str(payload["reference_no"]).strip() if payload["reference_no"] else None
+            tx.reference_no = ref or "-"
+        if "notes" in payload:
+            n = str(payload["notes"]).strip() if payload["notes"] else None
+            tx.notes = n or "-"
+
+        # Recalculate lateness
+        pay_date = tx.payment_date or date.today()
+        target_cycle_due = tx.cycle_due_date or pay_date
+        if target_cycle_due and pay_date > target_cycle_due:
+            tx.is_late = True
+            tx.days_late = max(1, (pay_date - target_cycle_due).days)
+        else:
+            tx.is_late = False
+            tx.days_late = 0
+
+        db.flush()
+
+        # Recalculate borrower terms and totals
+        freq = borrower.payment_frequency or "Daily"
+        term_days = borrower.term_days or (40 if freq == "Daily" else 60)
+        terms = cls.calculate_terms(
+            borrower.principal_amount,
+            borrower.interest_rate or Decimal("20.00"),
+            freq,
+            borrower.date_borrowed,
+            borrower.due_date,
+            term_days,
+        )
+
+        all_txs = (
+            db.query(LendingTransaction)
+            .filter(LendingTransaction.borrower_id == borrower.borrower_id)
+            .order_by(LendingTransaction.payment_date.asc(), LendingTransaction.created_at.asc())
+            .all()
+        )
+
+        total_paid = sum((Decimal(str(t.amount or 0)) for t in all_txs), Decimal("0.00"))
+        total_penalties = sum((Decimal(str(t.penalty_portion or 0)) for t in all_txs), Decimal("0.00"))
+        contractual_total_payable = quantize(terms["total_payable"])
+        remaining_balance = max(Decimal("0.00"), contractual_total_payable - total_paid)
+        installment_target = quantize(terms["installment_target"])
+
+        # Update borrower aggregates
+        borrower.amount_paid = total_paid
+        borrower.total_penalties = total_penalties
+        borrower.total_payable = contractual_total_payable
+        borrower.remaining_balance = remaining_balance
+        if remaining_balance <= Decimal("0.00"):
+            borrower.status = "Fully Paid"
+        elif any(t.is_late for t in all_txs) or (borrower.due_date and date.today() > borrower.due_date):
+            borrower.status = "Overdue"
+        else:
+            borrower.status = "Active"
+
+        # Update per-cycle status on transactions
+        paid_by_cycle: Dict[str, Decimal] = {}
+        for t in all_txs:
+            cycle_key = str(t.cycle_due_date or t.payment_date or "")
+            paid_by_cycle[cycle_key] = paid_by_cycle.get(cycle_key, Decimal("0.00")) + Decimal(str(t.amount or 0))
+
+        for t in all_txs:
+            cycle_key = str(t.cycle_due_date or t.payment_date or "")
+            is_settled = (paid_by_cycle.get(cycle_key, Decimal("0.00")) >= installment_target) or (remaining_balance <= Decimal("0.00"))
+            t.status = "Completed" if is_settled else "Partially Paid"
+
+        db.commit()
+        db.expire_all()
+        system_cache.invalidate_tag("notifications")
+        return cls.get_borrower(db=db, borrower_id=borrower.borrower_id)
+
+    @classmethod
+    def delete_payment(
+        cls,
+        db: Session,
+        transaction_id: int,
+        user: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Delete an existing payment remittance and recalculate borrower balances and installment settlement statuses."""
+        tx = db.query(LendingTransaction).filter(LendingTransaction.transaction_id == transaction_id).first()
+        if not tx:
+            rep = db.query(LoanRepayment).filter(LoanRepayment.loan_repayment_id == transaction_id).first()
+            if not rep:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment remittance not found.")
+            loan_id = rep.loan_id
+            db.delete(rep)
+            db.commit()
+            db.expire_all()
+            system_cache.invalidate_tag("notifications")
+            return cls.get_borrower(db=db, borrower_id=loan_id)
+
+        borrower_id = tx.borrower_id
+        borrower = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        if not borrower:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+
+        db.delete(tx)
+        db.flush()
+
+        # Recalculate borrower terms and totals
+        freq = borrower.payment_frequency or "Daily"
+        term_days = borrower.term_days or (40 if freq == "Daily" else 60)
+        terms = cls.calculate_terms(
+            borrower.principal_amount,
+            borrower.interest_rate or Decimal("20.00"),
+            freq,
+            borrower.date_borrowed,
+            borrower.due_date,
+            term_days,
+        )
+
+        all_txs = (
+            db.query(LendingTransaction)
+            .filter(LendingTransaction.borrower_id == borrower.borrower_id)
+            .order_by(LendingTransaction.payment_date.asc(), LendingTransaction.created_at.asc())
+            .all()
+        )
+
+        total_paid = sum((Decimal(str(t.amount or 0)) for t in all_txs), Decimal("0.00"))
+        total_penalties = sum((Decimal(str(t.penalty_portion or 0)) for t in all_txs), Decimal("0.00"))
+        contractual_total_payable = quantize(terms["total_payable"])
+        remaining_balance = max(Decimal("0.00"), contractual_total_payable - total_paid)
+        installment_target = quantize(terms["installment_target"])
+
+        # Update borrower aggregates
+        borrower.amount_paid = total_paid
+        borrower.total_penalties = total_penalties
+        borrower.total_payable = contractual_total_payable
+        borrower.remaining_balance = remaining_balance
+        if remaining_balance <= Decimal("0.00"):
+            borrower.status = "Fully Paid"
+        elif any(t.is_late for t in all_txs) or (borrower.due_date and date.today() > borrower.due_date):
+            borrower.status = "Overdue"
+        else:
+            borrower.status = "Active"
+
+        # Update per-cycle status on remaining transactions
+        paid_by_cycle = {}
+        for t in all_txs:
+            cycle_key = str(t.cycle_due_date or t.payment_date or "")
+            paid_by_cycle[cycle_key] = paid_by_cycle.get(cycle_key, Decimal("0.00")) + Decimal(str(t.amount or 0))
+
+        for t in all_txs:
+            cycle_key = str(t.cycle_due_date or t.payment_date or "")
+            is_settled = (paid_by_cycle.get(cycle_key, Decimal("0.00")) >= installment_target) or (remaining_balance <= Decimal("0.00"))
+            t.status = "Completed" if is_settled else "Partially Paid"
+
+        db.commit()
+        db.expire_all()
+        system_cache.invalidate_tag("notifications")
+        return cls.get_borrower(db=db, borrower_id=borrower.borrower_id)
+
+    @classmethod
     def get_transactions(
         cls,
         db: Session,
@@ -1723,6 +2076,7 @@ class LendingService:
                 "reference_no": t.reference_no or "-",
                 "status": t.status or "Completed",
                 "notes": t.notes or "-",
+                "recorded_by": t.recorded_by,
                 "created_at": t.created_at.isoformat() if t.created_at else "",
                 "updated_at": t.updated_at.isoformat() if t.updated_at else "",
             }
@@ -1753,6 +2107,7 @@ class LendingService:
             "reference_no": t.reference_no or "-",
             "status": t.status or "Completed",
             "notes": t.notes or "-",
+            "recorded_by": t.recorded_by,
             "created_at": t.created_at.isoformat() if t.created_at else "",
             "updated_at": t.updated_at.isoformat() if t.updated_at else "",
         }

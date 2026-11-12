@@ -285,8 +285,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       onUpdate?.(updated)
       setTimeout(() => setReinviteSuccess(false), 4000)
     } catch (error) {
-      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to resend invitation. Please try again.')
-      window.alert(errorMsg)
+      notifyError(error, 'Unable to resend invitation. Please try again.')
     } finally {
       setIsReinviting(false)
     }
@@ -497,6 +496,16 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                                 : [...prev, comp.name]
                             )
                           }
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              setEditSelectedCompanies((prev) =>
+                                prev.includes(comp.name)
+                                  ? prev.filter((c) => c !== comp.name)
+                                  : [...prev, comp.name]
+                              )
+                            }
+                          }}
                           className={cn(
                             'flex items-center justify-between p-2 rounded-lg border text-xs font-medium transition-all cursor-pointer select-none',
                             isSelected

@@ -12,6 +12,8 @@ Base = declarative_base()
 
 # Database connection setup
 db_url = settings.DATABASE_URL
+if os.environ.get("TESTING") == "1":
+    db_url = "sqlite:///:memory:"
 engine = None
 
 if db_url and db_url.strip() and not db_url.startswith("sqlite"):
@@ -32,15 +34,7 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
                 else parsed.netloc.replace(":5432", ":6543")
             )
             db_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
-        # Use a real client-side connection pool instead of NullPool.
-        # Opening a connection to the remote Supabase pooler costs ~1-3s
-        # (TCP + TLS + auth), so NullPool (a fresh connection per operation)
-        # made every request pay that cost several times over, stacking up to
-        # ~20s per API call. Reusing pooled connections keeps the query itself
-        # (~0.3s) as the dominant cost. psycopg2 does not use server-side
-        # prepared statements by default, so it is compatible with Supabase's
-        # transaction-mode pooler (port 6543). pool_pre_ping discards stale
-        # connections the pooler may have dropped; pool_recycle caps lifetime.
+
         engine = create_engine(
             db_url,
             pool_pre_ping=True,
@@ -48,7 +42,7 @@ if db_url and db_url.strip() and not db_url.startswith("sqlite"):
             max_overflow=10,
             pool_recycle=1800,
             pool_timeout=30,
-            connect_args={"connect_timeout": 5},
+            connect_args={"connect_timeout": 30},
         )
         with engine.connect() as _probe:
             pass
@@ -71,12 +65,15 @@ def init_db():
     import app.models.staff_credit
     import app.models.bills
     import app.models.petty_cash
+    import app.models.intercompany_transfer
     import app.models.bank
     import app.models.lending
     import app.models.security
     import app.models.notification
     import app.models.receivable
     import app.models.invitation
+    import app.models.particular
+    import app.models.payment_method
     from app.db.migrations import run_migrations
     from app.models.company import Company
 
@@ -121,6 +118,33 @@ def init_db():
         from sqlalchemy import inspect as sqla_inspect, text
         inspector = sqla_inspect(engine)
         table_names = set(inspector.get_table_names())
+        if "sales" in table_names:
+            sales_cols = {col["name"] for col in inspector.get_columns("sales")}
+            if "payment_status" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN payment_status VARCHAR(50) DEFAULT 'Paid'"))
+            if "deposit_status" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_status VARCHAR(50) DEFAULT 'Not Deposited'"))
+            if "deposit_date" not in sales_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_date DATE NULL"))
+                    conn.execute(text("UPDATE sales SET deposit_date = transaction_date WHERE deposit_status = 'Deposited' AND deposit_date IS NULL"))
+            # Safe backfill (AC-7)
+            with engine.begin() as conn:
+                conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
+                conn.execute(text("UPDATE sales SET deposit_status = 'Deposited' WHERE payment_status = 'Paid' AND (deposit_status IS NULL OR deposit_status = '' OR deposit_status = 'Not Deposited')"))
+                conn.execute(text("UPDATE sales SET deposit_status = 'Not Deposited' WHERE payment_status IN ('Unpaid', 'Pending')"))
+
+        if "bank_transactions" in table_names:
+            bank_tx_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+            if "source_sale_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_sale_id INTEGER"))
+            if "source_expense_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER"))
+
         if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}
             if "balance" not in existing_cols:
@@ -139,6 +163,114 @@ def init_db():
                             conn.execute(text(f"ALTER TABLE receivables DROP COLUMN {obsolete_col}"))
                     except Exception as drop_err:
                         logger.warning("Could not drop obsolete column receivables.%s: %s", obsolete_col, drop_err)
+
+        if "lending_transactions" in table_names:
+            lt_cols = {col["name"] for col in inspector.get_columns("lending_transactions")}
+            if "recorded_by" not in lt_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE lending_transactions ADD COLUMN recorded_by VARCHAR(255)"))
+
+        if "borrowers" in table_names:
+            b_cols = {col["name"] for col in inspector.get_columns("borrowers")}
+            if "audit_status" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in b_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE borrowers ADD COLUMN audit_remarks TEXT"))
+
+        if "company_particulars" in table_names:
+            cp_cols = {col["name"] for col in inspector.get_columns("company_particulars")}
+            if "transaction_type" not in cp_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE company_particulars ADD COLUMN transaction_type VARCHAR(20) DEFAULT 'Sales'"))
+
+        if "tenant_leases" in table_names:
+            tl_cols = {col["name"] for col in inspector.get_columns("tenant_leases")}
+            if "audit_status" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in tl_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE tenant_leases ADD COLUMN audit_remarks TEXT"))
+
+        if "tenant_lease_payments" in table_names:
+            try:
+                with engine.begin() as conn:
+                    if engine.dialect.name == "postgresql":
+                        conn.execute(text("ALTER TABLE tenant_lease_payments ALTER COLUMN status TYPE VARCHAR(20)"))
+            except Exception:
+                pass
+
+        if "company" in table_names:
+            c_cols = {col["name"] for col in inspector.get_columns("company")}
+            if "petty_cash" not in c_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE company ADD COLUMN petty_cash NUMERIC(15, 2) DEFAULT 0.00"))
+
+        if "petty_cash_topups" in table_names:
+            pct_cols = {col["name"] for col in inspector.get_columns("petty_cash_topups")}
+            with engine.begin() as conn:
+                if "total_expenses" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN total_expenses NUMERIC(15, 2)"))
+                if "company_funded_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN company_funded_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "employee_out_of_pocket" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN employee_out_of_pocket NUMERIC(15, 2) DEFAULT 0.00"))
+                if "reserved_amount" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reserved_amount NUMERIC(15, 2) DEFAULT 0.00"))
+                if "amount_reimbursed" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN amount_reimbursed NUMERIC(15, 2) DEFAULT 0.00"))
+                if "existing_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN existing_expense_id INTEGER"))
+                if "petty_cash_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN petty_cash_expense_id INTEGER"))
+                if "reimbursement_expense_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursement_expense_id INTEGER"))
+                if "payment_method_option" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN payment_method_option VARCHAR(50)"))
+                if "destination_bank_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN destination_bank_id VARCHAR(100)"))
+                if "intercompany_transfer_id" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN intercompany_transfer_id INTEGER"))
+                if "reimbursed_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_at TIMESTAMP WITH TIME ZONE"))
+                if "reimbursed_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN reimbursed_by VARCHAR(150)"))
+                if "transfer_received_at" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_at TIMESTAMP WITH TIME ZONE"))
+                if "transfer_received_by" not in pct_cols:
+                    conn.execute(text("ALTER TABLE petty_cash_topups ADD COLUMN transfer_received_by VARCHAR(150)"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL"))
+                except Exception:
+                    pass
+
+        if "expenses" in table_names:
+            exp_cols = {col["name"] for col in inspector.get_columns("expenses")}
+            with engine.begin() as conn:
+                if "linked_topup_id" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
+                try:
+                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL"))
+                except Exception:
+                    pass
+                try:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -146,29 +278,42 @@ def init_db():
 
     def _sync_companies_from_supabase():
         try:
-            db = SessionLocal()
-            try:
-                if db.query(Company).count() == 0:
-                    from app.db.supabase import get_supabase_admin_client
-                    client = get_supabase_admin_client()
-                    supa_companies = client.table("company").select("*").execute().data
-                    if supa_companies:
-                        for sc in supa_companies:
+            from decimal import Decimal
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            supa_companies = client.table("company").select("*").execute().data
+            if supa_companies:
+                db = SessionLocal()
+                try:
+                    for sc in supa_companies:
+                        cid = sc.get("company_id")
+                        if not cid:
+                            continue
+                        existing = db.query(Company).filter(Company.company_id == cid).first()
+                        p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
+                        s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
+                        if existing:
+                            existing.company_name = sc.get("company_name") or existing.company_name
+                            existing.location = sc.get("location") or existing.location
+                            existing.contact_number = sc.get("contact_number")
+                            existing.phone = sc.get("phone")
+                            existing.starting_balance = s_bal
+                            existing.petty_cash = p_cash
+                            existing.logo_url = sc.get("logo_url")
+                        else:
                             db.add(Company(
-                                company_id=sc.get("company_id"),
+                                company_id=cid,
                                 company_name=sc.get("company_name"),
                                 location=sc.get("location"),
-                                contact_person=sc.get("contact_person"),
                                 contact_number=sc.get("contact_number"),
                                 phone=sc.get("phone"),
-                                email=sc.get("email"),
-                                starting_balance=sc.get("starting_balance", 0.0),
-                                current_balance=sc.get("current_balance", 0.0),
+                                starting_balance=s_bal,
+                                petty_cash=p_cash,
                                 logo_url=sc.get("logo_url"),
                             ))
-                        db.commit()
-            finally:
-                db.close()
+                    db.commit()
+                finally:
+                    db.close()
         except Exception as e:
             logger.warning(f"Could not sync companies on init: {e}")
 
@@ -178,12 +323,6 @@ def init_db():
         daemon=True,
     )
     sync_thread.start()
-    sync_thread.join(timeout=10)
-    if sync_thread.is_alive():
-        logger.warning(
-            "Supabase company sync did not finish within 10s; continuing startup "
-            "without it. Companies will sync on a later run or via the API."
-        )
 
 # Dependency to get a database session for FastAPI endpoints
 def get_db() -> Generator:

@@ -141,7 +141,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
     if (numericAmount > outstandingBalance) {
       setError(
-        `Payment amount (₱${numericAmount.toLocaleString('en-US')}) cannot exceed remaining balance (₱${outstandingBalance.toLocaleString('en-US')}).`
+        `Payment amount (${formatPHP(numericAmount)}) cannot exceed remaining balance (${formatPHP(outstandingBalance)}).`
       )
       return
     }
@@ -196,7 +196,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     }
     if (st === 'Partially Paid' || totalPaidSoFar > 0) {
       return {
-        bg: 'bg-blue-50 text-blue-700 border-blue-200/80',
+        bg: 'bg-amber-50 text-amber-700 border-amber-200/80',
         icon: Clock,
         label: 'Partially Paid',
       }
@@ -527,8 +527,9 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                         setAmountInput(e.target.value)
                         setError('')
                       }}
+                      onWheel={(e) => e.currentTarget.blur()}
                       placeholder="0.00"
-                      className="pl-8 h-11 text-base font-bold tabular-nums rounded-xl border-stroke/60 focus-visible:ring-2 focus-visible:ring-focus"
+                      className="pl-8 h-11 text-base font-bold tabular-nums rounded-xl border-stroke/60 focus-visible:ring-2 focus-visible:ring-focus [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       autoFocus
                     />
                   </div>
@@ -676,7 +677,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                     <Button
                       type="submit"
                       disabled={isSubmitting || numericAmount <= 0 || numericAmount > outstandingBalance}
-                      className="h-10 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isSubmitting ? (
                         <>

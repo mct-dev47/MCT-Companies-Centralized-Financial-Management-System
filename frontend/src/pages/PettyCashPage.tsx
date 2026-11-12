@@ -24,8 +24,15 @@ import {
   Trash2,
   MoreVertical,
   Eye,
+  Receipt,
+  User,
+  History,
+  RotateCw,
 } from 'lucide-react'
+import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
+import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -62,7 +69,7 @@ import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { loanService } from '@/services/loanService'
-import { bankService, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import {
   pettyCashService,
   type PettyCashLedgerEntry,
@@ -78,6 +85,34 @@ const COMPANY_LIST = [
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
+function downloadReceipt(url: string, name?: string) {
+  if (!url) return
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name || 'official_receipt'
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  } catch {
+    window.open(url, '_blank')
+  }
+}
+
+function formatTimelineDateTime(dateStr?: string | null): string {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return dateStr
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
 export const PettyCashPage: React.FC = () => {
   const { user } = useSession()
   const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
@@ -88,9 +123,11 @@ export const PettyCashPage: React.FC = () => {
   const isSupervisor = userRole === 'supervisor'
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
+  const canRequestTopUp = ['admin', 'superadmin', 'finance', 'supervisor'].includes(userRole)
   const isCompanyScoped = isStrictlyCompanyScoped
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
+  const canExecuteFinancialActions = (isFinance || isAdmin) && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   // Selected company filter
@@ -161,6 +198,12 @@ export const PettyCashPage: React.FC = () => {
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
+  const requestDropdownRef = React.useRef<HTMLDivElement>(null)
+  const typeDropdownRef = React.useRef<HTMLDivElement>(null)
+  const [isRequestDropdownOpen, setIsRequestDropdownOpen] = React.useState(false)
+  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Top-up' | 'Reimbursement'>('All')
+  const [isTypeDropdownOpen, setIsTypeDropdownOpen] = React.useState(false)
+  const [isReimbursementModalOpen, setIsReimbursementModalOpen] = React.useState(false)
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -169,6 +212,7 @@ export const PettyCashPage: React.FC = () => {
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)
   const [isSummaryModalOpen, setIsSummaryModalOpen] = React.useState(false)
+  const [previewReceipt, setPreviewReceipt] = React.useState<{ url: string; name: string } | null>(null)
   const [isReviewConfirmModalOpen, setIsReviewConfirmModalOpen] = React.useState(false)
 
   // Target entry & review data
@@ -181,20 +225,38 @@ export const PettyCashPage: React.FC = () => {
   // Spec 0012: funding bank Finance chooses when endorsing a petty cash request.
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
   const [selectedFundingBankId, setSelectedFundingBankId] = React.useState('')
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState<'direct' | 'transfer_first'>('direct')
+  const [selectedDestinationBankId, setSelectedDestinationBankId] = React.useState('')
   const [approvalFeedback, setApprovalFeedback] = React.useState<string | null>(null)
 
-  // Audit Actions Menu State
+  // Spec 0038: Transfer cancellation and execution state
+  const [cancelModalEntry, setCancelModalEntry] = React.useState<PettyCashTransaction | null>(null)
+  const [cancelReason, setCancelReason] = React.useState('')
+  const [isSubmittingAction, setIsSubmittingAction] = React.useState(false)
+  const [actionError, setActionError] = React.useState('')
+
+  // Row Actions Menu State
   const [openMenuPettyId, setOpenMenuPettyId] = React.useState<string | null>(null)
-  const [menuPosition, setMenuPosition] = React.useState<{ top: number; left: number } | null>(null)
+  const [menuPosition, setMenuPosition] = React.useState<{
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
   const [activeMenuPetty, setActiveMenuPetty] = React.useState<PettyCashTransaction | null>(null)
 
   React.useEffect(() => {
-    const handleCloseMenu = () => setOpenMenuPettyId(null)
+    const handleCloseMenu = () => {
+      setOpenMenuPettyId(null)
+      setMenuPosition(null)
+      setActiveMenuPetty(null)
+    }
     window.addEventListener('click', handleCloseMenu)
     window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
     return () => {
       window.removeEventListener('click', handleCloseMenu)
       window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
     }
   }, [])
 
@@ -210,7 +272,7 @@ export const PettyCashPage: React.FC = () => {
       ...entry,
       auditStatus: status,
       auditDate: timestamp,
-      auditedBy: user?.fullName || 'Audit',
+      auditedBy: formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer'),
       status: status === 'Verified' && entry.status === 'Pending Audit Approval' ? 'Approved' : entry.status,
     }
     setLedger((prev) => prev.map((e) => (e.id === entry.id ? updatedEntry : e)))
@@ -362,6 +424,12 @@ export const PettyCashPage: React.FC = () => {
       if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
         setIsCompanyDropdownOpen(false)
       }
+      if (requestDropdownRef.current && !requestDropdownRef.current.contains(target)) {
+        setIsRequestDropdownOpen(false)
+      }
+      if (typeDropdownRef.current && !typeDropdownRef.current.contains(target)) {
+        setIsTypeDropdownOpen(false)
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -420,6 +488,13 @@ export const PettyCashPage: React.FC = () => {
         if (statusFilter === 'Expense' && item.type !== 'expense') return false
       }
 
+      // 2b. Type Filter (All / Top-up / Replenishment)
+      if (typeFilter !== 'All') {
+        const reqType = (item.requestType || (item.type === 'expense' ? 'expense' : 'topup')).toLowerCase()
+        if (typeFilter === 'Top-up' && (reqType !== 'topup' || item.type === 'expense')) return false
+        if (typeFilter === 'Reimbursement' && reqType !== 'reimbursement' && reqType !== 'replenishment' && reqType !== 'replenishment_disbursement') return false
+      }
+
       // 3. Search Query Filter
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim()
@@ -428,7 +503,9 @@ export const PettyCashPage: React.FC = () => {
         const matchesCat = (item.category || '').toLowerCase().includes(q)
         const matchesRemark = (item.remark || '').toLowerCase().includes(q)
         const matchesFinRemark = (item.financeRemark || '').toLowerCase().includes(q)
-        if (!matchesDesc && !matchesComp && !matchesCat && !matchesRemark && !matchesFinRemark) {
+        const matchesPaidBy = (item.paidBy || '').toLowerCase().includes(q)
+        const matchesItems = (item.items || '').toLowerCase().includes(q)
+        if (!matchesDesc && !matchesComp && !matchesCat && !matchesRemark && !matchesFinRemark && !matchesPaidBy && !matchesItems) {
           return false
         }
       }
@@ -442,7 +519,7 @@ export const PettyCashPage: React.FC = () => {
 
       return true
     })
-  }, [ledger, isAllCompanies, selectedCompany, statusFilter, searchQuery, dateRange, isAudit])
+  }, [ledger, isAllCompanies, selectedCompany, statusFilter, typeFilter, searchQuery, dateRange, isAudit])
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredLedger.length / itemsPerPage))
@@ -480,11 +557,15 @@ export const PettyCashPage: React.FC = () => {
     // exists (Finance may change it to an outside funder). Otherwise leave it unchosen.
     if (action === 'endorse') {
       const ownAccount = bankAccounts.find((acc) =>
-        isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
+        isAccountOwnedBy(acc, targetEntry?.companyName || '')
       )
       setSelectedFundingBankId(ownAccount ? ownAccount.id : '')
+      setSelectedPaymentMethod('direct')
+      setSelectedDestinationBankId('')
     } else {
       setSelectedFundingBankId('')
+      setSelectedPaymentMethod('direct')
+      setSelectedDestinationBankId('')
     }
     setIsReviewConfirmModalOpen(true)
   }
@@ -505,6 +586,16 @@ export const PettyCashPage: React.FC = () => {
       return
     }
 
+    const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
+    const isCrossCompanyBank = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry.companyName || '')
+
+    if (reviewAction === 'endorse' && isCrossCompanyBank) {
+      if (selectedPaymentMethod === 'transfer_first' && !selectedDestinationBankId) {
+        setReviewError(`Please choose a destination bank account belonging to ${targetEntry.companyName}.`)
+        return
+      }
+    }
+
     setIsSubmittingReview(true)
     setReviewError('')
 
@@ -515,6 +606,8 @@ export const PettyCashPage: React.FC = () => {
           reviewAction,
           reviewRemark.trim(),
           reviewAction === 'endorse' ? selectedFundingBankId : undefined,
+          reviewAction === 'endorse' && isCrossCompanyBank ? selectedPaymentMethod : undefined,
+          reviewAction === 'endorse' && isCrossCompanyBank && selectedPaymentMethod === 'transfer_first' ? selectedDestinationBankId : undefined,
         )
       } else {
         await pettyCashService.reviewTopUp(targetEntry.recordId, reviewAction, reviewRemark.trim())
@@ -539,6 +632,110 @@ export const PettyCashPage: React.FC = () => {
       notifyError(err, 'Failed to submit decision.')
     } finally {
       setIsSubmittingReview(false)
+    }
+  }
+
+  // Spec 0038: Financial Execution Actions
+  const handleFinalizeSettlement = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.finalizeSettlement(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Zero excess settlement finalized successfully. Float was settled without bank deduction.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to finalize settlement.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleReimburse = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.reimburse(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Employee reimbursement disbursed and recorded in expenses successfully.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to disburse reimbursement.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleInitiateTransfer = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.initiateTransfer(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Cross company bank transfer initiated successfully. Funds are in transit.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to initiate transfer.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmTransfer = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.confirmTransfer(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer receipt confirmed. Funds deposited to requesting company bank account.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to confirm transfer receipt.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmReversal = async (recordId: number) => {
+    try {
+      setIsSubmittingAction(true)
+      await pettyCashService.confirmReversal(recordId)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer reversal confirmed. Funds restored to funding company bank account.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      notifyError(err, 'Failed to confirm reversal.')
+    } finally {
+      setIsSubmittingAction(false)
+    }
+  }
+
+  const handleConfirmCancelTransfer = async () => {
+    if (!cancelModalEntry) return
+    if (!cancelReason.trim()) {
+      setActionError('A cancellation reason is required.')
+      return
+    }
+    try {
+      setIsSubmittingAction(true)
+      setActionError('')
+      await pettyCashService.cancelTransfer(cancelModalEntry.recordId, cancelReason.trim())
+      setCancelModalEntry(null)
+      setIsSummaryModalOpen(false)
+      setTargetEntry(null)
+      await loadData()
+      setApprovalFeedback('Transfer cancelled. Status is now Return Pending until reversal is verified.')
+      setTimeout(() => setApprovalFeedback(null), 5000)
+    } catch (err: any) {
+      setActionError(formatUserFriendlyErrorMessage(err, 'Failed to cancel transfer.'))
+    } finally {
+      setIsSubmittingAction(false)
     }
   }
 
@@ -626,17 +823,9 @@ export const PettyCashPage: React.FC = () => {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 flex-wrap">
           <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                Petty Cash
-              </h1>
-              {pendingCount > 0 && isFinanceOrAdmin && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 animate-pulse">
-                  <Clock className="w-3.5 h-3.5" />
-                  {pendingCount} Pending Finance Review
-                </span>
-              )}
-            </div>
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Petty Cash
+            </h1>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Petty cash requests, approvals, and disbursements connected live to the MCT database
             </p>
@@ -684,35 +873,153 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
-            {/* Request Petty Cash Button (Hidden for Audit) */}
+            {/* Request Petty Cash Dropdown Button (Role-gated: AC-5) */}
             {!isAudit && !isOwner && (
-              <Button
-                type="button"
-                onClick={() => setIsTopUpModalOpen(true)}
-                className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
-              >
-                <Plus className="h-4 w-4 shrink-0" />
-                <span>Request Petty Cash</span>
-              </Button>
+              canRequestTopUp ? (
+                <div ref={requestDropdownRef} className="relative inline-block">
+                  <Button
+                    type="button"
+                    onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
+                    className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                    aria-haspopup="true"
+                    aria-expanded={isRequestDropdownOpen}
+                  >
+                    <Plus className="h-4 w-4 shrink-0" />
+                    <span>Request Petty Cash</span>
+                    <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
+                  </Button>
+
+                  {isRequestDropdownOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsRequestDropdownOpen(false)
+                          setIsTopUpModalOpen(true)
+                        }}
+                        className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-[#960C01]/10 text-[#960C01] flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-[#960C01] group-hover:text-white transition-colors">
+                          <Wallet className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-focus group-hover:text-[#960C01] transition-colors">Top-up Request</div>
+                          <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                            Ask for more petty cash funds when your current balance is short.
+                          </div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsRequestDropdownOpen(false)
+                          setIsReimbursementModalOpen(true)
+                        }}
+                        className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group border-t border-stroke/20 mt-1"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                          <Receipt className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Replenishment</div>
+                          <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                            Get paid back for expenses you paid out of your own pocket.
+                          </div>
+                        </div>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => setIsReimbursementModalOpen(true)}
+                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                >
+                  <Receipt className="h-4 w-4 shrink-0" />
+                  <span>Request Replenishment</span>
+                </Button>
+              )
             )}
           </div>
         </div>
 
         {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          {/* Extended Width Search Bar */}
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-            <Input
-              type="search"
-              placeholder="Search by particulars, company, category, remarks…"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value)
-                setCurrentPage(1)
-              }}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pt-1">
+          {/* Search Bar & Type Filter Dropdown Group */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+              <Input
+                type="search"
+                placeholder="Search particulars, company, category…"
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value)
+                  setCurrentPage(1)
+                }}
+                className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+              />
+            </div>
+
+            {/* Type Filter Dropdown Button */}
+            <div ref={typeDropdownRef} className="relative inline-block shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsTypeDropdownOpen((prev) => !prev)}
+                className={cn(
+                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  typeFilter !== 'All' && 'bg-[#960C01]/5 border-[#960C01]/40 text-[#960C01] font-semibold',
+                  isTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                )}
+              >
+                <span className="font-medium">
+                  {typeFilter === 'All'
+                    ? 'All'
+                    : typeFilter === 'Top-up'
+                    ? 'Petty Cash Request'
+                    : 'Replenishment'}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                    isTypeDropdownOpen && 'transform rotate-180'
+                  )}
+                />
+              </button>
+
+              {isTypeDropdownOpen && (
+                <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                  {[
+                    { id: 'All', label: 'All' },
+                    { id: 'Top-up', label: 'Petty Cash Request' },
+                    { id: 'Reimbursement', label: 'Replenishment' },
+                  ].map((tp) => (
+                    <button
+                      key={tp.id}
+                      type="button"
+                      onClick={() => {
+                        setTypeFilter(tp.id as any)
+                        setIsTypeDropdownOpen(false)
+                        setCurrentPage(1)
+                      }}
+                      className={cn(
+                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                        typeFilter === tp.id
+                          ? 'bg-[#960C01]/10 text-[#960C01] font-semibold'
+                          : 'text-focus/80 hover:bg-slate-50'
+                      )}
+                    >
+                      <span>{tp.label}</span>
+                      {typeFilter === tp.id && (
+                        <Check className="h-3.5 w-3.5 text-[#960C01] shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
@@ -822,6 +1129,8 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
+
+
             {/* Date Range Picker */}
             <DateRangePicker
               value={dateRange}
@@ -917,14 +1226,15 @@ export const PettyCashPage: React.FC = () => {
             <colgroup>
               <col style={{ width: '9%' }} />
               <col style={{ width: '11%' }} />
+              <col style={{ width: '9%' }} />
               <col style={{ width: '14%' }} />
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '10%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '11%' }} />
               <col style={{ width: '9%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: '10%' }} />
               <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '6%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
@@ -933,6 +1243,9 @@ export const PettyCashPage: React.FC = () => {
                 </TableHead>
                 <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   COMPANY
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  TYPE
                 </TableHead>
                 <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
@@ -963,10 +1276,10 @@ export const PettyCashPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={10} />
+                <TableSkeleton rows={5} columns={11} />
               ) : paginatedLedger.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
+                  <TableCell colSpan={11} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
                     <Wallet className="w-8 h-8 text-muted-fg/40 mx-auto mb-2" />
                     No petty cash transactions found for the selected criteria.
                   </TableCell>
@@ -1023,14 +1336,50 @@ export const PettyCashPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 3. Particulars & Remarks */}
+                      {/* 2b. Type Indicator */}
+                      <TableCell className="px-3 py-3.5 text-center">
+                        {entry.requestType === 'replenishment_disbursement' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300 whitespace-nowrap">
+                            <Wallet className="w-3 h-3 text-slate-600 shrink-0" />
+                            <span>Petty Cash Disbursement</span>
+                          </span>
+                        ) : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
+                            <span>Replenishment</span>
+                          </span>
+                        ) : entry.type === 'expense' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
+                            <span>Expense</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                            <Wallet className="w-3 h-3 text-blue-600 shrink-0" />
+                            <span>Top-up</span>
+                          </span>
+                        )}
+                      </TableCell>
+
+                      {/* 3. Particulars & Category (Remarks shown in modal per specification) */}
                       <TableCell className="px-3 py-3.5">
+                        {(entry.requestType === 'reimbursement' || entry.requestType === 'replenishment_disbursement' || entry.requestType === 'replenishment') && entry.paidBy && (
+                          <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
+                            <User className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
+                            {entry.receiptUrl && (
+                              <span className="inline-flex items-center text-[10px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/60 ml-1">
+                                <Receipt className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
+                                Receipt
+                              </span>
+                            )}
+                          </div>
+                        )}
                         {(() => {
                           const summary = getParticularsSummary(entry.description)
                           if (summary.count > 1) {
                             return (
                               <div className="flex items-center gap-1.5 min-w-0" title={entry.description}>
-                                <span className="font-medium text-xs text-focus truncate block">{summary.firstItemName}</span>
+                                <span className="font-semibold text-xs text-focus truncate block">{summary.firstItemName}</span>
                                 <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
                                   +{summary.count - 1} more
                                 </span>
@@ -1038,26 +1387,14 @@ export const PettyCashPage: React.FC = () => {
                             )
                           }
                           return (
-                            <div className="font-medium text-xs text-focus line-clamp-1" title={entry.description}>
+                            <div className="font-semibold text-xs text-focus line-clamp-1" title={entry.description}>
                               {summary.firstItemName || '—'}
                             </div>
                           )
                         })()}
-                        {entry.financeRemark && (
-                          <div className="text-[11px] text-blue-800 bg-blue-50/80 px-2 py-0.5 rounded-md mt-1 inline-flex items-center gap-1 max-w-full truncate border border-blue-200/50">
-                            <MessageSquare className="w-3 h-3 shrink-0 text-blue-600" />
-                            <span className="truncate italic">Finance: {entry.financeRemark}</span>
-                          </div>
-                        )}
-                        {entry.remark && (
-                          <div className="text-[11px] text-amber-800 bg-amber-50/80 px-2 py-0.5 rounded-md mt-1 inline-flex items-center gap-1 max-w-full truncate border border-amber-200/50">
-                            <MessageSquare className="w-3 h-3 shrink-0 text-amber-600" />
-                            <span className="truncate italic">Audit: {entry.remark}</span>
-                          </div>
-                        )}
-                        {entry.category && !entry.remark && !entry.financeRemark && (
-                          <div className="text-[11px] text-muted-fg line-clamp-1">{entry.category}</div>
-                        )}
+                        <div className="text-[11px] text-muted-fg line-clamp-1 mt-0.5">
+                          {entry.category || 'General'}
+                        </div>
                       </TableCell>
 
                       {/* 3b. Funding Bank (spec 0014): the bank Finance chose and the company that owns it */}
@@ -1116,6 +1453,31 @@ export const PettyCashPage: React.FC = () => {
                             <XCircle className="w-3 h-3" />
                             <span>Disapproved (Audit)</span>
                           </span>
+                        ) : entry.status === 'Transfer In Transit' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                            <Clock className="w-3 h-3 shrink-0" />
+                            <span>Transfer In Transit</span>
+                          </span>
+                        ) : entry.status === 'Return Pending' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>Return Pending</span>
+                          </span>
+                        ) : entry.status === 'Transfer Received' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-700 border border-teal-500/20 whitespace-nowrap">
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Transfer Received</span>
+                          </span>
+                        ) : entry.status === 'Settled' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            <Check className="w-3 h-3 shrink-0" />
+                            <span>Settled</span>
+                          </span>
+                        ) : entry.status === 'Reimbursed' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Reimbursed</span>
+                          </span>
                         ) : entry.type === 'expense' ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-50 text-slate-700 border border-slate-200 whitespace-nowrap">
                             <ArrowUpRight className="w-3 h-3" />
@@ -1131,63 +1493,36 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 9. Actions */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {canAuditActions ? (
+                        <div className="flex items-center justify-center">
                           <Button
                             type="button"
                             variant="ghost"
                             size="sm"
                             onClick={(e) => {
                               e.stopPropagation()
-                              const rect = e.currentTarget.getBoundingClientRect()
-                              setMenuPosition({
-                                top: rect.bottom + window.scrollY + 4,
-                                left: Math.min(window.innerWidth - 180, Math.max(10, rect.right + window.scrollX - 160)),
-                              })
-                              setActiveMenuPetty(entry)
-                              setOpenMenuPettyId(openMenuPettyId === entry.id ? null : entry.id)
+                              if (openMenuPettyId === entry.id) {
+                                setOpenMenuPettyId(null)
+                                setMenuPosition(null)
+                                setActiveMenuPetty(null)
+                              } else {
+                                const rect = e.currentTarget.getBoundingClientRect()
+                                const openUpward = rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                  right: Math.max(12, window.innerWidth - rect.right),
+                                  openUpward,
+                                })
+                                setActiveMenuPetty(entry)
+                                setOpenMenuPettyId(entry.id)
+                              }
                             }}
-                            className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                            title="Audit Actions"
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Row Actions"
+                            aria-label="Open row actions"
                           >
                             <MoreVertical className="w-4 h-4" />
                           </Button>
-                        ) : isOwner ? (
-                          <span className="text-muted-fg text-xs">—</span>
-                        ) : isPendingFinance && entry.type === 'topup' ? (
-                          <div className="flex items-center justify-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenEdit(entry)}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                              title="Edit Top Up Request"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleOpenDelete(entry)}
-                              className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                              title="Delete Top Up Request"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </Button>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleOpenSummary(entry)}
-                            className="h-7 px-2 text-[11px] text-muted-fg hover:text-focus hover:bg-slate-100 rounded-lg cursor-pointer"
-                            title="View details"
-                          >
-                            View
-                          </Button>
-                        )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   )
@@ -1316,6 +1651,189 @@ export const PettyCashPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* If Reimbursement / Replenishment: Show Paid By, Line Items, and Receipt Proof */}
+              {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') && (
+                <div className="p-3.5 rounded-xl bg-amber-50/60 border border-amber-200/60 space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <Receipt className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Replenishment Details</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-100 text-amber-800">
+                      Paid By: {targetEntry.paidBy || 'Employee'}
+                    </span>
+                  </div>
+
+                  {/* Line Items breakdown if present */}
+                  {(() => {
+                    if (!targetEntry.items) return null
+                    try {
+                      const items: Array<{ particulars: string; category?: string; amount: number }> = JSON.parse(targetEntry.items)
+                      if (!Array.isArray(items) || items.length === 0) return null
+                      return (
+                        <div className="rounded-lg border border-amber-200/80 overflow-hidden bg-white mt-2">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-amber-100/50 text-amber-900 font-bold border-b border-amber-200/60 text-[11px]">
+                                <th className="px-3 py-1.5 text-left">Particulars</th>
+                                <th className="px-3 py-1.5 text-left">Category</th>
+                                <th className="px-3 py-1.5 text-right">Amount (₱)</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-amber-100">
+                              {items.map((it, idx) => (
+                                <tr key={idx}>
+                                  <td className="px-3 py-1.5 text-focus font-medium">{it.particulars}</td>
+                                  <td className="px-3 py-1.5 text-muted-fg">{it.category || '—'}</td>
+                                  <td className="px-3 py-1.5 text-right font-semibold text-focus tabular-nums">{formatPHP(it.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )
+                    } catch {
+                      return null
+                    }
+                  })()}
+
+                  {/* Spec 0038: Reimbursement Funding Breakdown Card */}
+                  {targetEntry.totalExpenses !== undefined && targetEntry.totalExpenses !== null && (
+                    <div className="p-3.5 rounded-xl bg-slate-50 border border-stroke/30 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-muted-fg uppercase tracking-wider block">
+                          Funding Breakdown
+                        </span>
+                        {targetEntry.employeeOutOfPocket === 0 && (
+                          <span className="text-[10.5px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            Zero excess claim
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                        <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                          <span className="text-[10.5px] text-muted-fg block">Total Expenses (E)</span>
+                          <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.totalExpenses)}</span>
+                        </div>
+                        <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                          <span className="text-[10.5px] text-muted-fg block">Company Cash Paid (C)</span>
+                          <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.companyFundedAmount || 0)}</span>
+                          {targetEntry.existingExpenseId && (
+                            <span className="text-[10px] text-muted-fg block truncate" title={`Expense #${targetEntry.existingExpenseId}`}>
+                              Pre recorded #{targetEntry.existingExpenseId}
+                            </span>
+                          )}
+                        </div>
+                        <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-200">
+                          <span className="text-[10.5px] text-emerald-800 block">Out of Pocket (O)</span>
+                          <span className="font-bold text-emerald-900 text-sm">{formatPHP(targetEntry.employeeOutOfPocket ?? targetEntry.amountRequested)}</span>
+                        </div>
+                      </div>
+
+                      {targetEntry.paymentMethodOption && (
+                        <div className="pt-2 border-t border-stroke/20 flex items-center justify-between text-xs">
+                          <span className="text-muted-fg">Payment Method:</span>
+                          <span className="font-semibold text-focus">
+                            {targetEntry.paymentMethodOption === 'transfer_first'
+                              ? `Method B: Transfer First${targetEntry.destinationBankName ? ` (${targetEntry.destinationBankName})` : ''}`
+                              : 'Method A: Direct Payment to Employee'}
+                          </span>
+                        </div>
+                      )}
+
+                      {targetEntry.transferStatus && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-fg">Transfer Status:</span>
+                          <span className="font-semibold text-focus capitalize">
+                            {targetEntry.transferStatus.replace(/_/g, ' ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Receipt Attachments Section */}
+                  {(() => {
+                    let files: Array<{ file_url: string; file_name: string; file_size?: number }> = []
+                    if (targetEntry.attachments) {
+                      try {
+                        const parsed = typeof targetEntry.attachments === 'string'
+                          ? JSON.parse(targetEntry.attachments)
+                          : targetEntry.attachments
+                        if (Array.isArray(parsed)) {
+                          files = parsed.map((item: any, idx: number) => ({
+                            file_url: item.file_url || item.url || '',
+                            file_name: item.file_name || item.name || item.filename || `Receipt #${idx + 1}`,
+                            file_size: item.file_size || item.size,
+                          })).filter((f) => Boolean(f.file_url))
+                        }
+                      } catch {
+                        // ignore
+                      }
+                    }
+                    if (files.length === 0 && targetEntry.receiptUrl) {
+                      files = [{ file_url: targetEntry.receiptUrl, file_name: 'Official Receipt' }]
+                    }
+
+                    if (files.length === 0) {
+                      return (
+                        <div className="pt-1">
+                          <span className="text-[11px] font-semibold text-focus block mb-1">Receipt / Proof Attachments:</span>
+                          <div className="p-3 rounded-xl bg-slate-50 border border-stroke/30 text-xs text-muted-fg italic flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-slate-400 shrink-0" />
+                            <span>No receipt attached</span>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    return (
+                      <div className="pt-1 space-y-2">
+                        <span className="text-[11px] font-semibold text-focus block">
+                          Receipt / Proof Attachments ({files.length}):
+                        </span>
+                        {files.map((file, fIdx) => (
+                          <div key={fIdx} className="p-2.5 rounded-xl bg-white border border-stroke/40 flex items-center justify-between gap-3 shadow-2xs">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                                <FileText className="w-4 h-4" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-focus truncate max-w-[200px] sm:max-w-[280px]">
+                                  {file.file_name}
+                                </div>
+                                <div className="text-[10px] text-emerald-700 font-medium">Verified attachment</div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => setPreviewReceipt({ url: file.file_url, name: file.file_name })}
+                                className="h-8 px-2.5 rounded-lg text-xs font-semibold text-[#960C01] bg-[#960C01]/10 hover:bg-[#960C01]/20 flex items-center gap-1 transition-colors cursor-pointer"
+                                title="Preview proof"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>View</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => downloadReceipt(file.file_url, file.file_name)}
+                                className="h-8 px-2.5 rounded-lg text-xs font-semibold text-white bg-[#960C01] hover:bg-[#800a01] flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+                                title="Download proof"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                                <span>Download</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  })()}
+                </div>
+              )}
+
               {/* Funding bank chosen by Finance (spec 0014). Top ups and requests only, never the account number. */}
               {targetEntry.type !== 'expense' && (
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-stroke/30 space-y-1 text-xs">
@@ -1354,45 +1872,161 @@ export const PettyCashPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* Display Finance Endorsement Remark if present */}
-              {targetEntry.financeRemark && (
-                <div className="p-3.5 rounded-xl bg-blue-50/80 border border-blue-200 space-y-1 text-xs">
-                  <span className="text-[11px] font-bold text-blue-900 uppercase tracking-wider block">
-                    Finance Endorsement Remark
+              {/* Activity Timeline & Remarks Section (unified without circle bullet) */}
+              <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
+                <div className="flex items-center justify-between pb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Activity Timeline & Remarks
                   </span>
-                  <p className="text-xs text-blue-950 font-medium italic leading-relaxed">
-                    "{targetEntry.financeRemark}"
-                  </p>
-                  {targetEntry.endorsedBy && (
-                    <div className="text-[11px] text-blue-800 pt-1">
-                      Endorsed by: <strong>{targetEntry.endorsedBy}</strong>
-                      {targetEntry.endorsedAt && (
-                        <span> on {new Date(targetEntry.endorsedAt).toLocaleString()}</span>
-                      )}
-                    </div>
-                  )}
+                  <span className="text-[10px] text-muted-fg font-mono">
+                    ID: {targetEntry.id || '—'}
+                  </span>
                 </div>
-              )}
 
-              {/* Display Audit Review Remark if present */}
-              {targetEntry.remark && (
-                <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 space-y-1 text-xs">
-                  <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider block">
-                    Audit Review Remark
-                  </span>
-                  <p className="text-xs text-amber-950 font-medium italic leading-relaxed">
-                    "{targetEntry.remark}"
-                  </p>
-                  {targetEntry.reviewedBy && (
-                    <div className="text-[11px] text-amber-800 pt-1">
-                      Reviewed by: <strong>{targetEntry.reviewedBy}</strong>
-                      {targetEntry.reviewedAt && (
-                        <span> on {new Date(targetEntry.reviewedAt).toLocaleString()}</span>
+                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                  {/* Created / Requested Event */}
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') ? 'Replenishment filed by' : 'Requested by'}{' '}
+                        <span className="text-primary font-bold">
+                          {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                        {formatTimelineDateTime(targetEntry.createdAt || targetEntry.date)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-muted-fg mt-0.5">
+                      {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment')
+                        ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
+                        : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
+                    </p>
+                  </div>
+
+                  {/* Finance Endorsement Event */}
+                  {(targetEntry.endorsedBy || targetEntry.financeRemark) && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          {targetEntry.endorsedBy ? (
+                            <>
+                              Endorsed by Finance:{' '}
+                              <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy, 'Finance Officer')}</span>
+                            </>
+                          ) : (
+                            <span className="text-blue-600 font-semibold">Finance Endorsement</span>
+                          )}
+                        </span>
+                        {targetEntry.endorsedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.endorsedAt)}
+                          </span>
+                        )}
+                      </div>
+                      {targetEntry.financeRemark && (
+                        <div className="mt-1.5 p-2 rounded-lg bg-blue-50/90 border border-blue-200/80 text-blue-900 text-[11px] italic">
+                          Remarks: &ldquo;{targetEntry.financeRemark}&rdquo;
+                        </div>
                       )}
                     </div>
                   )}
+
+                  {/* Audit Review Event */}
+                  <div className="pt-2 border-t border-stroke/15 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-focus">
+                        {targetEntry.status === 'Approved' ? (
+                          <span className="text-emerald-700 font-bold">
+                            Audited & Approved
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                          </span>
+                        ) : targetEntry.status === 'Disapproved' ? (
+                          <span className="text-rose-700 font-bold">
+                            Rejected / Disapproved
+                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                          </span>
+                        ) : targetEntry.status === 'Pending Audit Approval' ? (
+                          <span className="text-amber-700 font-semibold">
+                            Pending Audit Review
+                          </span>
+                        ) : (
+                          <span className="text-slate-600 font-medium">
+                            {targetEntry.status}
+                          </span>
+                        )}
+                      </span>
+                      {targetEntry.reviewedAt && (
+                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                          {formatTimelineDateTime(targetEntry.reviewedAt)}
+                        </span>
+                      )}
+                    </div>
+                    {targetEntry.remark ? (
+                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                        Remarks: &ldquo;{targetEntry.remark}&rdquo;
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        {targetEntry.status === 'Approved'
+                          ? 'Approved by Internal Audit.'
+                          : targetEntry.status === 'Disapproved'
+                          ? 'Request rejected by reviewer.'
+                          : 'Awaiting audit review and verification.'}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Transfer Received Event */}
+                  {(targetEntry.transferReceivedAt || targetEntry.transferReceivedBy) && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          Bank Transfer Received by{' '}
+                          <span className="text-teal-700 font-bold">
+                            {formatRealName(targetEntry.transferReceivedBy || 'Finance Officer', 'Finance Officer')}
+                          </span>
+                        </span>
+                        {targetEntry.transferReceivedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.transferReceivedAt)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        Intercompany funding transfer confirmed received by requesting company bank.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Reimbursement Disbursed / Float Settled Event */}
+                  {(targetEntry.reimbursedAt || targetEntry.reimbursedBy || targetEntry.status === 'Reimbursed' || targetEntry.status === 'Settled') && (
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-focus">
+                          {targetEntry.status === 'Settled' ? (
+                            <span className="text-emerald-700 font-bold">Float Finalized & Settled</span>
+                          ) : (
+                            <span className="text-teal-700 font-bold">Reimbursement Payout Disbursed</span>
+                          )}
+                          {targetEntry.reimbursedBy ? ` by ${formatRealName(targetEntry.reimbursedBy, 'Finance Officer')}` : ''}
+                        </span>
+                        {targetEntry.reimbursedAt && (
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(targetEntry.reimbursedAt)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-muted-fg mt-0.5">
+                        {targetEntry.status === 'Settled'
+                          ? 'Company float adjustment finalized and petty cash ledger updated.'
+                          : `Employee reimbursement disbursed to ${formatRealName(targetEntry.paidBy || 'Employee', 'Staff')}.`}
+                      </p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
               {/* Footer Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
@@ -1481,6 +2115,113 @@ export const PettyCashPage: React.FC = () => {
                     </Button>
                   </div>
                 )}
+
+                {/* Finance Team Actions: Lifecycle execution for reimbursements */}
+                {canExecuteFinancialActions && (targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Zero Excess Claim in Approved status: Finalize Settlement */}
+                    {targetEntry.status === 'Approved' &&
+                      ((targetEntry.employeeOutOfPocket !== undefined && targetEntry.employeeOutOfPocket === 0) ||
+                       (targetEntry.amountRequested === 0 && (targetEntry.totalExpenses || 0) > 0)) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleFinalizeSettlement(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Finalize Settlement</span>
+                      </Button>
+                    )}
+
+                    {/* Own Bank or Method A Claim in Approved status: Reimburse */}
+                    {targetEntry.status === 'Approved' &&
+                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      targetEntry.paymentMethodOption !== 'transfer_first' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleReimburse(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Disburse Reimbursement</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Approved status: Initiate Transfer */}
+                    {targetEntry.status === 'Approved' &&
+                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      targetEntry.paymentMethodOption === 'transfer_first' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleInitiateTransfer(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <ArrowUpRight className="w-3.5 h-3.5" />
+                        <span>Initiate Bank Transfer</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Transfer In Transit status: Confirm Receipt or Cancel Transfer */}
+                    {targetEntry.status === 'Transfer In Transit' && (
+                      <>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={isSubmittingAction}
+                          onClick={() => setCancelModalEntry(targetEntry)}
+                          className="h-9 px-3 text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 cursor-pointer flex items-center gap-1.5"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>Cancel Transfer</span>
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={isSubmittingAction}
+                          onClick={() => handleConfirmTransfer(targetEntry.recordId)}
+                          className="h-9 px-4 text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Confirm Transfer Received</span>
+                        </Button>
+                      </>
+                    )}
+
+                    {/* Method B Claim in Return Pending status: Confirm Reversal */}
+                    {targetEntry.status === 'Return Pending' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleConfirmReversal(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Confirm Reversal & Return</span>
+                      </Button>
+                    )}
+
+                    {/* Method B Claim in Transfer Received status: Disburse Reimbursement */}
+                    {targetEntry.status === 'Transfer Received' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingAction}
+                        onClick={() => handleReimburse(targetEntry.recordId)}
+                        className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Disburse Reimbursement</span>
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1554,47 +2295,143 @@ export const PettyCashPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Funding Bank Picker (Finance endorsement only, spec 0012) */}
+            {/* Funding Bank Picker (Finance endorsement only, spec 0012 & 0038) */}
             {reviewAction === 'endorse' && (
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-focus block">
-                  Funding Bank Account <span className="text-red-500">* (Required)</span>
-                </Label>
-                <div className="relative">
-                  <select
-                    value={selectedFundingBankId}
-                    onChange={(e) => {
-                      setSelectedFundingBankId(e.target.value)
-                      if (reviewError) setReviewError('')
-                    }}
-                    className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                    required
-                  >
-                    <option value="" disabled>
-                      Choose the bank that funds this top-up...
-                    </option>
-                    {bankAccounts.map((acc) => {
-                      const isOwn = isCompanyMatch(acc.companyName || '', targetEntry?.companyName || '')
-                      return (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} · {acc.accountName} ({acc.companyName})
-                          {isOwn ? ' — own account, no deduction' : ''}
-                        </option>
-                      )
-                    })}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-focus block">
+                    Funding Bank Account <span className="text-red-500">* (Required)</span>
+                  </Label>
+                  <div className="relative">
+                    <select
+                      value={selectedFundingBankId}
+                      onChange={(e) => {
+                        setSelectedFundingBankId(e.target.value)
+                        if (reviewError) setReviewError('')
+                      }}
+                      className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
+                      required
+                    >
+                      <option value="" disabled>
+                        Choose the bank that funds this request...
+                      </option>
+                      {bankAccounts.map((acc) => {
+                        const isOwn = isAccountOwnedBy(acc, targetEntry?.companyName || '')
+                        return (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.bankName} ({acc.accountName}) [{acc.companyName}]
+                            {isOwn ? ' (own account)' : ' (affiliate)'}
+                          </option>
+                        )
+                      })}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                  </div>
+                  {bankAccounts.length === 0 && (
+                    <p className="text-[11px] text-amber-700 font-medium">
+                      No bank accounts found. Add a bank account before endorsing.
+                    </p>
+                  )}
                 </div>
-                {bankAccounts.length === 0 && (
-                  <p className="text-[11px] text-amber-700 font-medium">
-                    No bank accounts found. Add a bank account before endorsing.
-                  </p>
-                )}
-                <p className="text-[11px] text-muted-fg">
-                  Pick the requesting company's own account to fund it without any bank deduction.
-                  Pick a different company's account and the amount is withdrawn from it and
-                  deposited into {targetEntry?.companyName}'s bank on approval.
-                </p>
+
+                {/* Affiliate Bank Funding Method (Spec 0038 AC-6, AC-7) */}
+                {(() => {
+                  const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
+                  const isCrossCompany = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry?.companyName || '')
+                  if (!isCrossCompany) return null
+
+                  return (
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3 animate-in fade-in-50">
+                      <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                        <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                        <span>Affiliate Bank Funding Method</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 leading-snug">
+                        You selected an affiliate bank belonging to <strong>{selectedBank.companyName}</strong>. Select how funds will be disbursed:
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <label
+                          className={cn(
+                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
+                            selectedPaymentMethod === 'direct'
+                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
+                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="fundingPaymentMethod"
+                              checked={selectedPaymentMethod === 'direct'}
+                              onChange={() => setSelectedPaymentMethod('direct')}
+                              className="text-primary focus:ring-primary cursor-pointer"
+                            />
+                            <span className="font-bold text-focus">Method A: Direct Payment</span>
+                          </div>
+                          <span className="text-[10.5px] text-muted-fg mt-1">
+                            Disbursed directly from affiliate bank to employee. Creates intercompany payable immediately.
+                          </span>
+                        </label>
+
+                        <label
+                          className={cn(
+                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
+                            selectedPaymentMethod === 'transfer_first'
+                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
+                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              name="fundingPaymentMethod"
+                              checked={selectedPaymentMethod === 'transfer_first'}
+                              onChange={() => setSelectedPaymentMethod('transfer_first')}
+                              className="text-primary focus:ring-primary cursor-pointer"
+                            />
+                            <span className="font-bold text-focus">Method B: Transfer First</span>
+                          </div>
+                          <span className="text-[10.5px] text-muted-fg mt-1">
+                            Transfers funds from affiliate to {targetEntry?.companyName}'s bank first before reimbursing employee.
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* Destination Bank if Method B */}
+                      {selectedPaymentMethod === 'transfer_first' && (
+                        <div className="space-y-1.5 pt-1">
+                          <Label className="text-xs font-semibold text-focus block">
+                            Destination Bank Account ({targetEntry?.companyName}) <span className="text-red-500">* (Required)</span>
+                          </Label>
+                          <div className="relative">
+                            <select
+                              value={selectedDestinationBankId}
+                              onChange={(e) => {
+                                setSelectedDestinationBankId(e.target.value)
+                                if (reviewError) setReviewError('')
+                              }}
+                              className="w-full h-10 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
+                              required
+                            >
+                              <option value="" disabled>
+                                Select {targetEntry?.companyName}'s receiving bank...
+                              </option>
+                              {bankAccounts
+                                .filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || ''))
+                                .map((acc) => (
+                                  <option key={acc.id} value={acc.id}>
+                                    {acc.bankName} ({acc.accountName})
+                                  </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
               </div>
             )}
 
@@ -1668,15 +2505,21 @@ export const PettyCashPage: React.FC = () => {
 
       {/* Edit Top Up Request Modal */}
       <Dialog open={Boolean(editEntry)} onOpenChange={(open) => !open && setEditEntry(null)}>
-        <DialogContent className="sm:max-w-[640px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="pb-3 border-b border-stroke/20">
-            <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
-              <Pencil className="w-5 h-5 text-primary" />
-              <span>Edit Petty Cash Request</span>
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg">
-              Update the requested amount or particulars before finance reviews it.
-            </DialogDescription>
+        <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="pb-3 border-b border-stroke/30 text-left">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
+                <Pencil className="w-5 h-5" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus">
+                  Edit Petty Cash Request
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Update the requested amount or particulars before finance reviews it.
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
           {editEntry && (
@@ -1725,21 +2568,19 @@ export const PettyCashPage: React.FC = () => {
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
                   onClick={() => setEditEntry(null)}
-                  className="h-9 px-3 text-xs"
+                  className="h-10 px-4 rounded-xl text-xs font-semibold"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
-                  size="sm"
                   disabled={isEditing}
-                  className="h-9 px-4 text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white"
+                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-primary hover:bg-primary-hover text-white"
                 >
                   {isEditing ? 'Saving…' : 'Save Changes'}
                 </Button>
@@ -1750,69 +2591,47 @@ export const PettyCashPage: React.FC = () => {
       </Dialog>
 
       {/* Delete Top Up Confirmation Modal */}
-      <Dialog
+      <ConfirmModal
         open={Boolean(deleteConfirmEntry)}
         onOpenChange={(open) => !open && setDeleteConfirmEntry(null)}
-      >
-        <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-          <DialogHeader className="pb-2">
-            <DialogTitle className="text-lg font-bold text-focus">
-              Delete Petty Cash Request
-            </DialogTitle>
-            <DialogDescription className="text-xs text-muted-fg font-normal">
-              Are you sure you want to delete this pending request? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          {deleteError && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
-              {deleteError}
-            </div>
-          )}
-
-          {deleteConfirmEntry && (
-            <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 my-2">
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Company:</span>
-                <span className="font-semibold text-focus">{deleteConfirmEntry.companyName}</span>
+        title="Delete Petty Cash Request"
+        description={
+          <>
+            Are you sure you want to delete this pending request? This action cannot be undone.
+            {deleteError && (
+              <div className="mt-2 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 text-left">
+                {deleteError}
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Particulars:</span>
-                <span className="font-medium text-focus truncate max-w-[200px]">
-                  {deleteConfirmEntry.description || '—'}
-                </span>
+            )}
+            {deleteConfirmEntry && (
+              <div className="mt-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 text-left">
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Company:</span>
+                  <span className="font-semibold text-focus">{deleteConfirmEntry.companyName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Particulars:</span>
+                  <span className="font-medium text-focus truncate max-w-[200px]">
+                    {deleteConfirmEntry.description || '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-fg">Amount:</span>
+                  <span className="font-bold text-rose-600">
+                    {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn)}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-fg">Amount:</span>
-                <span className="font-bold text-red-600">
-                  {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn)}
-                </span>
-              </div>
-            </div>
-          )}
-
-          <div className="pt-2 flex items-center justify-end gap-2 border-t border-stroke/20">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteConfirmEntry(null)}
-              className="h-9 px-3 rounded-lg text-xs"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleConfirmDelete}
-              disabled={isDeleting}
-              className="h-9 px-4 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-xs"
-            >
-              {isDeleting ? 'Deleting…' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+            )}
+          </>
+        }
+        confirmLabel="Delete"
+        loadingLabel="Deleting…"
+        variant="destructive"
+        action="delete"
+        isLoading={isDeleting}
+        onConfirm={handleConfirmDelete}
+      />
 
       {/* Top Up / Request Petty Cash Modal */}
       <TopUpPettyCashModal
@@ -1825,49 +2644,332 @@ export const PettyCashPage: React.FC = () => {
         onSuccess={handleTopUpSuccess}
       />
 
-      {/* Audit Action Portal Menu */}
+      {/* Reimbursement Request Modal */}
+      <ReimbursementModal
+        open={isReimbursementModalOpen}
+        onOpenChange={setIsReimbursementModalOpen}
+        company={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : (user?.assignedCompany || 'MCT Kitchen'))}
+        currentBalance={currentBalance}
+        companies={companyList}
+        onSuccess={(newRecord) => {
+          if (newRecord) {
+            setLedger((prev) => [newRecord, ...prev])
+          }
+          loadData()
+          setIsReimbursementModalOpen(false)
+        }}
+      />
+
+      {/* Cancel Transfer Confirmation Modal (Spec 0038) */}
+      <Dialog open={Boolean(cancelModalEntry)} onOpenChange={(open) => !open && setCancelModalEntry(null)}>
+        <DialogContent className="sm:max-w-[520px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="pb-2">
+            <DialogTitle className="text-lg font-bold text-rose-700 flex items-center gap-2">
+              <XCircle className="w-5 h-5 text-rose-600" />
+              <span>Cancel In Transit Transfer</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg">
+              Cancelling marks the transfer as Return Pending. Bank balances will not be restored until reversal is verified.
+            </DialogDescription>
+          </DialogHeader>
+
+          {actionError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+              {actionError}
+            </div>
+          )}
+
+          <div className="space-y-3 pt-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="cancel-reason" className="text-xs font-semibold text-focus">
+                Reason for cancellation <span className="text-red-500">* (Required)</span>
+              </Label>
+              <textarea
+                id="cancel-reason"
+                rows={3}
+                value={cancelReason}
+                onChange={(e) => {
+                  setCancelReason(e.target.value)
+                  if (actionError) setActionError('')
+                }}
+                placeholder="Enter justification or reason for stopping this bank transfer..."
+                className="w-full p-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus placeholder:text-muted-fg resize-none"
+                required
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setCancelModalEntry(null)}
+                className="h-9 px-3 text-xs"
+              >
+                Keep Transfer
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSubmittingAction || !cancelReason.trim()}
+                onClick={handleConfirmCancelTransfer}
+                className="h-9 px-4 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer"
+              >
+                {isSubmittingAction ? 'Cancelling…' : 'Confirm Cancellation'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Row Action Portal Menu */}
       {openMenuPettyId && menuPosition && activeMenuPetty && typeof document !== 'undefined' &&
         createPortal(
           <div
             style={{
-              position: 'absolute',
               top: `${menuPosition.top}px`,
-              left: `${menuPosition.left}px`,
+              right: `${menuPosition.right}px`,
+              transform: menuPosition.openUpward ? 'translateY(-100%)' : 'none',
             }}
-            className="z-50 w-48 rounded-xl bg-white border border-slate-200 shadow-xl py-1 animate-in fade-in zoom-in-95 duration-100"
+            className="fixed z-[99999] w-52 rounded-xl bg-white border border-slate-200 shadow-2xl p-1.5 animate-in fade-in-50 zoom-in-95 duration-150"
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <button
               type="button"
-              onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Verified')}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Mark as Audit</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-              <span>Mark as Discrepancy</span>
-            </button>
-            <div className="h-px bg-slate-100 my-1" />
-            <button
-              type="button"
               onClick={() => {
-                handleOpenSummary(activeMenuPetty)
+                const target = activeMenuPetty
                 setOpenMenuPettyId(null)
+                setMenuPosition(null)
+                setActiveMenuPetty(null)
+                handleOpenSummary(target)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
-              <Eye className="w-3.5 h-3.5 text-slate-500" />
+              <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Verified')}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Mark as Audited</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isOwner &&
+              (activeMenuPetty.status === 'Pending Finance Endorsement' ||
+                activeMenuPetty.status === 'Pending Finance Approval') &&
+              activeMenuPetty.type === 'topup' ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenEdit(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>Edit Top-Up Request</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenDelete(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Delete Top-Up Request</span>
+                </button>
+              </>
+            ) : canExecuteFinancialActions && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement' || activeMenuPetty.requestType === 'replenishment') ? (
+              <>
+                {/* Zero excess claim */}
+                {activeMenuPetty.status === 'Approved' &&
+                  ((activeMenuPetty.employeeOutOfPocket !== undefined && activeMenuPetty.employeeOutOfPocket === 0) ||
+                   (activeMenuPetty.amountRequested === 0 && (activeMenuPetty.totalExpenses || 0) > 0)) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleFinalizeSettlement(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Finalize Settlement</span>
+                  </button>
+                )}
+
+                {/* Own Bank or Method A */}
+                {activeMenuPetty.status === 'Approved' &&
+                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  activeMenuPetty.paymentMethodOption !== 'transfer_first' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleReimburse(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Disburse Reimbursement</span>
+                  </button>
+                )}
+
+                {/* Method B: Initiate Transfer */}
+                {activeMenuPetty.status === 'Approved' &&
+                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  activeMenuPetty.paymentMethodOption === 'transfer_first' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleInitiateTransfer(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-blue-700 hover:bg-blue-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span>Initiate Transfer</span>
+                  </button>
+                )}
+
+                {/* Transfer In Transit */}
+                {activeMenuPetty.status === 'Transfer In Transit' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = activeMenuPetty
+                        setOpenMenuPettyId(null)
+                        setCancelModalEntry(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                    >
+                      <XCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      <span>Cancel Transfer</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = activeMenuPetty.recordId
+                        setOpenMenuPettyId(null)
+                        handleConfirmTransfer(id)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-teal-700 hover:bg-teal-50 transition-colors text-left cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                      <span>Confirm Received</span>
+                    </button>
+                  </>
+                )}
+
+                {/* Return Pending */}
+                {activeMenuPetty.status === 'Return Pending' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleConfirmReversal(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-amber-700 hover:bg-amber-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <RotateCw className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>Confirm Reversal</span>
+                  </button>
+                )}
+
+                {/* Transfer Received */}
+                {activeMenuPetty.status === 'Transfer Received' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeMenuPetty.recordId
+                      setOpenMenuPettyId(null)
+                      handleReimburse(id)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Disburse Reimbursement</span>
+                  </button>
+                )}
+              </>
+            ) : null}
           </div>,
           document.body
         )}
+      {/* Proof Preview Modal */}
+      <Dialog open={!!previewReceipt} onOpenChange={(open) => !open && setPreviewReceipt(null)}>
+        <DialogContent className="sm:max-w-[720px] p-6 max-h-[90vh] flex flex-col">
+          {previewReceipt && (
+            <div className="flex flex-col h-full space-y-4">
+              <DialogHeader>
+                <div className="flex items-center justify-between gap-3 pr-6">
+                  <div className="min-w-0">
+                    <DialogTitle className="text-base font-bold text-focus truncate max-w-[420px]">
+                      {previewReceipt.name}
+                    </DialogTitle>
+                    <DialogDescription className="text-xs text-muted-fg">
+                      Uploaded proof of expense / Official Receipt
+                    </DialogDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    onClick={() => downloadReceipt(previewReceipt.url, previewReceipt.name)}
+                    className="h-8 px-3 rounded-lg text-xs font-semibold text-white bg-[#960C01] hover:bg-[#800a01] flex items-center gap-1.5 shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download</span>
+                  </Button>
+                </div>
+              </DialogHeader>
+
+              <div className="flex-1 min-h-[320px] max-h-[62vh] overflow-auto rounded-xl bg-slate-900/5 border border-stroke/30 flex items-center justify-center p-2">
+                {previewReceipt.url.startsWith('data:application/pdf') || previewReceipt.name.toLowerCase().endsWith('.pdf') ? (
+                  <iframe
+                    src={previewReceipt.url}
+                    title={previewReceipt.name}
+                    className="w-full h-[58vh] rounded-lg border-0 bg-white"
+                  />
+                ) : (
+                  <img
+                    src={previewReceipt.url}
+                    alt={previewReceipt.name}
+                    className="max-w-full max-h-[58vh] object-contain rounded-lg shadow-xs"
+                  />
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

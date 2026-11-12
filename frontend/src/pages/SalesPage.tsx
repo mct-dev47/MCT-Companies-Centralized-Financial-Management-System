@@ -1,3 +1,4 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import {
   Download,
@@ -22,22 +23,17 @@ import {
   MoreVertical,
   Eye,
   Pencil,
+  Landmark,
   Lock,
   Receipt,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
 import {
   Table,
   TableHeader,
@@ -52,10 +48,12 @@ import {
 } from '@/components/ui/DateRangePicker'
 import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
+import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { DepositDateDialog } from '@/components/dashboard/DepositDateDialog'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
 import { useReceivables } from '@/hooks/useReceivables'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
-import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { notifyError } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -67,6 +65,7 @@ import { formatPHP } from '@/lib/format'
 import {
   isDateInRange,
   normalizeDateToYYYYMMDD,
+  formatDisplayDate,
   formatToYYYYMMDD,
   formatCreatedAt,
 } from '@/utils/dateUtils'
@@ -78,6 +77,8 @@ import {
 import { cn } from '@/lib/utils'
 import { useNavigate } from 'react-router-dom'
 import { useCompany } from '@/context/CompanyContext'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from '@/components/dashboard/DayRemark'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
@@ -89,7 +90,8 @@ const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
-import type { UtangSale } from '@/services/receivablesStore'
+import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
+import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
 const ITEMS_PER_PAGE = 10
@@ -105,6 +107,7 @@ export const SalesPage: React.FC = () => {
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = isStrictlyCompanyScoped
+  const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -202,6 +205,21 @@ export const SalesPage: React.FC = () => {
   const [tableTab, setTableTab] = React.useState<'Deposit' | 'Sales Record'>(
     'Sales Record'
   )
+  const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('Daily Summary')
+  const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
+  const [dailyPage, setDailyPage] = React.useState(1)
+
+  const toggleDateExpansion = (dateKey: string) => {
+    setExpandedDates((prev) => {
+      const next = new Set(prev)
+      if (next.has(dateKey)) {
+        next.delete(dateKey)
+      } else {
+        next.add(dateKey)
+      }
+      return next
+    })
+  }
 
   // Handle switching period (Daily, Quarterly, Monthly, Annually)
   const handlePeriodChange = (period: PeriodType) => {
@@ -291,6 +309,80 @@ export const SalesPage: React.FC = () => {
     }
   }, [])
 
+  // Toast notification state
+  const [toast, setToast] = React.useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type })
+    setTimeout(() => {
+      setToast(null)
+    }, 4500)
+  }
+
+  const handleDepositStatusChange = async (sale: SalesItem, newStatus: 'Deposited' | 'Not Deposited') => {
+    if (sale.auditStatus === 'Verified') {
+      showToast('This sale has been Verified by an Auditor and is locked as read-only.', 'error')
+      return
+    }
+
+    const st = (sale as any).payment_status || (sale.status === 'Overdue' ? 'Unpaid' : sale.status)
+    if (newStatus === 'Deposited') {
+      if (st === 'Unpaid') {
+        showToast('Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.', 'error')
+        return
+      }
+      if (st === 'Pending') {
+        const pm = (sale.paymentMethod || '').trim().toLowerCase()
+        const hasChq = Boolean(sale.chequeNo && sale.chequeNo.trim())
+        if (pm !== 'cheque' || !hasChq) {
+          showToast('Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance.', 'error')
+          return
+        }
+      }
+    }
+
+    if (newStatus === 'Deposited') {
+      // Ask which bank and which day the money arrived before saving
+      setDepositDialogSale(sale)
+      return
+    }
+    await applyDepositStatus(sale, newStatus)
+  }
+
+  const applyDepositStatus = async (
+    sale: SalesItem,
+    newStatus: 'Deposited' | 'Not Deposited',
+    depositDate?: string,
+    bankAccountId?: string
+  ) => {
+    try {
+      const updated = await salesService.updateSaleDepositStatus(
+        sale.id,
+        newStatus,
+        depositDate,
+        bankAccountId
+      )
+      setSales((prev) =>
+        prev.map((s) =>
+          s.id === sale.id
+            ? {
+                ...s,
+                depositStatus: newStatus,
+                deposit_status: newStatus,
+                deposit_date: newStatus === 'Deposited' ? depositDate || updated.deposit_date || s.rawDate : null,
+                depositDate: newStatus === 'Deposited' ? depositDate || updated.depositDate || s.rawDate : null,
+                bankAccountId: bankAccountId || updated.bankAccountId || s.bankAccountId,
+              }
+            : s
+        )
+      )
+      showToast(`Deposit status updated to ${newStatus}.`, 'success')
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update deposit status.', 'error')
+    }
+  }
+
+  const [depositDialogSale, setDepositDialogSale] = React.useState<SalesItem | null>(null)
+
   // Handlers for edit and delete
   const handleSaleUpdated = (updatedItem: SalesItem) => {
     setSales((prev) =>
@@ -311,7 +403,15 @@ export const SalesPage: React.FC = () => {
     if (!deleteConfirmSale || isAdmin) return
     setIsDeleting(true)
     try {
-      await salesService.deleteSale(deleteConfirmSale.id)
+      if (deleteConfirmSale.id.startsWith('utang-')) {
+        // A receivable with no sale behind it: delete it from receivables, not from sales
+        const result = await receivablesStore.deleteSale(deleteConfirmSale.id.slice('utang-'.length))
+        if (!result.success) throw new Error(result.message)
+        await refreshReceivablesFromBackend()
+      } else {
+        await salesService.deleteSale(deleteConfirmSale.id)
+        await refreshReceivablesFromBackend()
+      }
       setSales((prev) => prev.filter((s) => s.id !== deleteConfirmSale.id))
       setDeleteConfirmSale(null)
     } catch (err) {
@@ -322,7 +422,7 @@ export const SalesPage: React.FC = () => {
     }
   }
 
-  // 3-Dots Action Menu for Audit
+  // 3-Dots Action Menu state
   const [openMenuSaleId, setOpenMenuSaleId] = React.useState<string | null>(
     null
   )
@@ -334,6 +434,28 @@ export const SalesPage: React.FC = () => {
   const [activeMenuSale, setActiveMenuSale] = React.useState<SalesItem | null>(
     null
   )
+
+  React.useEffect(() => {
+    if (!openMenuSaleId) return
+    const handleCloseMenu = () => {
+      setOpenMenuSaleId(null)
+      setMenuPosition(null)
+      setActiveMenuSale(null)
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCloseMenu()
+    }
+    window.addEventListener('click', handleCloseMenu)
+    window.addEventListener('scroll', handleCloseMenu, true)
+    window.addEventListener('resize', handleCloseMenu)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', handleCloseMenu)
+      window.removeEventListener('scroll', handleCloseMenu, true)
+      window.removeEventListener('resize', handleCloseMenu)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openMenuSaleId])
 
   const handleMarkSaleAudit = (
     sale: SalesItem,
@@ -349,7 +471,7 @@ export const SalesPage: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     })
-    const auditorName = user?.fullName || 'Audit'
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const updated: SalesItem = {
       ...sale,
       auditStatus: status,
@@ -375,7 +497,7 @@ export const SalesPage: React.FC = () => {
   const [loading, setLoading] = React.useState(true)
 
   // Load sales data. `silent` reloads without the loading skeleton (used by realtime updates).
-  const loadSales = React.useCallback(async (silent = false) => {
+  const loadSales = React.useCallback(async (silent = false, forceRefresh = false) => {
     if (!silent) setLoading(true)
     try {
       const targetCompany = isCompanyScoped
@@ -383,7 +505,7 @@ export const SalesPage: React.FC = () => {
         : selectedCompany === 'All Companies'
           ? undefined
           : selectedCompany
-      const data = await salesService.getSales(targetCompany)
+      const data = await salesService.getSales(targetCompany, forceRefresh)
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
@@ -404,7 +526,7 @@ export const SalesPage: React.FC = () => {
       if (timer) window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         salesService.invalidateCache()
-        void loadSales(true)
+        void loadSales(true, true)
         void refreshReceivablesFromBackend()
       }, 250)
     }
@@ -517,7 +639,7 @@ export const SalesPage: React.FC = () => {
               : u.payment_status === 'Partial'
                 ? 'Partial Credit'
                 : 'Utang (Pay Later)',
-          company: u.company || 'MyCity.Kitchen Corporation',
+          company: u.company || '',
           items: [
             ...(u.amount_paid > 0
               ? [
@@ -547,7 +669,7 @@ export const SalesPage: React.FC = () => {
             : u.payment_status === 'Partial'
               ? 'Pending'
               : 'Unpaid') as any,
-          auditStatus: u.is_locked ? 'Verified' : 'Pending Audit',
+          auditStatus: 'Pending Audit',
           createdAt: `${u.date}T10:00:00Z`,
           type: 'Sales' as const,
           isStandaloneUtang: true,
@@ -568,11 +690,48 @@ export const SalesPage: React.FC = () => {
   }, [utangSalesList])
 
   const combinedSales = React.useMemo(() => {
-    return [...mappedUtangSales, ...sales]
-  }, [mappedUtangSales, sales])
+    const enrichedSales = sales.map((s) => {
+      const numId = Number(s.id)
+      const linkedList = !Number.isNaN(numId) ? receivablesBySaleId.get(numId) : undefined
+      const linked = linkedList && linkedList.length > 0 ? linkedList[0] : undefined
+      if (!linked) return s
+      return {
+        ...s,
+        customer_name: linked.customer_name,
+        customer_type:
+          (linked.customer_type as string) === 'Internal' ? 'Staff' : linked.customer_type,
+        amount_paid: linked.amount_paid,
+        balance: linked.balance,
+        payment_status: linked.payment_status,
+        status:
+          linked.payment_status === 'Unpaid'
+            ? 'Unpaid'
+            : linked.payment_status === 'Partial'
+              ? 'Pending'
+              : s.status,
+      } as SalesItem & {
+        customer_name?: string
+        customer_type?: string
+        amount_paid?: number
+        balance?: number
+        payment_status?: string
+      }
+    })
+    return [...mappedUtangSales, ...enrichedSales]
+  }, [mappedUtangSales, sales, receivablesBySaleId])
 
   // 1. Base filtered sales (independent of Deposit / Sales Record tab so KPIs above stay constant)
-  const baseFilteredSales = React.useMemo(() => {
+  const {
+    accounts: allBankAccounts,
+    available: bankOptions,
+    selectedId: selectedBankId,
+    setSelectedId: setSelectedBankId,
+    bankLabel,
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
+
+  // Everything except the date range, so the Sales Record tab can range by sale date and the
+  // Deposit tab by bank deposit date.
+  const preDateFilteredSales = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
 
     return combinedSales
@@ -585,14 +744,8 @@ export const SalesPage: React.FC = () => {
           return false
         }
 
-        // 2. Date range filter
-        if (
-          !isDateInRange(
-            item.rawDate || item.date,
-            dateRange.startDate,
-            dateRange.endDate
-          )
-        ) {
+        // Bank filter ('' = All Banks)
+        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
           return false
         }
 
@@ -641,34 +794,111 @@ export const SalesPage: React.FC = () => {
 
         return true
       })
-      .sort((a, b) => {
-        const dateA = a.rawDate || normalizeDateToYYYYMMDD(a.date)
-        const dateB = b.rawDate || normalizeDateToYYYYMMDD(b.date)
-        const cmp = dateB.localeCompare(dateA)
-        if (cmp !== 0) return cmp
-        return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      })
   }, [
     combinedSales,
     selectedCompany,
-    dateRange,
     statusFilter,
     searchQuery,
     isCompanyScoped,
     assignedCompany,
+    selectedBankId,
   ])
+
+  // Day the sale happened (Sales Record tab, KPIs)
+  const getSaleDay = (s: SalesItem) => s.rawDate || normalizeDateToYYYYMMDD(s.date)
+  // Day the money reached the bank (Deposit tab). Older rows without one fall back to the sale day.
+  const getDepositDay = (s: SalesItem) =>
+    s.deposit_date || s.depositDate || getSaleDay(s)
+
+  // Small line under the deposit badge: when and where the money landed, or that it is still in transit
+  const renderDepositInfo = (sale: SalesItem) => {
+    const isDeposited =
+      (sale.depositStatus || sale.deposit_status) === 'Deposited'
+    if (isDeposited) {
+      const bank = sale.bankName || (sale.bankAccountId ? bankLabel(sale.bankAccountId) : '')
+      return (
+        <span className="block mt-1 text-[10px] font-medium text-emerald-700">
+          {tableTab === 'Deposit' ? '' : 'Deposited '}
+          {formatDisplayDate(getDepositDay(sale))}
+          {bank && bank !== 'No bank' ? ` (${bank})` : ''}
+        </span>
+      )
+    }
+    // Paid but not yet in the bank (e.g. GCash waiting to be swept)
+    if (sale.payment_status === 'Paid') {
+      return <span className="block mt-1 text-[10px] font-medium text-amber-700">In transit</span>
+    }
+    return null
+  }
+
+  const sortNewestFirst = (list: SalesItem[], getDay: (s: SalesItem) => string) =>
+    [...list].sort((a, b) => {
+      const cmp = getDay(b).localeCompare(getDay(a))
+      if (cmp !== 0) return cmp
+      return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
+    })
+
+  const baseFilteredSales = React.useMemo(
+    () =>
+      sortNewestFirst(
+        preDateFilteredSales.filter((item) =>
+          isDateInRange(item.rawDate || item.date, dateRange.startDate, dateRange.endDate)
+        ),
+        getSaleDay
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [preDateFilteredSales, dateRange]
+  )
 
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Sales Record') for Table & Chart
   const filteredSales = React.useMemo(() => {
     if (tableTab === 'Deposit') {
-      return baseFilteredSales.filter((item) => getRealizedCash(item) > 0)
+      // Deposit tab follows the bank passbook: ranged, sorted and grouped by deposit date
+      return sortNewestFirst(
+        preDateFilteredSales.filter(
+          (item) =>
+            getRealizedCash(item) > 0 &&
+            isDateInRange(getDepositDay(item), dateRange.startDate, dateRange.endDate)
+        ),
+        getDepositDay
+      )
     }
     return baseFilteredSales
-  }, [baseFilteredSales, tableTab, getRealizedCash])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseFilteredSales, preDateFilteredSales, dateRange, tableTab, getRealizedCash])
+
+  // Daily grouped sales for Daily Summary subtab view
+  const dailySalesGroups = React.useMemo(() => {
+    return groupTransactionsByDate(filteredSales, {
+      getDate: (s) => (tableTab === 'Deposit' ? getDepositDay(s) : s.rawDate || s.date),
+      getGrossAmount: (s) => (tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit),
+      getRealizedCash: (s) => getRealizedCashForSale(s),
+      getAuditStatus: (s) => s.auditStatus,
+    }) // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredSales, tableTab])
+
+  const totalDailyPages = Math.max(1, Math.ceil(dailySalesGroups.length / ITEMS_PER_PAGE))
+  const paginatedDailyGroups = React.useMemo(() => {
+    const start = (dailyPage - 1) * ITEMS_PER_PAGE
+    return dailySalesGroups.slice(start, start + ITEMS_PER_PAGE)
+  }, [dailySalesGroups, dailyPage])
+
+  // Day remarks: one note per company, per date (sales). Supervisors and Finance can edit.
+  const dayRemarkCompanies = React.useMemo(
+    () => paginatedDailyGroups.flatMap((g) => g.items.map((item) => item.company)),
+    [paginatedDailyGroups]
+  )
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    'sales',
+    dayRemarkCompanies
+  )
+  const canEditDayRemark =
+    isFinance || userRole === 'supervisor' || userRole === 'company'
 
   // Reset to page 1 on filter change
   React.useEffect(() => {
     setCurrentPage(1)
+    setDailyPage(1)
   }, [
     dateRange,
     searchQuery,
@@ -676,6 +906,7 @@ export const SalesPage: React.FC = () => {
     selectedCompany,
     selectedPeriod,
     tableTab,
+    subTab,
   ])
 
   // KPI Calculation: Total Sales & Total Cash (AC-5: includes partial & full payments without double-counting)
@@ -700,6 +931,11 @@ export const SalesPage: React.FC = () => {
     if (tableTab === 'Deposit') return 'Paid'
     return 'All'
   }, [statusFilter, tableTab])
+
+  // Deposit tab is paid by definition, so a leftover "Paid" filter is dropped
+  React.useEffect(() => {
+    if (tableTab === 'Deposit' && statusFilter === 'Paid') setStatusFilter('All')
+  }, [tableTab, statusFilter])
 
   // Pagination calculation
   const totalPages = Math.ceil(filteredSales.length / ITEMS_PER_PAGE) || 1
@@ -727,15 +963,26 @@ export const SalesPage: React.FC = () => {
   const companyForExport = isCompanyScoped ? assignedCompany : selectedCompany
 
   const handleExportCsv = () => {
-    salesService.exportCsv(
-      filteredSales,
-      `sales_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
-    )
+    if (subTab === 'Daily Summary') {
+      salesService.exportDailySummaryCsv(
+        dailySalesGroups,
+        `sales_daily_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    } else {
+      salesService.exportCsv(
+        filteredSales,
+        `sales_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    }
     setIsExportDropdownOpen(false)
   }
 
   const handleExportPdf = () => {
-    salesService.exportPdf(filteredSales, companyForExport)
+    if (subTab === 'Daily Summary') {
+      salesService.exportDailySummaryPdf(dailySalesGroups, companyForExport)
+    } else {
+      salesService.exportPdf(filteredSales, companyForExport)
+    }
     setIsExportDropdownOpen(false)
   }
 
@@ -975,7 +1222,9 @@ export const SalesPage: React.FC = () => {
                       : 'absolute right-0 top-full mt-2 w-44'
                   )}
                 >
-                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const).map((st) => (
+                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const)
+                    .filter((st) => !(tableTab === 'Deposit' && st === 'Paid'))
+                    .map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -1146,6 +1395,12 @@ export const SalesPage: React.FC = () => {
               </div>
             )}
 
+            <BankFilterSelect
+              accounts={bankOptions}
+              value={selectedBankId}
+              onChange={setSelectedBankId}
+            />
+
             {/* Dynamic Tab Switcher: Deposit / Sales Record (Drives Chart & Table below; KPIs above remain independent) */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
               <button
@@ -1179,8 +1434,8 @@ export const SalesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Three Numbers Kept Separate: Total Sales, Cash Collected & Outstanding Utang Side by Side */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* 3. KPI Cards: Total Sales & Cash Collected Side by Side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* 1. Total Sales (date) = all sales that day/period, paid and unpaid */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
@@ -1206,11 +1461,11 @@ export const SalesPage: React.FC = () => {
           </div>
         </Card>
 
-        {/* 2. Cash Collected (date) = payments received that day/period, including payments on old utang */}
+        {/* 2. Cash Collected (date) = total cash deposited into bank for the period */}
         <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-semibold text-muted-fg block">
-              Cash Collected
+              Total Cash (Deposited)
             </span>
             {loading ? (
               <CardSkeleton inline={true} />
@@ -1220,7 +1475,7 @@ export const SalesPage: React.FC = () => {
                   {formatPHP(kpis.totalCash)}
                 </h3>
                 <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Cash collected today & on settled utang
+                  Total cash deposited to bank for {dateRange.label || 'selected period'}
                 </p>
               </>
             )}
@@ -1228,44 +1483,6 @@ export const SalesPage: React.FC = () => {
 
           <div className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs">
             <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
-          </div>
-        </Card>
-
-        {/* 3. Outstanding Utang = sum of all unpaid balances */}
-        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40 group">
-          <div className="w-full max-w-[calc(100%-60px)]">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-muted-fg block">
-                Outstanding Utang
-              </span>
-              <button
-                type="button"
-                onClick={() => navigate('/receivables')}
-                className="inline-flex items-center text-[10px] font-bold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
-              >
-                View Ledger &rarr;
-              </button>
-            </div>
-            {loading ? (
-              <CardSkeleton inline={true} />
-            ) : (
-              <>
-                <h3 className="text-xl sm:text-2xl font-bold text-focus mt-1 tabular-nums tracking-tight">
-                  {formatPHP(receivablesKpis.totalOutstanding)}
-                </h3>
-                <p className="text-2xs sm:text-xs text-muted-fg font-normal mt-0.5 truncate">
-                  Ext: {formatPHP(receivablesKpis.totalExternalUtang)} &bull; Staff: {formatPHP(receivablesKpis.totalStaffUtang)}
-                </p>
-              </>
-            )}
-          </div>
-
-          <div
-            onClick={() => navigate('/receivables')}
-            className="h-11 w-11 sm:h-12 sm:w-12 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-focus shrink-0 shadow-2xs cursor-pointer group-hover:bg-slate-200 transition-colors"
-            title="Open Receivables Page"
-          >
-            <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
           </div>
         </Card>
       </div>
@@ -1297,7 +1514,7 @@ export const SalesPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Dynamic Tab Context Banner */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 mb-2 border-b border-slate-100">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-2 border-b border-slate-100">
           <div className="flex items-center gap-2.5 flex-wrap">
             <span
               className={cn(
@@ -1319,6 +1536,34 @@ export const SalesPage: React.FC = () => {
                 </>
               )}
             </span>
+
+            {/* Subtab Toggle Switcher: Daily Summary vs All Transactions */}
+            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-0.5 gap-0.5">
+              <button
+                type="button"
+                onClick={() => setSubTab('Daily Summary')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'Daily Summary'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
+              >
+                Daily Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubTab('All Transactions')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'All Transactions'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
+              >
+                All Transactions
+              </button>
+            </div>
 
             {statusFilter !== 'All' && (
               <span
@@ -1345,48 +1590,406 @@ export const SalesPage: React.FC = () => {
           </div>
 
           <span className="text-xs text-muted-fg font-medium">
-            {filteredSales.length}{' '}
-            {tableTab === 'Deposit' ? 'deposit' : 'sales'}{' '}
-            {filteredSales.length === 1 ? 'record' : 'records'} shown
+            {subTab === 'Daily Summary'
+              ? `${dailySalesGroups.length} ${dailySalesGroups.length === 1 ? 'day' : 'days'} (${filteredSales.length} total records)`
+              : `${filteredSales.length} ${tableTab === 'Deposit' ? 'deposit' : 'sales'} ${filteredSales.length === 1 ? 'record' : 'records'} shown`}
           </span>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        {subTab === 'Daily Summary' ? (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
+            <Table className="w-full table-fixed min-w-[1000px]">
+              <colgroup>
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
+              </colgroup>
+              <TableHeader>
+                <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    SALES DATE & DAY
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    TRANSACTIONS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    {tableTab === 'Deposit' ? 'TOTAL DEPOSITED' : 'GROSS SALES'}
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    REALIZED CASH
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DAY REMARK
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    AUDIT STATUS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    DRILLDOWN
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableSkeleton rows={5} columns={7} />
+                ) : paginatedDailyGroups.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={7}
+                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
+                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
+                        </div>
+                        <p className="font-semibold text-focus text-sm sm:text-base">
+                          No daily sales records found
+                        </p>
+                        <p className="text-xs text-muted-fg leading-relaxed">
+                          There are no sales transactions recorded for this period matching your filters.
+                        </p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedDailyGroups.map((group) => {
+                    const isExpanded = expandedDates.has(group.date)
+                    return (
+                      <React.Fragment key={group.date}>
+                        <TableRow
+                          onClick={() => toggleDateExpansion(group.date)}
+                          className={cn(
+                            'border-b border-slate-100 transition-colors cursor-pointer select-none',
+                            isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
+                          )}
+                        >
+                          <TableCell className="px-3.5 py-3.5 text-left">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-focus">{group.formattedDate}</span>
+                              <span className="text-2xs text-muted-fg font-medium">{group.dayOfWeek}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                              {group.transactionCount} {group.transactionCount === 1 ? 'record' : 'records'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-focus text-xs sm:text-sm">
+                            {formatPHP(group.grossTotal)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-emerald-600 text-xs sm:text-sm">
+                            {formatPHP(group.realizedCash)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                            <DayRemarkCell
+                              companyNames={group.items.map((item) => item.company)}
+                              date={group.date}
+                              formattedDate={group.formattedDate}
+                              kindLabel="Sales"
+                              canEdit={canEditDayRemark}
+                              getRemark={getDayRemark}
+                              onSave={saveDayRemark}
+                              entries={group.items.map((s) => ({
+                                id: s.id,
+                                ref: s.chequeNo || s.refNo,
+                                particulars: s.particulars,
+                                amount: tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit,
+                                status: s.status,
+                                depositStatus: s.depositStatus || s.deposit_status,
+                              }))}
+                            />
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-2xs font-bold border',
+                                group.auditStatus === 'All Verified'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : group.auditStatus === 'Discrepancy'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              )}
+                            >
+                              {group.auditStatus}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDateExpansion(group.date)
+                              }}
+                              className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
+                            >
+                              <span>{isExpanded ? 'Hide' : 'Show'}</span>
+                              {isExpanded ? (
+                                <ChevronDown className="w-3.5 h-3.5 transition-transform" />
+                              ) : (
+                                <ChevronRight className="w-3.5 h-3.5 transition-transform" />
+                              )}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Expandable Accordion Row */}
+                        {isExpanded && (
+                          <TableRow className="bg-slate-50/40 border-b border-slate-200">
+                            <TableCell colSpan={7} className="p-3 sm:p-4">
+                              <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+                                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-focus">
+                                      Transactions on {group.formattedDate}
+                                    </span>
+                                    <span className="text-2xs text-muted-fg font-medium">
+                                      ({group.items.length} total)
+                                    </span>
+                                  </div>
+                                  <div className="text-2xs text-muted-fg">
+                                    Inspect, edit, delete, or audit individual day records
+                                  </div>
+                                </div>
+                                {(() => {
+                                  const byBank = new Map<string, { count: number; total: number }>()
+                                  group.items.forEach((it) => {
+                                    const key = String(it.bankAccountId || '')
+                                    const entry = byBank.get(key) || { count: 0, total: 0 }
+                                    entry.count += 1
+                                    entry.total += (tableTab === 'Deposit' ? getRealizedCashForSale(it) : it.deposit)
+                                    byBank.set(key, entry)
+                                  })
+                                  return (
+                                    <div className="px-4 py-3 border-b border-slate-200 bg-white">
+                                      <p className="text-2xs font-bold uppercase tracking-wider text-muted-fg mb-2">By bank</p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {Array.from(byBank.entries()).map(([key, v]) => (
+                                          <div
+                                            key={key || 'none'}
+                                            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs"
+                                          >
+                                            <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
+                                            <span className="font-semibold text-focus">{bankLabel(key)}</span>
+                                            <span className="text-muted-fg">{v.count} {v.count === 1 ? 'record' : 'records'}</span>
+                                            <span className="font-bold tabular-nums text-focus">{formatPHP(v.total)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
+                                      <tr>
+                                        <th className="px-3 py-2 font-bold">Cheque / Ref</th>
+                                        {showCompanyColumn && <th className="px-3 py-2 font-bold">Company</th>}
+                                        <th className="px-3 py-2 font-bold">Particulars</th>
+                                        <th className="px-3 py-2 font-bold text-center">Payment Status</th>
+                                        <th className="px-3 py-2 font-bold text-center">Deposit Status</th>
+                                        <th className="px-3 py-2 font-bold">Payment Method</th>
+                                        <th className="px-3 py-2 font-bold text-right">Amount</th>
+                                        <th className="px-3 py-2 font-bold text-center">Audit Status</th>
+                                        <th className="px-3 py-2 font-bold text-center">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {group.items.map((sale) => (
+                                        <tr key={sale.id} className="hover:bg-slate-50/60 transition-colors">
+                                          <td className="px-3 py-2 font-mono text-xs text-focus font-medium">
+                                            {sale.chequeNo || sale.refNo}
+                                          </td>
+                                          {showCompanyColumn && (
+                                            <td className="px-3 py-2 text-focus font-medium">
+                                              {sale.company}
+                                            </td>
+                                          )}
+                                          <td className="px-3 py-2 text-focus max-w-[260px]">
+                                            <p className="truncate font-medium">{sale.particulars}</p>
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                                                sale.status === 'Paid'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                  : sale.status === 'Pending'
+                                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                                  : 'bg-rose-50 text-rose-700 border-rose-300'
+                                              )}
+                                            >
+                                              {sale.status}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
+                                            {canAdd &&
+                                            sale.auditStatus !== 'Verified' &&
+                                            sale.payment_status === 'Paid' ? (
+                                              <select
+                                                value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                                onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
+                                                className={cn(
+                                                  'px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase cursor-pointer focus:outline-none focus:ring-1 transition-all',
+                                                  (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:ring-emerald-500'
+                                                    : 'bg-slate-100 text-slate-700 border-slate-300 focus:ring-slate-400'
+                                                )}
+                                              >
+                                                <option value="Deposited">Deposited</option>
+                                                <option value="Not Deposited">Not Deposited</option>
+                                              </select>
+                                            ) : (
+                                              <span
+                                                title={
+                                                  sale.payment_status === 'Unpaid' || sale.payment_status === 'Pending'
+                                                    ? 'Deposit status is read only for Unpaid or Pending transactions'
+                                                    : undefined
+                                                }
+                                                className={cn(
+                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase select-none',
+                                                  (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                    : 'bg-slate-100 text-slate-700 border-slate-300'
+                                                )}
+                                              >
+                                                {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                                              </span>
+                                            )}
+                                            {renderDepositInfo(sale)}
+                                          </td>
+                                          <td className="px-3 py-2 text-muted-fg font-medium">
+                                            {sale.paymentMethod || 'Cash'}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-bold tabular-nums text-focus">
+                                            {formatPHP(tableTab === 'Deposit' ? getRealizedCashForSale(sale) : sale.deposit)}
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold border',
+                                                sale.auditStatus === 'Verified'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                  : sale.auditStatus === 'Flagged'
+                                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                  : 'bg-slate-100 text-muted-fg border-slate-200'
+                                              )}
+                                            >
+                                              {sale.auditStatus}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <div className="flex items-center justify-center gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => setSelectedSale(sale)}
+                                                className="p-1 text-slate-500 hover:text-focus hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                                title="View Details"
+                                              >
+                                                <Eye className="w-3.5 h-3.5" />
+                                              </button>
+                                              {canAdd && sale.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    navigate('/sales/add', {
+                                                      state: { editSale: sale },
+                                                    })
+                                                  }
+                                                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Edit Record"
+                                                >
+                                                  <Pencil className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAdd && sale.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setDeleteConfirmSale(sale)}
+                                                  className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Delete Record"
+                                                >
+                                                  <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAuditActions && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setSelectedTx(salesService.toDashboardTransaction(sale))
+                                                    setIsAuditModalOpen(true)
+                                                  }}
+                                                  className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Audit Transaction"
+                                                >
+                                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full table-fixed min-w-[940px]">
             <colgroup>
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '21%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: showCompanyColumn ? '10%' : '11%' }} />
+              {showCompanyColumn && <col style={{ width: '12%' }} />}
+              <col style={{ width: '9%' }} />
+              <col style={{ width: showCompanyColumn ? '16%' : '18%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: '9%' }} />
+              <col style={{ width: showCompanyColumn ? '7%' : '9%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  DATE
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  SALES DATE
                 </TableHead>
-                <TableHead className="w-[15%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  COMPANY
-                </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                {showCompanyColumn && (
+                  <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    COMPANY
+                  </TableHead>
+                )}
+                <TableHead className="w-[9%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
                 </TableHead>
-                <TableHead className="w-[21%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[16%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  DEPOSIT STATUS
+                </TableHead>
+                <TableHead className="w-[9%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   {tableTab === 'Deposit' ? 'DEPOSITED' : 'DEPOSIT'}
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[9%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[9%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
-                <TableHead className="w-[8%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[7%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1394,11 +1997,11 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={8} />
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 9 : 8} />
               ) : paginatedSales.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={8}
+                    colSpan={showCompanyColumn ? 9 : 8}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1459,7 +2062,9 @@ export const SalesPage: React.FC = () => {
                       <TableCell className="w-[12%] px-3.5 py-3.5 text-xs font-medium text-focus truncate text-left">
                         <div className="flex flex-col truncate">
                           <div className="flex items-center gap-1.5 truncate">
-                            <span>{sale.date}</span>
+                            <span>
+                              {tableTab === 'Deposit' ? formatDisplayDate(getDepositDay(sale)) : sale.date}
+                            </span>
                             {highlightedSaleId === sale.id && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#960C01] text-white shadow-xs animate-bounce shrink-0">
                                 NEW
@@ -1472,6 +2077,14 @@ export const SalesPage: React.FC = () => {
                               title={`Created at ${formatCreatedAt(sale.createdAt)}`}
                             >
                               {createdAtTime}
+                            </span>
+                          )}
+                          {tableTab === 'Deposit' && (
+                            <span
+                              className="text-[10px] text-muted-fg mt-0.5"
+                              title="The day the sale happened"
+                            >
+                              From {formatDisplayDate(getSaleDay(sale))} sales
                             </span>
                           )}
                           {sale.auditStatus &&
@@ -1501,15 +2114,17 @@ export const SalesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Company */}
-                      <TableCell
-                        className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
-                        title={sale.company}
-                      >
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="truncate">{sale.company}</span>
-                        </div>
-                      </TableCell>
+                      {showCompanyColumn && (
+                        <TableCell
+                          className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
+                          title={sale.company}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                            <span className="truncate">{sale.company}</span>
+                          </div>
+                        </TableCell>
+                      )}
 
                       {/* 3. Cheque No */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-xs text-focus/90 truncate font-mono text-left">
@@ -1580,8 +2195,49 @@ export const SalesPage: React.FC = () => {
                         </div>
                       </TableCell>
 
+                      {/* 4b. Deposit Status */}
+                      <TableCell
+                        className="w-[11%] px-3.5 py-3.5 text-xs text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {canAdd &&
+                        sale.auditStatus !== 'Verified' &&
+                        sale.payment_status === 'Paid' ? (
+                          <select
+                            value={sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                            onChange={(e) => handleDepositStatusChange(sale, e.target.value as 'Deposited' | 'Not Deposited')}
+                            className={cn(
+                              'px-2.5 py-1 rounded-full text-2xs font-bold border tracking-wide uppercase cursor-pointer focus:outline-none focus:ring-1 transition-all',
+                              (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:ring-emerald-500'
+                                : 'bg-slate-100 text-slate-700 border-slate-300 focus:ring-slate-400'
+                            )}
+                          >
+                            <option value="Deposited">Deposited</option>
+                            <option value="Not Deposited">Not Deposited</option>
+                          </select>
+                        ) : (
+                          <span
+                            title={
+                              sale.payment_status === 'Unpaid' || sale.payment_status === 'Pending'
+                                ? 'Deposit status is read only for Unpaid or Pending transactions'
+                                : undefined
+                            }
+                            className={cn(
+                              'inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase select-none',
+                              (sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                : 'bg-slate-100 text-slate-700 border-slate-300'
+                            )}
+                          >
+                            {sale.depositStatus || (sale.payment_status === 'Paid' ? 'Deposited' : 'Not Deposited')}
+                          </span>
+                        )}
+                        {renderDepositInfo(sale)}
+                      </TableCell>
+
                       {/* 5. Deposit */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-left tabular-nums whitespace-nowrap text-emerald-600">
+                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-emerald-600">
                         {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
                       </TableCell>
 
@@ -1608,88 +2264,51 @@ export const SalesPage: React.FC = () => {
                       </TableCell>
 
                       {/* 7. Net Amount */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-left tabular-nums whitespace-nowrap text-focus">
+                      <TableCell className="w-[9%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
                       </TableCell>
 
-                      {/* 8. Actions */}
+                      {/* 8. Actions (3-dots menu) */}
                       <TableCell
-                        className="w-[8%] px-3.5 py-3.5 text-center whitespace-nowrap"
+                        className="w-[7%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-center gap-1">
-                          {canAuditActions ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (openMenuSaleId === sale.id) {
-                                  setOpenMenuSaleId(null)
-                                  setMenuPosition(null)
-                                  setActiveMenuSale(null)
-                                } else {
-                                  const rect =
-                                    e.currentTarget.getBoundingClientRect()
-                                  const openUpward =
-                                    rect.bottom + 140 > window.innerHeight
-                                  setMenuPosition({
-                                    top: openUpward
-                                      ? rect.top - 6
-                                      : rect.bottom + 6,
-                                    right: Math.max(
-                                      12,
-                                      window.innerWidth - rect.right
-                                    ),
-                                    openUpward,
-                                  })
-                                  setActiveMenuSale(sale)
-                                  setOpenMenuSaleId(sale.id)
-                                }
-                              }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                              title="Audit Actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          ) : isOwner ? (
-                            <span className="text-muted-fg text-xs">—</span>
-                          ) : sale.auditStatus === 'Verified' ? (
-                            <span
-                              className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
-                              title="Audited by auditor (locked from editing)"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          ) : (
-                            <>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  navigate('/sales/add', {
-                                    state: { editSale: sale },
-                                  })
-                                }
-                                className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                                title="Edit Sale & Particulars"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleteConfirmSale(sale)}
-                                className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                                title="Delete Sale"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuSaleId === sale.id) {
+                                setOpenMenuSaleId(null)
+                                setMenuPosition(null)
+                                setActiveMenuSale(null)
+                              } else {
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const openUpward =
+                                  rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward
+                                    ? rect.top - 6
+                                    : rect.bottom + 6,
+                                  right: Math.max(
+                                    12,
+                                    window.innerWidth - rect.right
+                                  ),
+                                  openUpward,
+                                })
+                                setActiveMenuSale(sale)
+                                setOpenMenuSaleId(sale.id)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Actions"
+                            aria-label="Open actions menu"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1699,47 +2318,102 @@ export const SalesPage: React.FC = () => {
             </TableBody>
           </Table>
         </div>
+        )}
 
         {/* 6. Pagination Footer */}
         <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredSales.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
-          </span>
+          {subTab === 'Daily Summary' ? (
+            <>
+              <span className="font-medium text-focus/80">
+                {dailySalesGroups.length === 0
+                  ? 'Showing 0 of 0 days'
+                  : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailySalesGroups.length)} of ${dailySalesGroups.length} days`}
+              </span>
 
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {dailyPage} out of {totalDailyPages}
+                </span>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage <= 1}
+                  onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous day page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage >= totalDailyPages}
+                  onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next day page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-focus/80">
+                {filteredSales.length === 0
+                  ? 'Showing 0 of 0 records'
+                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
+              </span>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {currentPage} out of {totalPages}
+                </span>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Card>
 
+
+      {/* Deposit date + bank prompt when marking a sale as Deposited */}
+      <DepositDateDialog
+        sale={depositDialogSale}
+        accounts={allBankAccounts}
+        onClose={() => setDepositDialogSale(null)}
+        onConfirm={async (depositDate, bankAccountId) => {
+          if (!depositDialogSale) return
+          await applyDepositStatus(depositDialogSale, 'Deposited', depositDate, bankAccountId)
+          setDepositDialogSale(null)
+        }}
+      />
 
       {/* Add Sales Modal */}
       <AddSalesModal
@@ -1751,61 +2425,28 @@ export const SalesPage: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {!isAdmin && (
-        <Dialog
-          open={!!deleteConfirmSale}
+        <ConfirmModal
+          open={Boolean(deleteConfirmSale)}
           onOpenChange={(open) => !open && setDeleteConfirmSale(null)}
-        >
-          <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-            <DialogHeader>
-              <div className="w-10 h-10 rounded-xl bg-red-100 text-red-600 flex items-center justify-center mb-2">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <DialogTitle className="text-lg font-bold text-focus">
-                Delete Sale Record
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg mt-1">
-                Are you sure you want to delete this sale entry{' '}
-                <strong className="text-focus">
-                  {deleteConfirmSale?.particulars}
-                </strong>{' '}
-                ({deleteConfirmSale?.refNo}) for{' '}
-                <strong className="text-focus">
-                  {deleteConfirmSale?.deposit
-                    ? formatPHP(deleteConfirmSale.deposit)
-                    : ''}
-                </strong>
-                ? This action cannot be undone.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDeleteConfirmSale(null)}
-                disabled={isDeleting}
-                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                className="h-9 px-5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-              >
-                {isDeleting ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    Deleting…
-                  </>
-                ) : (
-                  'Delete'
-                )}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+          title="Delete Sale Record"
+          description={
+            <>
+              Are you sure you want to delete this sale entry{' '}
+              <strong className="text-focus">{deleteConfirmSale?.particulars}</strong> (
+              {deleteConfirmSale?.refNo}) for{' '}
+              <strong className="text-focus">
+                {deleteConfirmSale?.deposit ? formatPHP(deleteConfirmSale.deposit) : ''}
+              </strong>
+              ? This action cannot be undone.
+            </>
+          }
+          confirmLabel="Delete"
+          loadingLabel="Deleting…"
+          variant="destructive"
+          action="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDelete}
+        />
       )}
 
       {/* Transaction Details & Audit Modal */}
@@ -1825,14 +2466,14 @@ export const SalesPage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* 3-Dots Action Portal Menu for Audit */}
+      {/* 3-Dots Action Portal Menu */}
       {openMenuSaleId &&
         activeMenuSale &&
         menuPosition &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-44 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-48 bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -1843,26 +2484,6 @@ export const SalesPage: React.FC = () => {
           >
             <button
               type="button"
-              onClick={(e) =>
-                handleMarkSaleAudit(activeMenuSale, 'Verified', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Mark as Audit</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) => handleMarkSaleAudit(activeMenuSale, 'Flagged', e)}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Mark as Discrepancy</span>
-            </button>
-
-            <button
-              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 const s = activeMenuSale
@@ -1871,14 +2492,107 @@ export const SalesPage: React.FC = () => {
                 setActiveMenuSale(null)
                 if (s) handleOpenRow(s)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkSaleAudit(activeMenuSale, 'Verified', e)
+                  }
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{activeMenuSale.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => handleMarkSaleAudit(activeMenuSale, 'Flagged', e)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isAdmin && !isOwner ? (
+              activeMenuSale.auditStatus === 'Verified' ? (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium text-emerald-700 bg-emerald-50/70 border-t border-slate-100 mt-1">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Locked (Audited)</span>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const s = activeMenuSale
+                      setOpenMenuSaleId(null)
+                      setMenuPosition(null)
+                      setActiveMenuSale(null)
+                      if (s) {
+                        navigate('/sales/add', {
+                          state: { editSale: s },
+                        })
+                      }
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                    <span>Edit</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const s = activeMenuSale
+                      setOpenMenuSaleId(null)
+                      setMenuPosition(null)
+                      setActiveMenuSale(null)
+                      if (s) setDeleteConfirmSale(s)
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Delete</span>
+                  </button>
+                </>
+              )
+            ) : null}
           </div>,
           document.body
         )}
+
+      {/* Toast Notification */}
+      {toast && (
+        <div
+          className={cn(
+            'fixed bottom-6 right-6 z-50 p-4 rounded-2xl text-white shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 duration-200 max-w-md',
+            toast.type === 'error' ? 'bg-rose-700' : 'bg-emerald-700'
+          )}
+        >
+          {toast.type === 'error' ? (
+            <AlertCircle className="w-5 h-5 text-rose-200 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-emerald-200 shrink-0" />
+          )}
+          <span className="text-xs sm:text-sm font-semibold">{toast.message}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="p-1 rounded-lg hover:bg-white/20 text-white ml-2 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   )
 }

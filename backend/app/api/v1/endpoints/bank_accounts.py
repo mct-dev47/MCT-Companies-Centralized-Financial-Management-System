@@ -1,4 +1,5 @@
 from typing import List, Optional
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
@@ -26,6 +27,37 @@ from app.services.bank_service import BankService
 from app.core.websocket import ws_manager
 
 router = APIRouter()
+
+def _sanitize_value_error(msg: str, fallback: str) -> str:
+    lower = msg.lower()
+    suspicious_tokens = ["traceback", "sql", "password", "secret", "select ", "insert ", "update ", "delete ", "c:\\", "/var/", "/usr/", "/etc/"]
+    if any(tok in lower for tok in suspicious_tokens) or re.search(r"[/\\].+[/\\].", msg):
+        return fallback
+    return msg
+
+
+def _check_any_owner_access(db: Session, current_user, account) -> None:
+    """Allow access when the user may access ANY owner company of the account; re-raise the last denial otherwise."""
+    owners = [n for n in (account.company_names or [account.company_name]) if n and str(n).strip()]
+    if not owners:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: account has no associated company.",
+        )
+    last_exc: Optional[HTTPException] = None
+    for name in owners:
+        try:
+            comp = resolve_company(db, company_name=name)
+            check_company_access(current_user, comp.company_id)
+            return
+        except HTTPException as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied to bank account.",
+    )
 
 
 @router.get("", response_model=List[BankAccountOut], summary="List corporate bank accounts")
@@ -57,7 +89,7 @@ def list_bank_accounts(
     }
     return [
         a for a in accounts
-        if (getattr(a, "company_name", None) or getattr(a, "company", "") or "").lower() in assigned_names
+        if any(n.lower() in assigned_names for n in (a.company_names or [getattr(a, "company", "") or ""]))
     ]
 
 
@@ -75,8 +107,7 @@ def get_bank_account(
     user_role = (current_user.get("role") or "").lower()
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if user_role not in ("finance", "audit", "auditor") and comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
 
     return account
 
@@ -108,7 +139,12 @@ def update_bank_account(
     db: Session = Depends(get_db),
 ):
     service = BankService(db)
-    account = service.update_account(account_id, data)
+    try:
+        account = service.update_account(account_id, data)
+    except ValueError as e:
+        db.rollback()
+        msg = _sanitize_value_error(str(e), "Invalid bank account parameters.")
+        raise HTTPException(status_code=400, detail=msg)
     if not account:
         raise HTTPException(status_code=404, detail="Bank account not found.")
     ws_manager.broadcast_sync({
@@ -160,8 +196,10 @@ def deposit_to_bank_account(
         raise HTTPException(status_code=404, detail="Bank account not found.")
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
+    if req.company_name:
+        req_comp = resolve_company(db, company_name=req.company_name)
+        check_company_access(current_user, req_comp.company_id)
 
     try:
         updated_account, tx = service.deposit(account_id, req)
@@ -176,7 +214,8 @@ def deposit_to_bank_account(
         })
         return updated_account
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = _sanitize_value_error(str(e), "Invalid deposit parameters.")
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post("/{account_id}/withdraw", response_model=BankAccountOut, summary="Record a withdrawal from bank account")
@@ -192,8 +231,10 @@ def withdraw_from_bank_account(
         raise HTTPException(status_code=404, detail="Bank account not found.")
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
     if comp_name:
-        comp = resolve_company(db, company_name=comp_name)
-        check_company_access(current_user, comp.company_id)
+        _check_any_owner_access(db, current_user, account)
+    if req.company_name:
+        req_comp = resolve_company(db, company_name=req.company_name)
+        check_company_access(current_user, req_comp.company_id)
 
     try:
         updated_account, tx = service.withdraw(account_id, req)
@@ -208,4 +249,5 @@ def withdraw_from_bank_account(
         })
         return updated_account
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = _sanitize_value_error(str(e), "Invalid withdrawal parameters.")
+        raise HTTPException(status_code=400, detail=msg)

@@ -3,10 +3,12 @@ import {
   Search,
   Building2,
   X,
+  ArrowUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ErrorBanner } from '@/components/common'
+import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { CreateCompanyModal } from '@/components/employee/CreateCompanyModal'
 import { ViewCompanyModal } from '@/components/employee/ViewCompanyModal'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,8 +22,17 @@ import {
 } from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
+type SortOption = 'recent' | 'asc' | 'desc'
+
+const SORT_OPTIONS: DropdownFilterOption<SortOption>[] = [
+  { value: 'recent', label: 'Recently Added' },
+  { value: 'asc', label: 'A-Z' },
+  { value: 'desc', label: 'Z-A' },
+]
+
 export const EmployeePage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
+  const [sortBy, setSortBy] = React.useState<SortOption>('asc')
 
   // Companies data state
   const [companies, setCompanies] = React.useState<Company[]>([])
@@ -72,7 +83,7 @@ export const EmployeePage: React.FC = () => {
     document.title = 'Company Management - MCT Centralized Financial System'
   }, [])
 
-  // Filtered companies based on search, sorted alphabetically by default
+  // Filtered and sorted companies
   const filteredCompanies = React.useMemo(() => {
     let result = [...companies]
 
@@ -87,36 +98,46 @@ export const EmployeePage: React.FC = () => {
       )
     }
 
-    return result.sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
-    )
-  }, [companies, searchQuery])
+    return result.sort((a, b) => {
+      if (sortBy === 'asc') {
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+      }
+      if (sortBy === 'desc') {
+        return b.name.localeCompare(a.name, undefined, { sensitivity: 'base', numeric: true })
+      }
+      // 'recent': newest created first
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0
+      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
+        return timeB - timeA
+      }
+      return Number(b.id) - Number(a.id)
+    })
+  }, [companies, searchQuery, sortBy])
 
   const handleCardClickCompany = (comp: Company) => {
     setSelectedCompany(comp)
     setIsViewCompanyOpen(true)
   }
 
-  const handleCompanyCreated = (newCompany: Company) => {
-    setCompanies((prev) => [newCompany, ...prev])
+  const handleCompanyCreated = async (newCompany: Company) => {
+    await loadData()
     const msg = `Company "${newCompany.name}" has been created successfully.`
     setSuccessBanner(msg)
     notifySuccess(msg)
   }
 
-  const handleCompanyUpdated = (updated: Company) => {
-    setCompanies((prev) =>
-      prev.map((c) => (c.id === updated.id ? updated : c))
-    )
+  const handleCompanyUpdated = async (updated: Company) => {
+    await loadData()
     setSelectedCompany(updated)
     const msg = `Company "${updated.name}" updated successfully.`
     setSuccessBanner(msg)
     notifySuccess(msg)
   }
 
-  const handleCompanyDeleted = (companyId: string) => {
+  const handleCompanyDeleted = async (companyId: string) => {
     const deletedName = companies.find((c) => c.id === companyId)?.name || 'Company'
-    setCompanies((prev) => prev.filter((c) => c.id !== companyId))
+    await loadData()
     const msg = `"${deletedName}" has been removed from companies.`
     setSuccessBanner(msg)
     notifySuccess(msg)
@@ -162,9 +183,9 @@ export const EmployeePage: React.FC = () => {
         isRetrying={loading}
       />
 
-      {/* Filters Toolbar - Extended full-width search bar */}
-      <div className="w-full">
-        <div className="relative w-full">
+      {/* Filters Toolbar - Search bar and Sort Filter */}
+      <div className="flex flex-col sm:flex-row items-center gap-3 w-full">
+        <div className="relative flex-1 w-full">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
           <Input
             type="text"
@@ -183,6 +204,18 @@ export const EmployeePage: React.FC = () => {
               <X className="h-4 w-4" />
             </button>
           )}
+        </div>
+
+        <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+          <DropdownFilter
+            value={sortBy}
+            options={SORT_OPTIONS}
+            onChange={(val) => setSortBy(val as SortOption)}
+            icon={ArrowUpDown}
+            menuTitle="Sort By"
+            className="h-11 sm:h-12 rounded-2xl bg-white border border-stroke/50 shadow-xs"
+            ariaLabel="Sort companies"
+          />
         </div>
       </div>
 

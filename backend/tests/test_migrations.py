@@ -73,7 +73,11 @@ class TestMigrations(unittest.TestCase):
         table_names = inspector.get_table_names()
         self.assertIn("user_invitations", table_names)
         self.assertIn("invitation_outbox", table_names)
+        self.assertIn("rate_limits", table_names)
+        self.assertIn("login_otp_challenges", table_names)
+        self.assertIn("user_sessions", table_names)
         self.assertIn("schema_migrations", table_names)
+        self.assertIn("0043_user_sessions", applied)
 
         # Verify indexes on invitation_outbox
         outbox_indexes = [idx["name"] for idx in inspector.get_indexes("invitation_outbox")]

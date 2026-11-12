@@ -38,6 +38,8 @@ class Sale(Base):
     company_id = Column(Integer, nullable=False, index=True)
     category_id = Column(Integer, ForeignKey("category.category_id", ondelete="SET NULL"), nullable=True)
     payment_method = Column(String(100), nullable=True)  # e.g. GCash, Cash, Cheque, Bank Transfer, etc.
+    payment_status = Column(String(50), nullable=False, default="Paid", server_default="Paid")
+    deposit_status = Column(String(50), nullable=False, default="Not Deposited", server_default="Not Deposited")
     transaction_date = Column(Date, nullable=False)
     cheque_no = Column("cheque_number", String(100), nullable=True)
     cheque_number = synonym("cheque_no")
@@ -50,6 +52,12 @@ class Sale(Base):
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
+    # Operational remarks (spec 0040): supervisor and finance notes
+    remarks = Column(Text, nullable=True)
+    # Bank account this sale is credited to (spec 0042)
+    bank_account_id = Column(String(100), nullable=True, index=True)
+    # Day the money reached the bank (spec 0043). transaction_date stays the day the sale happened.
+    deposit_date = Column(Date, nullable=True)
 
     category = relationship("Category", back_populates="sales")
 
@@ -78,6 +86,11 @@ class Expense(Base):
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
+    # Operational remarks (spec 0040): supervisor and finance notes
+    remarks = Column(Text, nullable=True)
+    # Bank account this expense is paid from (spec 0042)
+    bank_account_id = Column(String(100), nullable=True, index=True)
+    linked_topup_id = Column(Integer, ForeignKey("petty_cash_topups.topup_id", ondelete="SET NULL"), nullable=True, index=True)
 
     def __init__(self, **kwargs):
         if "particulars" in kwargs and "description" not in kwargs:

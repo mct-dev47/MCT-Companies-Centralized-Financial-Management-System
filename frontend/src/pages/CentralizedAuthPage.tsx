@@ -63,7 +63,7 @@ export const CentralizedAuthPage: React.FC = () => {
         commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
       }
       const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
-      if (role === 'supervisor' && assignedCount === 1) {
+      if (role === 'supervisor' && assignedCount <= 1) {
         navigate('/dashboard', { replace: true })
       }
     }

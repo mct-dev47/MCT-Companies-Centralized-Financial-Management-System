@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user
+from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user, require_reauthentication
 from app.db.session import get_db
 from app.models.company import Company
 from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLookupOut, CompanyOut, CompanyUpdate
@@ -205,7 +205,7 @@ async def create_company_with_picture(
     location: str = Form(...),
     contact_number: str | None = Form(None),
     phone: str | None = Form(None),
-    starting_balance: Decimal = Form(...),
+    starting_balance: Decimal = Form(Decimal("0.00")),
     petty_cash: Decimal = Form(Decimal("0.00")),
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -328,6 +328,7 @@ def delete_company(
     company_id: int,
     request: Request,
     admin: AdminUser,
+    _reauth: AuthenticatedUser = Depends(require_reauthentication),
     db: Session = Depends(get_db),
 ):
     try:

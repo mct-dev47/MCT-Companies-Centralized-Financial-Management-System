@@ -1,3 +1,4 @@
+import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import {
   TrendingDown,
@@ -21,12 +22,16 @@ import {
   MoreVertical,
   Eye,
   Pencil,
+  Landmark,
   Lock,
+  Loader2,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
 import {
   Table,
   TableHeader,
@@ -36,17 +41,11 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
-import {
   DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
+import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -74,6 +73,8 @@ import { useNavigate } from 'react-router-dom'
 import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 import { useCompany } from '@/context/CompanyContext'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from '@/components/dashboard/DayRemark'
 import { isCompanyMatch } from '@/utils/companyUtils'
 
 const DEFAULT_COMPANY_LIST = ['All Companies']
@@ -82,8 +83,9 @@ const PERIOD_OPTIONS = ['Daily', 'Monthly', 'Quarterly', 'Annually'] as const
 type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 
 import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
+import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
-import { notifyError, formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { notifyError } from '@/utils/errorUtils'
 
 const ITEMS_PER_PAGE = 10
 
@@ -98,6 +100,7 @@ export const ExpensePage: React.FC = () => {
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = isStrictlyCompanyScoped
+  const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -184,6 +187,21 @@ export const ExpensePage: React.FC = () => {
   const [tableTab, setTableTab] = React.useState<'Withdraw' | 'Expense Record'>(
     'Expense Record'
   )
+  const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('Daily Summary')
+  const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
+  const [dailyPage, setDailyPage] = React.useState(1)
+
+  const toggleDateExpansion = (dateKey: string) => {
+    setExpandedDates((prev) => {
+      const next = new Set(prev)
+      if (next.has(dateKey)) {
+        next.delete(dateKey)
+      } else {
+        next.add(dateKey)
+      }
+      return next
+    })
+  }
 
   // Dropdown menus
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
@@ -374,6 +392,13 @@ export const ExpensePage: React.FC = () => {
   }, [])
 
   // 1. Base filtered expenses (independent of Deposit / Expense Record tab so KPIs above stay constant)
+  const {
+    available: bankOptions,
+    selectedId: selectedBankId,
+    setSelectedId: setSelectedBankId,
+    bankLabel,
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
+
   const baseFilteredExpenses = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
 
@@ -383,6 +408,11 @@ export const ExpensePage: React.FC = () => {
           targetCompany !== 'All Companies' &&
           !isCompanyMatch(item.company, targetCompany)
         ) {
+          return false
+        }
+
+        // Bank filter ('' = All Banks)
+        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
           return false
         }
 
@@ -450,6 +480,7 @@ export const ExpensePage: React.FC = () => {
     searchQuery,
     isCompanyScoped,
     assignedCompany,
+    selectedBankId,
   ])
 
   // 2. Dynamic Tab Filtering ('Deposit' vs 'Expense Record')
@@ -462,8 +493,37 @@ export const ExpensePage: React.FC = () => {
     return baseFilteredExpenses
   }, [baseFilteredExpenses, tableTab])
 
+  // Daily grouped expenses for Daily Summary subtab view
+  const dailyExpenseGroups = React.useMemo(() => {
+    return groupTransactionsByDate(filteredExpenses, {
+      getDate: (e) => e.rawDate || e.date,
+      getGrossAmount: (e) => (tableTab === 'Withdraw' ? getPaidDisbursementForExpense(e) : e.withdrawal),
+      getRealizedCash: (e) => getPaidDisbursementForExpense(e),
+      getAuditStatus: (e) => e.auditStatus,
+    })
+  }, [filteredExpenses, tableTab])
+
+  const totalDailyPages = Math.max(1, Math.ceil(dailyExpenseGroups.length / ITEMS_PER_PAGE))
+  const paginatedDailyGroups = React.useMemo(() => {
+    const start = (dailyPage - 1) * ITEMS_PER_PAGE
+    return dailyExpenseGroups.slice(start, start + ITEMS_PER_PAGE)
+  }, [dailyExpenseGroups, dailyPage])
+
+  // Day remarks: one note per company, per date (expense). Supervisors and Finance can edit.
+  const dayRemarkCompanies = React.useMemo(
+    () => paginatedDailyGroups.flatMap((g) => g.items.map((item) => item.company)),
+    [paginatedDailyGroups]
+  )
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    'expense',
+    dayRemarkCompanies
+  )
+  const canEditDayRemark =
+    isFinance || userRole === 'supervisor' || userRole === 'company'
+
   React.useEffect(() => {
     setCurrentPage(1)
+    setDailyPage(1)
   }, [
     dateRange,
     searchQuery,
@@ -471,6 +531,7 @@ export const ExpensePage: React.FC = () => {
     selectedPeriod,
     statusFilter,
     tableTab,
+    subTab,
   ])
 
   // KPI Calculation: Total Expense & Total Cash (computed from baseFilteredExpenses so KPIs stay independent of tab switcher)
@@ -493,6 +554,11 @@ export const ExpensePage: React.FC = () => {
     if (tableTab === 'Withdraw') return 'Paid'
     return 'All'
   }, [statusFilter, tableTab])
+
+  // Withdraw tab is paid by definition, so a leftover "Paid" filter is dropped
+  React.useEffect(() => {
+    if (tableTab === 'Withdraw' && statusFilter === 'Paid') setStatusFilter('All')
+  }, [tableTab, statusFilter])
 
   // Pagination
   const totalPages = Math.ceil(filteredExpenses.length / ITEMS_PER_PAGE) || 1
@@ -523,15 +589,26 @@ export const ExpensePage: React.FC = () => {
   const companyForExport = selectedCompany
 
   const handleExportCsv = () => {
-    expenseService.exportCsv(
-      filteredExpenses,
-      `expense_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
-    )
+    if (subTab === 'Daily Summary') {
+      expenseService.exportDailySummaryCsv(
+        dailyExpenseGroups,
+        `expense_daily_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    } else {
+      expenseService.exportCsv(
+        filteredExpenses,
+        `expense_summary_${companyForExport.replace(/\s+/g, '_')}_${Date.now()}.csv`
+      )
+    }
     setIsExportDropdownOpen(false)
   }
 
   const handleExportPdf = () => {
-    expenseService.exportPdf(filteredExpenses, companyForExport)
+    if (subTab === 'Daily Summary') {
+      expenseService.exportDailySummaryPdf(dailyExpenseGroups, companyForExport)
+    } else {
+      expenseService.exportPdf(filteredExpenses, companyForExport)
+    }
     setIsExportDropdownOpen(false)
   }
 
@@ -606,7 +683,7 @@ export const ExpensePage: React.FC = () => {
     }
   }
 
-  // 3-Dots Action Menu for Audit
+  // 3-Dots Action Menu
   const [openMenuExpenseId, setOpenMenuExpenseId] = React.useState<
     string | null
   >(null)
@@ -617,6 +694,28 @@ export const ExpensePage: React.FC = () => {
   } | null>(null)
   const [activeMenuExpense, setActiveMenuExpense] =
     React.useState<ExpenseItem | null>(null)
+
+  React.useEffect(() => {
+    if (!openMenuExpenseId) return
+    const handleClose = () => {
+      setOpenMenuExpenseId(null)
+      setMenuPosition(null)
+      setActiveMenuExpense(null)
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClose()
+    }
+    window.addEventListener('click', handleClose)
+    window.addEventListener('scroll', handleClose, true)
+    window.addEventListener('resize', handleClose)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', handleClose)
+      window.removeEventListener('scroll', handleClose, true)
+      window.removeEventListener('resize', handleClose)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [openMenuExpenseId])
 
   const handleMarkExpenseAudit = (
     expense: ExpenseItem,
@@ -632,7 +731,7 @@ export const ExpensePage: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     })
-    const auditorName = user?.fullName || 'Audit'
+    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const updated: ExpenseItem = {
       ...expense,
       auditStatus: status,
@@ -852,7 +951,9 @@ export const ExpensePage: React.FC = () => {
                       : 'absolute right-0 top-full mt-2 w-48'
                   )}
                 >
-                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const).map((st) => (
+                  {(['All', 'Paid', 'Pending', 'Unpaid'] as const)
+                    .filter((st) => !(tableTab === 'Withdraw' && st === 'Paid'))
+                    .map((st) => (
                     <button
                       key={st}
                       type="button"
@@ -1008,6 +1109,12 @@ export const ExpensePage: React.FC = () => {
               </div>
             )}
 
+            <BankFilterSelect
+              accounts={bankOptions}
+              value={selectedBankId}
+              onChange={setSelectedBankId}
+            />
+
             {/* Tab Switcher: Withdraw / Expense Record */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
               <button
@@ -1137,68 +1244,446 @@ export const ExpensePage: React.FC = () => {
         ref={tableCardRef}
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
-        {statusFilter !== 'All' && (
-          <div className="flex items-center justify-between pb-4 mb-2 border-b border-slate-100">
+        {/* Dynamic Tab Context Banner */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-2 border-b border-slate-100">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <span
               className={cn(
-                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border',
-                statusFilter === 'Paid'
-                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                  : statusFilter === 'Pending'
-                    ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
-                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border',
+                tableTab === 'Withdraw'
+                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                  : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
               )}
             >
-              <span>Particulars Status: {statusFilter}</span>
+              {tableTab === 'Withdraw' ? (
+                <>
+                  <Wallet className="w-3.5 h-3.5" />
+                  <span>Withdraw View (Paid Cash Outflows)</span>
+                </>
+              ) : (
+                <>
+                  <TrendingDown className="w-3.5 h-3.5" />
+                  <span>Expense Record View (All Expenses)</span>
+                </>
+              )}
+            </span>
+
+            {/* Subtab Toggle Switcher: Daily Summary vs All Transactions */}
+            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-0.5 gap-0.5">
               <button
                 type="button"
-                onClick={() => setStatusFilter('All')}
-                className="hover:opacity-75 cursor-pointer"
-                title="Clear status filter"
+                onClick={() => setSubTab('Daily Summary')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'Daily Summary'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
               >
-                <X className="w-3 h-3" />
+                Daily Summary
               </button>
-            </span>
-            <span className="text-xs text-muted-fg font-medium">
-              {filteredExpenses.length}{' '}
-              {filteredExpenses.length === 1 ? 'record' : 'records'} shown
-            </span>
-          </div>
-        )}
+              <button
+                type="button"
+                onClick={() => setSubTab('All Transactions')}
+                className={cn(
+                  'inline-flex items-center px-3 py-1 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                  subTab === 'All Transactions'
+                    ? 'bg-white text-focus shadow-xs'
+                    : 'text-muted-fg hover:text-focus'
+                )}
+              >
+                All Transactions
+              </button>
+            </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+            {statusFilter !== 'All' && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border',
+                  statusFilter === 'Paid'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : statusFilter === 'Pending'
+                      ? 'bg-yellow-100 text-yellow-800 border-yellow-300'
+                      : 'bg-rose-50 text-rose-700 border-rose-200'
+                )}
+              >
+                <span>Particulars Status: {statusFilter}</span>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('All')}
+                  className="hover:opacity-75 cursor-pointer"
+                  title="Clear status filter"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            )}
+          </div>
+
+          <span className="text-xs text-muted-fg font-medium">
+            {subTab === 'Daily Summary'
+              ? `${dailyExpenseGroups.length} ${dailyExpenseGroups.length === 1 ? 'day' : 'days'} (${filteredExpenses.length} total records)`
+              : `${filteredExpenses.length} ${tableTab === 'Withdraw' ? 'withdrawal' : 'expense'} ${filteredExpenses.length === 1 ? 'record' : 'records'} shown`}
+          </span>
+        </div>
+
+        {subTab === 'Daily Summary' ? (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
+            <Table className="w-full table-fixed min-w-[1000px]">
+              <colgroup>
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '9%' }} />
+              </colgroup>
+              <TableHeader>
+                <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE & DAY
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    TRANSACTIONS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    {tableTab === 'Withdraw' ? 'TOTAL WITHDRAWN' : 'GROSS EXPENSES'}
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    REALIZED CASH
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DAY REMARK
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    AUDIT STATUS
+                  </TableHead>
+                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    DRILLDOWN
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-8 text-center text-xs text-muted-fg">
+                      Loading daily expense summary...
+                    </TableCell>
+                  </TableRow>
+                ) : paginatedDailyGroups.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={7}
+                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
+                    >
+                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
+                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
+                        </div>
+                        <p className="font-semibold text-focus text-sm sm:text-base">
+                          No daily expense records found
+                        </p>
+                        <p className="text-xs text-muted-fg leading-relaxed">
+                          There are no expense transactions recorded for this period matching your filters.
+                        </p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedDailyGroups.map((group) => {
+                    const isExpanded = expandedDates.has(group.date)
+                    return (
+                      <React.Fragment key={group.date}>
+                        <TableRow
+                          onClick={() => toggleDateExpansion(group.date)}
+                          className={cn(
+                            'border-b border-slate-100 transition-colors cursor-pointer select-none',
+                            isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
+                          )}
+                        >
+                          <TableCell className="px-3.5 py-3.5 text-left">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-focus">{group.formattedDate}</span>
+                              <span className="text-2xs text-muted-fg font-medium">{group.dayOfWeek}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                              {group.transactionCount} {group.transactionCount === 1 ? 'record' : 'records'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-focus text-xs sm:text-sm">
+                            {formatPHP(group.grossTotal)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-rose-600 text-xs sm:text-sm">
+                            {formatPHP(group.realizedCash)}
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                            <DayRemarkCell
+                              companyNames={group.items.map((item) => item.company)}
+                              date={group.date}
+                              formattedDate={group.formattedDate}
+                              kindLabel="Expense"
+                              canEdit={canEditDayRemark}
+                              getRemark={getDayRemark}
+                              onSave={saveDayRemark}
+                              entries={group.items.map((e) => ({
+                                id: e.id,
+                                ref: e.chequeNo || e.refNo,
+                                particulars: e.particulars,
+                                amount: tableTab === 'Withdraw' ? getPaidDisbursementForExpense(e) : e.withdrawal,
+                                status: e.status,
+                              }))}
+                            />
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-2xs font-bold border',
+                                group.auditStatus === 'All Verified'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : group.auditStatus === 'Discrepancy'
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                              )}
+                            >
+                              {group.auditStatus}
+                            </span>
+                          </TableCell>
+                          <TableCell className="px-3.5 py-3.5 text-center">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                toggleDateExpansion(group.date)
+                              }}
+                              className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
+                            >
+                              <span>{isExpanded ? 'Hide' : 'Show'}</span>
+                              {isExpanded ? (
+                                <ChevronDown className="w-3.5 h-3.5 transition-transform" />
+                              ) : (
+                                <ChevronRight className="w-3.5 h-3.5 transition-transform" />
+                              )}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Expandable Accordion Row */}
+                        {isExpanded && (
+                          <TableRow className="bg-slate-50/40 border-b border-slate-200">
+                            <TableCell colSpan={7} className="p-3 sm:p-4">
+                              <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+                                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-bold text-focus">
+                                      Disbursements on {group.formattedDate}
+                                    </span>
+                                    <span className="text-2xs text-muted-fg font-medium">
+                                      ({group.items.length} total)
+                                    </span>
+                                  </div>
+                                  <div className="text-2xs text-muted-fg">
+                                    Inspect, edit, delete, or audit individual vouchers
+                                  </div>
+                                </div>
+                                {(() => {
+                                  const byBank = new Map<string, { count: number; total: number }>()
+                                  group.items.forEach((it) => {
+                                    const key = String(it.bankAccountId || '')
+                                    const entry = byBank.get(key) || { count: 0, total: 0 }
+                                    entry.count += 1
+                                    entry.total += (tableTab === 'Withdraw' ? getPaidDisbursementForExpense(it) : it.withdrawal)
+                                    byBank.set(key, entry)
+                                  })
+                                  return (
+                                    <div className="px-4 py-3 border-b border-slate-200 bg-white">
+                                      <p className="text-2xs font-bold uppercase tracking-wider text-muted-fg mb-2">By bank</p>
+                                      <div className="flex flex-wrap gap-2">
+                                        {Array.from(byBank.entries()).map(([key, v]) => (
+                                          <div
+                                            key={key || 'none'}
+                                            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs"
+                                          >
+                                            <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
+                                            <span className="font-semibold text-focus">{bankLabel(key)}</span>
+                                            <span className="text-muted-fg">{v.count} {v.count === 1 ? 'record' : 'records'}</span>
+                                            <span className="font-bold tabular-nums text-focus">{formatPHP(v.total)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )
+                                })()}
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-left text-xs">
+                                    <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
+                                      <tr>
+                                        <th className="px-3 py-2 font-bold">Cheque / Ref</th>
+                                        {showCompanyColumn && <th className="px-3 py-2 font-bold">Company</th>}
+                                        <th className="px-3 py-2 font-bold">Particulars</th>
+                                        <th className="px-3 py-2 font-bold">Category</th>
+                                        <th className="px-3 py-2 font-bold text-center">Status</th>
+                                        <th className="px-3 py-2 font-bold">Payment Method</th>
+                                        <th className="px-3 py-2 font-bold text-right">Amount</th>
+                                        <th className="px-3 py-2 font-bold text-center">Audit Status</th>
+                                        <th className="px-3 py-2 font-bold text-center">Actions</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                      {group.items.map((expense) => (
+                                        <tr key={expense.id} className="hover:bg-slate-50/60 transition-colors">
+                                          <td className="px-3 py-2 font-mono text-xs text-focus font-medium">
+                                            {expense.chequeNo || expense.refNo}
+                                          </td>
+                                          {showCompanyColumn && (
+                                            <td className="px-3 py-2 text-focus font-medium">
+                                              {expense.company}
+                                            </td>
+                                          )}
+                                          <td className="px-3 py-2 text-focus max-w-[260px]">
+                                            <p className="truncate font-medium">{expense.particulars}</p>
+                                          </td>
+                                          <td className="px-3 py-2 text-muted-fg font-medium">
+                                            {expense.category || 'General'}
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border tracking-wide uppercase',
+                                                expense.status === 'Paid'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                                  : expense.status === 'Pending'
+                                                  ? 'bg-amber-50 text-amber-700 border-amber-300'
+                                                  : 'bg-rose-50 text-rose-700 border-rose-300'
+                                              )}
+                                            >
+                                              {expense.status}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-muted-fg font-medium">
+                                            {expense.paymentMethod || 'Cash'}
+                                          </td>
+                                          <td className="px-3 py-2 text-right font-bold tabular-nums text-focus">
+                                            {formatPHP(tableTab === 'Withdraw' ? getPaidDisbursementForExpense(expense) : expense.withdrawal)}
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <span
+                                              className={cn(
+                                                'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold border',
+                                                expense.auditStatus === 'Verified'
+                                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                  : expense.auditStatus === 'Flagged'
+                                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                                  : 'bg-slate-100 text-muted-fg border-slate-200'
+                                              )}
+                                            >
+                                              {expense.auditStatus}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center">
+                                            <div className="flex items-center justify-center gap-1">
+                                              <button
+                                                type="button"
+                                                onClick={() => setSelectedExpense(expense)}
+                                                className="p-1 text-slate-500 hover:text-focus hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+                                                title="View Details"
+                                              >
+                                                <Eye className="w-3.5 h-3.5" />
+                                              </button>
+                                              {canAdd && expense.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    navigate('/expense/add', {
+                                                      state: { editExpense: expense },
+                                                    })
+                                                  }
+                                                  className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Edit Record"
+                                                >
+                                                  <Pencil className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAdd && expense.auditStatus !== 'Verified' && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setDeleteConfirmExpense(expense)}
+                                                  className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Delete Record"
+                                                >
+                                                  <Trash2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                              {canAuditActions && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => {
+                                                    setSelectedTx(expenseService.toDashboardTransaction(expense))
+                                                    setIsAuditModalOpen(true)
+                                                  }}
+                                                  className="p-1 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors cursor-pointer"
+                                                  title="Audit Transaction"
+                                                >
+                                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                                </button>
+                                              )}
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full table-fixed min-w-[940px]">
             <colgroup>
-              <col style={{ width: '12%' }} />
-              <col style={{ width: '15%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '21%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '8%' }} />
+              <col style={{ width: showCompanyColumn ? '10%' : '12%' }} />
+              {showCompanyColumn && <col style={{ width: '13%' }} />}
+              <col style={{ width: '10%' }} />
+              <col style={{ width: showCompanyColumn ? '18%' : '20%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: showCompanyColumn ? '8%' : '10%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                <TableHead className="w-[12%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                <TableHead className="w-[15%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  COMPANY
-                </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                {showCompanyColumn && (
+                  <TableHead className="w-[13%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    COMPANY
+                  </TableHead>
+                )}
+                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
                 </TableHead>
-                <TableHead className="w-[21%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[18%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   WITHDRAWAL
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
                 </TableHead>
-                <TableHead className="w-[11%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[10%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
                   NET AMOUNT
                 </TableHead>
                 <TableHead className="w-[8%] px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
@@ -1209,38 +1694,11 @@ export const ExpensePage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 5 }).map((_, idx) => (
-                  <TableRow key={idx} className="border-b border-slate-100">
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-28 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-20 bg-slate-200/60 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-32 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/70 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-5 w-16 bg-slate-200/60 animate-pulse rounded-full" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4">
-                      <div className="h-4 w-16 bg-slate-200/80 animate-pulse rounded" />
-                    </TableCell>
-                    <TableCell className="px-3.5 py-4 text-center">
-                      <div className="h-6 w-14 bg-slate-200/60 animate-pulse rounded-md mx-auto" />
-                    </TableCell>
-                  </TableRow>
-                ))
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
               ) : paginatedExpenses.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={8}
+                    colSpan={showCompanyColumn ? 8 : 7}
                     className="py-14 text-center text-xs sm:text-sm text-muted-fg"
                   >
                     <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
@@ -1338,15 +1796,17 @@ export const ExpensePage: React.FC = () => {
                       </TableCell>
 
                       {/* 2. Company */}
-                      <TableCell
-                        className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
-                        title={expense.company}
-                      >
-                        <div className="flex items-center gap-1.5 truncate">
-                          <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="truncate">{expense.company}</span>
-                        </div>
-                      </TableCell>
+                      {showCompanyColumn && (
+                        <TableCell
+                          className="w-[15%] px-3.5 py-3.5 text-xs font-semibold text-focus truncate text-left"
+                          title={expense.company}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                            <span className="truncate">{expense.company}</span>
+                          </div>
+                        </TableCell>
+                      )}
 
                       {/* 3. Cheque No */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-xs text-focus/90 truncate font-mono text-left">
@@ -1383,7 +1843,7 @@ export const ExpensePage: React.FC = () => {
                       </TableCell>
 
                       {/* 5. Withdrawal */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-left tabular-nums whitespace-nowrap text-red-600">
+                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-red-600">
                         {rowAmount > 0 ? formatPHP(rowAmount) : '—'}
                       </TableCell>
 
@@ -1406,7 +1866,7 @@ export const ExpensePage: React.FC = () => {
                       </TableCell>
 
                       {/* 7. Net Amount */}
-                      <TableCell className="w-[11%] px-3.5 py-3.5 text-xs font-bold text-left tabular-nums whitespace-nowrap text-focus">
+                      <TableCell className="w-[10%] px-3.5 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                         {formatPHP(rowAmount)}
                       </TableCell>
 
@@ -1415,79 +1875,42 @@ export const ExpensePage: React.FC = () => {
                         className="w-[8%] px-3.5 py-3.5 text-center whitespace-nowrap"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div className="flex items-center justify-center gap-1">
-                          {canAuditActions ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (openMenuExpenseId === expense.id) {
-                                  setOpenMenuExpenseId(null)
-                                  setMenuPosition(null)
-                                  setActiveMenuExpense(null)
-                                } else {
-                                  const rect =
-                                    e.currentTarget.getBoundingClientRect()
-                                  const openUpward =
-                                    rect.bottom + 140 > window.innerHeight
-                                  setMenuPosition({
-                                    top: openUpward
-                                      ? rect.top - 6
-                                      : rect.bottom + 6,
-                                    right: Math.max(
-                                      12,
-                                      window.innerWidth - rect.right
-                                    ),
-                                    openUpward,
-                                  })
-                                  setActiveMenuExpense(expense)
-                                  setOpenMenuExpenseId(expense.id)
-                                }
-                              }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                              title="Audit Actions"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          ) : isOwner ? (
-                            <span className="text-muted-fg text-xs">—</span>
-                          ) : expense.auditStatus === 'Verified' ? (
-                            <span
-                              className="h-7 w-7 rounded-lg text-emerald-600 bg-emerald-50 border border-emerald-200 flex items-center justify-center"
-                              title="Audited by auditor (locked from editing)"
-                            >
-                              <Lock className="w-3.5 h-3.5" />
-                            </span>
-                          ) : (
-                            <>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() =>
-                                  navigate('/expense/add', {
-                                    state: { editExpense: expense },
-                                  })
-                                }
-                                className="h-7 w-7 p-0 rounded-lg text-slate-500 hover:text-focus hover:bg-slate-100 cursor-pointer"
-                                title="Edit Expense & Particulars"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDeleteConfirmExpense(expense)}
-                                className="h-7 w-7 p-0 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
-                                title="Delete Expense"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </Button>
-                            </>
-                          )}
+                        <div className="flex items-center justify-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (openMenuExpenseId === expense.id) {
+                                setOpenMenuExpenseId(null)
+                                setMenuPosition(null)
+                                setActiveMenuExpense(null)
+                              } else {
+                                const rect =
+                                  e.currentTarget.getBoundingClientRect()
+                                const openUpward =
+                                  rect.bottom + 160 > window.innerHeight
+                                setMenuPosition({
+                                  top: openUpward
+                                    ? rect.top - 6
+                                    : rect.bottom + 6,
+                                  right: Math.max(
+                                    12,
+                                    window.innerWidth - rect.right
+                                  ),
+                                  openUpward,
+                                })
+                                setActiveMenuExpense(expense)
+                                setOpenMenuExpenseId(expense.id)
+                              }
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                            title="Row Actions"
+                            aria-label="Open row actions"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -1497,44 +1920,87 @@ export const ExpensePage: React.FC = () => {
             </TableBody>
           </Table>
         </div>
+        )}
 
         {/* 6. Pagination Footer */}
         <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          <span className="font-medium text-focus/80">
-            {filteredExpenses.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredExpenses.length} records`}
-          </span>
+          {subTab === 'Daily Summary' ? (
+            <>
+              <span className="font-medium text-focus/80">
+                {dailyExpenseGroups.length === 0
+                  ? 'Showing 0 of 0 days'
+                  : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailyExpenseGroups.length)} of ${dailyExpenseGroups.length} days`}
+              </span>
 
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {dailyPage} out of {totalDailyPages}
+                </span>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage <= 1}
+                  onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous day page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={dailyPage >= totalDailyPages}
+                  onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next day page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="font-medium text-focus/80">
+                {filteredExpenses.length === 0
+                  ? 'Showing 0 of 0 records'
+                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredExpenses.length} records`}
+              </span>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <span className="text-xs text-muted-fg italic">
+                  Page {currentPage} out of {totalPages}
+                </span>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       </Card>
 
@@ -1548,66 +2014,42 @@ export const ExpensePage: React.FC = () => {
 
       {/* Delete Confirmation Dialog */}
       {!isAdmin && (
-        <Dialog
+        <ConfirmModal
           open={Boolean(deleteConfirmExpense)}
           onOpenChange={(open) => !open && setDeleteConfirmExpense(null)}
-        >
-          <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
-            <DialogHeader>
-              <DialogTitle className="text-base font-bold text-focus flex items-center gap-2 text-red-600">
-                <Trash2 className="w-5 h-5 text-red-600" />
-                <span>Confirm Deletion</span>
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-fg mt-1 leading-relaxed">
-                Are you sure you want to delete this expense record? This action
-                will remove the record from the company ledger.
-              </DialogDescription>
-            </DialogHeader>
-
-            {deleteConfirmExpense && (
-              <div className="my-4 p-4 rounded-2xl bg-red-50/60 border border-red-200/60 space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Particulars:</span>
-                  <span className="font-semibold text-focus truncate max-w-[200px]">
-                    {deleteConfirmExpense.particulars}
-                  </span>
+          title="Delete Expense Record"
+          description={
+            <>
+              Are you sure you want to delete this expense record? This action will remove the record from the company ledger.
+              {deleteConfirmExpense && (
+                <div className="mt-3 p-3.5 rounded-xl bg-rose-50/60 border border-rose-200/60 space-y-1.5 text-xs text-left">
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Particulars:</span>
+                    <span className="font-semibold text-focus truncate max-w-[200px]">
+                      {deleteConfirmExpense.particulars}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Withdrawal:</span>
+                    <span className="font-bold text-rose-600">
+                      {formatPHP(deleteConfirmExpense.withdrawal)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-fg">Ref No:</span>
+                    <span className="font-mono text-focus">{deleteConfirmExpense.refNo}</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Withdrawal:</span>
-                  <span className="font-bold text-red-600">
-                    {formatPHP(deleteConfirmExpense.withdrawal)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-fg">Ref No:</span>
-                  <span className="font-mono text-focus">
-                    {deleteConfirmExpense.refNo}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center justify-end gap-2.5">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setDeleteConfirmExpense(null)}
-                disabled={isDeleting}
-                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={handleConfirmDelete}
-                disabled={isDeleting}
-                className="h-9 px-5 text-xs font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white cursor-pointer"
-              >
-                {isDeleting ? 'Deleting…' : 'Delete Record'}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
+              )}
+            </>
+          }
+          confirmLabel="Delete Record"
+          loadingLabel="Deleting…"
+          variant="destructive"
+          action="delete"
+          isLoading={isDeleting}
+          onConfirm={handleConfirmDelete}
+        />
       )}
 
       {/* Transaction Details & Audit Modal */}
@@ -1627,14 +2069,14 @@ export const ExpensePage: React.FC = () => {
         statusFilter={effectiveParticularsStatusFilter}
       />
 
-      {/* 3-Dots Action Portal Menu for Audit */}
+      {/* 3-Dots Action Portal Menu */}
       {openMenuExpenseId &&
         activeMenuExpense &&
         menuPosition &&
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-44 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-48 bg-white rounded-xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -1645,28 +2087,6 @@ export const ExpensePage: React.FC = () => {
           >
             <button
               type="button"
-              onClick={(e) =>
-                handleMarkExpenseAudit(activeMenuExpense, 'Verified', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>Mark as Audit</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={(e) =>
-                handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
-              }
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-            >
-              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-              <span>Mark as Discrepancy</span>
-            </button>
-
-            <button
-              type="button"
               onClick={(e) => {
                 e.stopPropagation()
                 const exp = activeMenuExpense
@@ -1675,11 +2095,82 @@ export const ExpensePage: React.FC = () => {
                 setActiveMenuExpense(null)
                 if (exp) handleOpenRow(exp)
               }}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
+
+            {canAuditActions ? (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkExpenseAudit(activeMenuExpense, 'Verified', e)
+                  }
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Mark as Audited</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) =>
+                    handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
+                  }
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Flag Discrepancy</span>
+                </button>
+              </>
+            ) : !isOwner ? (
+              activeMenuExpense.auditStatus === 'Verified' ? (
+                <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700 border-t border-slate-100 mt-1 pt-1.5">
+                  <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>Locked (Audited)</span>
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const exp = activeMenuExpense
+                      setOpenMenuExpenseId(null)
+                      setMenuPosition(null)
+                      setActiveMenuExpense(null)
+                      if (exp) {
+                        navigate('/expense/add', {
+                          state: { editExpense: exp },
+                        })
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                    <span>Edit Expense</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      const exp = activeMenuExpense
+                      setOpenMenuExpenseId(null)
+                      setMenuPosition(null)
+                      setActiveMenuExpense(null)
+                      if (exp) setDeleteConfirmExpense(exp)
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Delete Expense</span>
+                  </button>
+                </>
+              )
+            ) : null}
           </div>,
           document.body
         )}

@@ -11,6 +11,12 @@ import {
   Receipt,
   RotateCcw,
   Lock,
+  History,
+  Clock,
+  ShieldCheck,
+  UserCheck,
+  PlusCircle,
+  MessageSquare,
 } from 'lucide-react'
 import { UpdateLoanStatusModal } from './UpdateLoanStatusModal'
 import { parseParticulars } from '@/utils/particularsUtils'
@@ -24,9 +30,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatPHP } from '@/lib/format'
+import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { CATEGORY_COLORS } from '@/utils/categoryConstants'
-import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatDisplayDate } from '@/utils/dateUtils'
+import { bankService } from '@/services/bankService'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
+import { DayRemarkCell } from './DayRemark'
+import { notifyError } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -40,8 +50,11 @@ import {
   loanService,
   type LoanItem,
 } from '@/services/loanService'
+import { tenantService } from '@/services/tenantService'
+import { activityLogService, type EntityTimelineEvent } from '@/services/activityLogService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { cn } from '@/lib/utils'
+import { formatRealName } from '@/utils/formatRealName'
 import { useSession } from '@/hooks/useSession'
 
 interface AuditTransactionModalProps {
@@ -100,6 +113,24 @@ const DEFAULT_SPECIFIC_CATEGORIES = [
   'Revolving Funds',
 ]
 
+function formatTimelineDateTime(dateStr?: string | null): string {
+  if (!dateStr) return '—'
+  try {
+    const d = new Date(dateStr)
+    if (isNaN(d.getTime())) return String(dateStr)
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+  } catch {
+    return String(dateStr)
+  }
+}
+
 export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   open,
   onOpenChange,
@@ -118,9 +149,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const navigate = useNavigate()
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
-  const isAdmin = roleLower === 'admin' || roleLower === 'audit'
+  const isAudit = roleLower.includes('audit')
+  const isAdmin = roleLower === 'admin' || isAudit
   const isOwner = roleLower === 'owner'
   const canAudit = isAdmin && !isOwner
+
+  const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [discrepancyReason, setDiscrepancyReason] = React.useState('')
+  const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
 
   const [currentTx, setCurrentTx] = React.useState<DashboardTransactionItem | null>(transaction)
   const [currentSale, setCurrentSale] = React.useState<SalesItem | null>(sale || null)
@@ -128,6 +164,9 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [currentLoan, setCurrentLoan] = React.useState<LoanItem | null>(loan || null)
   const [isEditing, setIsEditing] = React.useState(false)
   const [isUpdateLoanStatusOpen, setIsUpdateLoanStatusOpen] = React.useState(false)
+
+  const [timelineEvents, setTimelineEvents] = React.useState<EntityTimelineEvent[]>([])
+  const [isLoadingTimeline, setIsLoadingTimeline] = React.useState(false)
 
   // Form states for editing
   const [date, setDate] = React.useState('')
@@ -140,7 +179,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
   const [newCategoryName, setNewCategoryName] = React.useState('')
   const [isCreatingCategory, setIsCreatingCategory] = React.useState(false)
+  const [remarks, setRemarks] = React.useState('')
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+
+  // Immediate Remarks Modal states for Finance and Supervisor
+  const [isRemarksModalOpen, setIsRemarksModalOpen] = React.useState(false)
+  const [remarksInput, setRemarksInput] = React.useState('')
+  const [isSubmittingRemarks, setIsSubmittingRemarks] = React.useState(false)
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
@@ -151,7 +196,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     category?: string
   }>({})
 
-  const todayIso = React.useMemo(() => new Date().toISOString().split('T')[0], [])
+  const todayIso = React.useMemo(() => formatToYYYYMMDD(new Date()), [])
 
   // Fetch categories from database
   React.useEffect(() => {
@@ -200,6 +245,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeSale.deposit || activeSale.netAmount || ''))
         setCategory(activeSale.category || 'General')
         setPaymentMethod(activeSale.paymentMethod || 'Cash')
+        setRemarks(activeSale.remarks || '')
       } else if (activeExpense) {
         setDate(activeExpense.rawDate || normalizeDateToYYYYMMDD(activeExpense.date))
         setChequeNo(activeExpense.chequeNo || '')
@@ -207,6 +253,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeExpense.withdrawal || activeExpense.netAmount || ''))
         setCategory(activeExpense.category || 'General')
         setPaymentMethod(activeExpense.paymentMethod || 'Cash')
+        setRemarks(activeExpense.remarks || '')
       } else if (activeLoan) {
         setDate(activeLoan.rawDate || normalizeDateToYYYYMMDD(activeLoan.date))
         setChequeNo(activeLoan.chequeNo || '')
@@ -214,6 +261,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(activeLoan.amount || ''))
         setCategory(activeLoan.category || 'General')
         setPaymentMethod('Cash')
+        setRemarks('')
       } else if (activeTx) {
         setDate(normalizeDateToYYYYMMDD(activeTx.date))
         setChequeNo(activeTx.chequeNo || '')
@@ -227,6 +275,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setAmount(String(txAmount))
         setCategory(activeTx.category || 'General')
         setPaymentMethod(activeTx.paymentMethod || 'Cash')
+        setRemarks(activeTx.remarks || '')
       }
     } else {
       setIsEditing(false)
@@ -279,6 +328,69 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const activeExpense = currentExpense || expense
   const activeLoan = currentLoan || loan
 
+  const resolvedTarget = React.useMemo(() => {
+    let type = 'transaction'
+    let id: string | number | undefined = undefined
+    let ref: string | undefined = undefined
+
+    if (activeSale || activeTx?.type === 'Sales') {
+      type = 'sale'
+      id = activeSale?.id || (activeTx?.id ? String(activeTx.id).replace('sale_', '') : undefined)
+      ref = activeSale?.refNo || activeTx?.refNo
+    } else if (activeExpense || activeTx?.type === 'Expense') {
+      type = 'expense'
+      id = activeExpense?.id || (activeTx?.id ? String(activeTx.id).replace('expense_', '') : undefined)
+      ref = activeExpense?.refNo || activeTx?.refNo
+    } else if (activeLoan || activeTx?.type === 'Loan') {
+      type = 'loan'
+      id = activeLoan?.id || (activeTx?.id ? String(activeTx.id).replace('loan_', '') : undefined)
+      ref = activeLoan?.refNo || activeTx?.refNo
+    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && String(activeTx.id).startsWith('pc_'))) {
+      type = 'petty_cash'
+      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').split(':')[0] : undefined
+      ref = activeTx?.refNo
+    } else if (activeTx?.id && String(activeTx.id).startsWith('tenant_')) {
+      type = 'tenant'
+      id = activeTx?.id ? String(activeTx.id).replace('tenant_lease_', '').replace('tenant_pmt_', '') : undefined
+      ref = activeTx?.refNo
+    }
+
+    return { type, id, ref }
+  }, [activeSale, activeExpense, activeLoan, activeTx])
+
+  React.useEffect(() => {
+    if (!open) {
+      setTimelineEvents([])
+      return
+    }
+    let isMounted = true
+    setIsLoadingTimeline(true)
+
+    activityLogService
+      .getEntityTimeline({
+        recordType: resolvedTarget.type,
+        recordId: resolvedTarget.id,
+        refNo: resolvedTarget.ref,
+      })
+      .then((events) => {
+        if (isMounted) {
+          setTimelineEvents(events)
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load entity timeline:', err)
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingTimeline(false)
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [open, resolvedTarget.type, resolvedTarget.id, resolvedTarget.ref])
+
   const isExpense = Boolean(activeExpense || activeTx?.type === 'Expense')
   const isLoan = Boolean(activeLoan || activeTx?.type === 'Loan')
 
@@ -297,6 +409,43 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
   const displayDate =
     activeSale?.date || activeExpense?.date || activeLoan?.date || activeTx?.date || '—'
+  // Sale vs bank deposit (spec 0043): a sale keeps its own date; the deposit date and target bank show
+  // when the money cleared so the auditor can verify the sale-day record knowing the bank side.
+  const depositSource: any = activeSale || (activeTx?.type === 'Sales' ? activeTx : null)
+  const isDepositedSale =
+    !!depositSource && (depositSource.depositStatus || depositSource.deposit_status) === 'Deposited'
+  const depositDateRaw: string | null | undefined = depositSource?.deposit_date || depositSource?.depositDate
+  const depositBankLabel: string | undefined = depositSource
+    ? (() => {
+        const acc = depositSource.bankAccountId
+          ? bankService
+              .getCachedAccounts()
+              .find((a) => String(a.id) === String(depositSource.bankAccountId))
+          : undefined
+        if (acc) return `${acc.bankName}${acc.accountName ? ` - ${acc.accountName}` : ''}`
+        return depositSource.bankName || undefined
+      })()
+    : undefined
+  // Day remark (spec 0041): one note per company, per date, per kind. Sales and expense records only.
+  const dayRemarkKind: 'sales' | 'expense' | null = isLoan
+    ? null
+    : isExpense
+      ? 'expense'
+      : activeSale || activeTx?.type === 'Sales'
+        ? 'sales'
+        : null
+  const dayRemarkCompany = displayCompany === '—' ? '' : displayCompany
+  const dayRemarkDate =
+    activeSale?.rawDate ||
+    activeExpense?.rawDate ||
+    normalizeDateToYYYYMMDD(activeSale?.date || activeExpense?.date || activeTx?.date || '')
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
+    dayRemarkKind ?? 'sales',
+    dayRemarkKind && dayRemarkCompany ? [dayRemarkCompany] : []
+  )
+  const canEditDayRemark =
+    roleLower === 'finance' || roleLower === 'supervisor' || roleLower === 'company'
+
   const displayChequeNo =
     activeSale?.chequeNo || activeExpense?.chequeNo || activeLoan?.chequeNo || activeTx?.chequeNo || '—'
   const displayParticulars =
@@ -306,6 +455,45 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     : (activeSale?.status || activeExpense?.status || activeLoan?.status || activeTx?.status || '—')
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
+  const displayCreatedBy =
+    activeSale?.createdBy || activeExpense?.createdBy || activeLoan?.createdBy || activeTx?.createdBy || (user?.fullName ? formatRealName(user.fullName, user.role || 'Staff') : undefined)
+  const displayUpdatedAt =
+    activeSale?.updatedAt || activeExpense?.updatedAt || activeLoan?.updatedAt || activeTx?.updatedAt
+  const displayUpdatedBy =
+    activeSale?.updatedBy || activeExpense?.updatedBy || activeLoan?.updatedBy || activeTx?.updatedBy
+  const displayAuditNotes =
+    activeSale?.auditNotes || activeExpense?.auditNotes || activeLoan?.auditNotes || activeTx?.auditNotes
+  const displayRemarks =
+    activeSale?.remarks || activeExpense?.remarks || activeTx?.remarks || ''
+
+  const handleSaveImmediateRemarks = async () => {
+    const targetId = activeSale?.id || activeExpense?.id || activeTx?.id
+    if (!targetId) return
+    setIsSubmittingRemarks(true)
+    try {
+      const trimmed = remarksInput.trim()
+      if (isExpense || activeTx?.type === 'Expense') {
+        const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
+        setCurrentExpense(updatedExpense)
+        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        setCurrentTx(tx)
+        if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
+        if (onTransactionUpdated) onTransactionUpdated(tx)
+      } else {
+        const updatedSale = await salesService.updateSaleRemarks(targetId, trimmed)
+        setCurrentSale(updatedSale)
+        const tx = salesService.toDashboardTransaction(updatedSale)
+        setCurrentTx(tx)
+        if (onSaleUpdated) onSaleUpdated(updatedSale)
+        if (onTransactionUpdated) onTransactionUpdated(tx)
+      }
+      setIsRemarksModalOpen(false)
+    } catch (err: any) {
+      notifyError(err?.message || 'Failed to update remarks')
+    } finally {
+      setIsSubmittingRemarks(false)
+    }
+  }
 
   const withdrawalVal = isExpense
     ? (activeExpense?.withdrawal ?? activeTx?.withdrawal ?? 0)
@@ -360,116 +548,228 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     activeLoan?.auditDate ||
     activeTx?.auditDate
 
-  const handleMarkAudit = () => {
+  const handleMarkAudit = async () => {
+    setIsSubmittingAudit(true)
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = user?.fullName || 'Admin'
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
-    if (activeSale) {
-      const updated: SalesItem = {
-        ...activeSale,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Verified', auditorName)
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName)
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: undefined,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName)
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName)
+        } else if (activeTx.type === 'Loan') {
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Verified')
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentSale(updated)
-      setCurrentTx(salesService.toDashboardTransaction(updated))
-      salesService.updateSaleAuditStatus(updated.id, 'Verified', auditorName)
-      if (onSaleUpdated) onSaleUpdated(updated)
-    } else if (activeExpense) {
-      const updated: ExpenseItem = {
-        ...activeExpense,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentExpense(updated)
-      setCurrentTx(expenseService.toDashboardTransaction(updated))
-      expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName)
-      if (onExpenseUpdated) onExpenseUpdated(updated)
-    } else if (activeLoan) {
-      const updated: LoanItem = {
-        ...activeLoan,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentLoan(updated)
-      setCurrentTx(loanService.toDashboardTransaction(updated))
-      loanService.updateLoan(updated.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
-      if (onLoanUpdated) onLoanUpdated(updated)
-    } else if (activeTx) {
-      const updated: DashboardTransactionItem = {
-        ...activeTx,
-        auditStatus: 'Verified',
-        auditedBy: auditorName,
-        auditDate: today,
-      }
-      setCurrentTx(updated)
-      if (activeTx.type === 'Sales') {
-        salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName)
-      } else if (activeTx.type === 'Expense') {
-        expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName)
-      } else if (activeTx.type === 'Loan') {
-        loanService.updateLoan(activeTx.id, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
-      }
-      if (onTransactionUpdated) onTransactionUpdated(updated)
+    } catch (err: any) {
+      console.error('Failed to mark transaction as audited:', err)
+      notifyError(err, 'Failed to update audit review. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
     }
   }
 
-  const handleUnmarkAudit = () => {
-    if (activeSale) {
-      const updated: SalesItem = {
-        ...activeSale,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
+  const handleConfirmDiscrepancy = async () => {
+    const trimmedRemarks = discrepancyReason.trim()
+    if (!trimmedRemarks) return
+    setIsSubmittingAudit(true)
+    const today = new Date().toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: '2-digit',
+    })
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
+
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Flagged',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedRemarks,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+        } else if (activeTx.type === 'Loan') {
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentSale(updated)
-      setCurrentTx(salesService.toDashboardTransaction(updated))
-      salesService.updateSaleAuditStatus(updated.id, 'Pending Audit')
-      if (onSaleUpdated) onSaleUpdated(updated)
-    } else if (activeExpense) {
-      const updated: ExpenseItem = {
-        ...activeExpense,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
+      setIsDiscrepancyModalOpen(false)
+      setDiscrepancyReason('')
+    } catch (err: any) {
+      console.error('Failed to flag discrepancy:', err)
+      notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
+    }
+  }
+
+  const handleUnmarkAudit = async () => {
+    setIsSubmittingAudit(true)
+    try {
+      if (activeSale) {
+        const updated: SalesItem = {
+          ...activeSale,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentSale(updated)
+        setCurrentTx(salesService.toDashboardTransaction(updated))
+        await salesService.updateSaleAuditStatus(updated.id, 'Pending Audit')
+        if (onSaleUpdated) onSaleUpdated(updated)
+      } else if (activeExpense) {
+        const updated: ExpenseItem = {
+          ...activeExpense,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentExpense(updated)
+        setCurrentTx(expenseService.toDashboardTransaction(updated))
+        await expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
+        if (onExpenseUpdated) onExpenseUpdated(updated)
+      } else if (activeLoan) {
+        const updated: LoanItem = {
+          ...activeLoan,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentLoan(updated)
+        setCurrentTx(loanService.toDashboardTransaction(updated))
+        await loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined, auditNotes: undefined })
+        if (onLoanUpdated) onLoanUpdated(updated)
+      } else if (activeTx) {
+        const updated: DashboardTransactionItem = {
+          ...activeTx,
+          auditStatus: 'Pending Audit',
+          auditedBy: undefined,
+          auditDate: undefined,
+          auditNotes: undefined,
+        }
+        setCurrentTx(updated)
+        if (activeTx.type === 'Sales') {
+          await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
+        } else if (activeTx.type === 'Expense') {
+          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
+        } else if (activeTx.type === 'Loan') {
+          const loanId = activeTx.id.replace(/:lender$/, '')
+          await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
+        } else if (activeTx.type === 'Income') {
+          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+          await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+        }
+        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
-      setCurrentExpense(updated)
-      setCurrentTx(expenseService.toDashboardTransaction(updated))
-      expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
-      if (onExpenseUpdated) onExpenseUpdated(updated)
-    } else if (activeLoan) {
-      const updated: LoanItem = {
-        ...activeLoan,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
-      }
-      setCurrentLoan(updated)
-      setCurrentTx(loanService.toDashboardTransaction(updated))
-      loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-      if (onLoanUpdated) onLoanUpdated(updated)
-    } else if (activeTx) {
-      const updated: DashboardTransactionItem = {
-        ...activeTx,
-        auditStatus: 'Pending Audit',
-        auditedBy: undefined,
-        auditDate: undefined,
-      }
-      setCurrentTx(updated)
-      if (activeTx.type === 'Sales') {
-        salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
-      } else if (activeTx.type === 'Expense') {
-        expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-      } else if (activeTx.type === 'Loan') {
-        loanService.updateLoan(activeTx.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-      }
-      if (onTransactionUpdated) onTransactionUpdated(updated)
+    } catch (err: any) {
+      console.error('Failed to reset audit status:', err)
+      notifyError(err, 'Failed to reset audit status. Please try again.')
+    } finally {
+      setIsSubmittingAudit(false)
     }
   }
 
@@ -541,7 +841,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setError('')
     const errors: { date?: string; particulars?: string; amount?: string; category?: string } = {}
 
-    const todayIso = new Date().toISOString().split('T')[0]
+    const todayIso = formatToYYYYMMDD(new Date())
     if (!date.trim()) {
       errors.date = 'Date is required.'
     } else if (date.trim() > todayIso) {
@@ -574,6 +874,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmitting(true)
 
     const parsedAmount = parseFloat(cleanAmount)
+    const modifierName = formatRealName(user?.fullName || user?.name || user?.email || 'Authorized User', user?.role || 'Staff')
+    const nowIso = new Date().toISOString()
 
     try {
       const targetId =
@@ -589,15 +891,24 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           netAmount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          remarks: remarks.trim(),
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         })
         if (!updatedExpenseItem) throw new Error('Expense item not found.')
-        const updatedTxItem = expenseService.toDashboardTransaction(updatedExpenseItem)
+        const mergedExpense = {
+          ...updatedExpenseItem,
+          remarks: remarks.trim(),
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = expenseService.toDashboardTransaction(mergedExpense)
 
-        setCurrentExpense(updatedExpenseItem)
+        setCurrentExpense(mergedExpense)
         setCurrentTx(updatedTxItem)
 
         if (onExpenseUpdated) {
-          onExpenseUpdated(updatedExpenseItem)
+          onExpenseUpdated(mergedExpense)
         }
       } else if (isLoan) {
         const updatedLoanItem = await loanService.updateLoan(targetId, {
@@ -606,15 +917,22 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           particulars: particulars.trim(),
           amount: parsedAmount,
           category: category.trim() || 'General',
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         })
         if (!updatedLoanItem) throw new Error('Loan item not found.')
-        const updatedTxItem = loanService.toDashboardTransaction(updatedLoanItem)
+        const mergedLoan = {
+          ...updatedLoanItem,
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = loanService.toDashboardTransaction(mergedLoan)
 
-        setCurrentLoan(updatedLoanItem)
+        setCurrentLoan(mergedLoan)
         setCurrentTx(updatedTxItem)
 
         if (onLoanUpdated) {
-          onLoanUpdated(updatedLoanItem)
+          onLoanUpdated(mergedLoan)
         }
       } else {
         const payload: Partial<NewSalesInput> = {
@@ -624,16 +942,25 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           amount: parsedAmount,
           paymentMethod: paymentMethod.trim() || 'Cash',
           category: category.trim() || 'General',
+          remarks: remarks.trim(),
+          updatedBy: modifierName,
+          updatedAt: nowIso,
         }
 
         const updatedSaleItem = await salesService.updateSale(targetId, payload)
-        const updatedTxItem = salesService.toDashboardTransaction(updatedSaleItem)
+        const mergedSale = {
+          ...updatedSaleItem,
+          remarks: remarks.trim(),
+          updatedBy: modifierName,
+          updatedAt: nowIso,
+        }
+        const updatedTxItem = salesService.toDashboardTransaction(mergedSale)
 
-        setCurrentSale(updatedSaleItem)
+        setCurrentSale(mergedSale)
         setCurrentTx(updatedTxItem)
 
         if (onSaleUpdated) {
-          onSaleUpdated(updatedSaleItem)
+          onSaleUpdated(mergedSale)
         }
       }
 
@@ -661,31 +988,31 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     >
       <DialogContent
         className={cn(
-          'rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl transition-all duration-200 max-h-[85vh] overflow-y-auto',
+          'rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl transition-all duration-200 max-h-[85vh] overflow-y-auto overflow-x-hidden w-full max-w-[calc(100vw-2rem)]',
           isEditing ? 'sm:max-w-[640px]' : (hasMultipleParticulars ? 'sm:max-w-[740px]' : 'sm:max-w-[580px]')
         )}
       >
         {/* Header */}
-        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-7">
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="w-8 h-8 rounded-lg bg-[#0B0F2B] text-white flex items-center justify-center shrink-0 shadow-xs">
+        <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
               {isEditing ? (
-                <Pencil className="w-4 h-4 text-white" />
+                <Pencil className="w-5 h-5 text-white" />
               ) : (
-                <FileText className="w-4 h-4 text-white" />
+                <FileText className="w-5 h-5 text-white" />
               )}
             </div>
             <div>
-              <DialogTitle className="text-base sm:text-lg font-bold text-focus leading-tight">
+              <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">
                 {isEditing ? 'Edit Transaction Details' : (isAdmin ? 'Audit Transaction Details' : 'Transaction Details')}
               </DialogTitle>
+              <DialogDescription className="text-xs text-muted-fg font-normal mt-0.5">
+                {isEditing
+                  ? 'Update the transaction details directly below, then save changes'
+                  : (isAdmin ? 'Complete audit record and transaction details' : 'Complete transaction record')}
+              </DialogDescription>
             </div>
           </div>
-          <DialogDescription className="text-[11px] text-muted-fg font-normal mt-1">
-            {isEditing
-              ? 'Update the transaction details directly below, then save changes'
-              : (isAdmin ? 'Complete audit record and transaction details' : 'Complete transaction record')}
-          </DialogDescription>
         </DialogHeader>
 
         {/* Content Body */}
@@ -733,6 +1060,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   type="text"
                   placeholder="e.g. CHQ-8892"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-9 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -748,6 +1076,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 type="text"
                 placeholder={isExpense ? "e.g. Office Supplies" : isLoan ? "e.g. Loan Commitment" : "e.g. Catering Deposit"}
                 value={particulars}
+                maxLength={255}
                 onChange={(e) => {
                   setParticulars(e.target.value)
                   if (fieldErrors.particulars) {
@@ -775,6 +1104,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   inputMode="decimal"
                   placeholder="1.00"
                   value={amount}
+                  maxLength={20}
                   onKeyDown={(e) => {
                     if (['-', '+', 'e', 'E'].includes(e.key)) {
                       e.preventDefault()
@@ -915,6 +1245,20 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             </div>
             )}
 
+            {/* Remarks (Supervisor and Finance Notes) */}
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks (Optional)
+              </Label>
+              <textarea
+                rows={2}
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                placeholder="Add operational notes or remarks…"
+                className="w-full rounded-xl border border-stroke/50 text-xs p-2.5 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
+              />
+            </div>
+
             {/* Read-only Context (Company) */}
             <div className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
               <span className="text-[11px] font-medium text-muted-fg">Company:</span>
@@ -990,31 +1334,48 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             {/* Key-Value Details */}
             <div className="space-y-1.5 text-xs">
               {/* Reference No */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Reference No:
                 </span>
-                <span className="font-mono text-xs font-semibold text-focus text-right">
+                <span className="font-mono text-xs font-semibold text-focus text-right break-all min-w-0">
                   {displayRefNo}
                 </span>
               </div>
 
               {/* 1. Date */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
-                  Transaction Date:
+                  {depositSource ? 'Sale Date:' : 'Transaction Date:'}
                 </span>
                 <span className="text-xs font-semibold text-focus text-right">
                   {displayDate}
                 </span>
               </div>
 
+              {isDepositedSale && depositDateRaw && (
+                <>
+                  <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
+                    <span className="text-[11px] font-medium text-muted-fg shrink-0">Deposit Date:</span>
+                    <span className="text-xs font-semibold text-emerald-700 text-right">
+                      {formatDisplayDate(depositDateRaw)}
+                    </span>
+                  </div>
+                  {depositBankLabel && (
+                    <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
+                      <span className="text-[11px] font-medium text-muted-fg shrink-0">Target Bank:</span>
+                      <span className="text-xs font-semibold text-focus text-right">{depositBankLabel}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
               {/* 2. Cheque Number */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Cheque Number:
                 </span>
-                <span className="font-mono text-xs font-semibold text-focus text-right">
+                <span className="font-mono text-xs font-semibold text-focus text-right break-all min-w-0">
                   {displayChequeNo}
                 </span>
               </div>
@@ -1074,7 +1435,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                               <td className="py-2 px-2 text-center font-mono text-[11px] text-muted-fg">
                                 {idx + 1}
                               </td>
-                              <td className="py-2 px-2 font-medium text-focus break-words leading-tight" title={item.particulars}>
+                              <td className="py-2 px-2 font-medium text-focus break-words [overflow-wrap:anywhere] leading-tight" title={item.particulars}>
                                 {item.particulars}
                               </td>
                               {parsedParticularItems.some((it) => Boolean(it.status)) && (
@@ -1127,34 +1488,34 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-stroke/10">
+                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                   <span className="text-[11px] font-medium text-muted-fg shrink-0">
                     Particulars:
                   </span>
-                  <span className="text-xs font-medium text-focus text-right max-w-[280px]">
+                  <span className="text-xs font-medium text-focus text-right max-w-[280px] break-words [overflow-wrap:anywhere] min-w-0">
                     {displayParticulars}
                   </span>
                 </div>
               )}
 
               {/* Payment Method */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Payment Method:
                 </span>
-                <span className="text-xs font-semibold text-focus text-right">
+                <span className="text-xs font-semibold text-focus text-right break-words [overflow-wrap:anywhere] min-w-0">
                   {displayPaymentMethod}
                 </span>
               </div>
 
               {/* 4. Category (Expense only) */}
               {isExpense && (
-                <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+                <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Category:
                 </span>
                 <span
-                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold select-none"
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold select-none break-all max-w-[220px] truncate"
                   style={{
                     backgroundColor: `${categoryColor}15`,
                     color: categoryColor,
@@ -1162,26 +1523,26 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   }}
                 >
                   <span
-                    className="w-1.5 h-1.5 rounded-full"
+                    className="w-1.5 h-1.5 rounded-full shrink-0"
                     style={{ backgroundColor: categoryColor }}
                   />
-                  {displayCategory}
+                  <span className="truncate">{displayCategory}</span>
                 </span>
               </div>
               )}
 
               {/* 5. Company */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Company:
                 </span>
-                <span className="text-xs font-semibold text-focus text-right">
+                <span className="text-xs font-semibold text-focus text-right break-words [overflow-wrap:anywhere] min-w-0">
                   {displayCompany}
                 </span>
               </div>
 
               {/* 6. Payment Status */}
-              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10">
+              <div className="flex items-center justify-between gap-3 py-1.5 border-b border-stroke/10 min-w-0">
                 <span className="text-[11px] font-medium text-muted-fg shrink-0">
                   Payment Status:
                 </span>
@@ -1207,119 +1568,502 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 </span>
                 <div className="flex items-center gap-1.5 text-right">
                   {currentAuditStatus === 'Verified' ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                       <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                       <span>Audited</span>
                     </span>
+                  ) : currentAuditStatus === 'Flagged' ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
+                      <AlertCircle className="w-3 h-3 text-rose-600" />
+                      <span>Discrepancy</span>
+                    </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
-                      <AlertCircle className="w-3 h-3 text-amber-600" />
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
+                      <Clock className="w-3 h-3 text-amber-600" />
                       <span>Pending Audit</span>
                     </span>
                   )}
-                  {displayAuditedBy && currentAuditStatus === 'Verified' && (
+                  {displayAuditedBy && currentAuditStatus !== 'Pending Audit' && (
                     <span className="text-[10px] text-muted-fg italic">
-                      by {displayAuditedBy} {displayAuditDate ? `(${displayAuditDate})` : ''}
+                      by {formatRealName(displayAuditedBy, 'Audit Officer')} {displayAuditDate ? `(${displayAuditDate})` : ''}
                     </span>
                   )}
                 </div>
               </div>
 
-              {/* 8. Created At (if present) */}
-              {displayCreatedAt && (
-                <div className="flex items-center justify-between gap-3 py-1.5">
-                  <span className="text-[11px] font-medium text-muted-fg shrink-0">
-                    Created At:
+              {/* Remarks (Supervisor and Finance Notes) */}
+              <div className="flex items-start justify-between gap-3 py-2 border-b border-stroke/10 min-w-0">
+                <div className="min-w-0 flex-1">
+                  <span className="text-[11px] font-medium text-muted-fg block">
+                    Remarks:
                   </span>
-                  <span className="font-mono text-focus text-right text-[11px]">
-                    {displayCreatedAt}
+                  <p className="text-xs font-medium text-focus mt-0.5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                    {displayRemarks ? (
+                      displayRemarks
+                    ) : (
+                      <span className="text-muted-fg/60 italic font-normal">No remarks provided</span>
+                    )}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRemarksInput(displayRemarks || '')
+                    setIsRemarksModalOpen(true)
+                  }}
+                  className="h-7 px-2.5 text-[11px] font-semibold rounded-lg border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary flex items-center gap-1 shrink-0 cursor-pointer"
+                  title="Add or update remarks"
+                >
+                  <MessageSquare className="w-3 h-3 text-primary" />
+                  <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+                </Button>
+              </div>
+
+              {/* Day Remark (one note for the whole day, separate from the transaction remark) */}
+              {dayRemarkKind && dayRemarkCompany && /^\d{4}-\d{2}-\d{2}$/.test(dayRemarkDate) && (
+                <div className="py-2 border-b border-stroke/10 min-w-0">
+                  <span className="text-[11px] font-medium text-muted-fg block mb-0.5">
+                    Day remark ({formatDisplayDate(dayRemarkDate)}):
                   </span>
+                  <DayRemarkCell
+                    variant="block"
+                    companyNames={[dayRemarkCompany]}
+                    date={dayRemarkDate}
+                    formattedDate={formatDisplayDate(dayRemarkDate)}
+                    kindLabel={dayRemarkKind === 'expense' ? 'Expense' : 'Sales'}
+                    canEdit={canEditDayRemark}
+                    getRemark={getDayRemark}
+                    onSave={saveDayRemark}
+                  />
                 </div>
               )}
+
+              {/* Activity Timeline & Remarks Section */}
+              <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
+                <div className="flex items-center justify-between pb-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    Activity Timeline & Remarks
+                  </span>
+                  <span className="text-[10px] text-muted-fg font-mono">
+                    ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
+                  </span>
+                </div>
+
+                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
+                  {isLoadingTimeline ? (
+                    <div className="py-4 flex items-center justify-center gap-2 text-xs text-muted-fg">
+                      <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                      <span>Loading complete activity timeline...</span>
+                    </div>
+                  ) : timelineEvents.length > 0 ? (
+                    <div className="space-y-3 relative before:absolute before:inset-0 before:left-3 before:w-0.5 before:bg-slate-200">
+                      {timelineEvents.map((event, idx) => {
+                        let iconColor = 'bg-blue-100 text-blue-600 border-blue-200'
+                        let IconComponent = FileText
+                        if (event.event_type === 'created') {
+                          iconColor = 'bg-blue-100 text-blue-600 border-blue-200'
+                          IconComponent = PlusCircle
+                        } else if (event.event_type === 'edited') {
+                          iconColor = 'bg-amber-100 text-amber-700 border-amber-200'
+                          IconComponent = Pencil
+                        } else if (event.event_type === 'endorsed') {
+                          iconColor = 'bg-indigo-100 text-indigo-700 border-indigo-200'
+                          IconComponent = UserCheck
+                        } else if (event.event_type === 'audited') {
+                          const isVer =
+                            event.status_badge === 'Verified' ||
+                            event.title.toLowerCase().includes('verified') ||
+                            event.title.toLowerCase().includes('approved')
+                          iconColor = isVer
+                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                            : 'bg-rose-100 text-rose-700 border-rose-200'
+                          IconComponent = ShieldCheck
+                        } else if (event.event_type === 'disbursed' || event.event_type === 'payment') {
+                          iconColor = 'bg-teal-100 text-teal-700 border-teal-200'
+                          IconComponent = CheckCircle2
+                        }
+
+                        return (
+                          <div key={event.id || idx} className="relative flex items-start gap-3 pl-1">
+                            <div className={cn('relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border shadow-2xs', iconColor)}>
+                              <IconComponent className="h-3 w-3" />
+                            </div>
+                            <div className="min-w-0 flex-1 rounded-xl border border-stroke/20 bg-white/90 p-2.5 text-xs shadow-2xs space-y-1">
+                              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-focus">{event.title}</span>
+                                  {event.status_badge && (
+                                    <span
+                                      className={cn(
+                                        'text-[10px] font-semibold px-1.5 py-0.5 rounded-full border',
+                                        event.status_badge === 'Verified' ||
+                                          event.status_badge === 'Approved' ||
+                                          event.status_badge === 'Paid' ||
+                                          event.status_badge === 'Settled'
+                                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                          : event.status_badge === 'Flagged' ||
+                                            event.status_badge.toLowerCase().includes('disapproved')
+                                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                          : 'bg-amber-50 text-amber-700 border-amber-200'
+                                      )}
+                                    >
+                                      {event.status_badge}
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                                  {formatTimelineDateTime(event.timestamp)}
+                                </span>
+                              </div>
+
+                              <div className="text-[11px] text-muted-fg flex items-center gap-1.5 flex-wrap">
+                                <span>By</span>
+                                <span className="font-semibold text-focus">
+                                  {formatRealName(event.actor_name, event.actor_role || 'Staff')}
+                                </span>
+                                {event.actor_role && (
+                                  <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium border border-slate-200">
+                                    {event.actor_role}
+                                  </span>
+                                )}
+                              </div>
+
+                              {event.description && (
+                                <p className="text-[11px] text-slate-600 leading-relaxed">
+                                  {event.description}
+                                </p>
+                              )}
+
+                              {/* Changes Diff */}
+                              {event.changes && Object.keys(event.changes).length > 0 && (
+                                <div className="mt-1.5 pt-1.5 border-t border-slate-100 space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                                    Changes Made:
+                                  </span>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {Object.entries(event.changes).map(([field, val]) => {
+                                      const fieldLabel = field.replace(/_/g, ' ')
+                                      let changeText = ''
+                                      if (typeof val === 'object' && val !== null) {
+                                        const fromVal = (val as any).from ?? (val as any).old
+                                        const toVal = (val as any).to ?? (val as any).new
+                                        changeText = fromVal !== undefined ? `${fromVal} → ${toVal}` : String(toVal)
+                                      } else {
+                                        changeText = String(val)
+                                      }
+                                      return (
+                                        <span
+                                          key={field}
+                                          className="inline-flex items-center gap-1 text-[10px] bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5"
+                                        >
+                                          <span className="font-semibold capitalize text-slate-700">{fieldLabel}:</span>
+                                          <span className="font-mono text-slate-600">{changeText}</span>
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Notes / Remarks */}
+                              {event.notes && (
+                                <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 border border-amber-200/80 text-[11px] text-amber-900 leading-relaxed">
+                                  <span className="font-semibold block text-[10px] uppercase text-amber-800">Remark / Note:</span>
+                                  <span className="whitespace-pre-wrap">{event.notes}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    /* Fallback Timeline */
+                    <>
+                      {/* Created Event */}
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            Created by{' '}
+                            <span className="text-primary font-bold">
+                              {formatRealName(displayCreatedBy || 'Authorized Staff', 'Staff')}
+                            </span>
+                          </span>
+                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                            {formatTimelineDateTime(displayCreatedAt)}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted-fg">
+                          Initial record added to {displayCompany} ledger
+                        </p>
+                      </div>
+
+                      {/* Modified Event (if updated) */}
+                      {displayUpdatedAt && displayUpdatedAt !== displayCreatedAt && (
+                        <div className="pt-2 border-t border-stroke/15 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-focus">
+                              Last modified
+                              {' '}by{' '}
+                              <span className="text-blue-600 font-bold">
+                                {formatRealName(displayUpdatedBy || user?.fullName || 'Authorized Staff', user?.role || 'Supervisor')}
+                              </span>
+                            </span>
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(displayUpdatedAt)}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-muted-fg">
+                            Transaction details or items modified
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Audit Review Event */}
+                      <div className="pt-2 border-t border-stroke/15 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {currentAuditStatus === 'Verified' ? (
+                              <span className="text-emerald-700 font-bold">
+                                Audited & Verified
+                                {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : currentAuditStatus === 'Flagged' ? (
+                              <span className="text-rose-700 font-bold">
+                                Flagged for Audit Review
+                                {displayAuditedBy ? ` by ${formatRealName(displayAuditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">
+                                Pending Audit Review
+                              </span>
+                            )}
+                          </span>
+                          {displayAuditDate && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(displayAuditDate)}
+                            </span>
+                          )}
+                        </div>
+                        {displayAuditNotes ? (
+                          <div className="mt-2 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs shadow-2xs">
+                            <strong className="text-rose-900 font-bold block mb-1 text-[11px] flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              Auditor Remarks / Discrepancy Note:
+                            </strong>
+                            <p className="leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{displayAuditNotes}</p>
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-muted-fg mt-0.5">
+                            {currentAuditStatus === 'Verified'
+                              ? 'Approved and verified by Internal Audit.'
+                              : currentAuditStatus === 'Flagged'
+                              ? 'Flagged for audit review.'
+                              : 'Pending review by Internal Audit team.'}
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  )}
+
+                  {/* Reference / Cheque Remark */}
+                  {displayChequeNo && displayChequeNo !== '—' && (
+                    <div className="flex items-center justify-between pt-2 border-t border-stroke/15 text-[11px]">
+                      <span className="text-muted-fg font-medium">
+                        Cheque / Reference No:
+                      </span>
+                      <span className="font-mono font-semibold text-focus bg-white px-2 py-0.5 rounded border border-stroke/30">
+                        {displayChequeNo}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Admin Audit Actions: Unmark as Audit / Mark as Audited */}
+            {/* Audit Actions: Mark as Audited, Flag Discrepancy, or Reset */}
             {canAudit && (
-              <div className="flex items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
+              <div className="sticky bottom-0 z-20 bg-white flex flex-wrap items-center justify-between gap-2.5 pt-3 pb-1 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (
                     <span className="text-emerald-700 font-semibold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      Verified and marked as Audited
+                      Audited & Verified
+                    </span>
+                  ) : currentAuditStatus === 'Flagged' ? (
+                    <span className="text-rose-700 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      Discrepancy Flagged
                     </span>
                   ) : (
                     <span className="text-amber-700 font-medium flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       Pending Audit Review
                     </span>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {currentAuditStatus === 'Verified' ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    disabled={isSubmittingAudit}
+                    onClick={handleMarkAudit}
+                    className="h-9 px-4 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    title="Mark as Audited"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                    <span>{currentAuditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isSubmittingAudit}
+                    onClick={() => {
+                      setDiscrepancyReason(displayAuditNotes || '')
+                      setIsDiscrepancyModalOpen(true)
+                    }}
+                    className="h-9 px-3.5 text-xs font-semibold rounded-xl border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                    title="Flag Discrepancy"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Flag Discrepancy</span>
+                  </Button>
+
+                  {currentAuditStatus !== 'Pending Audit' && (
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="ghost"
+                      disabled={isSubmittingAudit}
                       onClick={handleUnmarkAudit}
-                      className="h-9 px-3.5 text-xs font-semibold rounded-xl border-amber-300 bg-amber-50/70 text-amber-800 hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
-                      title="Unmark as audit"
+                      className="h-9 px-3 text-xs font-medium rounded-xl text-muted-fg hover:text-focus hover:bg-slate-100 flex items-center gap-1.5 cursor-pointer"
+                      title="Reset to Pending Audit"
                     >
-                      <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Unmark as Audit</span>
-                    </Button>
-                  ) : (
-                    <Button
-                      type="button"
-                      onClick={handleMarkAudit}
-                      className="h-9 px-4 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                      title="Mark as Audited"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-white" />
-                      <span>Mark as Audited</span>
+                      <RotateCcw className="w-3.5 h-3.5 text-muted-fg" />
+                      <span className="hidden sm:inline">Reset</span>
                     </Button>
                   )}
                 </div>
               </div>
             )}
 
-            {/* View Mode Footer: Strictly read-only until the user clicks the Edit button */}
-            {isEditable && (
-              <div className="flex items-center justify-end gap-2.5 pt-3 mt-2 border-t border-stroke/20">
-                {isLoan ? (
-                  <Button
-                    type="button"
-                    onClick={() => setIsEditing(true)}
-                    className="h-9 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-white" />
-                    <span>Edit</span>
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    onClick={handleEditInSheet}
-                    className="h-9 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                    title="Edit transaction in Excel Sheet"
-                  >
-                    <Pencil className="w-3.5 h-3.5 text-white" />
-                    <span>Edit</span>
-                  </Button>
+            {/* Operational Remarks Button and Edit Actions Footer */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setRemarksInput(displayRemarks || '')
+                  setIsRemarksModalOpen(true)
+                }}
+                className="h-9 px-3.5 text-xs font-semibold rounded-xl border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary flex items-center gap-1.5 cursor-pointer shadow-2xs transition-colors"
+                title="Immediately add or edit operational remarks"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary" />
+                <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+              </Button>
+
+              <div className="flex items-center gap-2">
+                {isEditable && (
+                  isLoan ? (
+                    <Button
+                      type="button"
+                      onClick={() => setIsEditing(true)}
+                      className="h-9 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-white" />
+                      <span>Edit</span>
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      onClick={handleEditInSheet}
+                      className="h-9 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                      title="Edit transaction in Excel Sheet"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-white" />
+                      <span>Edit</span>
+                    </Button>
+                  )
+                )}
+
+                {isAudited && !isAdmin && (
+                  <span className="text-xs font-medium text-muted-fg bg-slate-100/90 px-3 py-1.5 rounded-xl flex items-center gap-1.5 border border-stroke/30">
+                    <Lock className="w-3 h-3 text-slate-500 shrink-0" />
+                    <span>Audited</span>
+                  </span>
                 )}
               </div>
-            )}
-
-            {/* If transaction has already been audited, operational user can no longer edit */}
-            {isAudited && !isAdmin && (
-              <div className="flex items-center justify-end gap-2 pt-3 mt-2 border-t border-stroke/20">
-                <span className="text-xs font-medium text-muted-fg bg-slate-100/90 px-3.5 py-2 rounded-xl flex items-center gap-2 border border-stroke/30">
-                  <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  <span>This transaction has already been audited and can no longer be edited.</span>
-                </span>
-              </div>
-            )}
+            </div>
           </div>
         )}
       </DialogContent>
+
+      {/* Immediate Remarks Dialog for Finance / Supervisor */}
+      <Dialog open={isRemarksModalOpen} onOpenChange={setIsRemarksModalOpen}>
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold text-focus leading-tight">
+                  Update Remarks
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter operational remarks for supervisor and finance records.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks
+              </Label>
+              <textarea
+                rows={4}
+                value={remarksInput}
+                onChange={(e) => setRemarksInput(e.target.value)}
+                placeholder="Enter remarks or notes here…"
+                className="w-full rounded-xl border border-stroke/50 text-xs p-3 font-normal focus:outline-none focus:ring-1 focus:ring-focus bg-white resize-y"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/15">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingRemarks}
+                onClick={() => setIsRemarksModalOpen(false)}
+                className="h-8.5 px-3.5 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSubmittingRemarks}
+                onClick={handleSaveImmediateRemarks}
+                className="h-8.5 px-4 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                {isSubmittingRemarks ? (
+                  <>
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Save Remarks</span>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Embedded Update Loan Status Modal when opened from transaction details */}
       {activeLoan && (
@@ -1336,6 +2080,79 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           }}
         />
       )}
+      {/* Modal: Flag Discrepancy Reason */}
+      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-bold text-focus leading-tight">
+                  Flag Audit Discrepancy
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Describe the discrepancy or required correction for this transaction.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Discrepancy Reason / Remarks <span className="text-rose-600">*</span>
+              </Label>
+              <textarea
+                rows={3}
+                value={discrepancyReason}
+                onChange={(e) => setDiscrepancyReason(e.target.value)}
+                placeholder="e.g. Voucher amount does not match the attached official receipt..."
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-1 focus:ring-rose-500 font-normal leading-relaxed resize-none"
+              />
+              {!discrepancyReason.trim() && (
+                <p className="text-[10px] text-muted-fg leading-tight">
+                  A reason is required so Finance and Operations can address the discrepancy.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stroke/20">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingAudit}
+                onClick={() => {
+                  setIsDiscrepancyModalOpen(false)
+                  setDiscrepancyReason('')
+                }}
+                className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={!discrepancyReason.trim() || isSubmittingAudit}
+                onClick={handleConfirmDiscrepancy}
+                className="h-9 px-4 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSubmittingAudit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Flagging…</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-white" />
+                    <span>Flag Discrepancy</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }

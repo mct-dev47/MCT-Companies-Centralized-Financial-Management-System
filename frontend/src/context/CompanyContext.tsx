@@ -195,10 +195,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const allCompanies = React.useMemo(() => {
     if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
-      if (userAssignedCompanies.length > 1) {
-        return ['All Companies', ...userAssignedCompanies]
-      }
-      return [userAssignedCompanies[0]]
+      return userAssignedCompanies.filter((c) => c !== 'All Companies')
     }
     if (dynamicCompanies.length > 0) return dynamicCompanies
     return ALL_COMPANIES_LIST

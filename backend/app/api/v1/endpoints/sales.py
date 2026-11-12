@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from typing import List, Optional
 from datetime import date
 from decimal import Decimal
+from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
 from app.models.company import Company
-from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate
+from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate, RemarksUpdate
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -17,6 +18,12 @@ from app.services.sales_receivables_sync import (
     compute_paid_amount_from_particulars,
 )
 from app.core.websocket import ws_manager
+from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
+from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
+
+
+class _SkipBackup(Exception):
+    """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
 
@@ -31,7 +38,28 @@ from app.core.dependencies import (
     require_business_writer,
 )
 from app.core.company_resolver import resolve_company, normalize_company_id
+from app.core.pagination import PaginationParams
 from app.core.cache import get_cached, set_cached
+
+
+def reconcile_sale_bank(
+    db: Session,
+    *,
+    sale_id: int,
+    bank_account_id: Optional[str] = None,
+    reference_no: Optional[str] = None,
+    force_zero: bool = False,
+    legacy_particulars: Optional[str] = None,
+) -> None:
+    """Keep the bank equal to the Transactions ledger: a sale (including lines settled through a
+    receivable) counts as cash only while it is Deposited, so the bank holds that amount only then."""
+    SalesReceivablesSyncService(db).reconcile_sale_bank(
+        sale_id,
+        account_id=bank_account_id,
+        reference_no=reference_no,
+        force_zero=force_zero,
+        legacy_particulars=legacy_particulars,
+    )
 
 
 def get_supabase_mappings(client):
@@ -78,9 +106,22 @@ def get_sales(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
+    pagination: PaginationParams = Depends(),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    # Normalize FastAPI Query parameters if called directly in tests/python code
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+
     is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
@@ -120,7 +161,8 @@ def get_sales(
         if end_date:
             sb_query = sb_query.lte("transaction_date", end_date.isoformat())
 
-        res = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True).execute()
+        sb_query = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True)
+        res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
         return [
@@ -131,12 +173,16 @@ def get_sales(
                 category_id=row.get("category_id"),
                 category_name=cat_map.get(row.get("category_id")) or "None",
                 payment_method=row.get("payment_method"),
+                payment_status=row.get("payment_status") or "Paid",
+                deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
+                deposit_date=row.get("deposit_date"),
                 transaction_date=row.get("transaction_date"),
                 cheque_no=row.get("cheque_number") or row.get("cheque_no") or row.get("reference_no"),
                 amount=row.get("amount") or 0.0,
                 particulars=row.get("particulars") or row.get("description") or "",
                 created_at=row.get("created_at"),
                 updated_at=row.get("updated_at"),
+                remarks=row.get("remarks"),
                 **audit_fields(row)
             )
             for row in rows
@@ -179,7 +225,7 @@ def get_sales(
         if end_date:
             query = query.filter(Sale.transaction_date <= end_date)
 
-        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
+        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
         return [
             SaleOut(
@@ -189,16 +235,224 @@ def get_sales(
                 category_id=sale.category_id,
                 category_name=cat_name or "None",
                 payment_method=sale.payment_method,
+                payment_status=sale.payment_status or "Paid",
+                deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+                deposit_date=sale.deposit_date,
                 transaction_date=sale.transaction_date,
                 cheque_no=sale.cheque_no,
                 amount=sale.amount,
                 particulars=sale.particulars or "",
                 created_at=sale.created_at,
                 updated_at=sale.updated_at,
+                remarks=getattr(sale, "remarks", None),
                 **audit_fields(sale)
             )
             for sale, c_name, cat_name in rows
         ]
+
+
+def _to_date(val) -> Optional[date]:
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str) and val.strip():
+        try:
+            return date.fromisoformat(val.strip().split("T")[0])
+        except Exception:
+            try:
+                parts = val.strip().split("/")
+                if len(parts) == 3:
+                    m, d, y = parts
+                    if len(y) == 2:
+                        y = "20" + y
+                    return date(int(y), int(m), int(d))
+            except Exception:
+                pass
+    return None
+
+
+def _rollup_audit_status(statuses: List[str]) -> str:
+    if not statuses:
+        return "Pending Audit"
+    cleaned = [s.strip() for s in statuses if s]
+    if any(s.lower() in ("discrepancy", "flagged") for s in cleaned):
+        return "Discrepancy"
+    if all(s.lower() in ("verified", "all verified") for s in cleaned):
+        return "All Verified"
+    return "Pending Audit"
+
+
+@router.get("/daily-summary", response_model=List[DailySalesSummaryOut], summary="Daily sales aggregation summary")
+def get_sales_daily_summary(
+    company_id: Optional[int] = Query(None, description="Filter by Company ID"),
+    company_name: Optional[str] = Query(None, description="Filter by Company Name"),
+    category_id: Optional[int] = Query(None, description="Filter by Category ID"),
+    start_date: Optional[date] = Query(None, description="Filter from date"),
+    end_date: Optional[date] = Query(None, description="Filter to date"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    view_type: Optional[str] = Query(None, description="View type ('deposit' or 'sales')"),
+    search: Optional[str] = Query(None, description="Search keyword"),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db)
+):
+    # Normalize FastAPI Query parameters if called directly in tests/python code
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+
+    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    raw_records = []
+
+    try:
+        if not use_sb:
+            raise RuntimeError("In-memory SQLite session")
+        client = get_supabase_admin_client()
+
+        sb_query = client.table("sales").select("*")
+
+        resolved_company_id = normalize_company_id(company_id)
+        if resolved_company_id:
+            check_company_access(current_user, resolved_company_id)
+            sb_query = sb_query.eq("company_id", resolved_company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved_comp = resolve_company(db, company_name=company_name)
+            target_cid = resolved_comp.company_id
+            check_company_access(current_user, target_cid)
+            sb_query = sb_query.eq("company_id", target_cid)
+        elif user_company_ids:
+            if len(user_company_ids) == 1:
+                sb_query = sb_query.eq("company_id", user_company_ids[0])
+            else:
+                sb_query = sb_query.in_("company_id", user_company_ids)
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            sb_query = sb_query.eq("category_id", category_id)
+        if start_date:
+            sb_query = sb_query.gte("transaction_date", start_date.isoformat())
+        if end_date:
+            sb_query = sb_query.lte("transaction_date", end_date.isoformat())
+
+        res = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True).execute()
+        rows = res.data or []
+        for r in rows:
+            raw_records.append({
+                "transaction_date": r.get("transaction_date"),
+                "amount": r.get("amount") or 0.0,
+                "particulars": r.get("particulars") or r.get("description") or "",
+                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
+                "audit_status": r.get("audit_status") or "Pending Audit",
+                "deposit_status": r.get("deposit_status"),
+            })
+    except HTTPException:
+        raise
+    except Exception:
+        query = db.query(Sale)
+        if company_id:
+            check_company_access(current_user, company_id)
+            query = query.filter(Sale.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            try:
+                resolved_comp = resolve_company(db, company_name=company_name)
+                check_company_access(current_user, resolved_comp.company_id)
+                query = query.filter(Sale.company_id == resolved_comp.company_id)
+            except HTTPException:
+                raise
+            except Exception:
+                query = query.join(Company, Sale.company_id == Company.company_id).filter(
+                    func.lower(Company.company_name) == func.lower(company_name.strip())
+                )
+        elif user_company_ids:
+            query = query.filter(Sale.company_id.in_(user_company_ids))
+        elif not is_privileged:
+            return []
+
+        if category_id:
+            query = query.filter(Sale.category_id == category_id)
+        if start_date:
+            query = query.filter(Sale.transaction_date >= start_date)
+        if end_date:
+            query = query.filter(Sale.transaction_date <= end_date)
+
+        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
+        for s in rows:
+            raw_records.append({
+                "transaction_date": s.transaction_date,
+                "amount": s.amount,
+                "particulars": s.particulars or "",
+                "cheque_no": s.cheque_no or "",
+                "audit_status": s.audit_status or "Pending Audit",
+                "deposit_status": s.deposit_status,
+            })
+
+    # Group by date
+    daily_groups = defaultdict(lambda: {
+        "count": 0,
+        "gross_total": Decimal("0.00"),
+        "realized_cash": Decimal("0.00"),
+        "audit_statuses": []
+    })
+
+    search_term = (search or "").strip().lower()
+    is_deposit_view = (view_type or "").lower() == "deposit"
+
+    for r in raw_records:
+        rec_date = _to_date(r["transaction_date"])
+        if not rec_date:
+            continue
+
+        parts = r["particulars"]
+        chq = r["cheque_no"]
+
+        if search_term:
+            if search_term not in parts.lower() and search_term not in chq.lower():
+                continue
+
+        amt = Decimal(str(r["amount"] or 0))
+        dep_raw = r.get("deposit_status")
+        # In Scenario A: Only records marked 'Deposited' count toward realized/deposited cash
+        if dep_raw is not None and str(dep_raw).strip():
+            is_deposited = str(dep_raw).strip().lower() == "deposited"
+        else:
+            is_deposited = True
+
+        realized = compute_paid_amount_from_particulars(parts, amt) if is_deposited else Decimal("0.00")
+
+        if is_deposit_view and not is_deposited:
+            continue
+
+        gross = realized if is_deposit_view else amt
+
+        daily_groups[rec_date]["count"] += 1
+        daily_groups[rec_date]["gross_total"] += gross
+        daily_groups[rec_date]["realized_cash"] += realized
+        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+
+    result = [
+        DailySalesSummaryOut(
+            date=d,
+            day_of_week=d.strftime("%A"),
+            transaction_count=data["count"],
+            gross_total=data["gross_total"],
+            realized_cash=data["realized_cash"],
+            audit_status=_rollup_audit_status(data["audit_statuses"])
+        )
+        for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
+    ]
+    return result
+
 
 
 @router.post("", response_model=SaleOut, status_code=status.HTTP_201_CREATED, summary="Record a new sale")
@@ -209,14 +463,18 @@ def create_sale(
     db: Session = Depends(get_db)
 ):
     if sale_in.amount < 1.00:
-        raise HTTPException(status_code=400, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
+        raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
     if sale_in.transaction_date > date.today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     parts = (sale_in.particulars or sale_in.description or "").strip()
     if not parts:
-        raise HTTPException(status_code=400, detail="Particulars is required.")
+        raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
+
+    cat_str = (sale_in.category or "").strip()
+    if not sale_in.category_id and not cat_str:
+        raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (sale_in.cheque_no or sale_in.chequeNo or "").strip() or None
     use_sb = SalesReceivablesSyncService(db)._use_supabase()
@@ -262,10 +520,19 @@ def create_sale(
             "company_id": target_company_id,
             "category_id": resolved_category_id,
             "payment_method": payment_method_str,
+            "payment_status": sale_in.payment_status or "Paid",
+            "deposit_status": sale_in.deposit_status or "Not Deposited",
+            "deposit_date": sale_in.deposit_date.isoformat() if sale_in.deposit_date else None,
             "transaction_date": sale_in.transaction_date.isoformat(),
             "cheque_number": cheque,
             "amount": float(sale_in.amount),
             "particulars": parts,
+            "remarks": sale_in.remarks,
+            "bank_account_id": sale_in.bank_account_id,
+            "audit_status": "Pending Audit",
+            "audited_by": None,
+            "audited_at": None,
+            "audit_remarks": None,
         }).execute()
 
         if not sb_insert.data:
@@ -274,8 +541,10 @@ def create_sale(
         created_row = sb_insert.data[0]
         sb_sales_id = created_row["sales_id"]
 
-        # Also backup to local SQLite
+        # Also backup to the ORM database, unless it IS the Supabase database (then the row is already there)
         try:
+            if rest_and_orm_share_database():
+                raise _SkipBackup()
             local_comp = db.query(Company).filter(Company.company_id == target_company_id).first()
             if not local_comp:
                 local_comp = Company(
@@ -292,41 +561,33 @@ def create_sale(
                 company_id=target_company_id,
                 category_id=resolved_category_id,
                 payment_method=payment_method_str,
+                payment_status=sale_in.payment_status or "Paid",
+                deposit_status=sale_in.deposit_status or "Not Deposited",
+                deposit_date=sale_in.deposit_date,
                 transaction_date=sale_in.transaction_date,
                 cheque_no=cheque,
                 amount=sale_in.amount,
-                particulars=parts
+                particulars=parts,
+                remarks=sale_in.remarks,
+                bank_account_id=sale_in.bank_account_id,
+                audit_status="Pending Audit",
+                audited_by=None,
+                audited_at=None,
+                audit_remarks=None,
             )
             db.merge(local_sale)
             db.commit()
+        except _SkipBackup:
+            pass
         except Exception:
             db.rollback()
 
-        # Credit settled portion to bank account if specified or company account exists
-        try:
-            from app.services.bank_service import BankService
-            paid_portion = compute_paid_amount_from_particulars(parts, sale_in.amount)
-            if paid_portion > Decimal("0.00"):
-                bank_svc = BankService(db)
-                if sale_in.bank_account_id:
-                    bank_svc.record_deposit_by_account_id(
-                        account_id=sale_in.bank_account_id,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {parts}",
-                        reference_no=cheque,
-                        tx_date=sale_in.transaction_date.strftime("%m/%d/%y") if hasattr(sale_in.transaction_date, "strftime") else str(sale_in.transaction_date),
-                    )
-                elif target_company_name:
-                    bank_svc.record_sale_cash_deposit(
-                        company_name=target_company_name,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {parts}",
-                        reference_no=cheque,
-                        tx_date=sale_in.transaction_date.strftime("%m/%d/%y") if hasattr(sale_in.transaction_date, "strftime") else str(sale_in.transaction_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company_name}})
-        except Exception:
-            pass
+        # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
+        reconcile_sale_bank(
+            db,
+            sale_id=sb_sales_id, bank_account_id=sale_in.bank_account_id,
+            reference_no=cheque,
+        )
 
         ws_manager.broadcast_sync(
             {
@@ -336,12 +597,26 @@ def create_sale(
             }
         )
 
-        log_transaction(
-            db, AuditAction.SALE_CREATED,
-            user_id=current_user.get("user_id"), company_id=target_company_id,
+        # Particulars library + audit log don't change the response: do them after it is sent
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+        schedule_created_side_effects(
+            db,
+            company_id=target_company_id,
+            company_name=target_company_name,
+            particulars_text=parts,
+            particulars_type="Sales",
+            audit_action=AuditAction.SALE_CREATED,
+            user_id=current_user.get("user_id"),
             ip_address=request.client.host if request.client else "unknown",
-            record_id=sb_sales_id, record_type="sale",
-            extra={"amount": float(sale_in.amount), "transaction_date": sale_in.transaction_date.isoformat()},
+            record_id=sb_sales_id,
+            record_type="sale",
+            audit_extra={
+                "amount": float(sale_in.amount),
+                "transaction_date": sale_in.transaction_date.isoformat(),
+                "particulars": parts,
+                "actor_name": actor_name,
+                "actor_role": current_user.get("role", "Staff"),
+            },
         )
 
         return SaleOut(
@@ -351,6 +626,9 @@ def create_sale(
             category_id=created_row.get("category_id"),
             category_name=category_name,
             payment_method=payment_method_str,
+            payment_status=created_row.get("payment_status") or sale_in.payment_status or "Paid",
+            deposit_status=created_row.get("deposit_status") or sale_in.deposit_status or "Not Deposited",
+            deposit_date=created_row.get("deposit_date") or sale_in.deposit_date,
             transaction_date=created_row.get("transaction_date"),
             cheque_no=created_row.get("cheque_number"),
             amount=created_row.get("amount"),
@@ -371,40 +649,31 @@ def create_sale(
             company_id=target_company.company_id,
             category_id=sale_in.category_id,
             payment_method=(sale_in.payment_method or "").strip() or None,
+            payment_status=sale_in.payment_status or "Paid",
+            deposit_status=sale_in.deposit_status or "Not Deposited",
+            deposit_date=sale_in.deposit_date,
             transaction_date=sale_in.transaction_date,
             cheque_no=cheque,
             amount=sale_in.amount,
             particulars=parts,
+            remarks=sale_in.remarks,
+            bank_account_id=sale_in.bank_account_id,
+            audit_status="Pending Audit",
+            audited_by=None,
+            audited_at=None,
+            audit_remarks=None,
         )
         db.add(sale)
         db.commit()
         db.refresh(sale)
 
-        # Auto-credit settled portion to company bank account
-        try:
-            from app.services.bank_service import BankService
-            paid_portion = compute_paid_amount_from_particulars(parts, sale.amount)
-            if paid_portion > Decimal("0.00"):
-                bank_svc = BankService(db)
-                if sale_in.bank_account_id:
-                    bank_svc.record_deposit_by_account_id(
-                        account_id=sale_in.bank_account_id,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {sale.particulars}",
-                        reference_no=cheque,
-                        tx_date=sale.transaction_date.strftime("%m/%d/%y") if hasattr(sale.transaction_date, "strftime") else str(sale.transaction_date),
-                    )
-                else:
-                    bank_svc.record_sale_cash_deposit(
-                        company_name=target_company.company_name,
-                        amount=paid_portion,
-                        particulars=f"Sales Collection: {sale.particulars}",
-                        reference_no=cheque,
-                        tx_date=sale.transaction_date.strftime("%m/%d/%y") if hasattr(sale.transaction_date, "strftime") else str(sale.transaction_date),
-                    )
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": target_company.company_name}})
-        except Exception:
-            pass
+        # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
+        reconcile_sale_bank(
+            db,
+            sale_id=sale.sales_id,
+            bank_account_id=sale_in.bank_account_id,
+            reference_no=cheque,
+        )
 
         ws_manager.broadcast_sync(
             {
@@ -414,12 +683,28 @@ def create_sale(
             }
         )
 
+        # Auto-save particulars to company library
+        try:
+            for p_name in extract_particular_names(parts):
+                save_company_particular_if_not_exists(
+                    db, target_company.company_id, target_company.company_name, p_name, "Sales"
+                )
+        except Exception:
+            pass
+
+        actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
             user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=sale.sales_id, record_type="sale",
-            extra={"amount": float(sale.amount), "transaction_date": sale_in.transaction_date.isoformat()},
+            extra={
+                "amount": float(sale.amount),
+                "transaction_date": sale_in.transaction_date.isoformat(),
+                "particulars": parts,
+                "actor_name": actor_name,
+                "actor_role": current_user.get("role", "Staff"),
+            },
         )
 
         return SaleOut(
@@ -429,6 +714,9 @@ def create_sale(
             category_id=sale.category_id,
             category_name="None",
             payment_method=sale.payment_method,
+            payment_status=sale.payment_status or "Paid",
+            deposit_status=sale.deposit_status or "Not Deposited",
+            deposit_date=sale.deposit_date,
             transaction_date=sale.transaction_date,
             cheque_no=sale.cheque_no,
             amount=sale.amount,
@@ -461,12 +749,16 @@ def get_sale(
                     category_id=row.get("category_id"),
                     category_name=cat_map.get(row.get("category_id")) or "None",
                     payment_method=row.get("payment_method"),
+                    payment_status=row.get("payment_status") or "Paid",
+                    deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
+                    deposit_date=row.get("deposit_date"),
                     transaction_date=row.get("transaction_date"),
                     cheque_no=row.get("cheque_number") or row.get("cheque_no"),
                     amount=row.get("amount") or 0.0,
                     particulars=row.get("particulars") or "",
                     created_at=row.get("created_at"),
                     updated_at=row.get("updated_at"),
+                    remarks=row.get("remarks"),
                     **audit_fields(row)
                 )
         except HTTPException:
@@ -496,12 +788,16 @@ def get_sale(
         category_id=sale.category_id,
         category_name=cat_name or "None",
         payment_method=sale.payment_method,
+        payment_status=sale.payment_status or "Paid",
+        deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+        deposit_date=sale.deposit_date,
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
         particulars=sale.particulars or "",
         created_at=sale.created_at,
         updated_at=sale.updated_at,
+        remarks=getattr(sale, "remarks", None),
         **audit_fields(sale)
     )
 
@@ -516,7 +812,7 @@ def update_sale(
     db: Session = Depends(get_db)
 ):
     if sale_in.amount is not None and sale_in.amount < 1.00:
-        raise HTTPException(status_code=400, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
+        raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
     if sale_in.transaction_date is not None and sale_in.transaction_date > date.today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
@@ -526,6 +822,9 @@ def update_sale(
     old_particulars = None
     old_amount = None
     existing_payment_method = None
+    existing_payment_status = None
+    existing_deposit_status = None
+    existing_cheque_no = None
     sync_svc = SalesReceivablesSyncService(db)
     use_sb = sync_svc._use_supabase()
     client = None
@@ -535,7 +834,7 @@ def update_sale(
             client = get_supabase_admin_client()
             res = (
                 client.table("sales")
-                .select("company_id, audit_status, particulars, amount, payment_method")
+                .select("company_id, audit_status, particulars, amount, payment_method, payment_status, deposit_status, cheque_number")
                 .eq("sales_id", sales_id)
                 .limit(1)
                 .execute()
@@ -547,6 +846,9 @@ def update_sale(
                 old_particulars = sb_existing.get("particulars")
                 old_amount = sb_existing.get("amount")
                 existing_payment_method = sb_existing.get("payment_method")
+                existing_payment_status = sb_existing.get("payment_status")
+                existing_deposit_status = sb_existing.get("deposit_status")
+                existing_cheque_no = sb_existing.get("cheque_number") or sb_existing.get("cheque_no")
         except Exception:
             pass
 
@@ -560,6 +862,12 @@ def update_sale(
             old_amount = existing_local.amount
         if existing_payment_method is None:
             existing_payment_method = existing_local.payment_method
+        if existing_payment_status is None:
+            existing_payment_status = existing_local.payment_status
+        if existing_deposit_status is None:
+            existing_deposit_status = existing_local.deposit_status
+        if existing_cheque_no is None:
+            existing_cheque_no = existing_local.cheque_no
 
     if existing_company_id:
         check_company_access(current_user, existing_company_id)
@@ -570,7 +878,71 @@ def update_sale(
             detail="This sale has been Verified by an Auditor and is locked as read-only.",
         )
 
-    update_payload = {}
+    new_payment_status = sale_in.payment_status if sale_in.payment_status is not None else (existing_payment_status or "Paid")
+    new_payment_method = (
+        (sale_in.payment_method or "").strip()
+        if sale_in.payment_method is not None
+        else (existing_payment_method or "")
+    )
+    cheque = sale_in.cheque_no if sale_in.cheque_no is not None else sale_in.chequeNo
+    new_cheque_no = (
+        cheque.strip()
+        if cheque is not None
+        else (existing_cheque_no or "")
+    )
+
+    # AC-5: If payment status reverts to Unpaid or non-cheque Pending, auto reset deposit status to 'Not Deposited'
+    is_pending_non_cheque = (new_payment_status == "Pending" and (new_payment_method.lower() != "cheque" or not new_cheque_no))
+    if new_payment_status == "Unpaid" or is_pending_non_cheque:
+        if sale_in.deposit_status is not None and sale_in.deposit_status == "Deposited":
+            if new_payment_status == "Unpaid":
+                raise HTTPException(
+                    status_code=422,
+                    detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+                )
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+        else:
+            new_deposit_status = "Not Deposited"
+    else:
+        new_deposit_status = (
+            sale_in.deposit_status
+            if sale_in.deposit_status is not None
+            else (existing_deposit_status or "Deposited")
+        )
+
+    # Invariant safety enforcement (AC-3, AC-4)
+    if new_payment_status == "Unpaid" and new_deposit_status == "Deposited":
+        raise HTTPException(
+            status_code=422,
+            detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+        )
+    if new_payment_status == "Pending" and new_deposit_status == "Deposited":
+        if new_payment_method.lower() != "cheque" or not new_cheque_no:
+            raise HTTPException(
+                status_code=422,
+                detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+            )
+
+    update_payload = {
+        "payment_status": new_payment_status,
+        "deposit_status": new_deposit_status,
+    }
+    # Deposit date follows the deposit status: cleared when not deposited, otherwise the supplied
+    # date, otherwise (newly deposited) the sale date.
+    if new_deposit_status != "Deposited":
+        update_payload["deposit_date"] = None
+    elif sale_in.deposit_date is not None:
+        update_payload["deposit_date"] = sale_in.deposit_date.isoformat()
+    elif (existing_deposit_status or "") != "Deposited" or (
+        existing_local is not None and existing_local.deposit_date is None
+    ):
+        fallback_date = sale_in.transaction_date or (existing_local.transaction_date if existing_local else None)
+        if fallback_date is not None:
+            update_payload["deposit_date"] = fallback_date.isoformat()
     if sale_in.transaction_date:
         update_payload["transaction_date"] = sale_in.transaction_date.isoformat()
     if sale_in.amount is not None:
@@ -578,9 +950,10 @@ def update_sale(
     parts = sale_in.particulars or sale_in.description
     if parts is not None:
         update_payload["particulars"] = parts.strip()
-    cheque = sale_in.cheque_no if sale_in.cheque_no is not None else sale_in.chequeNo
     if cheque is not None:
         update_payload["cheque_number"] = cheque.strip() if cheque.strip() else None
+    if sale_in.remarks is not None:
+        update_payload["remarks"] = sale_in.remarks.strip() if sale_in.remarks else None
 
     # Update in Supabase
     updated_row = None
@@ -637,6 +1010,15 @@ def update_sale(
             sale.category_id = update_payload["category_id"]
         if "payment_method" in update_payload:
             sale.payment_method = update_payload["payment_method"]
+        if "payment_status" in update_payload:
+            sale.payment_status = update_payload["payment_status"]
+        if "deposit_status" in update_payload:
+            sale.deposit_status = update_payload["deposit_status"]
+        if "deposit_date" in update_payload:
+            dd = update_payload["deposit_date"]
+            sale.deposit_date = date.fromisoformat(dd) if dd else None
+        if "remarks" in update_payload:
+            sale.remarks = update_payload["remarks"]
         db.commit()
         db.refresh(sale)
 
@@ -661,6 +1043,16 @@ def update_sale(
     )
     actor_email = current_user.get("email") or f"user-{current_user.get('user_id')}"
 
+    # Auto-save updated particulars to company library
+    if final_particulars:
+        try:
+            for p_name in extract_particular_names(final_particulars):
+                save_company_particular_if_not_exists(
+                    db, existing_company_id, None, p_name, "Sales"
+                )
+        except Exception:
+            pass
+
     sync_svc.sync_sale_updated_to_receivables(
         sales_id,
         new_particulars=final_particulars,
@@ -673,6 +1065,15 @@ def update_sale(
         actor_name=actor_email,
     )
 
+    # Keep the bank equal to the ledger after any edit to amount, particulars, payment or deposit status
+    reconcile_sale_bank(
+        db,
+        sale_id=sales_id,
+        bank_account_id=getattr(sale_in, "bank_account_id", None),
+        reference_no=new_cheque_no or None,
+        legacy_particulars=old_particulars,
+    )
+
     if sale:
         db.refresh(sale)
     if updated_row and use_sb and client is not None:
@@ -683,6 +1084,9 @@ def update_sale(
         except Exception:
             pass
 
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+    changes_dict = {k: str(v) for k, v in update_payload.items()}
+
     if updated_row:
         client = client or get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client)
@@ -691,6 +1095,7 @@ def update_sale(
             user_id=current_user.get("user_id"), company_id=updated_row.get("company_id"),
             ip_address=request.client.host if request.client else "unknown",
             record_id=sales_id, record_type="sale",
+            extra={"changes": changes_dict, "actor_name": actor_name, "actor_role": current_user.get("role", "Staff")},
         )
         return SaleOut(
             sales_id=updated_row["sales_id"],
@@ -699,6 +1104,9 @@ def update_sale(
             category_id=updated_row.get("category_id"),
             category_name=cat_map.get(updated_row.get("category_id")) or "None",
             payment_method=updated_row.get("payment_method"),
+            payment_status=updated_row.get("payment_status") or new_payment_status,
+            deposit_status=updated_row.get("deposit_status") or new_deposit_status,
+            deposit_date=updated_row.get("deposit_date"),
             transaction_date=updated_row.get("transaction_date"),
             cheque_no=updated_row.get("cheque_number") or updated_row.get("cheque_no"),
             amount=updated_row.get("amount"),
@@ -716,6 +1124,7 @@ def update_sale(
         user_id=current_user.get("user_id"), company_id=sale.company_id,
         ip_address=request.client.host if request.client else "unknown",
         record_id=sales_id, record_type="sale",
+        extra={"changes": changes_dict, "actor_name": actor_name, "actor_role": current_user.get("role", "Staff")},
     )
     return SaleOut(
         sales_id=sale.sales_id,
@@ -724,6 +1133,9 @@ def update_sale(
         category_id=sale.category_id,
         category_name=category.name if category else "None",
         payment_method=sale.payment_method,
+        payment_status=sale.payment_status or "Paid",
+        deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+        deposit_date=sale.deposit_date,
         transaction_date=sale.transaction_date,
         cheque_no=sale.cheque_no,
         amount=sale.amount,
@@ -732,6 +1144,212 @@ def update_sale(
         updated_at=sale.updated_at,
         **audit_fields(sale)
     )
+
+
+@router.patch("/{sales_id}/deposit-status", response_model=SaleOut, summary="Quick toggle sale deposit status")
+def update_sale_deposit_status(
+    sales_id: int,
+    deposit_in: DepositStatusUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_deposit_status = deposit_in.deposit_status
+
+    existing_company_id = None
+    existing_audit_status = None
+    existing_payment_status = None
+    existing_payment_method = None
+    existing_cheque_no = None
+
+    sync_svc = SalesReceivablesSyncService(db)
+    use_sb = sync_svc._use_supabase()
+    client = None
+
+    if use_sb:
+        try:
+            client = get_supabase_admin_client()
+            res = (
+                client.table("sales")
+                .select("company_id, audit_status, payment_status, payment_method, cheque_number, cheque_no")
+                .eq("sales_id", sales_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                sb_existing = res.data[0]
+                existing_company_id = sb_existing.get("company_id")
+                existing_audit_status = sb_existing.get("audit_status")
+                existing_payment_status = sb_existing.get("payment_status")
+                existing_payment_method = sb_existing.get("payment_method")
+                existing_cheque_no = sb_existing.get("cheque_number") or sb_existing.get("cheque_no")
+        except Exception:
+            pass
+
+    existing_local = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    if existing_local:
+        existing_company_id = existing_company_id or existing_local.company_id
+        existing_audit_status = existing_audit_status or existing_local.audit_status
+        existing_payment_status = existing_payment_status or existing_local.payment_status
+        existing_payment_method = existing_payment_method or existing_local.payment_method
+        existing_cheque_no = existing_cheque_no or existing_local.cheque_no
+
+    if not existing_company_id and not existing_local:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    check_company_access(current_user, existing_company_id)
+
+    if (existing_audit_status or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This sale has been Verified by an Auditor and is locked as read-only.",
+        )
+
+    cur_payment_status = (existing_payment_status or "Paid").strip()
+    cur_payment_method = (existing_payment_method or "").strip().lower()
+    cur_cheque_no = (existing_cheque_no or "").strip()
+
+    # AC-3 and AC-4 validation
+    if target_deposit_status == "Deposited":
+        if cur_payment_status == "Unpaid":
+            raise HTTPException(
+                status_code=422,
+                detail="Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first."
+            )
+        elif cur_payment_status == "Pending":
+            if cur_payment_method != "cheque" or not cur_cheque_no:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
+                )
+
+    # Deposit date: only while Deposited. Default to the sale date when none is given.
+    target_deposit_date = None
+    if target_deposit_status == "Deposited":
+        target_deposit_date = deposit_in.deposit_date
+        if target_deposit_date is None and existing_local is not None:
+            target_deposit_date = existing_local.deposit_date or existing_local.transaction_date
+        if target_deposit_date is None:
+            target_deposit_date = date.today()
+        if existing_local is not None and existing_local.transaction_date and target_deposit_date < existing_local.transaction_date:
+            raise HTTPException(status_code=422, detail="Deposit date cannot be earlier than the sale date.")
+
+    sb_update = {
+        "deposit_status": target_deposit_status,
+        "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+    }
+    if deposit_in.bank_account_id:
+        sb_update["bank_account_id"] = deposit_in.bank_account_id
+
+    # Persist update in Supabase (retry without the new columns if the table predates them)
+    if use_sb and client is not None:
+        try:
+            client.table("sales").update(sb_update).eq("sales_id", sales_id).execute()
+        except Exception:
+            try:
+                client.table("sales").update({"deposit_status": target_deposit_status}).eq("sales_id", sales_id).execute()
+            except Exception:
+                pass
+
+    if existing_local:
+        existing_local.deposit_status = target_deposit_status
+        existing_local.deposit_date = target_deposit_date
+        if deposit_in.bank_account_id:
+            existing_local.bank_account_id = deposit_in.bank_account_id
+        db.commit()
+        db.refresh(existing_local)
+
+    ws_manager.broadcast_sync(
+        {
+            "type": "SALES_UPDATED",
+            "company_id": existing_company_id,
+            "payload": {
+                "sale_id": sales_id,
+                "action": "deposit_status_updated",
+                "deposit_status": target_deposit_status,
+                "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+            },
+        }
+    )
+
+    log_transaction(
+        db, AuditAction.SALE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=sales_id, record_type="sale",
+        extra={
+            "deposit_status": target_deposit_status,
+            "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+        },
+    )
+
+    # Marking Deposited credits the bank, un-marking reverses it, so the bank always matches the ledger
+    reconcile_sale_bank(db, sale_id=sales_id, bank_account_id=deposit_in.bank_account_id)
+    return get_sale(sales_id, current_user, db)
+
+
+@router.patch("/{sales_id}/remarks", response_model=SaleOut, summary="Update operational remarks of a sale")
+def update_sale_remarks(
+    sales_id: int,
+    remarks_in: RemarksUpdate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db)
+):
+    target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
+
+    existing_company_id = None
+    sync_svc = SalesReceivablesSyncService(db)
+    use_sb = sync_svc._use_supabase()
+    client = None
+
+    if use_sb:
+        try:
+            client = get_supabase_admin_client()
+            res = client.table("sales").select("company_id").eq("sales_id", sales_id).limit(1).execute()
+            if res.data:
+                existing_company_id = res.data[0].get("company_id")
+        except Exception:
+            pass
+
+    existing_local = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    if existing_local:
+        existing_company_id = existing_company_id or existing_local.company_id
+
+    if not existing_company_id and not existing_local:
+        raise HTTPException(status_code=404, detail="Sale not found")
+
+    check_company_access(current_user, existing_company_id)
+
+    if use_sb:
+        try:
+            client = client or get_supabase_admin_client()
+            client.table("sales").update({"remarks": target_remarks}).eq("sales_id", sales_id).execute()
+        except Exception as e:
+            pass
+
+    if existing_local:
+        existing_local.remarks = target_remarks
+        db.commit()
+        db.refresh(existing_local)
+
+    ws_manager.broadcast_sync(
+        {
+            "type": "SALES_UPDATED",
+            "company_id": existing_company_id,
+            "payload": {"sale_id": sales_id, "action": "remarks_updated", "remarks": target_remarks},
+        }
+    )
+
+    log_transaction(
+        db, AuditAction.SALE_UPDATED,
+        user_id=current_user.get("user_id"), company_id=existing_company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=sales_id, record_type="sale",
+        extra={"remarks": target_remarks},
+    )
+
+    return get_sale(sales_id, current_user, db)
 
 
 @router.patch("/{sales_id}/audit", response_model=SaleOut, summary="Save the audit review of a sale (Auditor only)")
@@ -812,6 +1430,9 @@ def delete_sale(
     # Cascade delete linked receivables and reverse bank deposits before removing parent sale
     sync_svc.sync_sale_deleted_to_receivables(sales_id, company_id=deleted_company_id)
 
+    # Reverse whatever the bank still holds for this sale (receivable reversals above are already counted)
+    reconcile_sale_bank(db, sale_id=sales_id, force_zero=True)
+
     if client:
         try:
             sb_res = client.table("sales").delete().eq("sales_id", sales_id).execute()
@@ -824,6 +1445,14 @@ def delete_sale(
     if sale:
         db.delete(sale)
         db.commit()
+
+    # The sale is gone, so none of its bank entries (originals or reversals) should remain
+    try:
+        from app.services.bank_service import BankService
+        BankService(db).purge_linked_entries(link_attr="source_sale_id", link_id=sales_id)
+    except Exception as e:
+        db.rollback()
+        print(f"Bank entry purge error on sale delete: {e}")
 
     try:
         log_transaction(

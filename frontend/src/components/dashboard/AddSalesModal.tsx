@@ -22,6 +22,10 @@ import {
   type NewSalesInput,
   type SalesItem,
 } from '@/services/salesService'
+import {
+  particularsService,
+  type CompanyParticular,
+} from '@/services/particularsService'
 import { expenseService } from '@/services/expenseService'
 import { bankService } from '@/services/bankService'
 import { receivablesStore, type PaymentOption, type CustomerType } from '@/services/receivablesStore'
@@ -29,6 +33,7 @@ import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 
 interface AddSalesModalProps {
   open: boolean
@@ -62,11 +67,16 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [date, setDate] = React.useState(getTodayIso())
   const [chequeNo, setChequeNo] = React.useState('')
   const [particulars, setParticulars] = React.useState('')
+  const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
+  const [dayRemark, setDayRemark] = React.useState('')
+  const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('sales', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState('Cash')
   const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
+  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
   // Food Utang / Payment Option states
   const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
@@ -92,14 +102,37 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     let mounted = true
     expenseService.getCategories().then((cats) => {
       if (mounted && cats && cats.length > 0) {
-        const names = Array.from(new Set([...cats.map((c) => c.name), ...DEFAULT_SALES_CATEGORIES]))
+        const names = Array.from(
+          new Set([
+            ...DEFAULT_SALES_CATEGORIES,
+            ...cats.map((c) => c.name?.trim()).filter(Boolean),
+          ])
+        )
         setCategoryOptions(names)
       }
-    })
+    }).catch(() => {})
     return () => {
       mounted = false
     }
   }, [open])
+
+  // Load previous particulars for suggestions/autocomplete
+  React.useEffect(() => {
+    let mounted = true
+    if (open && assignedCompany) {
+      particularsService
+        .getParticulars(assignedCompany, 'Sales')
+        .then((data) => {
+          if (mounted && data) {
+            setParticularOptions(data)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, assignedCompany])
 
   // Check if assigned company has any registered bank accounts
   const [hasBankAccounts, setHasBankAccounts] = React.useState<boolean | null>(null)
@@ -121,12 +154,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
   }, [open, assignedCompany])
 
-  // Dynamic filter for category suggestions
+  // Dynamic filter for category suggestions (show full list until user types)
   const filteredCategoryOptions = React.useMemo(() => {
+    if (!isCategoryTyping) return categoryOptions
     const q = category.trim().toLowerCase()
     if (!q) return categoryOptions
     return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions])
+  }, [category, categoryOptions, isCategoryTyping])
 
   // Close category dropdown on click outside
   React.useEffect(() => {
@@ -136,6 +170,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         !categoryContainerRef.current.contains(e.target as Node)
       ) {
         setIsCategoryOpen(false)
+        setIsCategoryTyping(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -149,8 +184,12 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setChequeNo('')
       setParticulars('')
       setAmount('')
+      setDayRemark('')
+      setDayRemarkTouched(false)
       setPaymentMethod('Cash')
       setCategory(DEFAULT_SALES_CATEGORIES[0])
+      setIsCategoryOpen(false)
+      setIsCategoryTyping(false)
       setPaymentOption('Paid in full')
       setCustomerType('External')
       setCustomerName('')
@@ -160,6 +199,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setIsConfirmOpen(false)
     }
   }, [open])
+
+  // Prefill with the existing day remark for the chosen date (until the user edits it)
+  React.useEffect(() => {
+    if (open && !dayRemarkTouched) setDayRemark(getDayRemark(assignedCompany, date))
+  }, [open, date, assignedCompany, dayRemarkTouched, getDayRemark])
 
   // Step 1: Pre-validate and show confirmation dialogue
   const handlePreSubmit = (e: React.FormEvent) => {
@@ -227,20 +271,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
       }
 
-      const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Partial' : 'Unpaid'
-
-      // Also record in local Receivables Utang store so both pages sync immediately
-      receivablesStore.addNewSale({
-        customer_name: (paymentOption !== 'Paid in full' && customerName.trim()) ? customerName.trim() : 'Walk-in Customer',
-        customer_type: customerType,
-        items_summary: particulars.trim(),
-        total_amount: parsedAmount,
-        payment_option: paymentOption,
-        amount_paid: paymentOption === 'Paid in full' ? parsedAmount : paymentOption === 'Partial' ? (parseFloat(amountPaid) || 0) : 0,
-        payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
-        date: date.trim() || getTodayIso(),
-        notes: chequeNo.trim() ? `Cheque: ${chequeNo.trim()}` : undefined,
-      })
+      const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Pending' : 'Unpaid'
 
       const payload: NewSalesInput = {
         date: date.trim() || getTodayIso(),
@@ -251,8 +282,44 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         paymentMethod: paymentMethod,
         company: assignedCompany,
         status: effectiveStatus as any,
+        depositStatus: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
+        deposit_status: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
       }
       const created = await salesService.addSale(payload)
+
+      // Optional day remark: one note for the whole day, not per transaction
+      if (dayRemarkTouched && dayRemark.trim() !== getDayRemark(assignedCompany, payload.date).trim()) {
+        try {
+          await saveDayRemark(assignedCompany, payload.date, dayRemark)
+        } catch (e) {
+          console.warn('Could not save day remark:', e)
+        }
+      }
+
+      if (particulars.trim() && assignedCompany) {
+        particularsService
+          .addParticular(assignedCompany, particulars.trim(), 'Sales')
+          .catch(() => {})
+        particularsService.invalidateCache(assignedCompany, 'Sales')
+      }
+
+      // Only record in receivables if there is an unpaid balance (Utang / Partial)
+      if (paymentOption !== 'Paid in full') {
+        const parsedSaleId = created?.id ? Number(created.id) : undefined
+        receivablesStore.addNewSale({
+          customer_name: customerName.trim() || 'Walk-in Customer',
+          customer_type: customerType,
+          items_summary: particulars.trim(),
+          total_amount: parsedAmount,
+          payment_option: paymentOption,
+          amount_paid: paymentOption === 'Partial' ? (parseFloat(amountPaid) || 0) : 0,
+          payment_method: (paymentMethod === 'GCash' ? 'GCash' : paymentMethod === 'Bank Transfer' ? 'Bank' : 'Cash') as any,
+          date: date.trim() || getTodayIso(),
+          notes: chequeNo.trim() ? `Cheque: ${chequeNo.trim()}` : undefined,
+          company: assignedCompany,
+          sale_id: Number.isFinite(parsedSaleId) ? parsedSaleId : undefined,
+        })
+      }
 
       // Close confirmation and modal
       setIsConfirmOpen(false)
@@ -272,10 +339,10 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     <>
       {/* 1. Main Add Sales Modal */}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
+        <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
                 <PlusCircle className="w-5 h-5" />
               </div>
               <div>
@@ -336,7 +403,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               </div>
 
               {/* 2. Cheque No (no icon in label) */}
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Cheque No. (Optional)
                 </Label>
@@ -344,6 +411,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   type="text"
                   placeholder="e.g. CHQ-8899"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-10 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -351,14 +419,16 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
             </div>
 
             {/* 3. Particulars (no 'Notes', no icon in label, required asterisk) */}
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 min-w-0">
               <Label className="text-xs font-semibold text-focus block">
                 Particulars <span className="text-red-500">*</span>
               </Label>
               <Input
                 type="text"
+                list="sales-particular-list"
                 placeholder="e.g. Corporate Banquet Catering Deposit"
                 value={particulars}
+                maxLength={255}
                 onChange={(e) => {
                   setParticulars(e.target.value)
                   if (fieldErrors.particulars) {
@@ -370,6 +440,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
                 )}
               />
+              <datalist id="sales-particular-list">
+                {particularOptions.map((opt) => (
+                  <option key={opt.id} value={opt.name} />
+                ))}
+              </datalist>
               {fieldErrors.particulars && (
                 <p className="text-[11px] text-red-600 font-medium">
                   {fieldErrors.particulars}
@@ -492,6 +567,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                         type="text"
                         placeholder={customerType === 'Staff' ? 'e.g. Maria Santos (Kitchen)' : 'e.g. Mang Jose Mercado'}
                         value={customerName}
+                        maxLength={100}
                         onChange={(e) => {
                           setCustomerName(e.target.value)
                           if (fieldErrors.customerName) {
@@ -561,12 +637,23 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   value={category}
                   onChange={(e) => {
                     setCategory(e.target.value)
+                    setIsCategoryTyping(true)
                     setIsCategoryOpen(true)
                     if (fieldErrors.category) {
                       setFieldErrors((prev) => ({ ...prev, category: undefined }))
                     }
                   }}
-                  onFocus={() => setIsCategoryOpen(true)}
+                  onFocus={(e) => {
+                    setIsCategoryTyping(false)
+                    setIsCategoryOpen(true)
+                    e.currentTarget.select()
+                  }}
+                  onClick={() => {
+                    if (!isCategoryOpen) {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen(true)
+                    }
+                  }}
                   placeholder="Select or type category…"
                   className={cn(
                     'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium bg-white',
@@ -576,7 +663,11 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 <button
                   type="button"
                   tabIndex={-1}
-                  onClick={() => setIsCategoryOpen((prev) => !prev)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    setIsCategoryTyping(false)
+                    setIsCategoryOpen((prev) => !prev)
+                  }}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5 rounded cursor-pointer transition-colors"
                   aria-label="Toggle category list"
                 >
@@ -585,10 +676,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
 
                 {/* Suggestions dropdown with dynamic matching or custom input indication */}
                 {isCategoryOpen && (
-                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100">
+                  <div
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="absolute left-0 right-0 bottom-full mb-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100"
+                  >
                     <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
                       <span>Specific Categories</span>
-                      {category.trim() && (
+                      {isCategoryTyping && category.trim() && (
                         <span className="text-[10px] text-slate-400 font-normal">
                           {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
                         </span>
@@ -602,6 +696,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                             type="button"
                             onClick={() => {
                               setCategory(opt)
+                              setIsCategoryTyping(false)
                               setIsCategoryOpen(false)
                               if (fieldErrors.category) {
                                 setFieldErrors((prev) => ({ ...prev, category: undefined }))
@@ -644,6 +739,24 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   {fieldErrors.category}
                 </p>
               )}
+            </div>
+
+            {/* Day remarks */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus flex items-center justify-between">
+                <span>Day Remarks (Optional)</span>
+                <span className="text-[11px] text-muted-fg font-normal">Applies to all sales on this date</span>
+              </Label>
+              <Input
+                placeholder="e.g. Verified deposit slip, walk-in collection..."
+                value={dayRemark}
+                onChange={(e) => {
+                  setDayRemarkTouched(true)
+                  setDayRemark(e.target.value)
+                }}
+                maxLength={255}
+                className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
+              />
             </div>
 
             {/* Actions */}

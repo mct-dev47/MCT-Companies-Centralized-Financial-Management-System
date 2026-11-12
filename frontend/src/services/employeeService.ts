@@ -36,6 +36,7 @@ export interface EmployeeUser {
   isAdmin?: boolean
   isProtected?: boolean
   avatarUrl?: string
+  createdAt?: string
 }
 
 export interface CreateCompanyPayload {
@@ -175,6 +176,7 @@ function mapUser(value: unknown): EmployeeUser {
     isAdmin: user.is_admin,
     isProtected: Boolean(user.is_protected || user.is_admin || user.user_id === 1 || (user.role && user.role.toLowerCase() === 'admin')),
     avatarUrl: user.photo_url || undefined,
+    createdAt: (user as { created_at?: string }).created_at || '',
   }
 }
 
@@ -196,8 +198,8 @@ function mapCompany(value: unknown): Company {
     address: company.location,
     contactNumber: company.contact_number || '',
     telephoneNumber: company.phone || '',
-    startingBalance: Number(company.starting_balance),
-    pettyCash: Number(company.petty_cash || 0),
+    startingBalance: Number(company.starting_balance) || 0,
+    pettyCash: Number(company.petty_cash) || 0,
     status: 'Active',
     createdAt: company.created_at || '',
     logoUrl: company.logo_url || undefined,
@@ -249,6 +251,13 @@ export const employeeService = {
     return await mapApiResponse(response, (value) =>
       (value as unknown[]).map(mapCompany)
     )
+  },
+
+  async getCompany(id: string): Promise<Company> {
+    const response = await fetch(`/api/v1/companies/${id}`, {
+      headers: getAuthHeaders(),
+    })
+    return await mapApiResponse(response, mapCompany)
   },
 
   async getAuthorizedCompanies(): Promise<AuthorizedCompany[]> {
@@ -448,8 +457,8 @@ export const employeeService = {
       location: payload.address,
       contact_number: payload.contactNumber || null,
       phone: payload.telephoneNumber || null,
-      starting_balance: payload.startingBalance,
-      petty_cash: payload.pettyCash || 0,
+      starting_balance: Number(payload.startingBalance) || 0,
+      petty_cash: Number(payload.pettyCash) || 0,
       logo_url: payload.logoUrl && !payload.logoUrl.startsWith('data:') ? payload.logoUrl : null,
     })
 
@@ -459,8 +468,8 @@ export const employeeService = {
       formData.append('location', payload.address)
       formData.append('contact_number', payload.contactNumber || '')
       formData.append('phone', payload.telephoneNumber || '')
-      formData.append('starting_balance', String(payload.startingBalance))
-      formData.append('petty_cash', String(payload.pettyCash || 0))
+      formData.append('starting_balance', String(Number(payload.startingBalance) || 0))
+      formData.append('petty_cash', String(Number(payload.pettyCash) || 0))
       formData.append('picture', payload.logoFile)
       endpoint = '/api/v1/companies/with-picture'
       headers = getAuthHeaders()

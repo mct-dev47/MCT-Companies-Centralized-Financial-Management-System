@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from app.core.ssrf import validate_safe_url
 
 
 NAME_REGEX = re.compile(r"^[\w\s.'\-]+$", re.UNICODE)
@@ -16,7 +17,7 @@ class UserBase(BaseModel):
     company_names: List[str] = Field(default_factory=list)
     is_admin: bool = False
     role: str = Field(default="supervisor", description="Role of the user: admin, audit, finance, supervisor, owner")
-    photo_url: Optional[str] = None
+    photo_url: Optional[str] = Field(default=None, max_length=2048)
 
 
 class UserCreate(UserBase):
@@ -52,6 +53,11 @@ class UserCreate(UserBase):
             )
         return cleaned
 
+    @field_validator("photo_url")
+    @classmethod
+    def validate_photo_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
+
 
 class UserUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=100)
@@ -59,17 +65,23 @@ class UserUpdate(BaseModel):
     company_ids: Optional[List[int]] = None
     company_names: Optional[List[str]] = None
     role: Optional[str] = None
-    photo_url: Optional[str] = None
+    photo_url: Optional[str] = Field(default=None, max_length=2048)
     is_admin: Optional[bool] = None
     status: Optional[str] = None
+
+    @field_validator("photo_url")
+    @classmethod
+    def validate_photo_url(cls, v: Optional[str]) -> Optional[str]:
+        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
 
 
 class UserResponse(UserBase):
     user_id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     status: str = "ACTIVE"
     must_change_password: bool = False
     is_protected: bool = False
+    last_login_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

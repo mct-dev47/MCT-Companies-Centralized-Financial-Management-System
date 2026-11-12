@@ -156,7 +156,7 @@ export const CentralizedAuthRouteGuard: React.FC<{ children: React.ReactNode }> 
   }
   const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
 
-  if (role === 'supervisor' && assignedCount === 1) {
+  if (role === 'supervisor' && assignedCount <= 1) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -175,11 +175,9 @@ export const LendingRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chi
     return <Navigate to="/employee" replace />
   }
 
-  if (!isAudit) {
-    const targetCompany = activeCompany || user?.assignedCompany || ''
-    if (!isLendingEnabledCompany(targetCompany)) {
-      return <Navigate to="/dashboard" replace />
-    }
+  const targetCompany = activeCompany || user?.assignedCompany || ''
+  if (isJKPropertyCompany(targetCompany) || (!isAudit && !isLendingEnabledCompany(targetCompany))) {
+    return <Navigate to="/dashboard" replace />
   }
 
   return <>{children}</>
@@ -195,11 +193,9 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
     return <Navigate to="/employee" replace />
   }
 
-  if (!isAudit) {
-    const targetCompany = activeCompany || user?.assignedCompany || ''
-    if (!isTenantEnabledCompany(targetCompany)) {
-      return <Navigate to="/dashboard" replace />
-    }
+  const targetCompany = activeCompany || user?.assignedCompany || ''
+  if (isFilCapCompany(targetCompany) || (!isAudit && !isTenantEnabledCompany(targetCompany))) {
+    return <Navigate to="/dashboard" replace />
   }
 
   return <>{children}</>

@@ -21,12 +21,17 @@ import {
   type NewExpenseInput,
   type ExpenseItem,
 } from '@/services/expenseService'
+import {
+  particularsService,
+  type CompanyParticular,
+} from '@/services/particularsService'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { pettyCashService } from '@/services/pettyCashService'
 import { bankService } from '@/services/bankService'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 
 import { PREDEFINED_PETTY_CASH_CATEGORIES } from '@/pages/AddTransactionSheetPage'
 
@@ -99,7 +104,11 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [chequeNo, setChequeNo] = React.useState('')
   const [pettyCashCategory, setPettyCashCategory] = React.useState('')
   const [particulars, setParticulars] = React.useState('')
+  const [particularOptions, setParticularOptions] = React.useState<CompanyParticular[]>([])
   const [amount, setAmount] = React.useState('')
+  const [dayRemark, setDayRemark] = React.useState('')
+  const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
+  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('expense', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState(initialPaymentMethod || 'Cash')
   const [category, setCategory] = React.useState(
     (initialPaymentMethod || '').trim().toLowerCase() === 'petty cash'
@@ -108,6 +117,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   )
   const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_EXPENSE_CATEGORIES)
   const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
+  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
 
   // Petty cash is strictly determined by payment method being Petty Cash
@@ -188,11 +198,30 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
   }, [open])
 
+  // Load previous particulars for suggestions/autocomplete
+  React.useEffect(() => {
+    let mounted = true
+    if (open && assignedCompany) {
+      particularsService
+        .getParticulars(assignedCompany, 'Expense')
+        .then((data) => {
+          if (mounted && data) {
+            setParticularOptions(data)
+          }
+        })
+        .catch(() => {})
+    }
+    return () => {
+      mounted = false
+    }
+  }, [open, assignedCompany])
+
   const filteredCategoryOptions = React.useMemo(() => {
+    if (!isCategoryTyping) return categoryOptions
     const q = category.trim().toLowerCase()
     if (!q) return categoryOptions
     return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions])
+  }, [category, categoryOptions, isCategoryTyping])
 
   // Close category dropdown on click outside
   React.useEffect(() => {
@@ -202,6 +231,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         !categoryContainerRef.current.contains(e.target as Node)
       ) {
         setIsCategoryOpen(false)
+        setIsCategoryTyping(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -216,6 +246,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       setPettyCashCategory('')
       setParticulars('')
       setAmount('')
+      setDayRemark('')
+      setDayRemarkTouched(false)
       const pm = initialPaymentMethod || 'Cash'
       setPaymentMethod(pm)
       if (pm.trim().toLowerCase() === 'petty cash') {
@@ -224,12 +256,18 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         setCategory(DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
       }
       setIsCategoryOpen(false)
+      setIsCategoryTyping(false)
       setIsConfirmOpen(false)
       setIsSubmitting(false)
       setError('')
       setFieldErrors({})
     }
   }, [open, initialPaymentMethod])
+
+  // Prefill with the existing day remark for the chosen date (until the user edits it)
+  React.useEffect(() => {
+    if (open && !dayRemarkTouched) setDayRemark(getDayRemark(assignedCompany, date))
+  }, [open, date, assignedCompany, dayRemarkTouched, getDayRemark])
 
   // Pre-validate and show confirmation dialogue
   const handlePreSubmit = (e: React.FormEvent) => {
@@ -322,6 +360,22 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       }
       const created = await expenseService.addExpense(payload)
 
+      // Optional day remark: one note for the whole day, not per transaction
+      if (dayRemarkTouched && dayRemark.trim() !== getDayRemark(assignedCompany, payload.date).trim()) {
+        try {
+          await saveDayRemark(assignedCompany, payload.date, dayRemark)
+        } catch (e) {
+          console.warn('Could not save day remark:', e)
+        }
+      }
+
+      if (finalParticulars && assignedCompany) {
+        particularsService
+          .addParticular(assignedCompany, finalParticulars, 'Expense')
+          .catch(() => {})
+        particularsService.invalidateCache(assignedCompany, 'Expense')
+      }
+
       setIsConfirmOpen(false)
       onOpenChange(false)
       onSuccess(created)
@@ -337,10 +391,10 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     <>
       {/* 1. Main Add Expense Modal */}
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl [&>button]:top-4 [&>button]:right-4 [&>button]:w-6 [&>button]:h-6 [&>button]:p-0.5 [&>button]:rounded-md [&>button>svg]:w-3.5 [&>button>svg]:h-3.5">
+        <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
+              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
                 <PlusCircle className="w-5 h-5" />
               </div>
               <div>
@@ -401,7 +455,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               </div>
 
               {/* 2. Cheque No (Optional) */}
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Cheque No. (Optional)
                 </Label>
@@ -409,6 +463,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   type="text"
                   placeholder="e.g. CHK-99201"
                   value={chequeNo}
+                  maxLength={50}
                   onChange={(e) => setChequeNo(e.target.value)}
                   className="h-10 rounded-xl border-stroke/50 text-xs font-mono"
                 />
@@ -418,14 +473,16 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             {isPettyCash ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {/* 3. Particulars (Manual text input) */}
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 min-w-0">
                   <Label className="text-xs font-semibold text-focus block">
                     Particulars <span className="text-red-500">*</span>
                   </Label>
                   <Input
                     type="text"
+                    list="expense-particular-list"
                     placeholder="e.g. Taxi fare to bank, Bond paper A4..."
                     value={particulars}
+                    maxLength={255}
                     onChange={(e) => {
                       setParticulars(e.target.value)
                       if (fieldErrors.particulars) {
@@ -445,7 +502,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </div>
 
                 {/* Pre-defined Petty Cash Category dropdown: placed next to particulars, not on top */}
-                <div className="space-y-1.5">
+                <div className="space-y-1.5 min-w-0">
                   <Label className="text-xs font-semibold text-focus block">
                     Petty Cash Category <span className="text-red-500">*</span>
                   </Label>
@@ -469,14 +526,16 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 min-w-0">
                 <Label className="text-xs font-semibold text-focus block">
                   Particulars <span className="text-red-500">*</span>
                 </Label>
                 <Input
                   type="text"
+                  list="expense-particular-list"
                   placeholder="e.g. Commercial Kitchen Gas & Utility Bill"
                   value={particulars}
+                  maxLength={255}
                   onChange={(e) => {
                     setParticulars(e.target.value)
                     if (fieldErrors.particulars) {
@@ -495,6 +554,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 )}
               </div>
             )}
+
+            <datalist id="expense-particular-list">
+              {particularOptions.map((opt) => (
+                <option key={opt.id} value={opt.name} />
+              ))}
+            </datalist>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               {/* 4. Withdrawal Amount */}
@@ -584,6 +649,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     onChange={(e) => {
                       const newCat = e.target.value
                       setCategory(newCat)
+                      setIsCategoryTyping(true)
                       setIsCategoryOpen(true)
                       if (newCat.trim().toLowerCase() === 'petty cash') {
                         setPaymentMethod('Petty Cash')
@@ -592,7 +658,17 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                         setFieldErrors((prev) => ({ ...prev, category: undefined }))
                       }
                     }}
-                    onFocus={() => setIsCategoryOpen(true)}
+                    onFocus={(e) => {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen(true)
+                      e.currentTarget.select()
+                    }}
+                    onClick={() => {
+                      if (!isCategoryOpen) {
+                        setIsCategoryTyping(false)
+                        setIsCategoryOpen(true)
+                      }
+                    }}
                     className={cn(
                       'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium',
                       fieldErrors.category && 'border-red-500 focus-visible:ring-red-200'
@@ -600,7 +676,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   />
                   <button
                     type="button"
-                    onClick={() => setIsCategoryOpen((prev) => !prev)}
+                    tabIndex={-1}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      setIsCategoryTyping(false)
+                      setIsCategoryOpen((prev) => !prev)
+                    }}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-1 cursor-pointer"
                     aria-label="Toggle category options"
                   >
@@ -608,36 +689,59 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   </button>
 
                   {isCategoryOpen && (
-                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-stroke/40 rounded-xl shadow-xl max-h-48 overflow-y-auto p-1.5">
+                    <div
+                      onMouseDown={(e) => e.preventDefault()}
+                      className="absolute z-50 left-0 right-0 bottom-full mb-1.5 bg-white border border-stroke/40 rounded-xl shadow-xl max-h-52 overflow-y-auto p-1.5"
+                    >
                       <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
                         <span>Specific Categories</span>
+                        {isCategoryTyping && category.trim() && (
+                          <span className="text-[10px] text-slate-400 font-normal">
+                            {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
+                          </span>
+                        )}
                       </div>
                       <div className="space-y-0.5">
-                        {filteredCategoryOptions.map((opt) => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => {
-                              setCategory(opt)
-                              setIsCategoryOpen(false)
-                              if (opt.trim().toLowerCase() === 'petty cash') {
-                                setPaymentMethod('Petty Cash')
-                              }
-                              if (fieldErrors.category) {
-                                setFieldErrors((prev) => ({ ...prev, category: undefined }))
-                              }
-                            }}
-                            className={cn(
-                              'w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between transition-colors cursor-pointer',
-                              category === opt
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'hover:bg-slate-100 text-focus'
-                            )}
-                          >
-                            <span>{opt}</span>
-                            {category === opt && <Check className="w-3.5 h-3.5" />}
-                          </button>
-                        ))}
+                        {filteredCategoryOptions.length > 0 ? (
+                          filteredCategoryOptions.map((opt) => (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                setCategory(opt)
+                                setIsCategoryTyping(false)
+                                setIsCategoryOpen(false)
+                                if (opt.trim().toLowerCase() === 'petty cash') {
+                                  setPaymentMethod('Petty Cash')
+                                }
+                                if (fieldErrors.category) {
+                                  setFieldErrors((prev) => ({ ...prev, category: undefined }))
+                                }
+                              }}
+                              className={cn(
+                                'w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between transition-colors cursor-pointer',
+                                category.toLowerCase() === opt.toLowerCase()
+                                  ? 'bg-primary/10 text-primary font-semibold'
+                                  : 'hover:bg-slate-100 text-focus'
+                              )}
+                            >
+                              <span>{opt}</span>
+                              {category.toLowerCase() === opt.toLowerCase() && <Check className="w-3.5 h-3.5" />}
+                            </button>
+                          ))
+                        ) : (
+                          <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-left">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-semibold text-focus break-all">"{category.trim()}"</span>
+                              <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-200/80 px-1.5 py-0.5 rounded">
+                                Custom
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-muted-fg mt-0.5">
+                              Will be saved as a new category.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -649,6 +753,24 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 )}
               </div>
             )}
+
+            {/* Day remarks */}
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus flex items-center justify-between">
+                <span>Day Remarks (Optional)</span>
+                <span className="text-[11px] text-muted-fg font-normal">Applies to all expenses on this date</span>
+              </Label>
+              <Input
+                placeholder="e.g. Approved receipts attached, vouchers #..."
+                value={dayRemark}
+                onChange={(e) => {
+                  setDayRemarkTouched(true)
+                  setDayRemark(e.target.value)
+                }}
+                maxLength={255}
+                className="h-10 rounded-xl border-stroke/60 text-xs text-focus placeholder:text-muted-fg/60 focus-visible:ring-1 focus-visible:ring-[#960C01]"
+              />
+            </div>
 
             {/* Actions */}
             <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">

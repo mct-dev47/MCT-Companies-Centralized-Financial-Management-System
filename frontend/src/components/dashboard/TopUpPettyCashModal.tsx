@@ -176,6 +176,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
         date: requestDate,
         description: particulars.trim(),
         status: targetStatus,
+        request_type: 'topup',
         bank_account_id: isFinance ? fundingBankId : undefined,
         finance_remark: isFinance ? financeRemark.trim() : undefined,
       })
@@ -399,21 +400,19 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-stroke/20">
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/20">
             <Button
               type="button"
               variant="outline"
-              size="sm"
               onClick={() => onOpenChange(false)}
-              className="h-9 px-4 rounded-xl text-xs font-semibold border-stroke/60 hover:bg-slate-50"
+              className="h-10 px-4 rounded-xl text-xs font-medium border-stroke/60 hover:bg-slate-50"
             >
               Cancel
             </Button>
             <Button
               type="submit"
-              size="sm"
               disabled={isSubmitting}
-              className="h-9 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs shadow-xs flex items-center gap-2 cursor-pointer"
+              className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white font-semibold text-xs shadow-xs flex items-center gap-2 cursor-pointer"
             >
               <PlusCircle className="w-3.5 h-3.5" />
               <span>

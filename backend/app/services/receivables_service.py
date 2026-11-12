@@ -44,7 +44,7 @@ class ReceivablesService:
         first_company = self.db.query(Company).first()
         if first_company:
             return first_company.company_id, first_company.company_name
-        return 1, company_name or "MyCity.Kitchen Corporation"
+        return 1, company_name or ""
 
     def _apply_company_filters(
         self,
@@ -246,6 +246,7 @@ class ReceivablesService:
                         amount=amount_paid,
                         particulars=f"Food Receivable Payment - {rec.customer_name}",
                         tx_date=rec.transaction_date.strftime("%m/%d/%y"),
+                        source_sale_id=rec.sale_id,
                     )
                     ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": data.bank_account_id}})
                 except Exception:
@@ -323,6 +324,7 @@ class ReceivablesService:
                     particulars=f"Food Receivable Payment - {rec.customer_name}",
                     reference_no=payment_data.reference_no,
                     tx_date=pay_date.strftime("%m/%d/%y"),
+                    source_sale_id=rec.sale_id,
                 )
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": payment_data.bank_account_id}})
             except Exception:
@@ -464,6 +466,7 @@ class ReceivablesService:
                                     amount=reduce_by,
                                     particulars=f"Adjustment Reversal of Food Receivable Payment - {rec.customer_name}",
                                     tx_date=date.today().strftime("%m/%d/%y"),
+                                    source_sale_id=rec.sale_id,
                                 )
                                 ws_manager.broadcast_sync(
                                     {"type": "BANK_UPDATED", "payload": {"account_id": pay.bank_account_id}}
@@ -510,6 +513,7 @@ class ReceivablesService:
                             amount=remaining,
                             particulars=f"Food Receivable Payment - {rec.customer_name}",
                             tx_date=pay_date.strftime("%m/%d/%y"),
+                            source_sale_id=rec.sale_id,
                         )
                         ws_manager.broadcast_sync(
                             {"type": "BANK_UPDATED", "payload": {"account_id": update_data.bank_account_id}}
@@ -525,7 +529,7 @@ class ReceivablesService:
 
         if rec.balance <= Decimal("0.005") and final_total > Decimal("0.005"):
             rec.payment_status = "Paid"
-        elif final_paid > Decimal("0.005"):
+        elif final_paid > Decimal("0.005") or requested_status == "Partial":
             rec.payment_status = "Partial"
         else:
             rec.payment_status = "Unpaid"

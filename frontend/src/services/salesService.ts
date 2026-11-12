@@ -1,4 +1,5 @@
 import type { DashboardTransactionItem } from './dashboardService'
+import type { DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { formatCreatedAt, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { removeLegacyAuditStorage, saveAuditReview } from './auditReviewApi'
 import {
@@ -22,6 +23,12 @@ export interface SalesItem {
   company: string
   items?: ParticularItem[]
   status: 'Paid' | 'Pending' | 'Overdue' | 'On hold' | 'Unpaid'
+  payment_status?: 'Paid' | 'Pending' | 'Unpaid'
+  depositStatus?: 'Deposited' | 'Not Deposited'
+  deposit_status?: 'Deposited' | 'Not Deposited'
+  /** Day the money reached the bank (YYYY-MM-DD). `rawDate` stays the day of the sale. */
+  deposit_date?: string | null
+  depositDate?: string | null
   auditStatus: 'Verified' | 'Pending Audit' | 'Flagged'
   auditedBy?: string
   auditNotes?: string
@@ -29,7 +36,20 @@ export interface SalesItem {
   createdBy?: string
   createdAt?: string
   updatedAt?: string
+  updatedBy?: string
+  bankAccountId?: string
+  bankName?: string
+  remarks?: string
   type: 'Sales'
+}
+
+export interface DailySalesSummaryOut {
+  date: string
+  day_of_week: string
+  transaction_count: number
+  gross_total: number | string
+  realized_cash: number | string
+  audit_status: string
 }
 
 export interface NewSalesInput {
@@ -41,8 +61,17 @@ export interface NewSalesInput {
   paymentMethod?: string // payment method (GCash, Cash, etc.)
   company: string
   status: 'Paid' | 'Pending' | 'On hold' | 'Unpaid'
+  payment_status?: 'Paid' | 'Pending' | 'Unpaid'
+  depositStatus?: 'Deposited' | 'Not Deposited'
+  deposit_status?: 'Deposited' | 'Not Deposited'
+  deposit_date?: string | null
+  depositDate?: string | null
+  remarks?: string
   items?: ParticularItem[]
   bankAccountId?: string
+  createdBy?: string
+  updatedBy?: string
+  updatedAt?: string
 }
 
 removeLegacyAuditStorage()
@@ -65,8 +94,26 @@ function mapBackendSaleToItem(b: any): SalesItem {
     chequeNo = parts[1].replace(/\]/g, '').trim()
   }
 
+  const rawPaymentStatus = b.payment_status || 'Paid'
+  const fallbackStatus: 'Paid' | 'Pending' | 'Unpaid' =
+    rawPaymentStatus === 'Unpaid'
+      ? 'Unpaid'
+      : rawPaymentStatus === 'Pending' || rawPaymentStatus === 'Partial'
+        ? 'Pending'
+        : 'Paid'
+
   const parsedItems = parseParticulars(particulars, null, amt)
-  const derivedStatus = deriveRecordStatusFromParticulars(parsedItems, 'Paid')
+  const derivedStatus = deriveRecordStatusFromParticulars(parsedItems, fallbackStatus)
+
+  const resolvedPaymentStatus: 'Paid' | 'Pending' | 'Unpaid' =
+    derivedStatus === 'Unpaid' ? 'Unpaid' : derivedStatus === 'Pending' ? 'Pending' : fallbackStatus
+
+  const resolvedDepositStatus: 'Deposited' | 'Not Deposited' =
+    b.deposit_status === 'Deposited' || b.depositStatus === 'Deposited'
+      ? 'Deposited'
+      : (b.deposit_status === 'Not Deposited' || b.depositStatus === 'Not Deposited')
+      ? 'Not Deposited'
+      : (resolvedPaymentStatus === 'Paid' ? 'Deposited' : 'Not Deposited')
 
   const saleId = String(b.sales_id)
   const resolvedAuditStatus: 'Verified' | 'Pending Audit' | 'Flagged' =
@@ -87,12 +134,29 @@ function mapBackendSaleToItem(b: any): SalesItem {
     company: b.company_name || 'MCT Kitchen',
     items: parsedItems,
     status: derivedStatus,
+    payment_status: resolvedPaymentStatus,
+    depositStatus: resolvedDepositStatus,
+    deposit_status: resolvedDepositStatus,
+    // A deposited sale with no recorded deposit date landed on the sale date
+    deposit_date:
+      resolvedDepositStatus === 'Deposited'
+        ? (b.deposit_date || b.depositDate || rawDate).slice(0, 10)
+        : null,
+    depositDate:
+      resolvedDepositStatus === 'Deposited'
+        ? (b.deposit_date || b.depositDate || rawDate).slice(0, 10)
+        : null,
     auditStatus: resolvedAuditStatus,
     auditedBy: b.audited_by || undefined,
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
     auditNotes: b.audit_remarks || undefined,
-    createdBy: b.created_by || 'Company Staff',
+    createdBy: b.created_by || b.created_by_name || 'Finance Staff',
     createdAt: b.created_at || new Date().toISOString(),
+    updatedAt: b.updated_at || undefined,
+    updatedBy: b.updated_by || b.updated_by_name || undefined,
+    bankAccountId: b.bank_account_id || b.bankAccountId || undefined,
+    bankName: b.bank_name || b.bankName || undefined,
+    remarks: b.remarks || undefined,
     type: 'Sales',
   }
 }
@@ -105,11 +169,50 @@ export const salesService = {
     salesCache.clear()
   },
 
-  async getSales(company?: string): Promise<SalesItem[]> {
+  async getDailySummary(params?: {
+    company?: string
+    startDate?: string
+    endDate?: string
+    viewType?: string
+    search?: string
+  }): Promise<DailySalesSummaryOut[]> {
+    try {
+      const query = new URLSearchParams()
+      if (params?.company && params.company !== 'All Companies') {
+        query.append('company_name', params.company)
+      }
+      if (params?.startDate) query.append('start_date', params.startDate)
+      if (params?.endDate) query.append('end_date', params.endDate)
+      if (params?.viewType) query.append('view_type', params.viewType)
+      if (params?.search) query.append('search', params.search)
+
+      const token =
+        typeof window !== 'undefined'
+          ? sessionStorage.getItem('mct_access_token')
+          : null
+
+      const res = await fetch(`/api/v1/sales/daily-summary?${query.toString()}`, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      if (res.ok) {
+        return await res.json()
+      }
+    } catch (err) {
+      console.warn('Failed to fetch sales daily summary:', err)
+    }
+    return []
+  },
+
+  async getSales(company?: string, forceRefresh = false): Promise<SalesItem[]> {
     const cacheKey = company || 'All Companies'
-    const cached = salesCache.get(cacheKey)
-    if (cached && Date.now() - cached.timestamp < SALES_CACHE_TTL) {
-      return cached.data
+    if (!forceRefresh) {
+      const cached = salesCache.get(cacheKey)
+      if (cached && Date.now() - cached.timestamp < SALES_CACHE_TTL) {
+        return cached.data
+      }
     }
 
     try {
@@ -166,16 +269,32 @@ export const salesService = {
 
   async addSale(input: NewSalesInput): Promise<SalesItem> {
     this.invalidateCache()
+    let rawDate = input.date
+    if (rawDate && rawDate.includes('/')) {
+      const p = rawDate.split('/')
+      if (p.length === 3) {
+        const m = p[0].padStart(2, '0')
+        const d = p[1].padStart(2, '0')
+        const y = p[2].length === 2 ? `20${p[2]}` : p[2]
+        rawDate = `${y}-${m}-${d}`
+      }
+    }
+    const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+
     const payload = {
       company: input.company,
-      transaction_date: input.date,
-      amount: input.amount,
+      transaction_date: rawDate,
+      amount: cleanAmount,
       particulars: input.particulars,
       description: input.particulars,
       category: input.category && input.category !== 'None' ? input.category : null,
       payment_method: input.paymentMethod || null,
+      payment_status: input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status) || 'Paid',
+      deposit_status: input.deposit_status || input.depositStatus || undefined,
+      deposit_date: input.deposit_date || input.depositDate || undefined,
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
+      remarks: input.remarks || undefined,
     }
 
     try {
@@ -212,9 +331,21 @@ export const salesService = {
         return newItem
       } else {
         const errData = await res.json().catch(() => ({}))
-        const errorMsg =
-          errData.detail ||
-          (typeof errData === 'string' ? errData : 'Failed to record sales entry.')
+        let errorMsg = 'Failed to record sales entry.'
+        if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail
+            .map((d: any) => {
+              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+            })
+            .join('; ')
+        } else if (errData.detail && typeof errData.detail === 'object') {
+          errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+        } else if (typeof errData.message === 'string') {
+          errorMsg = errData.message
+        }
         throw new Error(errorMsg)
       }
     } catch (err: any) {
@@ -254,7 +385,8 @@ export const salesService = {
         auditStatus: 'Pending Audit',
         createdBy: 'Company Staff',
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
         type: 'Sales',
       }
 
@@ -282,6 +414,18 @@ export const salesService = {
     if (input.paymentMethod !== undefined)
       payload.payment_method = input.paymentMethod || null
     if (input.chequeNo !== undefined) payload.chequeNo = input.chequeNo
+    if (input.payment_status !== undefined || input.status !== undefined) {
+      payload.payment_status = input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status)
+    }
+    if (input.deposit_status !== undefined || input.depositStatus !== undefined) {
+      payload.deposit_status = input.deposit_status || input.depositStatus
+    }
+    if (input.deposit_date !== undefined || input.depositDate !== undefined) {
+      payload.deposit_date = input.deposit_date || input.depositDate || null
+    }
+    if (input.remarks !== undefined) {
+      payload.remarks = input.remarks
+    }
 
     try {
       const token =
@@ -301,6 +445,12 @@ export const salesService = {
       if (res.ok) {
         const updated = await res.json()
         const mapped = mapBackendSaleToItem(updated)
+        if (input.updatedBy) {
+          mapped.updatedBy = input.updatedBy
+        }
+        if (input.updatedAt) {
+          mapped.updatedAt = input.updatedAt
+        }
         if (input.items && input.items.length > 0) {
           mapped.items = input.items
           mapped.status = deriveRecordStatusFromParticulars(
@@ -354,11 +504,92 @@ export const salesService = {
         items: updatedItems,
         deposit: amt,
         netAmount: amt,
-        updatedAt: new Date().toISOString(),
+        updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
       }
     })
     this.invalidateCache()
     return inMemorySales.find((s) => s.id === id)!
+  },
+
+  async updateSaleDepositStatus(
+    id: string,
+    depositStatus: 'Deposited' | 'Not Deposited',
+    depositDate?: string,
+    bankAccountId?: string
+  ): Promise<SalesItem> {
+    this.invalidateCache()
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/sales/${id}/deposit-status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        deposit_status: depositStatus,
+        deposit_date: depositStatus === 'Deposited' ? depositDate || undefined : undefined,
+        bank_account_id: bankAccountId || undefined,
+      }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendSaleToItem(updated)
+      inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      let errorMsg = 'Failed to update deposit status.'
+      if (typeof errData.detail === 'string') {
+        errorMsg = errData.detail
+      } else if (Array.isArray(errData.detail)) {
+        errorMsg = errData.detail
+          .map((d: any) => {
+            const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+            return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
+          })
+          .join('; ')
+      } else if (errData.detail && typeof errData.detail === 'object') {
+        errorMsg = errData.detail.msg || JSON.stringify(errData.detail)
+      } else if (typeof errData.message === 'string') {
+        errorMsg = errData.message
+      }
+      throw new Error(errorMsg)
+    }
+  },
+
+  async updateSaleRemarks(id: string, remarks: string): Promise<SalesItem> {
+    this.invalidateCache()
+    const token =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_access_token')
+        : null
+
+    const res = await fetch(`/api/v1/sales/${id}/remarks`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ remarks }),
+    })
+
+    if (res.ok) {
+      const updated = await res.json()
+      const mapped = mapBackendSaleToItem(updated)
+      inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+      this.invalidateCache()
+      return mapped
+    } else {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Failed to update remarks.')
+    }
   },
 
   async deleteSale(id: string): Promise<boolean> {
@@ -376,18 +607,19 @@ export const salesService = {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
       })
-      if (res.ok) {
+      // 404 = already gone on the server, which is what the caller wants
+      if (res.ok || res.status === 404) {
         inMemorySales = inMemorySales.filter((s) => s.id !== id)
         this.invalidateCache()
         return true
       }
-    } catch (err) {
-      console.warn('Backend delete sale failed, deleting locally:', err)
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(
+        typeof errData.detail === 'string' ? errData.detail : `Failed to delete sale (status ${res.status}).`
+      )
+    } finally {
+      this.invalidateCache()
     }
-
-    inMemorySales = inMemorySales.filter((s) => s.id !== id)
-    this.invalidateCache()
-    return true
   },
 
   async updateSaleAuditStatus(
@@ -410,7 +642,8 @@ export const salesService = {
               auditedBy: mapped.auditedBy,
               auditDate: mapped.auditDate,
               auditNotes: mapped.auditNotes,
-              updatedAt: new Date().toISOString(),
+              updatedBy: input.updatedBy || s.updatedBy,
+        updatedAt: input.updatedAt || new Date().toISOString(),
             }
           : s
       )
@@ -542,6 +775,129 @@ export const salesService = {
     `)
     printWindow.document.close()
   },
+
+  exportDailySummaryCsv(groups: DailyGroupSummary<SalesItem>[], filename = 'sales_daily_summary.csv') {
+    const headers = [
+      'Date',
+      'Day of Week',
+      'Transaction Count',
+      'Gross Total',
+      'Realized Cash',
+      'Audit Status',
+    ]
+
+    const rows = groups.map((g) => [
+      g.date,
+      g.dayOfWeek,
+      g.transactionCount,
+      g.grossTotal.toFixed(2),
+      g.realizedCash.toFixed(2),
+      g.auditStatus,
+    ])
+
+    const csvContent =
+      '\uFEFF' +
+      [headers.join(','), ...rows.map((e) => e.join(','))].join('\r\n')
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.setAttribute('href', url)
+    link.setAttribute('download', filename)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  },
+
+  exportDailySummaryPdf(groups: DailyGroupSummary<SalesItem>[], company = 'MCT Kitchen') {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+
+    const totalGross = groups.reduce((sum, g) => sum + (g.grossTotal || 0), 0)
+    const totalRealized = groups.reduce((sum, g) => sum + (g.realizedCash || 0), 0)
+    const totalTransactions = groups.reduce((sum, g) => sum + (g.transactionCount || 0), 0)
+
+    const rowsHtml =
+      groups.length === 0
+        ? `<tr><td colspan="6" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No daily sales records available for this selection.</td></tr>`
+        : groups
+            .map(
+              (g) => `
+      <tr>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${g.formattedDate || g.date}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; color: #64748b;">${g.dayOfWeek}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: center;">${g.transactionCount}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #16a34a; font-weight: 600;">₱${g.grossTotal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">₱${g.realizedCash.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">
+          <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; ${
+            g.auditStatus === 'All Verified'
+              ? 'background: #dcfce7; color: #15803d;'
+              : g.auditStatus === 'Discrepancy'
+              ? 'background: #ffe4e6; color: #be123c;'
+              : 'background: #fef3c7; color: #b45309;'
+          }">
+            ${g.auditStatus}
+          </span>
+        </td>
+      </tr>
+    `
+            )
+            .join('')
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Daily Sales Summary Report - ${company}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
+            h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
+            p { font-size: 12px; color: #64748B; margin: 0 0 16px 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+            th { background-color: #F8FAFC; text-align: left; padding: 8px 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #64748B; border-bottom: 2px solid #CBD5E1; }
+            .summary { margin-top: 20px; padding: 12px 16px; background-color: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; display: flex; justify-content: space-between; font-size: 12px; }
+            @media print {
+              body { padding: 10px; }
+              @page { size: landscape; margin: 10mm; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>MCT Group of Companies</h1>
+          <p>Daily Sales Summary Report for <strong>${company}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Day</th>
+                <th style="text-align: center;">Transactions</th>
+                <th style="text-align: right;">Gross Sales</th>
+                <th style="text-align: right;">Realized Cash</th>
+                <th>Audit Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          <div class="summary">
+            <div><strong>Total Days:</strong> ${groups.length} (Total Tx: ${totalTransactions})</div>
+            <div><strong>Total Gross Sales:</strong> ₱${totalGross.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+            <div><strong>Total Realized Cash:</strong> ₱${totalRealized.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+  },
+
 
   // Map a SalesItem to DashboardTransactionItem so it can be viewed in AuditTransactionModal
   toDashboardTransaction(sale: SalesItem): DashboardTransactionItem {

@@ -1,4 +1,5 @@
 import { websocketService, type SyncEventType } from './websocketService'
+import { isCompanyMatch } from '@/utils/companyUtils'
 
 export interface BankTransaction {
 
@@ -11,6 +12,8 @@ export interface BankTransaction {
   deposit?: number
   category: string
   netAmount: number
+  /** Which owner company this entry belongs to (matters only on shared bank accounts) */
+  companyName?: string
   timestamp?: string
   createdAt?: string
 }
@@ -21,6 +24,8 @@ export interface BankAccount {
   accountName: string
   accountNumber: string
   companyName: string
+  /** Every owner company of this account, primary first. More than one = shared account. */
+  companyNames: string[]
   companyId?: number
   cardLabel?: string
   accountType: 'Checking' | 'Savings' | 'Payroll' | 'Time Deposit'
@@ -33,11 +38,23 @@ export interface BankAccount {
   notes?: string
 }
 
+/** A bank is shared when more than one company owns it. */
+export function isSharedAccount(acc?: BankAccount | null): boolean {
+  return !!acc && (acc.companyNames?.length || 0) > 1
+}
+
+/** True when `company` is any one of the account's owner companies (alias-aware). */
+export function isAccountOwnedBy(acc: Pick<BankAccount, 'companyName' | 'companyNames'>, company: string): boolean {
+  const owners = acc.companyNames?.length ? acc.companyNames : [acc.companyName]
+  return owners.some((o) => isCompanyMatch(o || '', company))
+}
+
 export interface NewBankAccountInput {
   bankName: string
   accountName: string
   accountNumber?: string
   companyName: string
+  companyNames?: string[]
   companyId?: number
   cardLabel?: string
   accountType?: 'Checking' | 'Savings' | 'Payroll' | 'Time Deposit'
@@ -54,6 +71,7 @@ export interface DepositWithdrawInput {
   category?: string
   chequeNo?: string
   referenceNo?: string
+  companyName?: string
 }
 
 const BANK_CACHE_STORAGE_KEY = 'mct_bank_accounts_cache_v1'
@@ -144,6 +162,7 @@ function mapAccountFromBackend(raw: any): BankAccount {
         deposit: Number(t.deposit || 0),
         category: t.category,
         netAmount: Number(t.net_amount || 0),
+        companyName: t.company_name || undefined,
         createdAt: t.created_at,
       }))
     : []
@@ -154,6 +173,10 @@ function mapAccountFromBackend(raw: any): BankAccount {
     accountName: raw.account_name,
     accountNumber: raw.account_number,
     companyName: raw.company_name,
+    companyNames:
+      Array.isArray(raw.company_names) && raw.company_names.length > 0
+        ? raw.company_names
+        : [raw.company_name].filter(Boolean),
     companyId: raw.company_id,
     cardLabel: raw.card_label || raw.account_name || raw.company_name,
     accountType: (raw.account_type as any) || 'Checking',
@@ -232,7 +255,7 @@ export const bankService = {
       const allMem = memoryBankCache.get('__ALL__')
       if (allMem && Array.isArray(allMem.data) && allMem.data.length > 0) {
         const filtered = allMem.data.filter(
-          (b) => (b.companyName || '').trim().toLowerCase() === key
+          (b) => (b.companyNames || [b.companyName]).some((n) => (n || '').trim().toLowerCase() === key)
         )
         if (filtered.length > 0) return filtered
       }
@@ -287,6 +310,7 @@ export const bankService = {
       account_name: input.accountName,
       account_number: input.accountNumber || undefined,
       company_name: input.companyName,
+      company_names: input.companyNames && input.companyNames.length > 0 ? input.companyNames : undefined,
       company_id: input.companyId,
       card_label: input.cardLabel || input.accountName,
       account_type: input.accountType || 'Checking',
@@ -317,6 +341,7 @@ export const bankService = {
     if (input.accountName) payload.account_name = input.accountName
     if (input.accountNumber) payload.account_number = input.accountNumber
     if (input.companyName) payload.company_name = input.companyName
+    if (input.companyNames) payload.company_names = input.companyNames
     if (input.companyId !== undefined) payload.company_id = input.companyId
     if (input.cardLabel) payload.card_label = input.cardLabel
     if (input.accountType) payload.account_type = input.accountType
@@ -355,6 +380,7 @@ export const bankService = {
       particulars: input.particulars,
       category: input.category || 'Bank Transfer',
       reference_no: input.referenceNo,
+      company_name: input.companyName,
     }
 
     const res = await fetch(
@@ -382,6 +408,7 @@ export const bankService = {
       particulars: input.particulars,
       category: input.category || 'Cheque',
       cheque_no: input.chequeNo,
+      company_name: input.companyName,
     }
 
     const res = await fetch(

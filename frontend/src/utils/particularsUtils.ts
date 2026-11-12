@@ -3,6 +3,7 @@ export interface ParticularItem {
   particulars: string
   quantity: number
   unitPrice: number
+  serviceFee?: number
   total: number
   status?: 'Paid' | 'Unpaid' | 'Pending' | 'On hold'
 }
@@ -127,12 +128,12 @@ function parseSingleParticularLine(line: string, index: number): ParticularItem 
   let cleanedLine = line.trim()
   let itemStatus: 'Paid' | 'Unpaid' | 'Pending' | 'On hold' | undefined = undefined
 
-  const statusTagMatch = cleanedLine.match(/\[(Paid|Unpaid|Pending|On hold)\]/i)
+  const statusTagMatch = cleanedLine.match(/\[(Paid|Unpaid|Pending|On hold|Partial)\]/i)
   if (statusTagMatch) {
     const rawTag = statusTagMatch[1].toLowerCase()
     if (rawTag === 'paid') itemStatus = 'Paid'
     else if (rawTag === 'unpaid') itemStatus = 'Unpaid'
-    else if (rawTag === 'pending') itemStatus = 'Pending'
+    else if (rawTag === 'pending' || rawTag === 'partial') itemStatus = 'Pending'
     else if (rawTag === 'on hold') itemStatus = 'On hold'
     cleanedLine = cleanedLine.replace(statusTagMatch[0], '').trim()
   }
@@ -178,7 +179,7 @@ export function normalizeParticularStatus(
 ): 'Paid' | 'Pending' | 'Unpaid' {
   const s = (status || '').trim().toLowerCase()
   if (s === 'paid' || s === 'settled') return 'Paid'
-  if (s === 'pending' || s === 'on hold') return 'Pending'
+  if (s === 'pending' || s === 'on hold' || s === 'partial') return 'Pending'
   if (s === 'unpaid' || s === 'overdue') return 'Unpaid'
   return fallback
 }

@@ -77,7 +77,10 @@ class TestSecretLeakPrevention(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
 
         body_str = response.body.decode("utf-8")
-        self.assertIn("An internal server error occurred. Please try again later.", body_str)
+        self.assertTrue(
+            "An internal server error occurred. Please try again later." in body_str
+            or "Something went wrong. Please try again later." in body_str
+        )
         # Must not contain raw secret or internal traceback
         self.assertNotIn("xkeysib-", body_str)
         self.assertNotIn("Database crash with secret token", body_str)

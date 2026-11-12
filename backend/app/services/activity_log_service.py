@@ -21,7 +21,7 @@ from app.db.supabase import get_supabase_admin_client
 from app.models.audit_log import AuditLog
 from app.models.company import Company
 from app.models.user import User
-from app.schemas.activity_log import ActivityLogOut
+from app.schemas.activity_log import ActivityLogOut, TimelineEventOut
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,8 @@ def _parse_details(raw: Optional[Any]) -> dict:
 
 
 def _target_for(details: dict) -> str:
+    if details.get("record_ref"):
+        return str(details["record_ref"])
     if details.get("ref"):
         return str(details["ref"])
     if details.get("reference_no"):
@@ -384,6 +386,46 @@ class ActivityLogService:
 
         return purged_count
 
+    def cleanup_expired_logs_batched(
+        self,
+        db: Session,
+        retention_days: int = 180,
+        batch_size: int = 1000,
+        now: Optional[datetime] = None,
+    ) -> int:
+        """
+        Batched local database purge of AuditLog rows older than retention_days.
+        Avoids unbatched table locks and synchronous external HTTP calls.
+        """
+        from sqlalchemy import delete, select
+
+        resolved_now = now if now is not None else datetime.now(timezone.utc)
+        if resolved_now.tzinfo is None:
+            resolved_now = resolved_now.replace(tzinfo=timezone.utc)
+        cutoff = resolved_now - timedelta(days=retention_days)
+        total_deleted = 0
+        try:
+            while True:
+                ids = db.scalars(
+                    select(AuditLog.audit_log_id)
+                    .where(AuditLog.created_at < cutoff)
+                    .limit(batch_size)
+                ).all()
+                if not ids:
+                    break
+                res = db.execute(
+                    delete(AuditLog).where(AuditLog.audit_log_id.in_(ids))
+                )
+                db.commit()
+                deleted = res.rowcount or 0
+                total_deleted += deleted
+                if deleted < batch_size:
+                    break
+        except Exception as exc:
+            db.rollback()
+            logger.warning("Batched local audit_logs retention purge failed: %s", exc)
+        return total_deleted
+
     def _enrich_logs(self, rows: List[dict], db: Optional[Session] = None) -> List[ActivityLogOut]:
         """
         Enrich raw audit rows with readable user names, company names,
@@ -431,11 +473,24 @@ class ActivityLogService:
             action = str(r.get("action") or "")
             category = r.get("action_category")
 
-            user_name = users.get(r.get("user_id")) or (str(details["email"]) if details.get("email") else "System")
+            from app.core.user_name_resolver import resolve_real_name
+            user_name = users.get(r.get("user_id")) or (resolve_real_name(str(details["email"])) if details.get("email") else "System")
+            user_name = resolve_real_name(user_name)
             company_name = companies.get(r.get("company_id")) or "System"
             description = _ACTION_DESCRIPTIONS.get(action) or action.replace("_", " ").capitalize()
             module = _module_for(action, category)
             target = _target_for(details)
+
+            ip_address = r.get("ip_address") or details.get("ip_address") or details.get("ip")
+            severity = str(
+                details.get("severity")
+                or ("CRITICAL" if action in ("ACCOUNT_LOCKED", "LOGIN_FAILED", "PASSWORD_RESET_FAILED") else "INFO")
+            ).upper()
+            record_type = details.get("record_type")
+            record_id = details.get("record_id")
+            record_ref = details.get("record_ref") or details.get("ref") or details.get("reference_no")
+            user_agent = details.get("user_agent")
+            changes = details.get("changes") if isinstance(details.get("changes"), dict) else None
 
             results.append(
                 ActivityLogOut(
@@ -444,7 +499,7 @@ class ActivityLogService:
                     company_id=r.get("company_id"),
                     action=action,
                     action_category=category,
-                    ip_address=r.get("ip_address"),
+                    ip_address=ip_address,
                     details=r.get("details"),
                     created_at=str(r.get("created_at")) if r.get("created_at") else None,
                     user_name=user_name,
@@ -452,10 +507,415 @@ class ActivityLogService:
                     description=description,
                     module=module,
                     target=target,
+                    severity=severity,
+                    record_type=record_type,
+                    record_id=record_id,
+                    record_ref=record_ref,
+                    user_agent=user_agent,
+                    changes=changes,
                 )
             )
 
         return results
+
+    def get_entity_timeline(
+        self,
+        *,
+        record_type: str,
+        record_id: Optional[Union[str, int]] = None,
+        ref_no: Optional[str] = None,
+        company_id: Optional[int] = None,
+        db: Optional[Session] = None,
+    ) -> List[TimelineEventOut]:
+        """
+        Build an enriched, chronological timeline of an entity (Sale, Expense, Loan,
+        Petty Cash topup/reimbursement, Tenant collection, etc.), combining official
+        audit log events with database lifecycle milestones.
+        """
+        import re
+        from app.core.user_name_resolver import resolve_real_name
+        from app.models.finance import Sale, Expense
+        from app.models.petty_cash import PettyCashTopUp
+        from app.models.loan import Loan
+
+        norm_type = (record_type or "").strip().lower()
+        if norm_type in ("sales", "sale"):
+            norm_type = "sale"
+        elif norm_type in ("expenses", "expense"):
+            norm_type = "expense"
+        elif norm_type in ("petty_cash", "petty cash", "pettycash", "topup", "reimbursement", "replenishment"):
+            norm_type = "petty_cash"
+        elif norm_type in ("loans", "loan"):
+            norm_type = "loan"
+        elif norm_type in ("tenants", "tenant", "lease", "income"):
+            norm_type = "tenant"
+
+        raw_id_str = str(record_id or "").strip()
+        parsed_id: Optional[int] = None
+        match = re.search(r"(\d+)", raw_id_str)
+        if match:
+            parsed_id = int(match.group(1))
+
+        close_session = False
+        if db is None:
+            db = SessionLocal()
+            close_session = True
+
+        timeline: List[TimelineEventOut] = []
+
+        try:
+            # 1. Fetch relevant audit logs from local DB / Supabase
+            local_logs = (
+                db.query(AuditLog)
+                .order_by(AuditLog.created_at.asc())
+                .all()
+            )
+
+            # Filter relevant logs for this entity
+            matched_audit_rows = []
+            for al in local_logs:
+                d = _parse_details(al.details)
+                al_rec_type = str(d.get("record_type") or "").strip().lower()
+                al_rec_id = str(d.get("record_id") or "").strip()
+                al_ref = str(d.get("reference_no") or d.get("record_ref") or d.get("ref") or "").strip()
+
+                is_type_match = False
+                if al_rec_type == norm_type:
+                    is_type_match = True
+                elif norm_type == "sale" and al.action.startswith("SALE_"):
+                    is_type_match = True
+                elif norm_type == "expense" and al.action.startswith("EXPENSE_"):
+                    is_type_match = True
+                elif norm_type == "petty_cash" and al.action.startswith("PETTY_CASH_"):
+                    is_type_match = True
+                elif norm_type == "loan" and al.action.startswith("LOAN_"):
+                    is_type_match = True
+                elif norm_type == "tenant" and al.action.startswith("TENANT_"):
+                    is_type_match = True
+
+                if not is_type_match:
+                    continue
+
+                id_matches = False
+                if parsed_id is not None and al_rec_id == str(parsed_id):
+                    id_matches = True
+                elif ref_no and al_ref and al_ref.lower() == ref_no.strip().lower():
+                    id_matches = True
+                elif ref_no and d.get("cheque_number") and str(d.get("cheque_number")).strip().lower() == ref_no.strip().lower():
+                    id_matches = True
+
+                if id_matches:
+                    matched_audit_rows.append(al)
+
+            # Enrich matched audit rows
+            if matched_audit_rows:
+                enriched = self._enrich_logs(
+                    [
+                        {
+                            "audit_log_id": r.audit_log_id,
+                            "user_id": r.user_id,
+                            "company_id": r.company_id,
+                            "action": r.action,
+                            "action_category": r.action_category,
+                            "ip_address": r.ip_address,
+                            "details": r.details,
+                            "created_at": str(r.created_at) if r.created_at else None,
+                        }
+                        for r in matched_audit_rows
+                    ],
+                    db=db,
+                )
+                for item in enriched:
+                    evt_type = "general"
+                    title = item.description or item.action
+                    act_lower = item.action.lower()
+                    if "create" in act_lower:
+                        evt_type = "created"
+                        title = f"{norm_type.title()} Created"
+                    elif "update" in act_lower or "wallet" in act_lower:
+                        evt_type = "edited"
+                        title = "Details Modified"
+                    elif "endorse" in act_lower:
+                        evt_type = "endorsed"
+                        title = "Endorsed by Finance"
+                    elif "audit" in act_lower or "review" in act_lower:
+                        evt_type = "audited"
+                        title = "Audited & Verified"
+                    elif "reimburse" in act_lower or "disburse" in act_lower:
+                        evt_type = "disbursed"
+                        title = "Reimbursement Disbursed"
+                    elif "payment" in act_lower:
+                        evt_type = "payment"
+                        title = "Payment Recorded"
+
+                    raw_d = _parse_details(item.details)
+                    notes_val = raw_d.get("notes") or raw_d.get("remark") or raw_d.get("remarks")
+                    changes_val = raw_d.get("changes") if isinstance(raw_d.get("changes"), dict) else None
+
+                    timeline.append(
+                        TimelineEventOut(
+                            id=f"audit-{item.audit_log_id}",
+                            action=item.action,
+                            event_type=evt_type,
+                            title=title,
+                            actor_name=item.user_name,
+                            actor_role=item.module or None,
+                            timestamp=item.created_at,
+                            description=item.description,
+                            changes=changes_val,
+                            notes=str(notes_val) if notes_val else None,
+                            status_badge=raw_d.get("status") or raw_d.get("audit_status"),
+                        )
+                    )
+
+            # 2. Extract database model milestones
+            if norm_type == "sale" and parsed_id is not None:
+                sale = db.query(Sale).filter(Sale.sales_id == parsed_id).first()
+                if sale:
+                    # Created milestone
+                    has_created = any(t.event_type == "created" for t in timeline)
+                    if not has_created:
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"sale-{sale.sales_id}-created",
+                                action="SALE_CREATED",
+                                event_type="created",
+                                title="Sale Recorded",
+                                actor_name="Authorized Staff",
+                                actor_role="Staff",
+                                timestamp=str(sale.created_at) if sale.created_at else str(sale.transaction_date),
+                                description=f"Initial sale recorded: {sale.particulars} (₱{sale.amount:,.2f})",
+                                status_badge=sale.payment_status,
+                            )
+                        )
+                    # Audit milestone
+                    if sale.audit_status and sale.audit_status != "Pending Audit":
+                        has_audit = any(t.event_type == "audited" for t in timeline)
+                        if not has_audit:
+                            auditor = resolve_real_name(sale.audited_by) if sale.audited_by else "Internal Auditor"
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"sale-{sale.sales_id}-audited",
+                                    action="SALE_AUDITED",
+                                    event_type="audited",
+                                    title="Audited & Verified" if sale.audit_status == "Verified" else "Flagged for Audit Review",
+                                    actor_name=auditor,
+                                    actor_role="Audit Officer",
+                                    timestamp=str(sale.audited_at) if sale.audited_at else str(sale.updated_at or sale.created_at),
+                                    description=f"Transaction audited and marked as {sale.audit_status}",
+                                    notes=sale.audit_remarks,
+                                    status_badge=sale.audit_status,
+                                )
+                            )
+                    # Modified milestone
+                    if sale.updated_at and sale.created_at and str(sale.updated_at) != str(sale.created_at):
+                        has_edit = any(t.event_type == "edited" for t in timeline)
+                        if not has_edit:
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"sale-{sale.sales_id}-updated",
+                                    action="SALE_UPDATED",
+                                    event_type="edited",
+                                    title="Details Modified",
+                                    actor_name="Authorized Staff",
+                                    actor_role="Supervisor",
+                                    timestamp=str(sale.updated_at),
+                                    description="Transaction particulars, amount, or status updated",
+                                )
+                            )
+
+            elif norm_type == "expense" and parsed_id is not None:
+                exp = db.query(Expense).filter(Expense.expense_id == parsed_id).first()
+                if exp:
+                    creator_user = db.query(User).filter(User.user_id == exp.created_by).first() if exp.created_by else None
+                    creator_name = resolve_real_name(creator_user.name) if creator_user else "Authorized Staff"
+
+                    has_created = any(t.event_type == "created" for t in timeline)
+                    if not has_created:
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"expense-{exp.expense_id}-created",
+                                action="EXPENSE_CREATED",
+                                event_type="created",
+                                title="Expense Recorded",
+                                actor_name=creator_name,
+                                actor_role="Staff",
+                                timestamp=str(exp.created_at) if exp.created_at else str(exp.expense_date),
+                                description=f"Initial expense recorded: {exp.description or exp.particulars} (₱{exp.amount:,.2f})",
+                                status_badge="Paid",
+                            )
+                        )
+                    # Audit milestone
+                    if exp.audit_status and exp.audit_status != "Pending Audit":
+                        has_audit = any(t.event_type == "audited" for t in timeline)
+                        if not has_audit:
+                            auditor = resolve_real_name(exp.audited_by) if exp.audited_by else "Internal Auditor"
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"expense-{exp.expense_id}-audited",
+                                    action="EXPENSE_AUDITED",
+                                    event_type="audited",
+                                    title="Audited & Verified" if exp.audit_status == "Verified" else "Flagged for Audit Review",
+                                    actor_name=auditor,
+                                    actor_role="Audit Officer",
+                                    timestamp=str(exp.audited_at) if exp.audited_at else str(exp.updated_at or exp.created_at),
+                                    description=f"Expense audited and marked as {exp.audit_status}",
+                                    notes=exp.audit_remarks,
+                                    status_badge=exp.audit_status,
+                                )
+                            )
+                    # Modified milestone
+                    if exp.updated_at and exp.created_at and str(exp.updated_at) != str(exp.created_at):
+                        has_edit = any(t.event_type == "edited" for t in timeline)
+                        if not has_edit:
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"expense-{exp.expense_id}-updated",
+                                    action="EXPENSE_UPDATED",
+                                    event_type="edited",
+                                    title="Details Modified",
+                                    actor_name="Authorized Staff",
+                                    actor_role="Supervisor",
+                                    timestamp=str(exp.updated_at),
+                                    description="Expense details, amounts, or receipts updated",
+                                )
+                            )
+
+            elif norm_type == "petty_cash" and parsed_id is not None:
+                topup = db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == parsed_id).first()
+                if topup:
+                    is_reimb = (topup.request_type or "").strip().lower() in ("reimbursement", "replenishment")
+                    creator_user = db.query(User).filter(User.user_id == topup.created_by).first() if topup.created_by else None
+                    claimant_name = resolve_real_name(topup.paid_by) if topup.paid_by else (resolve_real_name(creator_user.name) if creator_user else "Employee")
+
+                    has_created = any(t.event_type == "created" for t in timeline)
+                    if not has_created:
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"topup-{topup.topup_id}-created",
+                                action="PETTY_CASH_TOPUP_CREATED",
+                                event_type="created",
+                                title="Replenishment / Reimbursement Claim Filed" if is_reimb else "Petty Cash Top Up Requested",
+                                actor_name=claimant_name,
+                                actor_role="Employee / Staff",
+                                timestamp=str(topup.created_at) if topup.created_at else str(topup.topup_date),
+                                description=f"Submitted {topup.request_type or 'topup'} request for ₱{topup.amount:,.2f}: {topup.description or 'Petty cash replenishment'}",
+                                status_badge=topup.status,
+                            )
+                        )
+
+                    # Finance Endorsement milestone
+                    if topup.endorsed_by or topup.endorsed_at or topup.finance_remark:
+                        has_endorse = any(t.event_type == "endorsed" for t in timeline)
+                        if not has_endorse:
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"topup-{topup.topup_id}-endorsed",
+                                    action="PETTY_CASH_ENDORSED",
+                                    event_type="endorsed",
+                                    title="Endorsed by Finance",
+                                    actor_name=resolve_real_name(topup.endorsed_by or "Finance Officer"),
+                                    actor_role="Finance Officer",
+                                    timestamp=str(topup.endorsed_at) if topup.endorsed_at else str(topup.created_at),
+                                    description="Funding bank assigned and request endorsed to Internal Audit",
+                                    notes=topup.finance_remark,
+                                    status_badge="Pending Audit Approval",
+                                )
+                            )
+
+                    # Audit review milestone
+                    if topup.reviewed_by or topup.reviewed_at or topup.remark or (topup.status or "").lower() in ("approved", "disapproved by audit", "reimbursed", "settled"):
+                        has_review = any(t.event_type == "audited" for t in timeline)
+                        if not has_review:
+                            is_approved = (topup.status or "").lower() in ("approved", "reimbursed", "settled", "transfer in transit", "transfer received")
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"topup-{topup.topup_id}-reviewed",
+                                    action="PETTY_CASH_AUDIT_REVIEW",
+                                    event_type="audited",
+                                    title="Audited & Approved" if is_approved else "Disapproved by Audit",
+                                    actor_name=resolve_real_name(topup.reviewed_by or "Internal Auditor"),
+                                    actor_role="Audit Officer",
+                                    timestamp=str(topup.reviewed_at) if topup.reviewed_at else str(topup.endorsed_at or topup.created_at),
+                                    description=f"Internal audit review complete. Status: {topup.status}",
+                                    notes=topup.remark,
+                                    status_badge=topup.status,
+                                )
+                            )
+
+                    # Transfer received milestone
+                    if topup.transfer_received_at or topup.transfer_received_by:
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"topup-{topup.topup_id}-transfer",
+                                action="PETTY_CASH_TRANSFER_RECEIVED",
+                                event_type="payment",
+                                title="Bank Transfer Confirmed Received",
+                                actor_name=resolve_real_name(topup.transfer_received_by or "Finance Officer"),
+                                actor_role="Finance Officer",
+                                timestamp=str(topup.transfer_received_at),
+                                description="Funding transfer verified and received by requesting company bank",
+                                status_badge="Transfer Received",
+                            )
+                        )
+
+                    # Reimbursed / Settled milestone
+                    if topup.reimbursed_at or topup.reimbursed_by or (topup.status or "").lower() in ("reimbursed", "settled"):
+                        has_payout = any(t.event_type == "disbursed" for t in timeline)
+                        if not has_payout:
+                            is_settled = (topup.status or "").lower() == "settled"
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"topup-{topup.topup_id}-reimbursed",
+                                    action="PETTY_CASH_REIMBURSED",
+                                    event_type="disbursed",
+                                    title="Float Finalized & Settled" if is_settled else "Reimbursement Payout Disbursed",
+                                    actor_name=resolve_real_name(topup.reimbursed_by or "Finance Officer"),
+                                    actor_role="Finance Officer",
+                                    timestamp=str(topup.reimbursed_at) if topup.reimbursed_at else str(topup.reviewed_at or topup.created_at),
+                                    description="Disbursement finalized and petty cash ledger updated" if is_settled else f"Employee reimbursement of ₱{topup.amount_reimbursed or topup.amount:,.2f} disbursed",
+                                    status_badge=topup.status,
+                                )
+                            )
+
+            elif norm_type == "loan" and parsed_id is not None:
+                loan = db.query(Loan).filter(Loan.id == parsed_id).first()
+                if loan:
+                    timeline.append(
+                        TimelineEventOut(
+                            id=f"loan-{loan.id}-created",
+                            action="LOAN_CREATED",
+                            event_type="created",
+                            title="Loan Facility Originated",
+                            actor_name="Authorized Finance Officer",
+                            actor_role="Finance Officer",
+                            timestamp=str(loan.created_at) if hasattr(loan, "created_at") and loan.created_at else str(loan.date),
+                            description=f"Loan originated: ₱{loan.amount:,.2f} to {loan.borrower_name or 'Borrower'}",
+                            status_badge=loan.status,
+                        )
+                    )
+                    if hasattr(loan, "audit_status") and loan.audit_status and loan.audit_status != "Pending Audit":
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"loan-{loan.id}-audited",
+                                action="LOAN_AUDITED",
+                                event_type="audited",
+                                title="Audited & Verified",
+                                actor_name=resolve_real_name(getattr(loan, "audited_by", "Internal Auditor")),
+                                actor_role="Audit Officer",
+                                timestamp=str(getattr(loan, "audited_at", loan.date)),
+                                description=f"Loan verified by audit. Status: {loan.audit_status}",
+                                status_badge=loan.audit_status,
+                            )
+                        )
+
+            # Sort chronological
+            timeline.sort(key=lambda x: str(x.timestamp or ""))
+            return timeline
+        finally:
+            if close_session:
+                db.close()
+
 
 
 # Global singleton instance

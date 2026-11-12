@@ -12,6 +12,7 @@ VALID_AUDIT_STATUSES = ("Pending Audit", "Verified", "Flagged")
 class AuditReviewIn(BaseModel):
     audit_status: AuditStatusValue
     remarks: Optional[str] = Field(None, max_length=2000)
+    auditor_name: Optional[str] = Field(None, max_length=150)
 
 
 def audit_fields(source: Any) -> dict:
@@ -29,4 +30,6 @@ def audit_fields(source: Any) -> dict:
         "audited_by": get("audited_by", None),
         "audited_at": get("audited_at", None),
         "audit_remarks": get("audit_remarks", None),
+        # Not an audit value: carried here so every SaleOut / ExpenseOut also reports its bank account.
+        "bank_account_id": get("bank_account_id", None),
     }

@@ -25,6 +25,10 @@ class Borrower(Base):
     date_borrowed = Column(Date, nullable=False, index=True)
     due_date = Column(Date, nullable=False, index=True)
     status = Column(String(50), nullable=False, default="Active")  # Active, Fully Paid, Delinquent
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -65,6 +69,7 @@ class LendingTransaction(Base):
     reference_no = Column(String(100), nullable=True)
     status = Column(String(50), nullable=False, default="Completed")  # Completed, Pending, Advance Paid, Missed
     notes = Column(Text, nullable=True)
+    recorded_by = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

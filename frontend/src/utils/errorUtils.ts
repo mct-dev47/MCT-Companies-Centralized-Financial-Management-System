@@ -14,6 +14,14 @@
 
 import { pushToast } from '@/lib/toastStore'
 
+export function formatSecondsToMMSS(totalSeconds: number): string {
+  if (isNaN(totalSeconds) || totalSeconds < 0) return '00:00'
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = Math.floor(totalSeconds % 60)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${pad(minutes)}:${pad(seconds)}`
+}
+
 export function formatUserFriendlyErrorMessage(
   err: unknown,
   fallbackMessage: string = 'An unexpected error occurred. Please try again.'
@@ -22,20 +30,53 @@ export function formatUserFriendlyErrorMessage(
 
   let rawMessage = ''
   let status: number | undefined
+  let code: string | undefined
+  let retryAfter: number | undefined
 
   if (typeof err === 'string') {
     rawMessage = err
+    if (rawMessage.startsWith('{') && rawMessage.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(rawMessage)
+        if (parsed.code) code = String(parsed.code)
+        if (parsed.retry_after) retryAfter = Number(parsed.retry_after)
+        if (parsed.detail) rawMessage = String(parsed.detail)
+      } catch {
+        // ignore
+      }
+    }
   } else if (err instanceof Error) {
     rawMessage = err.message
+    const anyErr = err as any
+    status = anyErr.status || anyErr.statusCode || anyErr.response?.status
+    code = anyErr.code || anyErr.data?.code || anyErr.response?.data?.code
+    retryAfter = anyErr.retry_after || anyErr.data?.retry_after || anyErr.response?.data?.retry_after
+
+    if (rawMessage.startsWith('{') && rawMessage.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(rawMessage)
+        if (parsed.code) code = String(parsed.code)
+        if (parsed.retry_after) retryAfter = Number(parsed.retry_after)
+        if (parsed.detail) rawMessage = String(parsed.detail)
+      } catch {
+        // ignore
+      }
+    }
+
     const statusMatch = rawMessage.match(/\b([45]\d{2})\b/)
-    if (statusMatch) {
+    if (statusMatch && !status) {
       status = parseInt(statusMatch[1], 10)
     }
   } else if (typeof err === 'object') {
     const anyErr = err as any
     status = anyErr.status || anyErr.statusCode || anyErr.response?.status
-    const data = anyErr.response?.data
+    code = anyErr.code || anyErr.data?.code || anyErr.response?.data?.code
+    retryAfter = anyErr.retry_after || anyErr.data?.retry_after || anyErr.response?.data?.retry_after
+
+    const data = anyErr.response?.data || anyErr.data
     if (data && typeof data === 'object') {
+      if (data.code) code = String(data.code)
+      if (data.retry_after) retryAfter = Number(data.retry_after)
       if (typeof data.detail === 'string') {
         rawMessage = data.detail
       } else if (Array.isArray(data.detail)) {
@@ -52,6 +93,44 @@ export function formatUserFriendlyErrorMessage(
       } else {
         rawMessage = anyErr.message || anyErr.error || ''
       }
+    }
+  }
+
+  // Authoritative machine-readable error code mappings (AC-32)
+  if (code) {
+    switch (code.toUpperCase()) {
+      case 'AUTH_INVALID_CREDENTIALS':
+        return 'Invalid email or password.'
+      case 'AUTH_RATE_LIMITED':
+        return retryAfter && retryAfter > 0
+          ? `Too many attempts. Please try again in ${formatSecondsToMMSS(retryAfter)}.`
+          : 'Too many attempts. Please try again in 15:00.'
+      case 'AUTH_IP_RATE_LIMITED':
+        return 'Too many login attempts from this network. Try again later.'
+      case 'OTP_COOLDOWN_ACTIVE':
+        return retryAfter && retryAfter > 0
+          ? `Please wait ${formatSecondsToMMSS(retryAfter)} before requesting another code.`
+          : 'Please wait 02:00 before requesting another code.'
+      case 'OTP_RESEND_LOCKED':
+        return retryAfter && retryAfter > 0
+          ? `You have reached the resend limit. Please try again in ${formatSecondsToMMSS(retryAfter)}.`
+          : 'You have reached the resend limit. Please try again in 15:00.'
+      case 'OTP_INVALID':
+        return 'The code is invalid or has expired. Request a new code if needed.'
+      case 'OTP_MAX_ATTEMPTS':
+        return 'Too many verification attempts. Please sign in again.'
+      case 'OTP_DELIVERY_FAILED':
+        return 'Unable to send verification code. Please try again later.'
+      case 'TOKEN_EXPIRED':
+        return 'This link has expired or is no longer valid. Request a new link.'
+      case 'API_RATE_LIMITED':
+        return 'Too many requests. Please slow down.'
+      case 'SERVICE_UNAVAILABLE':
+        return 'Authentication service temporarily unavailable. Please try again.'
+      case 'INTERNAL_SERVER_ERROR':
+        return 'Something went wrong. Please try again later.'
+      case 'VALIDATION_ERROR':
+        return 'Please check the entered values and ensure all required fields are correct.'
     }
   }
 
