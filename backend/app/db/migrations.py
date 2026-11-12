@@ -312,10 +312,9 @@ def _run_postgresql_migrations(conn) -> list[str]:
         script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.postgres.sql"
         if script_0052.exists():
             sql_0052 = script_0052.read_text(encoding="utf-8")
-            for stmt in sql_0052.replace("BEGIN;", "").replace("COMMIT;", "").split(";"):
-                body = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
-                if body:
-                    conn.execute(text(body))
+            clean_0052 = sql_0052.replace("BEGIN;", "").replace("COMMIT;", "").strip()
+            if clean_0052:
+                conn.execute(text(clean_0052))
             conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0052_update_admin_email')"))
             applied.append("0052_update_admin_email")
             logger.info("Migration 0052_update_admin_email applied successfully.")
