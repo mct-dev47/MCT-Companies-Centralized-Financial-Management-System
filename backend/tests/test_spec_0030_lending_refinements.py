@@ -339,24 +339,24 @@ def test_spec_0030_ac7_payment_modal_validation():
     assert req_50.notes == fifty_char_note
     assert req_50.method == "Cash"
 
-    # 2. 51 characters note fails validation
-    fifty_one_char_note = "A" * 51
+    # 2. 501 characters note fails validation (max_length=500)
+    five_hundred_one_char_note = "A" * 501
     with pytest.raises(ValidationError) as exc_info:
         LendingPaymentCreateRequest(
             borrower_id=1,
             payment_date="2026-11-06",
             amount=Decimal("500.00"),
-            notes=fifty_one_char_note,
+            notes=five_hundred_one_char_note,
         )
-    assert "String should have at most 50 characters" in str(exc_info.value)
+    assert "String should have at most 500 characters" in str(exc_info.value)
 
-    # 3. Transaction create request also enforces 50 char limit
+    # 3. Transaction create request also enforces 500 char limit
     with pytest.raises(ValidationError):
         LendingTransactionCreateRequest(
             borrower_id=1,
             payment_date="2026-11-06",
             amount=Decimal("500.00"),
-            notes="B" * 51,
+            notes="B" * 501,
         )
 
     # 4. Amount under 1.0 rejected on LendingPaymentCreateRequest
@@ -426,16 +426,16 @@ def test_spec_0030_api_record_payment_endpoint(db_session):
     assert res_explicit["recorded_by"] == "V. Masiglat"
     assert res_explicit["recordedBy"] == "V. Masiglat"
 
-    # 3. Validation rejection: notes exceeding 50 characters raises ValidationError
+    # 3. Validation rejection: notes exceeding 500 characters raises ValidationError
     with pytest.raises(ValidationError) as exc_info:
         LendingPaymentCreateRequest(
             borrower_id=105,
             payment_date="2026-11-06",
             amount=Decimal("300.00"),
             method="Cash",
-            notes="This remark is definitely longer than fifty characters in total length",
+            notes="A" * 501,
         )
-    assert "String should have at most 50 characters" in str(exc_info.value)
+    assert "String should have at most 500 characters" in str(exc_info.value)
 
 
 def test_spec_0030_audit_review_persistence_and_reload(db_session):

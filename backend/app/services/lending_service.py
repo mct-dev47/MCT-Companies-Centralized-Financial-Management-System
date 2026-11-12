@@ -962,7 +962,10 @@ class LendingService:
     @classmethod
     def get_borrower_ledger(cls, db: Session, borrower_id: int) -> Dict[str, Any]:
         """Fetch borrower details and generate its complete schedule ledger."""
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        b = b_query.first()
         if b:
             freq = b.payment_frequency or "Daily"
             term_days = b.term_days or (40 if freq == "Daily" else 60)
@@ -1302,7 +1305,10 @@ class LendingService:
         payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Update an existing borrower in the database and recalculate loan terms if required."""
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        b = b_query.first()
         if not b:
             loan = db.query(Loan).filter(Loan.loan_id == borrower_id).first()
             if not loan:
@@ -1411,7 +1417,10 @@ class LendingService:
     @classmethod
     def delete_borrower(cls, db: Session, borrower_id: int) -> Dict[str, Any]:
         """Delete an existing borrower and all associated transactions."""
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        b = b_query.first()
         if b:
             db.delete(b)
             db.commit()
@@ -1438,7 +1447,10 @@ class LendingService:
         auditor_name: Optional[str] = "Auditor",
     ) -> Dict[str, Any]:
         """Save the audit review for a borrower facility."""
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        b = b_query.first()
         if not b:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
 
@@ -1535,7 +1547,10 @@ class LendingService:
             recorded_by = getattr(data, "recorded_by", recorded_by)
             cycle_due_date_val = getattr(data, "cycle_due_date", cycle_due_date_val)
             cycle_index_val = getattr(data, "cycle_index", cycle_index_val)
-        b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        b = b_query.first()
 
         if b:
             freq = b.payment_frequency or "Daily"
@@ -1969,7 +1984,10 @@ class LendingService:
             return cls.get_borrower(db=db, borrower_id=loan_id)
 
         borrower_id = tx.borrower_id
-        borrower = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+        b_query = db.query(Borrower).filter(Borrower.borrower_id == borrower_id)
+        if hasattr(b_query, "with_for_update"):
+            b_query = b_query.with_for_update()
+        borrower = b_query.first()
         if not borrower:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
 

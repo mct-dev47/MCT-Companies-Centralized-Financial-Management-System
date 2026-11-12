@@ -1,6 +1,16 @@
 import path from 'path'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, createLogger, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+
+// Custom logger to filter out expected transient ECONNREFUSED errors while backend is booting
+const customLogger = createLogger()
+const originalError = customLogger.error.bind(customLogger)
+customLogger.error = (msg, options) => {
+  if (typeof msg === 'string' && msg.includes('http proxy error') && msg.includes('ECONNREFUSED')) {
+    return
+  }
+  originalError(msg, options)
+}
 
 /**
  * Build-time security guard that scans all generated client chunks
@@ -35,6 +45,7 @@ function secretLeakGuardPlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  customLogger,
   plugins: [react(), secretLeakGuardPlugin()],
   resolve: {
     alias: {

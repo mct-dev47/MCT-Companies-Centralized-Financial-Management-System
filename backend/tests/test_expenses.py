@@ -77,6 +77,7 @@ def test_get_expenses_allows_audit_and_finance_roles():
     mock_query = MagicMock()
     mock_client.table.return_value.select.return_value = mock_query
     mock_query.order.return_value = mock_query
+    mock_query.range.return_value = mock_query
     mock_query.execute.return_value.data = [
         {
             "expense_id": 1,

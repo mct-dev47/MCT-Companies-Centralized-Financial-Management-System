@@ -1,7 +1,9 @@
--- Migration 0052: Update Admin Account Email (SQLite)
+-- Migration 0052: Synchronize Admin Role & is_admin Flag (SQLite)
 
 UPDATE users
 SET
-    email = 'manuelctolentino1947@gmail.com'
+    is_admin = 1,
+    role = 'admin'
 WHERE
-    role = 'admin';
+    is_admin = 1
+    OR LOWER(COALESCE(role, '')) = 'admin';

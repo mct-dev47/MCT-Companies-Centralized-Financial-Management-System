@@ -254,15 +254,15 @@ def test_payment_schema_validation_and_recorded_by():
     assert req.recorded_by == "Princess Tayam"
     assert req.notes == "Partial collection on morning route"
 
-    # Notes exceeding 50 characters should fail validation
+    # Notes exceeding 500 characters should fail validation
     try:
         LendingPaymentCreateRequest(
             borrower_id=1,
             payment_date="2026-11-06",
             amount=Decimal("1500.00"),
-            notes="This note is deliberately way longer than fifty characters to test the validation constraint",
+            notes="x" * 501,
         )
-        assert False, "Should have raised ValidationError for notes > 50 chars"
+        assert False, "Should have raised ValidationError for notes > 500 chars"
     except ValidationError:
         pass
 

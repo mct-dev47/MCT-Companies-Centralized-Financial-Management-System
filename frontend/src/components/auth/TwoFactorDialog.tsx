@@ -223,10 +223,6 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
                     <InputOTPSlot index={5} isError={!!error} />
                   </InputOTPGroup>
                 </InputOTP>
-
-                <p className="text-xs text-muted-fg font-medium">
-                  Code is valid for 3 minutes
-                </p>
               </div>
 
               {/* Action Buttons */}
