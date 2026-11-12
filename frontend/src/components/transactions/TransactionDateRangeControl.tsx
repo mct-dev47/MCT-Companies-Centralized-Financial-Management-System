@@ -15,7 +15,7 @@ export interface TransactionDateRangeControlProps {
 }
 
 interface PresetItem {
-  key: 'All Dates' | 'Today' | 'Yesterday' | 'This week'
+  key: 'All Dates' | 'Today' | 'Yesterday' | 'This week' | 'This month'
   label: string
   startDate: string | null
   endDate: string | null
@@ -37,6 +37,10 @@ function buildPresets(): PresetItem[] {
   const weekEnd = new Date(weekStart)
   weekEnd.setDate(weekStart.getDate() + 6)
 
+  // Current month
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
+
   return [
     {
       key: 'All Dates',
@@ -46,7 +50,7 @@ function buildPresets(): PresetItem[] {
     },
     {
       key: 'Today',
-      label: 'Today',
+      label: 'Daily (Today)',
       startDate: todayStr,
       endDate: todayStr,
     },
@@ -61,6 +65,12 @@ function buildPresets(): PresetItem[] {
       label: 'This week',
       startDate: formatToYYYYMMDD(weekStart),
       endDate: formatToYYYYMMDD(weekEnd),
+    },
+    {
+      key: 'This month',
+      label: 'Monthly (This month)',
+      startDate: formatToYYYYMMDD(monthStart),
+      endDate: formatToYYYYMMDD(monthEnd),
     },
   ]
 }

@@ -71,7 +71,7 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, va
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label="Filter by bank"
-        className="appearance-none bg-transparent font-semibold text-focus/90 focus:outline-none cursor-pointer max-w-[190px] truncate"
+        className="appearance-none bg-transparent font-semibold text-focus/90 focus:outline-none cursor-pointer flex-1 min-w-0 truncate pr-2"
       >
         <option value="">All Banks</option>
         {accounts.map((a) => (
