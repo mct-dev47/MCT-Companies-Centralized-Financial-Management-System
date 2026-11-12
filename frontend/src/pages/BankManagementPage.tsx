@@ -1926,7 +1926,11 @@ export const BankManagementPage: React.FC = () => {
 
                               setIsCompanyDropdownOpen(false)
 
-                              if (c !== 'All Companies') {
+                              if (c === 'All Companies') {
+
+                                setSelectedAccountId('all')
+
+                              } else {
 
                                 const matched = preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, c)), c)
 
@@ -2069,9 +2073,9 @@ export const BankManagementPage: React.FC = () => {
 
         </Card>
 
-      ) : isSingleAccount ? (
+      ) : (isAggregatedView || isSingleAccount) ? (
 
-        /* SINGLE ACCOUNT FULL-WIDTH HERO CARD (Matching User's Reference Screenshot) */
+        /* SINGLE ACCOUNT / AGGREGATED GROUP TREASURY FULL-WIDTH HERO CARD */
 
         <div className="w-full space-y-3">
 
@@ -2079,7 +2083,7 @@ export const BankManagementPage: React.FC = () => {
 
             onClick={handleCardClick}
 
-            onDoubleClick={() => setIsCardDetailsModalOpen(true)}
+            onDoubleClick={() => activeAccount && setIsCardDetailsModalOpen(true)}
 
             onTouchEnd={handleCardTouch}
 
@@ -2253,6 +2257,8 @@ export const BankManagementPage: React.FC = () => {
                   </button>
                 )}
 
+                {activeAccount && (
+
                 <button
 
                   type="button"
@@ -2276,6 +2282,8 @@ export const BankManagementPage: React.FC = () => {
                   <Pencil className="h-4 w-4" />
 
                 </button>
+
+                )}
 
               </div>
 

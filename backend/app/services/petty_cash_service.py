@@ -1,14 +1,16 @@
+import json
+import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.cache import system_cache
-from app.core.dependencies import AuthenticatedUser
+from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.core.websocket import ws_manager
 from app.db.supabase import get_supabase_admin_client
 from app.models.bank import BankAccount
@@ -21,17 +23,20 @@ from app.schemas.bank import BankDepositWithdrawRequest
 from app.services.bank_service import BankService
 from app.services.audit_service import AuditAction, log_transaction
 from app.schemas.petty_cash import (
+    EligibleExpenseOut,
     IntercompanyTransferOut,
     PettyCashLedgerEntry,
     PettyCashMovementOut,
     PettyCashSummaryOut,
     PettyCashTopUpCreate,
     PettyCashTopUpOut,
+    PettyCashTopUpReceiptsOut,
 )
 from app.services.bills_service import _resolve_company
 
 
 PETTY_CASH_METHOD = "petty cash"
+logger = logging.getLogger(__name__)
 
 LEDGER_MOVEMENT_STATUSES = {
     "pending finance endorsement",
@@ -45,6 +50,38 @@ LEDGER_MOVEMENT_STATUSES = {
 }
 DEFAULT_LOW_BALANCE_THRESHOLD = Decimal("1000.00")
 ZERO = Decimal("0.00")
+
+ACTIVE_EXPENSE_CLAIM_STATUSES = (
+    "pending finance endorsement",
+    "pending finance approval",
+    "pending audit approval",
+    "approved",
+    "transfer in transit",
+    "return pending",
+    "transfer received",
+    "reimbursed",
+    "settled",
+)
+
+
+def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[str]) -> tuple[bool, int]:
+    """Compute receipt presence and count without forwarding large base64 blobs."""
+    has_url = bool(receipt_url and str(receipt_url).strip())
+    count = 0
+    if attachments_raw and str(attachments_raw).strip():
+        try:
+            parsed = json.loads(attachments_raw)
+            if isinstance(parsed, list):
+                count = sum(
+                    1
+                    for item in parsed
+                    if isinstance(item, dict) and (item.get("file_url") or item.get("url"))
+                )
+        except (TypeError, ValueError):
+            pass
+    if count == 0 and has_url:
+        count = 1
+    return (has_url or count > 0), count
 
 
 def is_petty_cash(payment_method: Optional[str] = None, category_name: Optional[str] = None) -> bool:
@@ -164,8 +201,15 @@ class PettyCashService:
             ]
 
     def _topups(self, company_id: Optional[int] = None) -> List[PettyCashTopUp]:
-        query = self.db.query(PettyCashTopUp).filter(
-            ~PettyCashTopUp.reference_no.like("SEED-%") | (PettyCashTopUp.reference_no == None)
+        query = (
+            self.db.query(PettyCashTopUp)
+            .options(
+                joinedload(PettyCashTopUp.company),
+                joinedload(PettyCashTopUp.intercompany_transfer),
+            )
+            .filter(
+                ~PettyCashTopUp.reference_no.like("SEED-%") | (PettyCashTopUp.reference_no == None)
+            )
         )
         if company_id:
             query = query.filter(PettyCashTopUp.company_id == company_id)
@@ -200,6 +244,7 @@ class PettyCashService:
         ledger_bal = self.get_balance(company_id)
         active_statuses = [
             "pending finance endorsement",
+            "pending finance approval",
             "pending audit approval",
             "approved",
             "transfer in transit",
@@ -338,9 +383,12 @@ class PettyCashService:
 
         expenses = self._petty_cash_expenses(company_id)
 
-        # Funding bank for each top up that has one (spec 0014).
+        # Funding & legacy destination banks for each top up that has one (specs 0014, 0042).
         name_to_id = {(name or "").strip().lower(): cid for cid, name in comp_map.items()}
-        banks = self._banks_by_id({t.bank_account_id for t in topups})
+        bank_ids_to_load = {t.bank_account_id for t in topups if t.bank_account_id} | {
+            t.destination_bank_id for t in topups if t.destination_bank_id
+        }
+        banks = self._banks_by_id(bank_ids_to_load)
 
         entries = []
         for t in topups:
@@ -352,10 +400,11 @@ class PettyCashService:
             req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
             is_reimbursement = req_type in ["reimbursement", "replenishment"]
 
-            dest_bank_name = (
-                self.db.query(BankAccount).filter(BankAccount.id == t.destination_bank_id).first().bank_name
-                if t.destination_bank_id
-                else None
+            dest_bank = banks.get((t.destination_bank_id or "").strip()) if t.destination_bank_id else None
+            dest_bank_name = dest_bank.bank_name if dest_bank else None
+            has_receipt, attachment_count = _summarize_receipts(
+                getattr(t, "receipt_url", None),
+                getattr(t, "attachments", None),
             )
 
             common_data = {
@@ -371,8 +420,10 @@ class PettyCashService:
                 "reference_no": t.reference_no,
                 "status": status_val,
                 "paid_by": getattr(t, "paid_by", None),
-                "receipt_url": getattr(t, "receipt_url", None),
-                "attachments": getattr(t, "attachments", None),
+                "receipt_url": None,
+                "attachments": None,
+                "has_receipt": has_receipt,
+                "attachment_count": attachment_count,
                 "items": getattr(t, "items", None),
                 "endorsed_by": t.endorsed_by,
                 "endorsed_at": t.endorsed_at,
@@ -426,7 +477,7 @@ class PettyCashService:
                         **common_data,
                         "entry_id": f"topup-{t.topup_id}-reimb",
                         "entry_type": "request",
-                        "description": f"[Replenishment] {t.description}" if t.description else "Petty cash replenishment request",
+                        "description": f"[Reimbursement] {t.description}" if t.description else "Petty cash reimbursement request",
                         "category": getattr(t, "category", None) or "Reimbursement",
                         "amount_requested": reimb_amt,
                         "amount_in": ZERO,
@@ -435,7 +486,7 @@ class PettyCashService:
                     })
             else:
                 amt_in = amt if is_approved else ZERO
-                default_desc = "Top-up from sales" if is_approved else "Petty cash replenishment request"
+                default_desc = "Top-up from sales" if is_approved else "Petty cash reimbursement request"
                 entries.append({
                     **common_data,
                     "entry_id": f"topup-{t.topup_id}",
@@ -470,6 +521,8 @@ class PettyCashService:
                 "paid_by": None,
                 "receipt_url": None,
                 "attachments": None,
+                "has_receipt": False,
+                "attachment_count": 0,
                 "items": None,
                 "endorsed_by": None,
                 "endorsed_at": None,
@@ -494,6 +547,82 @@ class PettyCashService:
         ]
         system_cache.set(cache_key, result, ttl=60, tags=["petty_cash"])
         return result
+
+    def get_topup_receipts(
+        self,
+        topup_id: int,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> PettyCashTopUpReceiptsOut:
+        """Lazy-load full receipt URLs and attachment JSON for a single topup or reimbursement."""
+        topup = self.db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+        if not topup:
+            raise HTTPException(status_code=404, detail="Petty cash transaction not found.")
+        if current_user is not None:
+            check_company_access(current_user, topup.company_id)
+        return PettyCashTopUpReceiptsOut(
+            topup_id=topup.topup_id,
+            receipt_url=getattr(topup, "receipt_url", None),
+            attachments=getattr(topup, "attachments", None),
+        )
+
+    def list_eligible_expenses(
+        self,
+        company_id: Optional[int] = None,
+        company_name: Optional[str] = None,
+        q: Optional[str] = None,
+        limit: int = 50,
+        current_user: Optional[AuthenticatedUser] = None,
+    ) -> List[EligibleExpenseOut]:
+        """List unclaimed Petty Cash expenses for a company eligible to link in a reimbursement."""
+        company = self.resolve_company(company_id, company_name)
+        if current_user is not None:
+            check_company_access(current_user, company.company_id)
+
+        claimed_subq = select(PettyCashTopUp.existing_expense_id).where(
+            PettyCashTopUp.existing_expense_id.isnot(None),
+            func.lower(PettyCashTopUp.status).in_(ACTIVE_EXPENSE_CLAIM_STATUSES),
+        )
+        query = (
+            self.db.query(Expense, Category.name)
+            .outerjoin(Category, Expense.category_id == Category.category_id)
+            .filter(
+                Expense.company_id == company.company_id,
+                func.lower(func.trim(func.coalesce(Expense.payment_method, ""))).like("%petty cash%"),
+                Expense.linked_topup_id.is_(None),
+                ~Expense.expense_id.in_(claimed_subq),
+                (
+                    (~Expense.reference_no.like("SEED-%") & ~Expense.reference_no.like("REIMB-%") & ~Expense.reference_no.like("PC-EXP-%"))
+                    | (Expense.reference_no == None)
+                ),
+            )
+        )
+        if q and q.strip():
+            term = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    func.coalesce(Expense.description, "").ilike(term),
+                    func.coalesce(Category.name, "").ilike(term),
+                    func.coalesce(Expense.reference_no, "").ilike(term),
+                )
+            )
+        safe_limit = max(1, min(limit, 100))
+        rows = (
+            query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc())
+            .limit(safe_limit)
+            .all()
+        )
+        return [
+            EligibleExpenseOut(
+                expense_id=exp.expense_id,
+                company_id=exp.company_id,
+                expense_date=exp.expense_date,
+                particulars=(exp.description or "").strip(),
+                category=cat_name,
+                amount=_to_decimal(exp.amount),
+                reference_no=exp.reference_no,
+            )
+            for exp, cat_name in rows
+        ]
 
     def _banks_by_id(self, bank_ids) -> Dict[str, BankAccount]:
         ids = {(b or "").strip() for b in bank_ids if (b or "").strip()}
@@ -625,6 +754,241 @@ class PettyCashService:
 
     # ── Mutations ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_bank_owned_by_company(
+        bank: Optional[BankAccount],
+        company_id: int,
+        company_name: Optional[str] = None,
+    ) -> bool:
+        if bank is None:
+            return False
+        if bank.company_id == company_id:
+            return True
+        if company_name:
+            target = company_name.strip().lower()
+            owners = [o.strip().lower() for o in (bank.company_names or [bank.company_name]) if o and o.strip()]
+            if target in owners:
+                return True
+        return False
+
+    def _validate_company_funding_bank(
+        self,
+        raw_bank_id: Optional[str],
+        company_id: int,
+        company_name: Optional[str] = None,
+    ) -> Optional[BankAccount]:
+        """Ensure any supplied funding bank exists and belongs strictly to the requesting company."""
+        cleaned = str(raw_bank_id).strip() if raw_bank_id else ""
+        if not cleaned:
+            return None
+        bank = self.db.query(BankAccount).filter(BankAccount.id == cleaned).first()
+        if not bank:
+            raise HTTPException(status_code=422, detail="Selected funding bank account not found.")
+        if company_name is None:
+            comp = self.db.query(Company).filter(Company.company_id == company_id).first()
+            company_name = comp.company_name if comp else None
+        if not self._is_bank_owned_by_company(bank, company_id, company_name):
+            raise HTTPException(
+                status_code=422,
+                detail="Funding bank account must belong to the requesting company.",
+            )
+        return bank
+
+    def _sync_petty_cash_notifications(
+        self,
+        topup_id: int,
+        company_id: int,
+        status_str: str,
+        amount: Decimal,
+        request_type: Optional[str] = None,
+        reference_no: Optional[str] = None,
+        total_expenses: Optional[Decimal] = None,
+        finance_remark: Optional[str] = None,
+        remark: Optional[str] = None,
+        created_by: Optional[int] = None,
+        resolve_previous: bool = False,
+        deleted: bool = False,
+    ) -> None:
+        """
+        Keep persistent `notifications` rows aligned with petty cash workflow transitions
+        and broadcast WebSocket updates so all connected role bells refresh immediately.
+        Safely skips DB inserts when no matching non-admin User rows exist (unit test safety).
+        """
+        from app.models.notification import Notification
+        from app.models.user import UserCompany
+
+        system_cache.invalidate_tag("notifications")
+
+        now = datetime.now(timezone.utc)
+        expires_resolved = now + timedelta(days=90)
+        status_lower = (status_str or "").strip().lower()
+        req_type = (request_type or "topup").strip().lower()
+        ref = reference_no or str(topup_id)
+        amt_val = _to_decimal(amount)
+
+        notif_type: Optional[str] = None
+        title = ""
+        message = ""
+        recipient_ids: set[int] = set()
+
+        try:
+            if resolve_previous or deleted:
+                prev_rows = self.db.scalars(
+                    select(Notification).where(
+                        Notification.reference_type == "petty_cash",
+                        Notification.reference_id == topup_id,
+                        Notification.resolved_at.is_(None),
+                    )
+                ).all()
+                for row in prev_rows:
+                    row.resolved_at = now
+                    curr_exp = row.expires_at
+                    if curr_exp is not None and curr_exp.tzinfo is None:
+                        curr_exp = curr_exp.replace(tzinfo=timezone.utc)
+                    if curr_exp is None or expires_resolved < curr_exp:
+                        row.expires_at = expires_resolved
+
+            if not deleted:
+                comp = self.db.query(Company).filter(Company.company_id == company_id).first()
+                cname = comp.company_name if comp else f"Company #{company_id}"
+
+                if status_lower in ("pending finance endorsement", "pending finance approval"):
+                    notif_type = "PETTY_CASH_REQUEST"
+                    if req_type == "reimbursement":
+                        tot = _to_decimal(total_expenses) if total_expenses is not None else amt_val
+                        title = "Petty Cash Replenishment Request (Finance Endorsement)"
+                        message = (
+                            f"{cname} submitted a petty cash replenishment claim "
+                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt_val:,.2f}, Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
+                    else:
+                        title = "Petty Cash Request (Finance Endorsement)"
+                        message = (
+                            f"{cname} requested a petty cash top-up of ₱{amt_val:,.2f} (Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
+                    recipient_ids.update(
+                        self.db.scalars(
+                            select(User.user_id).where(
+                                User.is_admin.is_(False),
+                                func.lower(User.role) == "finance",
+                            )
+                        ).all()
+                    )
+
+                elif status_lower == "pending audit approval":
+                    notif_type = "PETTY_CASH_AUDIT"
+                    kind_label = "replenishment claim" if req_type == "reimbursement" else "top-up"
+                    title = "Petty Cash Audit Compliance Required"
+                    message = (
+                        f"Petty cash {kind_label} of ₱{amt_val:,.2f} for {cname} (Ref: {ref}) "
+                        f"was endorsed by Finance and awaits Audit approval."
+                    )
+                    recipient_ids.update(
+                        self.db.scalars(
+                            select(User.user_id).where(
+                                User.is_admin.is_(False),
+                                func.lower(User.role).in_(["audit", "auditor"]),
+                            )
+                        ).all()
+                    )
+
+                elif status_lower in ("approved", "rejected by finance", "disapproved by audit", "disapproved"):
+                    kind_noun = "replenishment claim" if req_type == "reimbursement" else "top-up"
+                    is_approved = status_lower == "approved"
+                    notif_type = "PETTY_CASH_APPROVED" if is_approved else "PETTY_CASH_REJECTED"
+                    title = (
+                        ("Petty Cash Replenishment Approved" if req_type == "reimbursement" else "Petty Cash Top-up Approved")
+                        if is_approved
+                        else f"Petty Cash {status_str}"
+                    )
+                    if is_approved:
+                        message = (
+                            f"Your petty cash replenishment claim of ₱{amt_val:,.2f} (Ref: {ref}) has been approved by Audit and is ready for settlement."
+                            if req_type == "reimbursement"
+                            else f"Your petty cash top-up of ₱{amt_val:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                        )
+                    else:
+                        reason = remark or finance_remark or "Request declined."
+                        message = f"Your petty cash {kind_noun} of ₱{amt_val:,.2f} (Ref: {ref}) was {status_lower}: {reason}"
+
+                    recipient_ids.update(
+                        self.db.scalars(
+                            select(User.user_id)
+                            .join(UserCompany, User.user_id == UserCompany.user_id)
+                            .where(
+                                UserCompany.company_id == company_id,
+                                User.is_admin.is_(False),
+                                func.lower(User.role).in_(["supervisor", "company"]),
+                            )
+                        ).all()
+                    )
+                    recipient_ids.update(
+                        self.db.scalars(
+                            select(User.user_id).where(
+                                User.company_id == company_id,
+                                User.is_admin.is_(False),
+                                func.lower(User.role).in_(["supervisor", "company"]),
+                            )
+                        ).all()
+                    )
+                    if created_by:
+                        creator_uid = self.db.scalar(
+                            select(User.user_id).where(
+                                User.user_id == created_by,
+                                User.is_admin.is_(False),
+                                func.lower(User.role) != "admin",
+                            )
+                        )
+                        if creator_uid:
+                            recipient_ids.add(creator_uid)
+
+                if notif_type and recipient_ids:
+                    for uid in sorted(recipient_ids):
+                        nid = f"{notif_type}-pc-{topup_id}-{uid}"
+                        existing = self.db.get(Notification, nid)
+                        if existing:
+                            existing.title = title
+                            existing.message = message
+                            existing.company_id = company_id
+                            existing.read_at = None
+                            existing.resolved_at = None
+                            existing.expires_at = None
+                            existing.created_at = now
+                        else:
+                            self.db.add(
+                                Notification(
+                                    notification_id=nid,
+                                    recipient_user_id=uid,
+                                    company_id=company_id,
+                                    notification_type=notif_type,
+                                    title=title,
+                                    message=message,
+                                    reference_type="petty_cash",
+                                    reference_id=topup_id,
+                                    created_at=now,
+                                )
+                            )
+
+            self.db.commit()
+        except Exception as exc:
+            logger.warning("Failed to sync petty cash notifications for topup %s: %s", topup_id, exc)
+            self.db.rollback()
+
+        try:
+            ws_manager.broadcast_sync({
+                "type": "NOTIFICATION_RECEIVED",
+                "payload": {
+                    "notification_type": notif_type or "PETTY_CASH_UPDATED",
+                    "company_id": company_id,
+                    "reference_type": "petty_cash",
+                    "reference_id": topup_id,
+                },
+            })
+        except Exception:
+            pass
+
     def _topup_output(self, topup: PettyCashTopUp) -> PettyCashTopUpOut:
         output = PettyCashTopUpOut.model_validate(topup)
         output.company_name = topup.company.company_name if topup.company else None
@@ -646,6 +1010,13 @@ class PettyCashService:
     def create_topup(self, topup_in: PettyCashTopUpCreate, current_user: Optional[AuthenticatedUser] = None) -> PettyCashTopUpOut:
         company = self.resolve_company(topup_in.company_id, topup_in.company_name or topup_in.company)
         req_type = (topup_in.request_type or "topup").strip().lower()
+
+        # Fail closed before any DB lock/write if a supplied funding bank is foreign or missing.
+        validated_bank = self._validate_company_funding_bank(
+            topup_in.bank_account_id,
+            company.company_id,
+            company.company_name,
+        )
 
         total_expenses = topup_in.total_expenses
         company_funded = topup_in.company_funded_amount if topup_in.company_funded_amount is not None else ZERO
@@ -685,10 +1056,9 @@ class PettyCashService:
                     raise HTTPException(status_code=422, detail="Linked expense is already associated with another reimbursement claim.")
 
                 # Check if another active topup is already claiming this existing expense
-                active_statuses = ["pending finance endorsement", "pending audit approval", "approved", "transfer in transit", "return pending", "transfer received", "reimbursed", "settled"]
                 conflict = self.db.query(PettyCashTopUp).filter(
                     PettyCashTopUp.existing_expense_id == existing_exp_id,
-                    func.lower(PettyCashTopUp.status).in_(active_statuses),
+                    func.lower(PettyCashTopUp.status).in_(ACTIVE_EXPENSE_CLAIM_STATUSES),
                 ).first()
                 if conflict:
                     raise HTTPException(status_code=422, detail="Linked expense is already claimed by an active reimbursement request.")
@@ -719,16 +1089,36 @@ class PettyCashService:
         endorser_name = None
         endorsed_time = None
         fin_remark = None
-        bank_id = None
+        bank_id = validated_bank.id if validated_bank else None
+        payment_opt = None
+        dest_bank_id = None
         if is_direct_endorse:
             endorser_name = (
                 current_user.get("full_name")
+                or current_user.get("name")
                 or current_user.get("email")
                 or "Finance Officer"
             ) if current_user else "Finance Officer"
             endorsed_time = func.now()
             fin_remark = topup_in.finance_remark or topup_in.endorsement_remark or "Endorsed upon creation by Finance"
-            bank_id = str(topup_in.bank_account_id).strip() if topup_in.bank_account_id else None
+
+            is_zero_excess_reimb = req_type == "reimbursement" and _to_decimal(payable_amount) == ZERO
+            if req_type == "reimbursement" and not is_zero_excess_reimb and not bank_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Please choose a funding bank account before submitting to Internal Audit.",
+                )
+
+        resolved_receipt_url = topup_in.receipt_url
+        if not resolved_receipt_url and topup_in.attachments:
+            try:
+                parsed_atts = json.loads(topup_in.attachments)
+                if isinstance(parsed_atts, list) and parsed_atts:
+                    first_att = parsed_atts[0]
+                    if isinstance(first_att, dict):
+                        resolved_receipt_url = first_att.get("file_url") or first_att.get("url")
+            except (TypeError, ValueError):
+                pass
 
         topup = PettyCashTopUp(
             company_id=company.company_id,
@@ -737,10 +1127,12 @@ class PettyCashService:
             reference_no=(topup_in.reference_no or "").strip() or None,
             description=(topup_in.description or "").strip() or None,
             bank_account_id=bank_id,
+            payment_method_option=payment_opt,
+            destination_bank_id=dest_bank_id,
             status=status_to_use,
             request_type=req_type,
             paid_by=(topup_in.paid_by or "").strip() or None,
-            receipt_url=topup_in.receipt_url,
+            receipt_url=resolved_receipt_url,
             attachments=topup_in.attachments,
             items=topup_in.items,
             category=(topup_in.category or "").strip() or None,
@@ -780,8 +1172,19 @@ class PettyCashService:
             )
         except Exception:
             pass
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -882,8 +1285,19 @@ class PettyCashService:
             )
         except Exception:
             pass
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -918,62 +1332,41 @@ class PettyCashService:
             topup.endorsed_at = func.now()
             self.db.commit()
             self.db.refresh(topup)
+            self._sync_petty_cash_notifications(
+                topup_id=topup.topup_id,
+                company_id=topup.company_id,
+                status_str=topup.status,
+                amount=topup.amount,
+                request_type=topup.request_type,
+                reference_no=topup.reference_no,
+                total_expenses=topup.total_expenses,
+                finance_remark=topup.finance_remark,
+                remark=topup.remark,
+                created_by=topup.created_by,
+                resolve_previous=True,
+            )
             system_cache.invalidate_tag("petty_cash")
-            system_cache.invalidate_tag("notifications")
             ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
             return self._topup_output(topup)
 
         is_reimbursement = (getattr(topup, "request_type", "topup") or "topup").lower() == "reimbursement"
         is_zero_excess = is_reimbursement and (_to_decimal(topup.amount) == ZERO or _to_decimal(topup.employee_out_of_pocket) == ZERO)
 
+        cleaned_bank_id = str(bank_account_id).strip() if bank_account_id else ""
         if is_zero_excess:
-            if bank_account_id and str(bank_account_id).strip():
-                topup.bank_account_id = str(bank_account_id).strip()
-        else:
-            if not (bank_account_id and str(bank_account_id).strip()):
-                raise HTTPException(status_code=422, detail="Please choose a funding bank account before endorsing.")
-
-            source_acc = self.db.query(BankAccount).filter(BankAccount.id == str(bank_account_id).strip()).first()
-            if not source_acc:
-                raise HTTPException(status_code=422, detail="Selected funding bank account not found.")
-
-            topup.bank_account_id = source_acc.id
-
-            company = self.db.query(Company).filter(Company.company_id == topup.company_id).first()
-            company_name = company.company_name if company else None
-            is_own_account = (source_acc.company_id == topup.company_id)
-            if not is_own_account and source_acc.company_id is None and company_name:
-                is_own_account = (source_acc.company_name or "").strip().lower() == company_name.strip().lower()
-
-            if is_own_account:
+            if cleaned_bank_id:
+                source_acc = self._validate_company_funding_bank(cleaned_bank_id, topup.company_id)
+                topup.bank_account_id = source_acc.id
                 topup.payment_method_option = None
                 topup.destination_bank_id = None
-            else:
-                opt = (payment_method_option or "").strip().lower()
-                if opt not in ("direct", "transfer_first"):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Please select a payment method option ('direct' or 'transfer_first') for cross-company funding."
-                    )
-                topup.payment_method_option = opt
+        else:
+            if not cleaned_bank_id:
+                raise HTTPException(status_code=422, detail="Please choose a funding bank account before endorsing.")
 
-                if opt == "transfer_first":
-                    if not (destination_bank_id and str(destination_bank_id).strip()):
-                        raise HTTPException(
-                            status_code=422,
-                            detail="Please choose an eligible destination bank account belonging to the requesting company."
-                        )
-                    dest_acc = self.db.query(BankAccount).filter(BankAccount.id == str(destination_bank_id).strip()).first()
-                    if not dest_acc:
-                        raise HTTPException(status_code=422, detail="Selected destination bank account not found.")
-                    is_dest_own = (dest_acc.company_id == topup.company_id)
-                    if not is_dest_own and dest_acc.company_id is None and company_name:
-                        is_dest_own = (dest_acc.company_name or "").strip().lower() == company_name.strip().lower()
-                    if not is_dest_own:
-                        raise HTTPException(status_code=422, detail="Destination bank account must belong to the requesting company.")
-                    topup.destination_bank_id = dest_acc.id
-                else:
-                    topup.destination_bank_id = None
+            source_acc = self._validate_company_funding_bank(cleaned_bank_id, topup.company_id)
+            topup.bank_account_id = source_acc.id
+            topup.payment_method_option = None
+            topup.destination_bank_id = None
 
         topup.status = "Pending Audit Approval"
         topup.finance_remark = remark.strip()
@@ -982,8 +1375,20 @@ class PettyCashService:
 
         self.db.commit()
         self.db.refresh(topup)
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+            resolve_previous=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -1014,8 +1419,20 @@ class PettyCashService:
             topup.reviewed_at = func.now()
             self.db.commit()
             self.db.refresh(topup)
+            self._sync_petty_cash_notifications(
+                topup_id=topup.topup_id,
+                company_id=topup.company_id,
+                status_str=topup.status,
+                amount=topup.amount,
+                request_type=topup.request_type,
+                reference_no=topup.reference_no,
+                total_expenses=topup.total_expenses,
+                finance_remark=topup.finance_remark,
+                remark=topup.remark,
+                created_by=topup.created_by,
+                resolve_previous=True,
+            )
             system_cache.invalidate_tag("petty_cash")
-            system_cache.invalidate_tag("notifications")
             ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
             return self._topup_output(topup)
 
@@ -1030,8 +1447,20 @@ class PettyCashService:
         if req_type == "topup" and topup.bank_account_id:
             self._disburse_to_bank(topup)
 
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+            resolve_previous=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -1096,8 +1525,20 @@ class PettyCashService:
 
         self.db.commit()
         self.db.refresh(topup)
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+            resolve_previous=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -1233,8 +1674,20 @@ class PettyCashService:
 
         self.db.commit()
         self.db.refresh(topup)
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+            resolve_previous=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -1460,8 +1913,20 @@ class PettyCashService:
 
         self.db.commit()
         self.db.refresh(topup)
+        self._sync_petty_cash_notifications(
+            topup_id=topup.topup_id,
+            company_id=topup.company_id,
+            status_str=topup.status,
+            amount=topup.amount,
+            request_type=topup.request_type,
+            reference_no=topup.reference_no,
+            total_expenses=topup.total_expenses,
+            finance_remark=topup.finance_remark,
+            remark=topup.remark,
+            created_by=topup.created_by,
+            resolve_previous=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -1685,10 +2150,22 @@ class PettyCashService:
                 status_code=400,
                 detail="Cannot remove this top-up: petty cash expenses already use these funds.",
             )
+        deleted_id = topup.topup_id
+        deleted_comp_id = topup.company_id
+        deleted_status = topup.status
+        deleted_amount = _to_decimal(topup.amount)
+        deleted_req_type = topup.request_type
         self.db.delete(topup)
         self.db.commit()
+        self._sync_petty_cash_notifications(
+            topup_id=deleted_id,
+            company_id=deleted_comp_id,
+            status_str=deleted_status,
+            amount=deleted_amount,
+            request_type=deleted_req_type,
+            deleted=True,
+        )
         system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return topup
 

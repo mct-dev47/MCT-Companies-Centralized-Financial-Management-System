@@ -213,3 +213,66 @@ def test_default_bank_is_the_one_the_company_owns_alone(svc):
     assert svc.find_account_for_company("Beta").id == beta_own.id
     # Alpha has no bank of its own, so the shared bank is its default
     assert svc.find_account_for_company("Alpha").id == shared.id
+
+
+def test_list_bank_accounts_includes_shared_and_alias_banks_for_supervisor_and_owner(svc):
+    from app.api.v1.endpoints.bank_accounts import list_bank_accounts
+    from app.models.company import Company
+
+    svc.db.add_all([
+        Company(company_id=10, company_name="Alpha Tech Inc", starting_balance=Decimal("0.00")),
+        Company(company_id=20, company_name="Beta Logistics Corp", starting_balance=Decimal("0.00")),
+        Company(company_id=30, company_name="Gamma Ventures", starting_balance=Decimal("0.00")),
+    ])
+    svc.db.commit()
+
+    alpha_sole = svc.create_account(
+        BankAccountCreate(
+            bank_name="Metrobank",
+            account_name="Alpha Sole",
+            company_name="Alpha Tech Inc",
+            starting_balance=Decimal("1000"),
+        )
+    )
+    beta_main = svc.create_account(
+        BankAccountCreate(
+            bank_name="Main Bank",
+            account_name="Beta Ops",
+            company_name="Beta Logistics Corp",
+            starting_balance=Decimal("1000"),
+        )
+    )
+    shared_joint = svc.create_account(
+        BankAccountCreate(
+            bank_name="BDO Joint",
+            account_name="Shared Treasury",
+            company_name="Alpha Tech Inc",
+            company_names=["Alpha Tech Inc", "Beta Logistics"],
+            starting_balance=Decimal("1000"),
+        )
+    )
+    gamma_sole = svc.create_account(
+        BankAccountCreate(
+            bank_name="BPI",
+            account_name="Gamma Sole",
+            company_name="Gamma Ventures",
+            starting_balance=Decimal("1000"),
+        )
+    )
+
+    supervisor_beta = {"role": "supervisor", "company_id": 20, "company_ids": [20]}
+    sup_ids = [a.id for a in list_bank_accounts(company_name=None, current_user=supervisor_beta, db=svc.db)]
+    assert sup_ids == [beta_main.id, shared_joint.id]
+    assert supervisor_beta["company_ids"] == [20]
+
+    # Filtering explicitly by company_name=Beta Logistics Corp also resolves alias "Beta Logistics"
+    scoped_ids = [
+        a.id for a in list_bank_accounts(company_name="Beta Logistics Corp", current_user=supervisor_beta, db=svc.db)
+    ]
+    assert scoped_ids == [beta_main.id, shared_joint.id]
+
+    # Owner role receives all accounts across companies when listing all banks
+    owner_user = {"role": "owner", "company_id": None, "company_ids": []}
+    owner_ids = [a.id for a in list_bank_accounts(company_name=None, current_user=owner_user, db=svc.db)]
+    assert owner_ids == [alpha_sole.id, beta_main.id, shared_joint.id, gamma_sole.id]
+

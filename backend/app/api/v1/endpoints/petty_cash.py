@@ -20,6 +20,7 @@ from app.core.dependencies import (
 )
 from app.db.session import get_db
 from app.schemas.petty_cash import (
+    EligibleExpenseOut,
     FinalizeSettlementIn,
     IntercompanySettleIn,
     IntercompanyTransferOut,
@@ -32,6 +33,7 @@ from app.schemas.petty_cash import (
     PettyCashSummaryOut,
     PettyCashTopUpCreate,
     PettyCashTopUpOut,
+    PettyCashTopUpReceiptsOut,
     PettyCashTopUpUpdate,
     PettyCashWalletUpdate,
     ReceiptUploadOut,
@@ -108,6 +110,41 @@ def get_ledger(
                 company = service.resolve_company(current_user["company_id"], None)
 
     return service.list_ledger(company, start_date, end_date, user_role=current_user.get("role"))
+
+
+@router.get(
+    "/topups/{topup_id}/receipts",
+    response_model=PettyCashTopUpReceiptsOut,
+    summary="Lazy-fetch receipt attachments for a petty cash transaction",
+)
+def get_topup_receipts(
+    topup_id: int,
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    return PettyCashService(db).get_topup_receipts(topup_id=topup_id, current_user=current_user)
+
+
+@router.get(
+    "/eligible-expenses",
+    response_model=List[EligibleExpenseOut],
+    summary="List unclaimed Petty Cash expenses eligible to link in a reimbursement",
+)
+def list_eligible_expenses(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, max_length=100),
+    limit: int = Query(50, ge=1, le=100),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    return PettyCashService(db).list_eligible_expenses(
+        company_id=company_id,
+        company_name=company_name,
+        q=q,
+        limit=limit,
+        current_user=current_user,
+    )
 
 
 @router.get(

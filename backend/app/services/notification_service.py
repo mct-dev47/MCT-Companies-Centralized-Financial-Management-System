@@ -405,20 +405,26 @@ class NotificationService:
             q = select(func.count(Notification.notification_id)).where(
                 Notification.recipient_user_id == recipient_user_id,
                 Notification.read_at.is_(None),
+                Notification.resolved_at.is_(None),
             )
             if company_id is not None:
                 q = q.where(Notification.company_id == company_id)
             count = self.db.scalar(q)
-            if count is not None and count > 0:
-                return int(count)
 
-            has_any = self.db.scalar(
-                select(func.count(Notification.notification_id)).where(
-                    Notification.recipient_user_id == recipient_user_id
-                )
+            active_q = select(func.count(Notification.notification_id)).where(
+                Notification.recipient_user_id == recipient_user_id,
+                Notification.resolved_at.is_(None),
             )
+            if company_id is not None:
+                active_q = active_q.where(Notification.company_id == company_id)
+            has_any = self.db.scalar(active_q)
             if has_any and has_any > 0:
-                return 0
+                extra_pc = self._unpersisted_petty_cash_workflow(
+                    recipient_user_id=recipient_user_id,
+                    company_id=company_id,
+                    user_role=user_role,
+                )
+                return int(count or 0) + len(extra_pc)
 
         return len(
             self.get_notifications(
@@ -1580,18 +1586,33 @@ class NotificationService:
             if role in ("finance", "admin"):
                 pending_finance = [
                     t for t in topups
-                    if t.status == "Pending Finance Endorsement"
+                    if (t.status or "").strip().lower() in ("pending finance endorsement", "pending finance approval")
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in pending_finance:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    if req_type == "reimbursement":
+                        tot = topup.total_expenses if topup.total_expenses is not None else amt
+                        title = "Petty Cash Replenishment Request (Finance Endorsement)"
+                        msg = (
+                            f"{cname} submitted a petty cash replenishment claim "
+                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt:,.2f}, Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
+                    else:
+                        title = "Petty Cash Request (Finance Endorsement)"
+                        msg = (
+                            f"{cname} requested a petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) "
+                            f"awaiting your review and endorsement."
+                        )
                     results.append(NotificationOut(
                         notification_id=_make_id(NotificationType.PETTY_CASH_REQUEST, topup.topup_id),
                         notification_type=NotificationType.PETTY_CASH_REQUEST,
-                        title="Petty Cash Request (Finance Endorsement)",
-                        message=f"{cname} requested a petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) awaiting your review and endorsement.",
+                        title=title,
+                        message=msg,
                         company_id=topup.company_id,
                         reference_type="petty_cash",
                         reference_id=topup.topup_id,
@@ -1602,18 +1623,20 @@ class NotificationService:
             if role in ("audit", "auditor", "admin"):
                 pending_audit = [
                     t for t in topups
-                    if t.status == "Pending Audit Approval"
+                    if (t.status or "").strip().lower() == "pending audit approval"
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in pending_audit:
                     cname = _company_name(self.db, topup.company_id, name_map)
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    kind_label = "replenishment claim" if req_type == "reimbursement" else "top-up"
                     results.append(NotificationOut(
                         notification_id=_make_id(NotificationType.PETTY_CASH_AUDIT, topup.topup_id),
                         notification_type=NotificationType.PETTY_CASH_AUDIT,
                         title="Petty Cash Audit Compliance Required",
-                        message=f"Petty cash top-up of ₱{amt:,.2f} for {cname} (Ref: {ref}) was endorsed by Finance and awaits Audit approval.",
+                        message=f"Petty cash {kind_label} of ₱{amt:,.2f} for {cname} (Ref: {ref}) was endorsed by Finance and awaits Audit approval.",
                         company_id=topup.company_id,
                         reference_type="petty_cash",
                         reference_id=topup.topup_id,
@@ -1624,22 +1647,38 @@ class NotificationService:
             if role in ("supervisor", "company", "admin"):
                 topup_rows = [
                     t for t in topups
-                    if t.status in ("Approved", "Rejected by Finance", "Disapproved by Audit", "Disapproved")
+                    if (t.status or "").strip().lower() in (
+                        "approved",
+                        "rejected by finance",
+                        "disapproved by audit",
+                        "disapproved",
+                    )
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in topup_rows:
                     ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
-                    is_approved = topup.status == "Approved"
+                    status_str = topup.status or "Approved"
+                    req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+                    kind_noun = "replenishment claim" if req_type == "reimbursement" else "top-up"
+                    is_approved = status_str.strip().lower() == "approved"
                     ntype = NotificationType.PETTY_CASH_APPROVED if is_approved else NotificationType.PETTY_CASH_REJECTED
-                    title = "Petty Cash Top-up Approved" if is_approved else f"Petty Cash {topup.status}"
+                    title = (
+                        ("Petty Cash Replenishment Approved" if req_type == "reimbursement" else "Petty Cash Top-up Approved")
+                        if is_approved
+                        else f"Petty Cash {status_str}"
+                    )
                     if is_approved:
-                        msg = f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                        msg = (
+                            f"Your petty cash replenishment claim of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and is ready for settlement."
+                            if req_type == "reimbursement"
+                            else f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                        )
                     else:
                         reason = topup.remark or topup.finance_remark or "Request declined."
-                        msg = f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) was {topup.status.lower()}: {reason}"
+                        msg = f"Your petty cash {kind_noun} of ₱{amt:,.2f} (Ref: {ref}) was {status_str.lower()}: {reason}"
                     results.append(NotificationOut(
-                        notification_id=_make_id(ntype, topup.topup_id, topup.status.replace(" ", "_")),
+                        notification_id=_make_id(ntype, topup.topup_id, status_str.replace(" ", "_")),
                         notification_type=ntype,
                         title=title,
                         message=msg,
@@ -1830,6 +1869,61 @@ DEFAULT_RETENTION_DAYS = 90
 
 
 def _extend_service(cls):
+    def _unpersisted_petty_cash_workflow(
+        self,
+        recipient_user_id: int,
+        company_id: Optional[int] = None,
+        user_role: Optional[str] = None,
+        notification_type: Optional[str] = None,
+    ) -> list[NotificationOut]:
+        """
+        Return computed petty cash workflow alerts that have not yet been persisted as
+        active Notification rows for `recipient_user_id`. Prevents persistent alerts in
+        other modules from hiding live petty cash review items.
+        """
+        role = (user_role or "").strip().lower()
+        if role not in ("finance", "audit", "auditor"):
+            return []
+
+        nt_filter = notification_type.strip().upper() if notification_type else None
+        if nt_filter and nt_filter not in (
+            NotificationType.PETTY_CASH_REQUEST,
+            NotificationType.PETTY_CASH_AUDIT,
+        ):
+            return []
+
+        computed = self._petty_cash_workflow_notifications(
+            user_role=role,
+            company_id=company_id,
+        )
+        if not computed:
+            return []
+
+        from sqlalchemy import select
+        existing_pairs = set(
+            self.db.execute(
+                select(Notification.notification_type, Notification.reference_id).where(
+                    Notification.recipient_user_id == recipient_user_id,
+                    Notification.reference_type == "petty_cash",
+                    Notification.reference_id.isnot(None),
+                    Notification.resolved_at.is_(None),
+                )
+            ).all()
+        )
+        results: list[NotificationOut] = []
+        for item in computed:
+            if item.notification_type not in (
+                NotificationType.PETTY_CASH_REQUEST,
+                NotificationType.PETTY_CASH_AUDIT,
+            ):
+                continue
+            if nt_filter and item.notification_type != nt_filter:
+                continue
+            if (item.notification_type, item.reference_id) in existing_pairs:
+                continue
+            results.append(item)
+        return results
+
     def get_notifications_feed(
         self,
         recipient_user_id: int,
@@ -1842,7 +1936,10 @@ def _extend_service(cls):
         limit: int = 50,
     ) -> NotificationListResponse:
         from sqlalchemy import select, or_, and_
-        query = select(Notification).where(Notification.recipient_user_id == recipient_user_id)
+        query = select(Notification).where(
+            Notification.recipient_user_id == recipient_user_id,
+            Notification.resolved_at.is_(None),
+        )
 
         if company_id is not None:
             query = query.where(Notification.company_id == company_id)
@@ -1878,7 +1975,7 @@ def _extend_service(cls):
 
         items = self.db.scalars(query.limit(limit + 1)).all()
         
-        # If persistent table has no items for this user yet, fallback to computed items
+        # If persistent table has no active items for this user yet, fallback to computed items
         if not items and not cursor:
             computed = self.get_notifications(
                 company_id=company_id,
@@ -1894,14 +1991,28 @@ def _extend_service(cls):
                 total_unread=len(computed),
             )
 
-        has_more = len(items) > limit
-        results = items[:limit]
+        extra_pc = (
+            self._unpersisted_petty_cash_workflow(
+                recipient_user_id=recipient_user_id,
+                company_id=company_id,
+                user_role=user_role,
+                notification_type=notification_type,
+            )
+            if not cursor
+            else []
+        )
+
+        available_for_persistent = max(0, limit - len(extra_pc))
+        has_more = len(items) > available_for_persistent
+        results = items[:available_for_persistent]
 
         next_cursor = None
         if results:
             last = results[-1]
             c_dt = last.created_at.isoformat() if last.created_at else datetime.now(timezone.utc).isoformat()
             next_cursor = f"{c_dt}|{last.notification_id}"
+
+        combined_items = extra_pc[:limit] + [NotificationOut.model_validate(n) for n in results]
 
         # Get total unread count for this recipient & company scope
         effective_scope_key = user_scope_key or (f"u:{recipient_user_id}:r:{user_role}:c:{company_id}" if user_role else f"u:{recipient_user_id}:c:{company_id}")
@@ -1913,7 +2024,7 @@ def _extend_service(cls):
         )
 
         return NotificationListResponse(
-            items=[NotificationOut.model_validate(n) for n in results],
+            items=combined_items,
             next_cursor=next_cursor,
             has_more=has_more,
             total_unread=unread_count,
@@ -2023,6 +2134,10 @@ def _extend_service(cls):
                     r.expires_at = expires_target
             self.db.commit()
             return len(rows)
+
+    def _sync_extend_service_attach(cls):
+        cls._unpersisted_petty_cash_workflow = _unpersisted_petty_cash_workflow
+    _sync_extend_service_attach(cls)
 
     cls.get_notifications_feed = get_notifications_feed
     cls.mark_as_read = mark_as_read

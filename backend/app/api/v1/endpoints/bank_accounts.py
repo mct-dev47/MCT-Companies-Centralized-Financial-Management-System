@@ -75,22 +75,50 @@ def list_bank_accounts(
         return service.list_accounts(company_name=comp.company_name, company_id=comp.company_id)
 
     accounts = service.list_accounts()
-    if user_role in ("finance", "audit", "auditor"):
+    if user_role in ("finance", "audit", "auditor", "owner"):
         return accounts
 
-    # For supervisor, filter to their assigned companies
-    user_company_ids = current_user.get("company_ids") or []
-    if current_user.get("company_id") and current_user["company_id"] not in user_company_ids:
-        user_company_ids.append(current_user["company_id"])
+    # For supervisor, filter to their assigned companies (including shared-owner and alias-matched banks)
+    from app.core.company_resolver import normalize_company_id
+
+    raw_ids = list(current_user.get("company_ids") or [])
+    if current_user.get("company_id") is not None:
+        raw_ids.append(current_user["company_id"])
+    assigned_ids = {
+        nid for nid in (normalize_company_id(cid) for cid in raw_ids) if nid is not None
+    }
+    if not assigned_ids:
+        return []
 
     assigned_names = {
-        c.company_name.lower()
-        for c in db.query(Company).filter(Company.company_id.in_(user_company_ids)).all()
+        c.company_name.strip().lower()
+        for c in db.query(Company).filter(Company.company_id.in_(assigned_ids)).all()
+        if c.company_name
     }
-    return [
-        a for a in accounts
-        if any(n.lower() in assigned_names for n in (a.company_names or [getattr(a, "company", "") or ""]))
-    ]
+    owner_id_cache: dict[str, Optional[int]] = {}
+
+    def _owner_matches(owner_name: str) -> bool:
+        key = (owner_name or "").strip().lower()
+        if not key or key == "general treasury / unassigned":
+            return False
+        if key in assigned_names:
+            return True
+        if key not in owner_id_cache:
+            try:
+                resolved = resolve_company(db, company_name=owner_name)
+                owner_id_cache[key] = normalize_company_id(resolved.company_id)
+            except HTTPException:
+                owner_id_cache[key] = None
+        return owner_id_cache[key] in assigned_ids
+
+    def _account_in_scope(acc) -> bool:
+        acc_cid = normalize_company_id(getattr(acc, "company_id", None))
+        if acc_cid is not None and acc_cid in assigned_ids:
+            return True
+        owners = acc.company_names or [getattr(acc, "company_name", "") or ""]
+        return any(_owner_matches(n) for n in owners if n)
+
+    return [a for a in accounts if _account_in_scope(a)]
 
 
 @router.post("/reconcile", summary="Bring every bank back in line with the Transactions ledger")
@@ -120,7 +148,7 @@ def get_bank_account(
 
     user_role = (current_user.get("role") or "").lower()
     comp_name = getattr(account, "company_name", getattr(account, "company", None))
-    if user_role not in ("finance", "audit", "auditor") and comp_name:
+    if user_role not in ("finance", "audit", "auditor", "owner") and comp_name:
         _check_any_owner_access(db, current_user, account)
 
     return account

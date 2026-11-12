@@ -115,56 +115,73 @@ class BankService:
 
     def list_accounts(self, company_name: Optional[str] = None, company_id: Optional[int] = None) -> List[BankAccount]:
         query = self._with_entries(self.db.query(BankAccount))
-        
-        # 1. Direct company_id filter
-        if company_id:
-            from app.models.company import Company
-            comp = self.db.query(Company).filter(Company.company_id == company_id).first()
-            comp_name = comp.company_name.strip().lower() if comp else ""
-            
-            from app.core.company_resolver import COMPANY_ALIASES
-            aliases = [comp_name] if comp_name else []
-            for key, val_list in COMPANY_ALIASES.items():
-                if comp_name == key or comp_name in val_list or key in comp_name:
-                    aliases.append(key)
-                    aliases.extend(val_list)
-            aliases = [a for a in set(aliases) if a]
+        all_accounts = query.order_by(BankAccount.id.asc()).all()
 
-            conditions = [BankAccount.company_id == company_id]
-            if aliases:
-                conditions.extend([func.lower(BankAccount.company_name).contains(a) for a in aliases])
-                conditions.extend([func.lower(BankAccount.company_names_json).contains(a) for a in aliases])
-            query = query.filter(or_(*conditions))
-            result = query.order_by(BankAccount.id.asc()).all()
-            self._attach_entry_sources(result)
-            return result
+        norm_name = (company_name or "").strip().lower()
+        has_company_filter = bool(company_id) or (bool(norm_name) and norm_name != "all companies")
+        if not has_company_filter:
+            self._attach_entry_sources(all_accounts)
+            return all_accounts
 
-        # 2. Company name filter
-        if company_name and company_name != "All Companies":
-            normalized = company_name.strip().lower()
-            from app.core.company_resolver import COMPANY_ALIASES, resolve_company
-            aliases = [normalized]
-            resolved_cid = None
+        from fastapi import HTTPException
+        from app.core.company_resolver import COMPANY_ALIASES, normalize_company_id, resolve_company
+        from app.models.company import Company
+
+        target_cid = normalize_company_id(company_id)
+        aliases = set()
+        if norm_name and norm_name != "all companies":
+            aliases.add(norm_name)
+
+        if target_cid:
+            comp = self.db.query(Company).filter(Company.company_id == target_cid).first()
+            if comp and comp.company_name:
+                aliases.add(comp.company_name.strip().lower())
+        elif norm_name and norm_name != "all companies":
             try:
-                c = resolve_company(self.db, company_name=company_name)
-                if c and c.company_id:
-                    resolved_cid = c.company_id
-                    aliases.append(c.company_name.strip().lower())
-            except Exception:
+                comp = resolve_company(self.db, company_name=company_name)
+                if comp and comp.company_id:
+                    target_cid = normalize_company_id(comp.company_id)
+                if comp and comp.company_name:
+                    aliases.add(comp.company_name.strip().lower())
+            except HTTPException:
                 pass
 
+        expanded_aliases = set(aliases)
+        for seed in list(aliases):
             for key, val_list in COMPANY_ALIASES.items():
-                if normalized == key or normalized in val_list or key in normalized:
-                    aliases.append(key)
-                    aliases.extend(val_list)
-            aliases = [a for a in set(aliases) if a]
+                if seed == key or seed in val_list or key in seed:
+                    expanded_aliases.add(key)
+                    expanded_aliases.update(val_list)
+        aliases = {a for a in expanded_aliases if a}
 
-            conditions = [func.lower(BankAccount.company_name).contains(a) for a in aliases]
-            conditions.extend([func.lower(BankAccount.company_names_json).contains(a) for a in aliases])
-            if resolved_cid:
-                conditions.append(BankAccount.company_id == resolved_cid)
-            query = query.filter(or_(*conditions))
-        result = query.order_by(BankAccount.id.asc()).all()
+        owner_id_cache: Dict[str, Optional[int]] = {}
+
+        def _matches_target(acc: BankAccount) -> bool:
+            acc_cid = normalize_company_id(acc.company_id)
+            if target_cid and acc_cid == target_cid:
+                return True
+            owners = acc.company_names or [acc.company_name or ""]
+            for owner in owners:
+                ol = (owner or "").strip().lower()
+                if not ol or ol == "general treasury / unassigned":
+                    continue
+                if target_cid:
+                    if ol not in owner_id_cache:
+                        try:
+                            c = resolve_company(self.db, company_name=owner)
+                            owner_id_cache[ol] = normalize_company_id(c.company_id)
+                        except HTTPException:
+                            owner_id_cache[ol] = None
+                    resolved_owner_cid = owner_id_cache[ol]
+                    if resolved_owner_cid is not None:
+                        if resolved_owner_cid == target_cid:
+                            return True
+                        continue
+                if any(a in ol for a in aliases):
+                    return True
+            return False
+
+        result = [a for a in all_accounts if _matches_target(a)]
         self._attach_entry_sources(result)
         return result
 

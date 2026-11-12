@@ -1,3 +1,5 @@
+import json
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Optional
@@ -5,6 +7,47 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 from app.schemas.base import StrictBaseModel
 from app.core.ssrf import validate_safe_url
+
+_SAFE_RECEIPT_DATA_URL_RE = re.compile(
+    r"^data:(image/(?:png|jpeg|jpg|webp|gif)|application/pdf);base64,[A-Za-z0-9+/=\s]+$",
+    re.IGNORECASE,
+)
+
+
+def _validate_receipt_or_data_url(v: Optional[str]) -> Optional[str]:
+    """Allow safe HTTPS/relative URLs or validated image/PDF base64 data URIs from receipt uploads."""
+    if v is None:
+        return None
+    trimmed = v.strip()
+    if not trimmed:
+        return None
+    if trimmed.lower().startswith("data:"):
+        if not _SAFE_RECEIPT_DATA_URL_RE.match(trimmed):
+            raise ValueError("Invalid receipt data URL. Only PNG, JPEG, WEBP, GIF, and PDF base64 uploads are allowed.")
+        return trimmed
+    return validate_safe_url(trimmed, allow_localhost_dev=True, allow_relative=True)
+
+
+def _validate_attachments_json(v: Optional[str]) -> Optional[str]:
+    """Validate attachments JSON array entries and each contained file URL."""
+    if v is None:
+        return None
+    trimmed = v.strip()
+    if not trimmed:
+        return None
+    try:
+        parsed = json.loads(trimmed)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid attachments format. Expected JSON array.") from exc
+    if not isinstance(parsed, list):
+        raise ValueError("Attachments must be a JSON array.")
+    for item in parsed:
+        if not isinstance(item, dict):
+            raise ValueError("Each attachment item must be an object.")
+        url_val = item.get("file_url") or item.get("url")
+        if isinstance(url_val, str) and url_val.strip():
+            _validate_receipt_or_data_url(url_val)
+    return trimmed
 
 
 class PettyCashTopUpCreate(StrictBaseModel):
@@ -18,13 +61,15 @@ class PettyCashTopUpCreate(StrictBaseModel):
     status: Optional[str] = Field("Pending Finance Endorsement", max_length=100)
     created_by: Optional[int] = None
     bank_account_id: Optional[str] = Field(None, max_length=100)
+    payment_method_option: Optional[Literal["direct", "transfer_first"]] = None
+    destination_bank_id: Optional[str] = Field(None, max_length=100)
     finance_remark: Optional[str] = Field(None, max_length=1000)
     endorsement_remark: Optional[str] = Field(None, max_length=1000)
     request_type: Optional[str] = Field("topup", max_length=50)
     paid_by: Optional[str] = Field(None, max_length=100)
-    receipt_url: Optional[str] = Field(None, max_length=2048)
-    attachments: Optional[str] = Field(None, max_length=2048)
-    items: Optional[str] = Field(None, max_length=4000)
+    receipt_url: Optional[str] = Field(None, max_length=7500000)
+    attachments: Optional[str] = Field(None, max_length=15000000)
+    items: Optional[str] = Field(None, max_length=16000)
     category: Optional[str] = Field(None, max_length=100)
     total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
     company_funded_amount: Optional[Decimal] = Field(Decimal("0.00"), decimal_places=2)
@@ -58,16 +103,21 @@ class PettyCashTopUpCreate(StrictBaseModel):
     @field_validator("receipt_url")
     @classmethod
     def validate_receipt_url(cls, v: Optional[str]) -> Optional[str]:
-        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
+        return _validate_receipt_or_data_url(v)
+
+    @field_validator("attachments")
+    @classmethod
+    def validate_attachments(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_attachments_json(v)
 
 
 class PettyCashTopUpUpdate(StrictBaseModel):
     amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     description: Optional[str] = Field(None, max_length=1000)
     paid_by: Optional[str] = Field(None, max_length=100)
-    receipt_url: Optional[str] = Field(None, max_length=2048)
-    attachments: Optional[str] = Field(None, max_length=2048)
-    items: Optional[str] = Field(None, max_length=4000)
+    receipt_url: Optional[str] = Field(None, max_length=7500000)
+    attachments: Optional[str] = Field(None, max_length=15000000)
+    items: Optional[str] = Field(None, max_length=16000)
     category: Optional[str] = Field(None, max_length=100)
     total_expenses: Optional[Decimal] = Field(None, decimal_places=2)
     company_funded_amount: Optional[Decimal] = Field(None, decimal_places=2)
@@ -77,7 +127,12 @@ class PettyCashTopUpUpdate(StrictBaseModel):
     @field_validator("receipt_url")
     @classmethod
     def validate_receipt_url(cls, v: Optional[str]) -> Optional[str]:
-        return validate_safe_url(v, allow_localhost_dev=True, allow_relative=True) if v else v
+        return _validate_receipt_or_data_url(v)
+
+    @field_validator("attachments")
+    @classmethod
+    def validate_attachments(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_attachments_json(v)
 
 
 class PettyCashTopUpOut(BaseModel):
@@ -275,6 +330,8 @@ class PettyCashLedgerEntry(BaseModel):
     paid_by: Optional[str] = None
     receipt_url: Optional[str] = None
     attachments: Optional[str] = None
+    has_receipt: bool = False
+    attachment_count: int = 0
     items: Optional[str] = None
     endorsed_by: Optional[str] = None
     endorsed_at: Optional[datetime] = None
@@ -328,4 +385,20 @@ class ReceiptUploadOut(BaseModel):
     file_size: int
     mime_type: str
     content_type: str
+
+
+class PettyCashTopUpReceiptsOut(BaseModel):
+    topup_id: int
+    receipt_url: Optional[str] = None
+    attachments: Optional[str] = None
+
+
+class EligibleExpenseOut(BaseModel):
+    expense_id: int
+    company_id: int
+    expense_date: date
+    particulars: str
+    category: Optional[str] = None
+    amount: Decimal
+    reference_no: Optional[str] = None
 

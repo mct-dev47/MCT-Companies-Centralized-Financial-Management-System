@@ -214,6 +214,13 @@ export const PettyCashPage: React.FC = () => {
   const [isSummaryModalOpen, setIsSummaryModalOpen] = React.useState(false)
   const [previewReceipt, setPreviewReceipt] = React.useState<{ url: string; name: string } | null>(null)
   const [isReviewConfirmModalOpen, setIsReviewConfirmModalOpen] = React.useState(false)
+  const [receiptsLoading, setReceiptsLoading] = React.useState(false)
+  const [receiptsError, setReceiptsError] = React.useState<string | null>(null)
+  const [loadedReceipts, setLoadedReceipts] = React.useState<{
+    topupId: number
+    receiptUrl: string | null
+    attachments: string | null
+  } | null>(null)
 
   // Target entry & review data
   const [targetEntry, setTargetEntry] = React.useState<PettyCashTransaction | null>(null)
@@ -228,8 +235,7 @@ export const PettyCashPage: React.FC = () => {
   const [banksError, setBanksError] = React.useState<string | null>(null)
   const [banksReloadKey, setBanksReloadKey] = React.useState(0)
   const [selectedFundingBankId, setSelectedFundingBankId] = React.useState('')
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = React.useState<'direct' | 'transfer_first'>('direct')
-  const [selectedDestinationBankId, setSelectedDestinationBankId] = React.useState('')
+  const reviewAutoSelectedRef = React.useRef(false)
   const [approvalFeedback, setApprovalFeedback] = React.useState<string | null>(null)
 
   // Spec 0038: Transfer cancellation and execution state
@@ -531,15 +537,55 @@ export const PettyCashPage: React.FC = () => {
     return filteredLedger.slice(start, start + itemsPerPage)
   }, [filteredLedger, currentPage, itemsPerPage])
 
+  const fetchEntryReceipts = React.useCallback(async (entry: PettyCashTransaction, forceRefresh = false) => {
+    if (entry.type === 'expense' || !entry.recordId || (!entry.hasReceipt && !forceRefresh)) {
+      setLoadedReceipts(null)
+      setReceiptsLoading(false)
+      setReceiptsError(null)
+      return
+    }
+    if (!forceRefresh && (entry.attachments || entry.receiptUrl)) {
+      setLoadedReceipts({
+        topupId: entry.recordId,
+        receiptUrl: entry.receiptUrl ?? null,
+        attachments: entry.attachments ?? null,
+      })
+      setReceiptsLoading(false)
+      setReceiptsError(null)
+      return
+    }
+    setReceiptsLoading(true)
+    setReceiptsError(null)
+    try {
+      const res = await pettyCashService.getTopUpReceipts(entry.recordId, { forceRefresh })
+      setLoadedReceipts(res)
+    } catch (err: any) {
+      setReceiptsError(err instanceof Error ? err.message : 'Could not load receipts.')
+    } finally {
+      setReceiptsLoading(false)
+    }
+  }, [])
+
   // Open Transaction Detail Summary
   const handleOpenSummary = (entry: PettyCashTransaction) => {
     setTargetEntry(entry)
+    setLoadedReceipts(null)
+    setReceiptsError(null)
     setIsSummaryModalOpen(true)
+    void fetchEntryReceipts(entry)
   }
 
-  // Load bank accounts once, so Finance can pick a funding bank when endorsing (spec 0012).
+  // Load bank accounts for the signed-in user, reloading if user/role changes (spec 0012).
   React.useEffect(() => {
     let mounted = true
+    if (!user?.id) {
+      setBankAccounts([])
+      setBanksLoading(false)
+      setBanksError(null)
+      return () => {
+        mounted = false
+      }
+    }
     setBanksLoading(true)
     setBanksError(null)
     bankService
@@ -556,7 +602,24 @@ export const PettyCashPage: React.FC = () => {
     return () => {
       mounted = false
     }
-  }, [banksReloadKey])
+  }, [banksReloadKey, user?.id, user?.role])
+
+  // If banks finish loading after the endorse modal opens, preselect the requesting company's own bank once.
+  React.useEffect(() => {
+    if (!isReviewConfirmModalOpen || reviewAction !== 'endorse') {
+      if (!isReviewConfirmModalOpen) reviewAutoSelectedRef.current = false
+      return
+    }
+    if (reviewAutoSelectedRef.current || selectedFundingBankId || bankAccounts.length === 0) return
+    const ownAccount = preferSoleOwnedBanks(
+      bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || '')),
+      targetEntry?.companyName || ''
+    )[0]
+    if (ownAccount) {
+      setSelectedFundingBankId(ownAccount.id)
+    }
+    reviewAutoSelectedRef.current = true
+  }, [isReviewConfirmModalOpen, reviewAction, selectedFundingBankId, bankAccounts, targetEntry?.companyName])
 
   // Open Confirmation Modal for Endorse, Reject, Approve or Disapprove
   const handleOpenReviewConfirm = (action: 'endorse' | 'reject' | 'approve' | 'disapprove') => {
@@ -572,12 +635,10 @@ export const PettyCashPage: React.FC = () => {
         targetEntry?.companyName || ''
       )[0]
       setSelectedFundingBankId(ownAccount ? ownAccount.id : '')
-      setSelectedPaymentMethod('direct')
-      setSelectedDestinationBankId('')
+      reviewAutoSelectedRef.current = bankAccounts.length > 0
     } else {
       setSelectedFundingBankId('')
-      setSelectedPaymentMethod('direct')
-      setSelectedDestinationBankId('')
+      reviewAutoSelectedRef.current = false
     }
     setIsReviewConfirmModalOpen(true)
   }
@@ -592,20 +653,24 @@ export const PettyCashPage: React.FC = () => {
       return
     }
 
-    // Spec 0012: Finance must choose a funding bank before endorsing.
-    if (reviewAction === 'endorse' && !selectedFundingBankId) {
-      setReviewError('Please choose a funding bank account before endorsing.')
-      return
-    }
+    const isZeroExcessReview =
+      (targetEntry.requestType || '').toLowerCase() === 'reimbursement' &&
+      (targetEntry.employeeOutOfPocket ?? targetEntry.amountRequested ?? 0) === 0 &&
+      (targetEntry.totalExpenses ?? 0) > 0
 
+    // Spec 0012: Finance must choose a funding bank belonging to the company before endorsing (except float-only zero-excess settlements).
     const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
-    const isCrossCompanyBank = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry.companyName || '')
+    const isOwnCompanyBank = Boolean(
+      selectedBank && (!targetEntry.companyName || isAccountOwnedBy(selectedBank, targetEntry.companyName))
+    )
 
-    if (reviewAction === 'endorse' && isCrossCompanyBank) {
-      if (selectedPaymentMethod === 'transfer_first' && !selectedDestinationBankId) {
-        setReviewError(`Please choose a destination bank account belonging to ${targetEntry.companyName}.`)
-        return
-      }
+    if (reviewAction === 'endorse' && !isZeroExcessReview && (!selectedFundingBankId || !isOwnCompanyBank)) {
+      setReviewError(
+        targetEntry.companyName
+          ? `Please choose a funding bank account belonging to ${targetEntry.companyName} before endorsing.`
+          : 'Please choose a funding bank account before endorsing.'
+      )
+      return
     }
 
     setIsSubmittingReview(true)
@@ -618,8 +683,6 @@ export const PettyCashPage: React.FC = () => {
           reviewAction,
           reviewRemark.trim(),
           reviewAction === 'endorse' ? selectedFundingBankId : undefined,
-          reviewAction === 'endorse' && isCrossCompanyBank ? selectedPaymentMethod : undefined,
-          reviewAction === 'endorse' && isCrossCompanyBank && selectedPaymentMethod === 'transfer_first' ? selectedDestinationBankId : undefined,
         )
       } else {
         await pettyCashService.reviewTopUp(targetEntry.recordId, reviewAction, reviewRemark.trim())
@@ -934,7 +997,7 @@ export const PettyCashPage: React.FC = () => {
                           <Receipt className="w-4 h-4" />
                         </div>
                         <div>
-                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Replenishment</div>
+                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Reimbursement</div>
                           <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
                             Get paid back for expenses you paid out of your own pocket.
                           </div>
@@ -950,7 +1013,7 @@ export const PettyCashPage: React.FC = () => {
                   className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
                 >
                   <Receipt className="h-4 w-4 shrink-0" />
-                  <span>Request Replenishment</span>
+                  <span>Request Reimbursement</span>
                 </Button>
               )
             )}
@@ -991,7 +1054,7 @@ export const PettyCashPage: React.FC = () => {
                     ? 'All'
                     : typeFilter === 'Top-up'
                     ? 'Petty Cash Request'
-                    : 'Replenishment'}
+                    : 'Reimbursement'}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -1006,7 +1069,7 @@ export const PettyCashPage: React.FC = () => {
                   {[
                     { id: 'All', label: 'All' },
                     { id: 'Top-up', label: 'Petty Cash Request' },
-                    { id: 'Reimbursement', label: 'Replenishment' },
+                    { id: 'Reimbursement', label: 'Reimbursement' },
                   ].map((tp) => (
                     <button
                       key={tp.id}
@@ -1358,7 +1421,7 @@ export const PettyCashPage: React.FC = () => {
                         ) : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
                             <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Replenishment</span>
+                            <span>Reimbursement</span>
                           </span>
                         ) : entry.type === 'expense' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
@@ -1378,10 +1441,12 @@ export const PettyCashPage: React.FC = () => {
                           <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
                             <User className="w-3 h-3 text-slate-400 shrink-0" />
                             <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
-                            {entry.receiptUrl && (
+                            {(entry.hasReceipt || entry.receiptUrl) && (
                               <span className="inline-flex items-center text-[10px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/60 ml-1">
                                 <Receipt className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
-                                Receipt
+                                {entry.attachmentCount && entry.attachmentCount > 1
+                                  ? `Receipts (${entry.attachmentCount})`
+                                  : 'Receipt'}
                               </span>
                             )}
                           </div>
@@ -1669,7 +1734,7 @@ export const PettyCashPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1.5">
                       <Receipt className="w-3.5 h-3.5 text-amber-700" />
-                      <span>Replenishment Details</span>
+                      <span>Reimbursement Details</span>
                     </span>
                     <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-amber-100 text-amber-800">
                       Paid By: {targetEntry.paidBy || 'Employee'}
@@ -1767,12 +1832,52 @@ export const PettyCashPage: React.FC = () => {
 
                   {/* Receipt Attachments Section */}
                   {(() => {
+                    if (receiptsLoading) {
+                      return (
+                        <div className="pt-1 space-y-2">
+                          <span className="text-[11px] font-semibold text-focus block">Receipt / Proof Attachments:</span>
+                          <Skeleton className="h-12 w-full rounded-xl" aria-label="Loading receipt attachments" />
+                        </div>
+                      )
+                    }
+
+                    if (receiptsError) {
+                      return (
+                        <div className="pt-1 space-y-1.5">
+                          <span className="text-[11px] font-semibold text-focus block">Receipt / Proof Attachments:</span>
+                          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                              <span className="truncate">{receiptsError}</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void fetchEntryReceipts(targetEntry, true)}
+                              className="shrink-0 inline-flex items-center gap-1 font-semibold underline underline-offset-2 hover:text-rose-900 cursor-pointer"
+                            >
+                              <RotateCw className="w-3 h-3" />
+                              Retry
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    }
+
+                    const effectiveAttachments =
+                      loadedReceipts?.topupId === targetEntry.recordId
+                        ? loadedReceipts.attachments
+                        : targetEntry.attachments
+                    const effectiveReceiptUrl =
+                      loadedReceipts?.topupId === targetEntry.recordId
+                        ? loadedReceipts.receiptUrl
+                        : targetEntry.receiptUrl
+
                     let files: Array<{ file_url: string; file_name: string; file_size?: number }> = []
-                    if (targetEntry.attachments) {
+                    if (effectiveAttachments) {
                       try {
-                        const parsed = typeof targetEntry.attachments === 'string'
-                          ? JSON.parse(targetEntry.attachments)
-                          : targetEntry.attachments
+                        const parsed = typeof effectiveAttachments === 'string'
+                          ? JSON.parse(effectiveAttachments)
+                          : effectiveAttachments
                         if (Array.isArray(parsed)) {
                           files = parsed.map((item: any, idx: number) => ({
                             file_url: item.file_url || item.url || '',
@@ -1784,8 +1889,8 @@ export const PettyCashPage: React.FC = () => {
                         // ignore
                       }
                     }
-                    if (files.length === 0 && targetEntry.receiptUrl) {
-                      files = [{ file_url: targetEntry.receiptUrl, file_name: 'Official Receipt' }]
+                    if (files.length === 0 && effectiveReceiptUrl) {
+                      files = [{ file_url: effectiveReceiptUrl, file_name: 'Official Receipt' }]
                     }
 
                     if (files.length === 0) {
@@ -1901,7 +2006,7 @@ export const PettyCashPage: React.FC = () => {
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-focus">
-                        {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') ? 'Replenishment filed by' : 'Requested by'}{' '}
+                        {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') ? 'Reimbursement filed by' : 'Requested by'}{' '}
                         <span className="text-primary font-bold">
                           {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
                         </span>
@@ -2308,11 +2413,21 @@ export const PettyCashPage: React.FC = () => {
             </div>
 
             {/* Funding Bank Picker (Finance endorsement only, spec 0012 & 0038) */}
-            {reviewAction === 'endorse' && (
+            {reviewAction === 'endorse' && (() => {
+              const isZeroExcessReview =
+                (targetEntry?.requestType || '').toLowerCase() === 'reimbursement' &&
+                (targetEntry?.employeeOutOfPocket ?? targetEntry?.amountRequested ?? 0) === 0 &&
+                (targetEntry?.totalExpenses ?? 0) > 0
+              return (
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-semibold text-focus block">
-                    Funding Bank Account <span className="text-red-500">* (Required)</span>
+                    Funding Bank Account{' '}
+                    {isZeroExcessReview ? (
+                      <span className="text-[11px] font-normal text-muted-fg">(Optional for float-only settlement)</span>
+                    ) : (
+                      <span className="text-red-500">* (Required)</span>
+                    )}
                   </Label>
                   {banksLoading && bankAccounts.length === 0 ? (
                     <Skeleton className="h-11 w-full rounded-xl" aria-label="Loading bank accounts" />
@@ -2336,131 +2451,34 @@ export const PettyCashPage: React.FC = () => {
                         if (reviewError) setReviewError('')
                       }}
                       className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                      required
+                      required={!isZeroExcessReview}
                     >
-                      <option value="" disabled>
+                      <option value="" disabled={!isZeroExcessReview}>
                         Choose the bank that funds this request...
                       </option>
-                      {bankAccounts.map((acc) => {
-                        const isOwn = isAccountOwnedBy(acc, targetEntry?.companyName || '')
-                        return (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.bankName} ({acc.accountName}) [{acc.companyName}]
-                            {isOwn ? ' (own account)' : ' (affiliate)'}
-                          </option>
-                        )
-                      })}
+                      {(targetEntry?.companyName
+                        ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || ''))
+                        : bankAccounts
+                      ).map((acc) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.bankName} ({acc.accountName}) [{acc.companyName}]
+                        </option>
+                      ))}
                     </select>
                     <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
                   </div>
                   )}
-                  {!banksLoading && !banksError && bankAccounts.length === 0 && (
+                  {!banksLoading && !banksError && (targetEntry?.companyName ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || '')).length === 0 : bankAccounts.length === 0) && (
                     <p className="text-[11px] text-amber-700 font-medium">
-                      No bank accounts found. Add a bank account before endorsing.
+                      {targetEntry?.companyName
+                        ? `No bank accounts registered for ${targetEntry.companyName}. Add a bank account for this company before endorsing.`
+                        : 'No bank accounts found. Add a bank account before endorsing.'}
                     </p>
                   )}
                 </div>
-
-                {/* Affiliate Bank Funding Method (Spec 0038 AC-6, AC-7) */}
-                {(() => {
-                  const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
-                  const isCrossCompany = selectedBank && !isAccountOwnedBy(selectedBank, targetEntry?.companyName || '')
-                  if (!isCrossCompany) return null
-
-                  return (
-                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 space-y-3 animate-in fade-in-50">
-                      <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                        <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                        <span>Affiliate Bank Funding Method</span>
-                      </div>
-                      <p className="text-[11px] text-amber-800 leading-snug">
-                        You selected an affiliate bank belonging to <strong>{selectedBank.companyName}</strong>. Select how funds will be disbursed:
-                      </p>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        <label
-                          className={cn(
-                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
-                            selectedPaymentMethod === 'direct'
-                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
-                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
-                          )}
-                        >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name="fundingPaymentMethod"
-                              checked={selectedPaymentMethod === 'direct'}
-                              onChange={() => setSelectedPaymentMethod('direct')}
-                              className="text-primary focus:ring-primary cursor-pointer"
-                            />
-                            <span className="font-bold text-focus">Method A: Direct Payment</span>
-                          </div>
-                          <span className="text-[10.5px] text-muted-fg mt-1">
-                            Disbursed directly from affiliate bank to employee. Creates intercompany payable immediately.
-                          </span>
-                        </label>
-
-                        <label
-                          className={cn(
-                            'p-2.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between text-xs',
-                            selectedPaymentMethod === 'transfer_first'
-                              ? 'border-primary bg-white shadow-2xs ring-1 ring-primary'
-                              : 'border-amber-200/80 bg-white/70 hover:bg-white'
-                          )}
-                        >
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              name="fundingPaymentMethod"
-                              checked={selectedPaymentMethod === 'transfer_first'}
-                              onChange={() => setSelectedPaymentMethod('transfer_first')}
-                              className="text-primary focus:ring-primary cursor-pointer"
-                            />
-                            <span className="font-bold text-focus">Method B: Transfer First</span>
-                          </div>
-                          <span className="text-[10.5px] text-muted-fg mt-1">
-                            Transfers funds from affiliate to {targetEntry?.companyName}'s bank first before reimbursing employee.
-                          </span>
-                        </label>
-                      </div>
-
-                      {/* Destination Bank if Method B */}
-                      {selectedPaymentMethod === 'transfer_first' && (
-                        <div className="space-y-1.5 pt-1">
-                          <Label className="text-xs font-semibold text-focus block">
-                            Destination Bank Account ({targetEntry?.companyName}) <span className="text-red-500">* (Required)</span>
-                          </Label>
-                          <div className="relative">
-                            <select
-                              value={selectedDestinationBankId}
-                              onChange={(e) => {
-                                setSelectedDestinationBankId(e.target.value)
-                                if (reviewError) setReviewError('')
-                              }}
-                              className="w-full h-10 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                              required
-                            >
-                              <option value="" disabled>
-                                Select {targetEntry?.companyName}'s receiving bank...
-                              </option>
-                              {bankAccounts
-                                .filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || ''))
-                                .map((acc) => (
-                                  <option key={acc.id} value={acc.id}>
-                                    {acc.bankName} ({acc.accountName})
-                                  </option>
-                                ))}
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
               </div>
-            )}
+              )
+            })()}
 
             {/* Mandatory Remark Field */}
             <div className="space-y-1.5">
@@ -2668,6 +2686,9 @@ export const PettyCashPage: React.FC = () => {
         currentBalance={currentBalance}
         companies={companyList}
         bankAccounts={bankAccounts}
+        banksLoading={banksLoading}
+        banksError={banksError}
+        onRetryBanks={() => setBanksReloadKey((k) => k + 1)}
         onSuccess={handleTopUpSuccess}
       />
 
@@ -2678,6 +2699,10 @@ export const PettyCashPage: React.FC = () => {
         company={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : (user?.assignedCompany || 'MCT Kitchen'))}
         currentBalance={currentBalance}
         companies={companyList}
+        bankAccounts={bankAccounts}
+        banksLoading={banksLoading}
+        banksError={banksError}
+        onRetryBanks={() => setBanksReloadKey((k) => k + 1)}
         onSuccess={(newRecord) => {
           if (newRecord) {
             setLedger((prev) => [newRecord, ...prev])

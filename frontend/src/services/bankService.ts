@@ -103,8 +103,9 @@ const memoryBankCache = new Map<string, CachedBankAccountsEntry>()
 const inFlightRequests = new Map<string, Promise<BankAccount[]>>()
 
 function normalizeCacheKey(companyName?: string): string {
-  if (!companyName || companyName === 'All Companies') return '__ALL__'
-  return companyName.trim().toLowerCase()
+  const normalized = (companyName || '').trim().toLowerCase()
+  if (!normalized || normalized === 'all companies') return '__ALL__'
+  return normalized
 }
 
 // Purge legacy session storage to eliminate clear-text storage of bank accounts
@@ -138,6 +139,7 @@ if (typeof window !== 'undefined') {
 
 function clearBankCache(): void {
   memoryBankCache.clear()
+  inFlightRequests.clear()
   if (typeof window !== 'undefined') {
     try {
       sessionStorage.removeItem(BANK_CACHE_STORAGE_KEY)
@@ -230,8 +232,8 @@ async function fetchAccountsFromNetwork(companyName?: string): Promise<BankAccou
   const promise = (async () => {
     try {
       const url =
-        companyName && companyName !== 'All Companies'
-          ? `/api/v1/bank-accounts?company_name=${encodeURIComponent(companyName)}`
+        companyName && companyName.trim().toLowerCase() !== 'all companies'
+          ? `/api/v1/bank-accounts?company_name=${encodeURIComponent(companyName.trim())}`
           : '/api/v1/bank-accounts'
       const res = await fetch(url, {
         headers: backendHeaders(),
@@ -268,13 +270,11 @@ export const bankService = {
     const mem = memoryBankCache.get(key)
     if (mem && mem.data.length > 0) return mem.data
 
-    // Fallback: check __ALL__ cache and filter by company name
-    if (key !== '__ALL__') {
+    // Fallback: check __ALL__ cache and filter by company name (alias + shared-owner aware)
+    if (key !== '__ALL__' && companyName) {
       const allMem = memoryBankCache.get('__ALL__')
       if (allMem && Array.isArray(allMem.data) && allMem.data.length > 0) {
-        const filtered = allMem.data.filter(
-          (b) => (b.companyNames || [b.companyName]).some((n) => (n || '').trim().toLowerCase() === key)
-        )
+        const filtered = allMem.data.filter((b) => isAccountOwnedBy(b, companyName))
         if (filtered.length > 0) return filtered
       }
     }

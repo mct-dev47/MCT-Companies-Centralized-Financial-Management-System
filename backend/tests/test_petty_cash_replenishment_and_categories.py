@@ -160,7 +160,7 @@ class TestPettyCashReplenishmentAndCategories(unittest.TestCase):
         self.assertEqual(reimb_row.amount_requested, Decimal("3000.00"))
         self.assertEqual(reimb_row.amount_out, Decimal("0.00"))
         self.assertEqual(reimb_row.status, "Pending Finance Endorsement")
-        self.assertIn("[Replenishment]", reimb_row.description)
+        self.assertIn("[Reimbursement]", reimb_row.description)
 
         # Unified lifecycle: Finance endorses, Audit approves
         self.service.endorse_topup(created.topup_id, action="endorse", remark="Endorsed", bank_account_id="BANK-A-01")
