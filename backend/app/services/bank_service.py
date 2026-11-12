@@ -110,6 +110,13 @@ class BankService:
     def get_account(self, account_id: str) -> Optional[BankAccount]:
         return self.db.query(BankAccount).filter(BankAccount.id == account_id).first()
 
+    def _get_account_for_update(self, account_id: str) -> Optional[BankAccount]:
+        """Acquire a row-level lock on the BankAccount row before reading/modifying its balance."""
+        q = self.db.query(BankAccount).filter(BankAccount.id == account_id)
+        if hasattr(q, "with_for_update"):
+            q = q.with_for_update()
+        return q.first()
+
     def delete_account(self, account_id: str) -> bool:
         account = self.get_account(account_id)
         if not account:
@@ -264,7 +271,7 @@ class BankService:
         return account
 
     def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None) -> Tuple[BankAccount, BankTransaction]:
-        account = self.get_account(account_id)
+        account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
 
@@ -299,7 +306,7 @@ class BankService:
         return account, tx
 
     def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None) -> Tuple[BankAccount, BankTransaction]:
-        account = self.get_account(account_id)
+        account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
 
@@ -485,11 +492,12 @@ class BankService:
             return (Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))) * sign
 
         # Which account should hold this record: its own bank, else where it already is, else the company's
-        account = self.get_account(account_id) if account_id else None
+        account = self._get_account_for_update(account_id) if account_id else None
         if not account and linked:
-            account = self.get_account(linked[0].bank_account_id)
+            account = self._get_account_for_update(linked[0].bank_account_id)
         if not account and company_name:
-            account = self.find_account_for_company(company_name)
+            found_acct = self.find_account_for_company(company_name)
+            account = self._get_account_for_update(found_acct.id) if found_acct else None
         if not account:
             self.db.commit()
             return None
@@ -501,7 +509,7 @@ class BankService:
         for other_id, net in by_account.items():
             if other_id == account.id or net == Decimal("0.00"):
                 continue
-            other = self.get_account(other_id)
+            other = self._get_account_for_update(other_id)
             if other is None:
                 continue
             # Entries that recognized `net` there are undone by posting the opposite direction
@@ -557,7 +565,7 @@ class BankService:
             net = Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))
             net_by_account[t.bank_account_id] = net_by_account.get(t.bank_account_id, Decimal("0")) + net
         for account_id, net in net_by_account.items():
-            account = self.get_account(account_id)
+            account = self._get_account_for_update(account_id)
             if account is not None and net != Decimal("0"):
                 self._adjust_balance(account, -net)
         for t in linked:

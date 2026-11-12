@@ -162,8 +162,11 @@ class ReceivablesService:
             totalPeopleCount=len(all_debtors),
         )
 
-    def get_receivable(self, receivable_id: int) -> Receivable:
-        r = self.db.query(Receivable).filter(Receivable.receivable_id == receivable_id).first()
+    def get_receivable(self, receivable_id: int, for_update: bool = False) -> Receivable:
+        query = self.db.query(Receivable).filter(Receivable.receivable_id == receivable_id)
+        if for_update and hasattr(query, "with_for_update"):
+            query = query.with_for_update()
+        r = query.first()
         if not r:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -277,7 +280,7 @@ class ReceivablesService:
         actor_name: Optional[str] = None,
         skip_counterpart_sync: bool = False,
     ) -> ReceivablePayment:
-        rec = self.get_receivable(receivable_id)
+        rec = self.get_receivable(receivable_id, for_update=True)
         self.sync_service.assert_sale_not_locked(rec.sale_id)
 
         pay_amount = Decimal(str(payment_data.amount or 0))
@@ -599,7 +602,7 @@ class ReceivablesService:
         if not pay:
             raise HTTPException(status_code=404, detail="Payment record not found")
 
-        rec = self.get_receivable(pay.receivable_id)
+        rec = self.get_receivable(pay.receivable_id, for_update=True)
         self.sync_service.assert_sale_not_locked(rec.sale_id)
 
         pay_amount = Decimal(str(pay.amount or 0))

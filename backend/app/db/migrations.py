@@ -866,16 +866,35 @@ def _run_sqlite_migrations(conn) -> list[str]:
         applied.append("0051_auth_data_retention")
         logger.info("SQLite migration 0051_auth_data_retention applied successfully.")
 
+    # Ensure payment_method column exists on sales and expenses in SQLite (schema parity guard)
+    for _tbl in ("sales", "expenses"):
+        _tbl_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": _tbl}
+        ).first()
+        if _tbl_exists:
+            _cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({_tbl})")).fetchall()}
+            if "payment_method" not in _cols:
+                conn.execute(text(f"ALTER TABLE {_tbl} ADD COLUMN payment_method VARCHAR(100) NULL"))
+
     # 18. Check if 0052 is applied
     result_0052 = conn.execute(
         text("SELECT 1 FROM schema_migrations WHERE version = '0052_update_admin_email'")
     ).first()
 
     if not result_0052:
+        users_table_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        ).first()
         script_0052 = MIGRATIONS_DIR / "0052_update_admin_email.sqlite.sql"
-        if script_0052.exists():
+        if users_table_exists and script_0052.exists():
+            u_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+            if "is_admin" not in u_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+            if "role" not in u_cols:
+                conn.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(50) NULL"))
             for statement in script_0052.read_text(encoding="utf-8").split(";"):
-                stmt = statement.strip()
+                lines = [l for l in statement.splitlines() if not l.strip().startswith("--")]
+                stmt = "\n".join(lines).strip()
                 if stmt:
                     conn.execute(text(stmt))
 

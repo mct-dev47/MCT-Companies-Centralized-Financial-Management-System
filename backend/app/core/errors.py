@@ -1,14 +1,191 @@
+import html
 import logging
+import os
 import secrets
+import threading
+import time
+from datetime import datetime, timezone
 from typing import Optional, Any
 from fastapi import Request, HTTPException as FastAPIHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Cooldown map for 500 crash notifications: signature -> last_alerted_monotonic_ts
+_CRASH_ALERT_COOLDOWN_SECONDS = 300.0
+_crash_alert_lock = threading.Lock()
+_crash_alert_last_sent: dict[str, float] = {}
+_last_resolved_admin_email: str = ""
+
+
+def resolve_admin_email(db=None) -> str:
+    """
+    Dynamically resolve the primary admin email using the `is_admin` flag:
+    1. Local/Postgres `users` table (`is_admin = True` or `role = 'admin'`)
+    2. Supabase `users` table (`is_admin = True`)
+    3. Last known cached `is_admin` email (survives temporary DB outages)
+    4. Fallback to `settings.ADMIN_EMAIL` or `settings.BREVO_FROM_EMAIL`
+    """
+    global _last_resolved_admin_email
+    close_db = False
+    try:
+        if db is None:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            close_db = True
+        from app.models.user import User
+        admin_user = (
+            db.query(User)
+            .filter(or_(User.is_admin.is_(True), User.role == "admin"))
+            .order_by(User.is_admin.desc(), User.user_id.asc())
+            .first()
+        )
+        if admin_user and getattr(admin_user, "email", None):
+            resolved = str(admin_user.email).strip()
+            if resolved:
+                _last_resolved_admin_email = resolved
+                return resolved
+    except Exception as e:
+        logger.debug("Could not resolve admin email from SQL session: %s", e)
+    finally:
+        if close_db and db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+    try:
+        from app.db.supabase import get_supabase_admin_client
+        sb = get_supabase_admin_client()
+        if sb is not None:
+            res = sb.table("users").select("email,is_admin,role").eq("is_admin", True).limit(1).execute()
+            rows = getattr(res, "data", None) or []
+            if rows and rows[0].get("email"):
+                resolved = str(rows[0]["email"]).strip()
+                if resolved:
+                    _last_resolved_admin_email = resolved
+                    return resolved
+    except Exception as e:
+        logger.debug("Could not resolve admin email from Supabase client: %s", e)
+
+    return (
+        (getattr(settings, "ADMIN_EMAIL", "") or "").strip()
+        or _last_resolved_admin_email
+        or (getattr(settings, "BREVO_FROM_EMAIL", "") or "").strip()
+    )
+
+
+def _record_and_send_crash_alert(
+    request_id: str,
+    method: str,
+    path: str,
+    client_ip: str,
+    exc_type: str,
+    error_category: str = "SERVER_CRASH",
+) -> bool:
+    """
+    Persist a critical system crash audit log and send an email alert to the `is_admin` user.
+    Enforces a per-endpoint/exception-type cooldown to prevent alert storms.
+    Returns True if an alert was dispatched, False if suppressed by cooldown.
+    """
+    signature = f"{method}:{path}:{exc_type}"
+    now_mono = time.monotonic()
+    with _crash_alert_lock:
+        last_ts = _crash_alert_last_sent.get(signature)
+        if last_ts is not None and (now_mono - last_ts) < _CRASH_ALERT_COOLDOWN_SECONDS:
+            return False
+        _crash_alert_last_sent[signature] = now_mono
+
+    admin_email = ""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.audit_log import AuditLog
+
+        with SessionLocal() as db:
+            admin_email = resolve_admin_email(db)
+            log_entry = AuditLog(
+                user_name="SYSTEM_MONITOR",
+                user_role="system",
+                action="SYSTEM_CRASH_500",
+                action_category="SECURITY",
+                module="SYSTEM",
+                ip_address=client_ip,
+                details={
+                    "severity": "CRITICAL",
+                    "error_category": error_category,
+                    "request_id": request_id,
+                    "method": method,
+                    "path": path,
+                    "exception_type": exc_type,
+                },
+            )
+            db.add(log_entry)
+            db.commit()
+    except Exception as db_err:
+        logger.warning("Failed to persist crash alert audit log: %s", db_err)
+        if not admin_email:
+            admin_email = resolve_admin_email(None)
+
+    if admin_email:
+        try:
+            from app.services.email_service import send_transactional_email
+
+            ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            subject = f"[CRITICAL 500 ALERT] {method} {path} ({request_id})"
+            html_body = (
+                "<div style='font-family: sans-serif; padding: 20px; border: 1px solid #fecaca; border-radius: 8px;'>"
+                "<h2 style='color: #dc2626; margin-top: 0;'>Unhandled Production Server Error (HTTP 500)</h2>"
+                f"<p><strong>Request ID:</strong> <code>{html.escape(request_id)}</code></p>"
+                f"<p><strong>Endpoint:</strong> <code>{html.escape(method)} {html.escape(path)}</code></p>"
+                f"<p><strong>Category:</strong> {html.escape(error_category)} ({html.escape(exc_type)})</p>"
+                f"<p><strong>Client IP:</strong> {html.escape(client_ip)}</p>"
+                f"<p><strong>Timestamp:</strong> {html.escape(ts_str)}</p>"
+                "</div>"
+            )
+            text_body = (
+                f"CRITICAL 500 SERVER ALERT\n"
+                f"Request ID: {request_id}\n"
+                f"Endpoint: {method} {path}\n"
+                f"Category: {error_category} ({exc_type})\n"
+                f"Client IP: {client_ip}\n"
+                f"Timestamp: {ts_str}\n"
+            )
+            send_transactional_email(
+                recipient_email=admin_email,
+                subject=subject,
+                html_content=html_body,
+                text_content=text_body,
+                bypass_cooldown=True,
+            )
+        except Exception as mail_err:
+            logger.warning("Failed to dispatch crash alert email to admin: %s", mail_err)
+
+    return True
+
+
+def _dispatch_admin_crash_alert_async(
+    request_id: str,
+    method: str,
+    path: str,
+    client_ip: str,
+    exc: Exception,
+    error_category: str = "SERVER_CRASH",
+) -> None:
+    if os.environ.get("TESTING") == "1":
+        return
+    exc_type = type(exc).__name__
+    t = threading.Thread(
+        target=_record_and_send_crash_alert,
+        args=(request_id, method, path, client_ip, exc_type, error_category),
+        name=f"crash-alert-{request_id[:8]}",
+        daemon=True,
+    )
+    t.start()
 
 
 def _extract_request_id(request: Request) -> str:
@@ -175,6 +352,7 @@ def global_unhandled_exception_handler(request: Request, exc: Exception) -> JSON
         client_ip,
         exc,
     )
+    _dispatch_admin_crash_alert_async(request_id, method, path, client_ip, exc, error_category="SERVER_CRASH")
 
     return JSONResponse(
         status_code=500,
@@ -190,15 +368,19 @@ def global_unhandled_exception_handler(request: Request, exc: Exception) -> JSON
 def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError) -> JSONResponse:
     request_id = _extract_request_id(request)
     headers = {"X-Request-ID": request_id}
+    method = request.method
+    path = request.url.path
+    client_ip = request.client.host if request.client else "unknown"
 
     logger.exception(
         "Database exception intercepted: [%s] %s %s from IP %s. Exception: %s",
         request_id,
-        request.method,
-        request.url.path,
-        request.client.host if request.client else "unknown",
+        method,
+        path,
+        client_ip,
         exc,
     )
+    _dispatch_admin_crash_alert_async(request_id, method, path, client_ip, exc, error_category="DATABASE_CRASH")
 
     return JSONResponse(
         status_code=500,

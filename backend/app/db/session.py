@@ -1,5 +1,6 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.pool import StaticPool
 from app.core.config import settings
 from typing import Generator
 from urllib.parse import urlsplit, urlunsplit
@@ -10,50 +11,105 @@ logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
-# Database connection setup
-db_url = settings.DATABASE_URL
-if os.environ.get("TESTING") == "1":
-    db_url = "sqlite:///:memory:"
-engine = None
 
-if db_url and db_url.strip() and not db_url.startswith("sqlite"):
-    try:
-        if db_url.startswith("postgres://"):
-            db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
-        elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+psycopg2://"):
-            db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-        parsed = urlsplit(db_url)
-        if (
-            parsed.hostname
-            and (parsed.hostname == "pooler.supabase.com" or parsed.hostname.endswith(".pooler.supabase.com"))
-            and parsed.port == 5432
-        ):
-            netloc = (
-                parsed.netloc[:-5] + ":6543"
-                if parsed.netloc.endswith(":5432")
-                else parsed.netloc.replace(":5432", ":6543")
-            )
-            db_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+def create_db_engine(
+    raw_db_url: str | None = None,
+    environment: str | None = None,
+    is_testing: bool | None = None,
+):
+    """
+    Create and validate the SQLAlchemy database engine.
+    - In TESTING mode (`TESTING=1`), uses an isolated disk-backed temporary SQLite file (`mct_test_<pid>.db`).
+    - In PRODUCTION (`ENVIRONMENT=production`), requires PostgreSQL and fails fast if unreachable
+      (never silently falling back to ephemeral local SQLite).
+    - In DEVELOPMENT, falls back to local `mct_financial.db` if PostgreSQL is unconfigured/unreachable.
+    """
+    testing = is_testing if is_testing is not None else (os.environ.get("TESTING") == "1")
+    if testing:
+        import atexit
+        import tempfile
 
-        engine = create_engine(
-            db_url,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
-            pool_recycle=1800,
-            pool_timeout=30,
-            connect_args={"connect_timeout": 30},
+        test_db_path = os.path.join(tempfile.gettempdir(), f"mct_test_{os.getpid()}.db")
+        if os.path.exists(test_db_path):
+            try:
+                os.remove(test_db_path)
+            except OSError:
+                pass
+
+        def _cleanup_test_db():
+            for suffix in ("", "-wal", "-shm"):
+                p = f"{test_db_path}{suffix}"
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
+        atexit.register(_cleanup_test_db)
+        return create_engine(
+            f"sqlite:///{test_db_path}",
+            connect_args={"check_same_thread": False, "timeout": 30},
         )
-        with engine.connect() as _probe:
-            pass
-    except Exception as e:
-        engine = None
-        logger.warning(f"Failed to initialize database engine with {db_url}: {e}. Falling back to SQLite.")
 
-if engine is None:
-    db_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "mct_financial.db")
-    engine = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
+    env_name = (environment if environment is not None else getattr(settings, "ENVIRONMENT", "development") or "development").strip().lower()
+    is_prod = env_name == "production"
+    db_url = (raw_db_url if raw_db_url is not None else settings.DATABASE_URL or "").strip()
 
+    if is_prod and (not db_url or db_url.startswith("sqlite")):
+        raise RuntimeError(
+            "CRITICAL: Production environment requires a valid PostgreSQL DATABASE_URL. "
+            "SQLite fallback is disabled in production to prevent split-brain data loss."
+        )
+
+    eng = None
+    if db_url and not db_url.startswith("sqlite"):
+        try:
+            if db_url.startswith("postgres://"):
+                db_url = db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+            elif db_url.startswith("postgresql://") and not db_url.startswith("postgresql+psycopg2://"):
+                db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+            parsed = urlsplit(db_url)
+            if (
+                parsed.hostname
+                and (parsed.hostname == "pooler.supabase.com" or parsed.hostname.endswith(".pooler.supabase.com"))
+                and parsed.port == 5432
+            ):
+                netloc = (
+                    parsed.netloc[:-5] + ":6543"
+                    if parsed.netloc.endswith(":5432")
+                    else parsed.netloc.replace(":5432", ":6543")
+                )
+                db_url = urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+            eng = create_engine(
+                db_url,
+                pool_pre_ping=True,
+                pool_size=5,
+                max_overflow=10,
+                pool_recycle=1800,
+                pool_timeout=30,
+                connect_args={"connect_timeout": 30},
+            )
+            with eng.connect() as _probe:
+                pass
+        except Exception as e:
+            eng = None
+            if is_prod:
+                logger.critical("CRITICAL: Failed to initialize PostgreSQL database engine in production: %s", e)
+                raise RuntimeError(
+                    "CRITICAL: Failed to connect to production PostgreSQL database. "
+                    "Refusing to fall back to local SQLite in production."
+                ) from e
+            logger.warning(f"Failed to initialize database engine with {db_url}: {e}. Falling back to SQLite.")
+
+    if eng is None:
+        db_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "mct_financial.db")
+        eng = create_engine(f"sqlite:///{db_file}", connect_args={"check_same_thread": False})
+
+    return eng
+
+
+engine = create_db_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
@@ -120,18 +176,21 @@ def init_db():
         table_names = set(inspector.get_table_names())
         if "sales" in table_names:
             sales_cols = {col["name"] for col in inspector.get_columns("sales")}
-            if "payment_status" not in sales_cols:
-                with engine.begin() as conn:
+            with engine.begin() as conn:
+                if "payment_method" not in sales_cols:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN payment_method VARCHAR(100) NULL"))
+                if "payment_status" not in sales_cols:
                     conn.execute(text("ALTER TABLE sales ADD COLUMN payment_status VARCHAR(50) DEFAULT 'Paid'"))
-            if "deposit_status" not in sales_cols:
-                with engine.begin() as conn:
+                if "deposit_status" not in sales_cols:
                     conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_status VARCHAR(50) DEFAULT 'Not Deposited'"))
-            if "deposit_date" not in sales_cols:
-                with engine.begin() as conn:
+                if "deposit_date" not in sales_cols:
                     conn.execute(text("ALTER TABLE sales ADD COLUMN deposit_date DATE NULL"))
                     conn.execute(text("UPDATE sales SET deposit_date = transaction_date WHERE deposit_status = 'Deposited' AND deposit_date IS NULL"))
-            # Safe backfill (AC-7)
-            with engine.begin() as conn:
+                if "remarks" not in sales_cols:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN remarks TEXT NULL"))
+                if "bank_account_id" not in sales_cols:
+                    conn.execute(text("ALTER TABLE sales ADD COLUMN bank_account_id VARCHAR(100) NULL"))
+                # Safe backfill (AC-7)
                 conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
                 conn.execute(text("UPDATE sales SET deposit_status = 'Deposited' WHERE payment_status = 'Paid' AND (deposit_status IS NULL OR deposit_status = '' OR deposit_status = 'Not Deposited')"))
                 conn.execute(text("UPDATE sales SET deposit_status = 'Not Deposited' WHERE payment_status IN ('Unpaid', 'Pending')"))
@@ -261,6 +320,12 @@ def init_db():
         if "expenses" in table_names:
             exp_cols = {col["name"] for col in inspector.get_columns("expenses")}
             with engine.begin() as conn:
+                if "payment_method" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN payment_method VARCHAR(100) NULL"))
+                if "remarks" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN remarks TEXT NULL"))
+                if "bank_account_id" not in exp_cols:
+                    conn.execute(text("ALTER TABLE expenses ADD COLUMN bank_account_id VARCHAR(100) NULL"))
                 if "linked_topup_id" not in exp_cols:
                     conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
                 try:
@@ -277,45 +342,55 @@ def init_db():
     import threading
 
     def _sync_companies_from_supabase():
-        try:
-            from decimal import Decimal
-            from app.db.supabase import get_supabase_admin_client
-            client = get_supabase_admin_client()
-            supa_companies = client.table("company").select("*").execute().data
-            if supa_companies:
-                db = SessionLocal()
-                try:
-                    for sc in supa_companies:
-                        cid = sc.get("company_id")
-                        if not cid:
-                            continue
-                        existing = db.query(Company).filter(Company.company_id == cid).first()
-                        p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
-                        s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
-                        if existing:
-                            existing.company_name = sc.get("company_name") or existing.company_name
-                            existing.location = sc.get("location") or existing.location
-                            existing.contact_number = sc.get("contact_number")
-                            existing.phone = sc.get("phone")
-                            existing.starting_balance = s_bal
-                            existing.petty_cash = p_cash
-                            existing.logo_url = sc.get("logo_url")
-                        else:
-                            db.add(Company(
-                                company_id=cid,
-                                company_name=sc.get("company_name"),
-                                location=sc.get("location"),
-                                contact_number=sc.get("contact_number"),
-                                phone=sc.get("phone"),
-                                starting_balance=s_bal,
-                                petty_cash=p_cash,
-                                logo_url=sc.get("logo_url"),
-                            ))
-                    db.commit()
-                finally:
-                    db.close()
-        except Exception as e:
-            logger.warning(f"Could not sync companies on init: {e}")
+        import time
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                from decimal import Decimal
+                from app.db.supabase import get_supabase_admin_client
+                client = get_supabase_admin_client()
+                if not client:
+                    return
+                res = client.table("company").select("*").execute()
+                supa_companies = res.data if res else None
+                if supa_companies:
+                    db = SessionLocal()
+                    try:
+                        for sc in supa_companies:
+                            cid = sc.get("company_id")
+                            if not cid:
+                                continue
+                            existing = db.query(Company).filter(Company.company_id == cid).first()
+                            p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
+                            s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
+                            if existing:
+                                existing.company_name = sc.get("company_name") or existing.company_name
+                                existing.location = sc.get("location") or existing.location
+                                existing.contact_number = sc.get("contact_number")
+                                existing.phone = sc.get("phone")
+                                existing.starting_balance = s_bal
+                                existing.petty_cash = p_cash
+                                existing.logo_url = sc.get("logo_url")
+                            else:
+                                db.add(Company(
+                                    company_id=cid,
+                                    company_name=sc.get("company_name"),
+                                    location=sc.get("location"),
+                                    contact_number=sc.get("contact_number"),
+                                    phone=sc.get("phone"),
+                                    starting_balance=s_bal,
+                                    petty_cash=p_cash,
+                                    logo_url=sc.get("logo_url"),
+                                ))
+                        db.commit()
+                    finally:
+                        db.close()
+                return
+            except Exception as e:
+                if attempt < max_retries:
+                    time.sleep(2 * attempt)
+                    continue
+                logger.warning(f"Could not sync companies on init: {e}")
 
     sync_thread = threading.Thread(
         target=_sync_companies_from_supabase,

@@ -73,37 +73,46 @@ def _mask_email(email: str) -> str:
 
 
 def _get_application_user(*, email: str | None = None, user_id: int | None = None) -> dict[str, object] | None:
-    # 1. Try Supabase with role
-    try:
-        query = get_supabase_admin_client().table("users").select(
-            "user_id,email,name,is_admin,role,company_id,photo_url,created_at,updated_at,last_login_at,token_version,status,must_change_password"
-        )
-        if email is not None:
-            query = query.eq("email", email)
-        elif user_id is not None:
-            query = query.eq("user_id", user_id)
-        else:
-            return None
-        result = query.limit(1).execute().data
-        if result:
-            return result[0]
-    except Exception:
-        pass
+    admin_client = get_supabase_admin_client()
+    skip_supa_retry = False
 
-    # 2. Try Supabase without role
-    try:
-        query = get_supabase_admin_client().table("users").select(
-            "user_id,email,name,is_admin,company_id,created_at,updated_at,last_login_at,token_version,status,must_change_password"
-        )
-        if email is not None:
-            query = query.eq("email", email)
-        elif user_id is not None:
-            query = query.eq("user_id", user_id)
-        result = query.limit(1).execute().data
-        if result:
-            return result[0]
-    except Exception:
-        pass
+    # 1. Try Supabase with role
+    if admin_client:
+        try:
+            query = admin_client.table("users").select(
+                "user_id,email,name,is_admin,role,company_id,photo_url,created_at,updated_at,last_login_at,token_version,status,must_change_password"
+            )
+            if email is not None:
+                query = query.eq("email", email)
+            elif user_id is not None:
+                query = query.eq("user_id", user_id)
+            else:
+                return None
+            result = query.limit(1).execute().data
+            if result:
+                return result[0]
+        except Exception as exc:
+            # If the error is a network connection failure or timeout, do not repeat query 2;
+            # fall through immediately to database lookup to avoid doubling delay.
+            err_msg = str(exc).lower()
+            if isinstance(exc, (TimeoutError, OSError, ConnectionError)) or "timed out" in err_msg or "timeout" in err_msg or "connection" in err_msg:
+                skip_supa_retry = True
+
+    # 2. Try Supabase without role (legacy schema fallback when role column is missing)
+    if admin_client and not skip_supa_retry:
+        try:
+            query = admin_client.table("users").select(
+                "user_id,email,name,is_admin,company_id,created_at,updated_at,last_login_at,token_version,status,must_change_password"
+            )
+            if email is not None:
+                query = query.eq("email", email)
+            elif user_id is not None:
+                query = query.eq("user_id", user_id)
+            result = query.limit(1).execute().data
+            if result:
+                return result[0]
+        except Exception:
+            pass
 
     # 3. Fallback to local SQLite DB
     try:

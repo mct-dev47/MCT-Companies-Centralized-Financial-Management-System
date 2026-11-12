@@ -15,6 +15,23 @@ from app.services.petty_cash_service import PettyCashService
 def db_session():
     db = SessionLocal()
     try:
+        if db.query(Company).count() == 0:
+            comp = Company(
+                company_id=1,
+                company_name="JK Property and Ventures",
+                location="Manila",
+                starting_balance=Decimal("100000.00"),
+                petty_cash=Decimal("10000.00"),
+            )
+            db.add(comp)
+            db.add(
+                PettyCashWallet(
+                    company_id=1,
+                    balance=Decimal("10000.00"),
+                    low_balance_threshold=Decimal("5000.00"),
+                )
+            )
+            db.commit()
         yield db
     finally:
         db.close()
