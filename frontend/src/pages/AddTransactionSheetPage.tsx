@@ -1,8 +1,7 @@
 import { mapWithConcurrency } from '@/utils/concurrency'
-import { Skeleton } from '@/components/ui/skeleton'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate, useLocation, useBlocker } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Plus,
   Trash2,
@@ -23,7 +22,6 @@ import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { BackButton, ErrorBanner } from '@/components/common'
-import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
   Table,
   TableHeader,
@@ -32,7 +30,7 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { salesService, type NewSalesInput } from '@/services/salesService'
+import { salesService } from '@/services/salesService'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 import {
   Dialog,
@@ -42,16 +40,14 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { expenseService, type NewExpenseInput } from '@/services/expenseService'
-import { offlineQueue, type OutboxReceivableInput } from '@/services/offlineQueue'
-import { isConnectivityError } from '@/lib/requestErrors'
+import { expenseService } from '@/services/expenseService'
 import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { formatUserFriendlyErrorMessage, notifyWarning } from '@/utils/errorUtils'
+import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { formatRealName } from '@/utils/formatRealName'
 import {
   formatParticularsString,
@@ -61,7 +57,7 @@ import {
 } from '@/utils/particularsUtils'
 import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
-import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import {
   particularsService,
   type CompanyParticular,
@@ -191,6 +187,71 @@ interface AddTransactionSheetPageProps {
   initialType?: 'Sales' | 'Expense'
 }
 
+/* ------------------------------------------------------------------
+ * Flat spreadsheet styles: Add Sales & Add Expense sheets.
+ * ------------------------------------------------------------------ */
+const SPREADSHEET_TH =
+  'h-9 px-2 py-0 text-[11px] font-bold uppercase tracking-wide text-slate-600 bg-slate-50 border-r border-slate-200/70 truncate shadow-[inset_0_-1px_0_#e2e8f0]'
+const SPREADSHEET_TD = 'h-11 p-0 border-r border-slate-200/70 align-middle box-border'
+const SPREADSHEET_INPUT =
+  'block w-full h-11 px-2 bg-transparent border-0 rounded-none text-[13px] text-focus placeholder:text-slate-500 box-border truncate focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-focus'
+const SPREADSHEET_NUM_INPUT =
+  'text-right tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+const SPREADSHEET_STATUS_SELECT =
+  'block w-full h-11 px-2 bg-transparent border-0 rounded-none appearance-none text-xs font-bold cursor-pointer box-border truncate focus:outline focus:outline-2 focus:-outline-offset-2 focus:outline-focus'
+
+// Aliases for compatibility
+const SALES_TH = SPREADSHEET_TH
+const SALES_TD = SPREADSHEET_TD
+const SALES_INPUT = SPREADSHEET_INPUT
+const SALES_NUM_INPUT = SPREADSHEET_NUM_INPUT
+const SALES_STATUS_SELECT = SPREADSHEET_STATUS_SELECT
+
+/** Display-only short date (MM/DD/YY). The stored value stays YYYY-MM-DD. */
+const toShortDate = (iso: string | null | undefined): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
+  return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : ''
+}
+
+/**
+ * Native date input that shows MM/DD/YY while not focused.
+ * Shows calendar icon right next to the date text.
+ */
+const SalesDateCellInput = React.forwardRef<
+  HTMLInputElement,
+  Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'value'> & {
+    value: string
+  }
+>(({ value, className, ...props }, ref) => {
+  const short = toShortDate(value)
+  return (
+    <div className="relative h-11 flex items-center px-2">
+      <input
+        ref={ref}
+        type="date"
+        value={value}
+        {...props}
+        className={cn(
+          SALES_INPUT,
+          'peer pl-0 pr-0 cursor-pointer tabular-nums [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-70 hover:[&::-webkit-calendar-picker-indicator]:opacity-100 [&::-webkit-calendar-picker-indicator]:ml-1.5',
+          short &&
+            '[&:not(:focus)]:text-transparent',
+          className
+        )}
+      />
+      {short && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-[13px] text-focus tabular-nums truncate peer-focus:hidden"
+        >
+          {short}
+        </span>
+      )}
+    </div>
+  )
+})
+SalesDateCellInput.displayName = 'SalesDateCellInput'
+
 interface PortalDropdownPosition {
   top: number
   left: number
@@ -286,6 +347,9 @@ interface ParticularsComboboxProps {
   placeholder?: string
   isPartial?: boolean
   hasError?: boolean
+  /** Flat spreadsheet cell look (Add Sales). Defaults to the legacy look. */
+  flat?: boolean
+  ariaLabel?: string
 }
 
 const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
@@ -302,6 +366,8 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
   placeholder,
   isPartial,
   hasError,
+  flat = false,
+  ariaLabel,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [isTypingFilter, setIsTypingFilter] = React.useState(false)
@@ -465,14 +531,26 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
           }}
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
-          className={cn(
-            'w-full h-9 pl-2.5 pr-7 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
-            hasError
-              ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
-              : isPartial
-              ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
-              : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
-          )}
+          aria-label={ariaLabel}
+          title={flat && value ? value : undefined}
+          className={
+            flat
+              ? cn(
+                  SALES_INPUT,
+                  'pr-7',
+                  hasError
+                    ? 'bg-rose-50/60 ring-1 ring-inset ring-rose-500'
+                    : isPartial && 'bg-amber-50/60 ring-1 ring-inset ring-amber-400'
+                )
+              : cn(
+                  'w-full h-9 pl-2.5 pr-7 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border',
+                  hasError
+                    ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+                    : isPartial
+                    ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
+                    : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
+                )
+          }
         />
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10">
           <button
@@ -616,6 +694,9 @@ interface CategoryComboboxProps {
   inputRef?: (el: HTMLInputElement | null) => void
   placeholder?: string
   hasError?: boolean
+  /** Flat spreadsheet cell look (Add Sales). Defaults to the legacy look. */
+  flat?: boolean
+  ariaLabel?: string
 }
 
 const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
@@ -631,6 +712,8 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
   inputRef,
   placeholder,
   hasError,
+  flat = false,
+  ariaLabel,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [isTypingFilter, setIsTypingFilter] = React.useState(false)
@@ -806,13 +889,23 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
           }}
           onKeyDown={handleKeyDownInternal}
           onPaste={onPaste}
-          className={cn(
-            'w-full h-9 pl-2.5 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border truncate',
-            canSaveToList ? 'pr-18' : 'pr-7',
-            hasError
-              ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
-              : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
-          )}
+          aria-label={ariaLabel}
+          title={flat && value ? value : undefined}
+          className={
+            flat
+              ? cn(
+                  SALES_INPUT,
+                  canSaveToList ? 'pr-18' : 'pr-7',
+                  hasError && 'bg-rose-50/60 ring-1 ring-inset ring-rose-500'
+                )
+              : cn(
+                  'w-full h-9 pl-2.5 text-xs sm:text-sm text-focus rounded-lg border bg-white focus:outline-none focus:ring-1 transition-all box-border truncate',
+                  canSaveToList ? 'pr-18' : 'pr-7',
+                  hasError
+                    ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+                    : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
+                )
+          }
         />
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10">
           {canSaveToList && (
@@ -1035,13 +1128,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const [isLoadingBanks, setIsLoadingBanks] = React.useState<boolean>(
     () => bankService.getCachedAccounts(initialCompany).length === 0
   )
-  // Set when the bank list could not be fetched (so it isn't mistaken for "no banks"); bump the key to retry
-  const [bankLoadError, setBankLoadError] = React.useState<string | null>(null)
-  const [bankReloadKey, setBankReloadKey] = React.useState(0)
   const [selectedBankAccountId, setSelectedBankAccountId] =
     React.useState<string>(() => {
-      // Default to the bank this company owns alone; shared banks only if it has none
-      const cached = preferSoleOwnedBanks(bankService.getCachedAccounts(initialCompany), initialCompany)
+      const cached = bankService.getCachedAccounts(initialCompany)
       return cached.length > 0 ? cached[0].id : ''
     })
 
@@ -1055,19 +1144,17 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     } else {
       setIsLoadingBanks(true)
     }
-    setBankLoadError(null)
 
     bankService
-      .getAccounts(targetComp, { forceRefresh: bankReloadKey > 0 })
+      .getAccounts(targetComp)
       .then((accounts) => {
         if (mounted) {
           setBankAccounts(accounts || [])
           setIsLoadingBanks(false)
         }
       })
-      .catch((err) => {
+      .catch(() => {
         if (mounted) {
-          setBankLoadError(err instanceof Error ? err.message : 'Could not load bank accounts.')
           setIsLoadingBanks(false)
         }
       })
@@ -1075,7 +1162,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return () => {
       mounted = false
     }
-  }, [isAuditor, assignedCompany, selectedCompany, bankReloadKey])
+  }, [isAuditor, assignedCompany, selectedCompany])
 
   const availableBankAccounts = React.useMemo(() => {
     const targetComp = isAuditor ? assignedCompany : selectedCompany
@@ -1083,8 +1170,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const matching = bankAccounts.filter((a) =>
       isAccountOwnedBy(a, targetComp)
     )
-    // The company's own (sole-owner) bank comes first so it is the default; shared banks follow
-    if (matching.length > 0) return preferSoleOwnedBanks(matching, targetComp)
+    if (matching.length > 0) return matching
     const general = bankAccounts.filter(
       (a) =>
         !a.companyName ||
@@ -1094,20 +1180,13 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return general
   }, [bankAccounts, selectedCompany, isAuditor, assignedCompany])
 
-  // Keep the default on the company's sole owned bank (availableBankAccounts[0]) until the user picks one.
-  // A bank picked earlier (cache, or another company's list) must not stick just because it is a shared bank.
-  const userPickedBankRef = React.useRef(false)
-  React.useEffect(() => {
-    userPickedBankRef.current = false
-  }, [selectedCompany, assignedCompany])
   React.useEffect(() => {
     if (availableBankAccounts.length > 0) {
       const exists = availableBankAccounts.some(
         (a) => a.id === selectedBankAccountId
       )
-      const defaultId = availableBankAccounts[0].id
-      if (!exists || (!userPickedBankRef.current && selectedBankAccountId !== defaultId)) {
-        setSelectedBankAccountId(defaultId)
+      if (!exists) {
+        setSelectedBankAccountId(availableBankAccounts[0].id)
       }
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
@@ -1631,7 +1710,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         date: prevRow?.date || todayIso,
         particulars: '',
         category: prevRow?.category || defaultCategory,
-        paymentMethod: 'Cash', // always start as Cash; never carry GCash etc. over from the row above
+        paymentMethod: prevRow?.paymentMethod || 'Cash',
         serviceFee: 0,
         chequeNo: '',
         unitPrice: '',
@@ -1779,22 +1858,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         }
         // New paid rows keep depositDate empty, so the deposit day follows the sales date
 
-        // Expense paid with petty cash: the category is always Petty Cash. Switching away from petty cash
-        // puts back the default category instead of leaving a petty cash category on a bank expense.
-        let category = field === 'category' ? value : r.category
-        if (!isSales && field === 'paymentMethod') {
-          const pmLower = String(value || '').trim().toLowerCase()
-          if (pmLower === 'petty cash') {
-            category = 'Petty Cash'
-          } else if ((r.category || '').trim().toLowerCase() === 'petty cash') {
-            category = defaultCategory
-          }
-        }
-
         return {
           ...r,
           [field]: value,
-          category,
           depositStatus: finalDepositStatus,
           depositDate,
         }
@@ -1955,7 +2021,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             date: lastRow?.date || todayIso,
             particulars: '',
             category: lastRow?.category || defaultCategory,
-            paymentMethod: 'Cash',
+            paymentMethod: lastRow?.paymentMethod || 'Cash',
             chequeNo: '',
             unitPrice: '',
             quantity: 1,
@@ -2131,30 +2197,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     type: string
   } | null>(null)
 
-  // Warn before leaving with rows that were typed but not saved (spec 0038, AC-14).
-  // Rows saved offline are already safe in the outbox, so a successful save lifts the guard.
-  const allowLeaveRef = React.useRef(false)
-  const hasUnsavedRows =
-    !isEditMode &&
-    rows.some((r) => r.particulars.trim().length > 0 || (r.unitPrice !== '' && Number(r.unitPrice) > 0))
-  const leaveBlocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      hasUnsavedRows &&
-      !allowLeaveRef.current &&
-      !isSubmitting &&
-      currentLocation.pathname !== nextLocation.pathname
-  )
-  React.useEffect(() => {
-    if (!hasUnsavedRows) return
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (allowLeaveRef.current) return
-      e.preventDefault()
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [hasUnsavedRows])
-
   // Save handler
   const handleSave = async () => {
     const remarkPromptConfirmed = dayRemarkConfirmedRef.current
@@ -2296,8 +2338,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         new Set(validRows.map((r) => normalizeDateToYYYYMMDD(r.date) || todayIso))
       ).sort()
       setDayRemarkDates(dates)
-      // Start empty every time: the day's saved remark is shown above the box, not copied into it
-      setDayRemarkDrafts(Object.fromEntries(dates.map((d) => [d, ''])))
+      setDayRemarkDrafts(Object.fromEntries(dates.map((d) => [d, getDayRemark(companyToUse, d)])))
       setIsDayRemarkOpen(true)
       return
     }
@@ -2340,73 +2381,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
     const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
     const nowIso = new Date().toISOString()
-
-    // Offline support (spec 0038): a new row that can't reach the server is kept in the on device
-    // outbox and sent automatically later. Its outbox id doubles as client_ref, so if the first try
-    // did reach the server (only the reply was lost), the resend returns that record, never a copy.
-    let queuedCount = 0
-    const announceQueued = () => {
-      if (queuedCount === 0) return
-      notifyWarning(
-        `No connection: ${queuedCount} ${queuedCount === 1 ? 'entry was' : 'entries were'} saved on this device ` +
-          'and will be sent automatically when the internet is back. Check the outbox at the top of the page.'
-      )
-    }
-    const ensureOutboxUser = async () => {
-      if (!offlineQueue.getSnapshot().userId && user?.id) await offlineQueue.setActiveUser(String(user.id))
-    }
-    const createSaleOrQueue = async (saleInput: NewSalesInput, receivableInput?: OutboxReceivableInput) => {
-      const saleRef = offlineQueue.newId()
-      const queueAll = async () => {
-        await ensureOutboxUser()
-        await offlineQueue.enqueue([
-          { id: saleRef, kind: 'sale', company: companyToUse, input: saleInput },
-          ...(receivableInput
-            ? [{ kind: 'receivable' as const, company: companyToUse, input: receivableInput, dependsOn: saleRef }]
-            : []),
-        ])
-        queuedCount += 1
-      }
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) return queueAll()
-
-      let createdSale: Awaited<ReturnType<typeof salesService.addSale>>
-      try {
-        createdSale = await salesService.addSale({ ...saleInput, clientRef: saleRef })
-      } catch (err) {
-        if (isConnectivityError(err)) return queueAll()
-        throw err
-      }
-      if (!receivableInput) return
-      const parsedSaleId = createdSale?.id ? Number(createdSale.id) : NaN
-      const recInput = { ...receivableInput, sale_id: !Number.isNaN(parsedSaleId) ? parsedSaleId : undefined }
-      const recRef = offlineQueue.newId()
-      try {
-        await receivablesService.createReceivable({ ...recInput, client_ref: recRef })
-      } catch (err) {
-        if (!isConnectivityError(err)) throw err
-        // The sale is saved; only its receivable waits (it already knows the sale ID)
-        await ensureOutboxUser()
-        await offlineQueue.enqueue([
-          { id: recRef, kind: 'receivable', company: companyToUse, input: recInput, dependsOn: saleRef },
-        ])
-        queuedCount += 1
-      }
-    }
-    const createExpenseOrQueue = async (expenseInput: NewExpenseInput) => {
-      const expenseRef = offlineQueue.newId()
-      const queueIt = async () => {
-        await ensureOutboxUser()
-        await offlineQueue.enqueue([{ id: expenseRef, kind: 'expense', company: companyToUse, input: expenseInput }])
-        queuedCount += 1
-      }
-      if (typeof navigator !== 'undefined' && navigator.onLine === false) return queueIt()
-      try {
-        await expenseService.addExpense({ ...expenseInput, clientRef: expenseRef })
-      } catch (err) {
-        if (isConnectivityError(err)) return queueIt()
-        throw err
-      }
-    }
 
     try {
       if (isEditMode) {
@@ -2550,7 +2524,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           const extraFormatted = formatParticularsString(extraItemized)
 
           if (isSales) {
-            await createSaleOrQueue({
+            await salesService.addSale({
               company: companyToUse,
               date: rowDate,
               particulars: extraFormatted,
@@ -2567,7 +2541,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               createdBy: authorName,
             })
           } else {
-            await createExpenseOrQueue({
+            await expenseService.addExpense({
               company: companyToUse,
               date: rowDate,
               particulars: extraFormatted,
@@ -2603,19 +2577,37 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           const formatted = formatParticularsString(itemized)
 
           if (isSales) {
-            // An unpaid row with a named customer also gets a receivable, linked to its sale
-            let receivableInput: OutboxReceivableInput | undefined
+            const createdSale = await salesService.addSale({
+              company: companyToUse,
+              date: rowDate,
+              particulars: formatted,
+              amount: rowAmount,
+              category: row.category || SALES_CATEGORY_LIST[0],
+              paymentMethod: row.paymentMethod,
+              chequeNo: row.chequeNo.trim() || undefined,
+              status: row.status,
+              depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
+              deposit_date: getRowDepositDate(row) || undefined,
+              items: itemized,
+              bankAccountId: effectiveBankId,
+              createdBy: authorName,
+            })
+
             if (row.status === 'Unpaid' && unpaidAssignments.length > 0) {
               const assignment = unpaidAssignments.find(
                 (u) => u.rowId === row.id
               )
               if (assignment && assignment.customerName.trim()) {
+                const parsedSaleId = createdSale?.id
+                  ? Number(createdSale.id)
+                  : NaN
                 const resolvedType: CustomerType =
                   assignment.customerType === 'Staff' ? 'Staff' : 'External'
                 const apiCustomerType =
                   resolvedType === 'Staff' ? 'Internal' : 'External'
 
-                receivableInput = {
+                await receivablesService.createReceivable({
                   customer_name: assignment.customerName.trim(),
                   customer_type: apiCustomerType,
                   items_summary: row.particulars.trim(),
@@ -2632,32 +2624,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     ? `Ref: ${row.chequeNo.trim()}`
                     : undefined,
                   company_name: companyToUse,
+                  sale_id: !Number.isNaN(parsedSaleId)
+                    ? parsedSaleId
+                    : undefined,
                   date: rowDate,
-                }
+                })
               }
             }
-
-            await createSaleOrQueue(
-              {
-                company: companyToUse,
-                date: rowDate,
-                particulars: formatted,
-                amount: rowAmount,
-                category: row.category || SALES_CATEGORY_LIST[0],
-                paymentMethod: row.paymentMethod,
-                chequeNo: row.chequeNo.trim() || undefined,
-                status: row.status,
-                depositStatus: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
-                deposit_status: row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
-                deposit_date: getRowDepositDate(row) || undefined,
-                items: itemized,
-                bankAccountId: effectiveBankId,
-                createdBy: authorName,
-              },
-              receivableInput
-            )
           } else {
-            await createExpenseOrQueue({
+            await expenseService.addExpense({
               company: companyToUse,
               date: rowDate,
               particulars: formatted,
@@ -2701,18 +2676,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const remarkResults = await Promise.allSettled(
         (skipDayRemarks ? [] : dayRemarkDates)
           .map((d) => ({ d, text: (dayRemarkDrafts[d] || '').trim() }))
-          // Blank = leave the day's remark as it is. Otherwise add the new note after the saved one.
-          .filter(({ text }) => text.length > 0)
-          .map(({ d, text }) => {
-            const existing = getDayRemark(companyToUse, d).trim()
-            return saveDayRemark(companyToUse, d, (existing ? `${existing}; ${text}` : text).slice(0, 255))
-          })
+          .filter(({ d, text }) => text !== getDayRemark(companyToUse, d).trim())
+          .map(({ d, text }) => saveDayRemark(companyToUse, d, text))
       )
       remarkResults.forEach((r) => {
         if (r.status === 'rejected') console.warn('Could not save day remark:', r.reason)
       })
-
-      announceQueued()
 
       setSuccessBanner({
         count: validRowsCount,
@@ -2722,11 +2691,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           : `${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`,
       })
 
-      allowLeaveRef.current = true
       navigate(isSales ? '/sales' : '/expense')
     } catch (err: any) {
-      // Rows that went to the outbox are out of the sheet already; say so even though another row failed
-      announceQueued()
       console.error('Failed to save spreadsheet entries:', err)
       const userMessage = formatUserFriendlyErrorMessage(
         err,
@@ -2739,21 +2705,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   }
 
   return (
-    <div className="space-y-6 pb-16 w-full max-w-[1800px] mx-auto px-2 sm:px-4 lg:px-6 animate-in fade-in duration-300">
-      <ConfirmModal
-        open={leaveBlocker.state === 'blocked'}
-        onOpenChange={(open) => {
-          if (!open && leaveBlocker.state === 'blocked') leaveBlocker.reset()
-        }}
-        title="You have unsaved rows"
-        description="The rows in this sheet have not been saved yet. If you leave now, they will be lost."
-        confirmLabel="Leave without saving"
-        cancelLabel="Stay"
-        actionType="warning"
-        onConfirm={() => {
-          if (leaveBlocker.state === 'blocked') leaveBlocker.proceed()
-        }}
-      />
+    <div
+      className={cn(
+        'space-y-6 pb-16 animate-in fade-in duration-300',
+        // Sales: trim outer gutter to ~20px (offsets the shared AppShell padding locally)
+        isSales
+          ? 'sm:-mx-1 lg:-mx-3'
+          : 'w-full max-w-[1800px] mx-auto px-2 sm:px-4 lg:px-6'
+      )}
+    >
       {/* STEP 2: DEDICATED UNPAID RECEIVABLES ASSIGNMENT VIEW */}
       {currentStep === 'assign_unpaid' ? (
         <div className="space-y-6 animate-in fade-in duration-200">
@@ -3002,7 +2962,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         </div>
       ) : (
         /* STEP 1: SPREADSHEET ENTRY VIEW */
-        <div className="space-y-6">
+        <div className={isSales ? 'space-y-4' : 'space-y-6'}>
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div className="space-y-1">
@@ -3049,8 +3009,18 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           )}
 
           {/* BATCH SETUP CARD */}
-          <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-6 shadow-xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-stroke/20">
+          <Card
+            className={cn(
+              'rounded-[24px] bg-white border border-stroke/30 shadow-xs',
+              isSales ? 'p-4 space-y-3' : 'p-5 sm:p-6 space-y-4'
+            )}
+          >
+            <div
+              className={cn(
+                'flex items-center justify-between border-b border-stroke/20',
+                isSales ? 'pb-2' : 'pb-3'
+              )}
+            >
               <span className="text-xs font-bold uppercase tracking-wider text-muted-fg">
                 Batch Setup
               </span>
@@ -3097,26 +3067,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     {isSales ? 'Deposit Bank' : 'Deposit Bank / Withdraw Bank'}
                   </span>
                 </label>
-                {isLoadingBanks && availableBankAccounts.length === 0 ? (
-                  <Skeleton className="h-10 w-full rounded-xl" aria-label="Loading bank accounts" />
-                ) : bankLoadError && availableBankAccounts.length === 0 ? (
-                  <div className="h-10 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
-                    <span className="truncate" title={bankLoadError}>Couldn't load bank accounts.</span>
-                    <button
-                      type="button"
-                      onClick={() => setBankReloadKey((k) => k + 1)}
-                      className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                ) : (
                 <select
                   value={selectedBankAccountId}
-                  onChange={(e) => {
-                    userPickedBankRef.current = true
-                    setSelectedBankAccountId(e.target.value)
-                  }}
+                  onChange={(e) => setSelectedBankAccountId(e.target.value)}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
                   className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer disabled:opacity-70"
                 >
@@ -3140,8 +3093,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     </>
                   )}
                 </select>
-                )}
-                {!isLoadingBanks && !bankLoadError && availableBankAccounts.length === 0 && (
+                {!isLoadingBanks && availableBankAccounts.length === 0 && (
                   <p className="text-[11px] font-medium text-amber-700 flex items-center gap-1 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
                     <span>
@@ -3157,7 +3109,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           {/* SPREADSHEET CARD */}
           <Card className="rounded-[24px] bg-white border border-stroke/30 shadow-xs overflow-hidden">
             {/* Header */}
-            <div className="p-4 sm:p-5 bg-slate-100/90 border-b border-slate-200/80 flex flex-col gap-3">
+            <div
+              className={cn(
+                'bg-slate-100/90 border-b border-slate-200/80 flex flex-col',
+                isSales ? 'px-4 py-3 gap-2' : 'p-4 sm:p-5 gap-3'
+              )}
+            >
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white font-bold text-xs flex items-center justify-center font-mono shadow-xs shrink-0">
@@ -3256,74 +3213,90 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             {/* Table with fixed height & colgroup so adding rows never shifts layout */}
             <div
               ref={sheetTableContainerRef}
-              className="h-[480px] sm:h-[540px] overflow-auto relative bg-white"
+              className="overflow-auto relative bg-white max-h-[520px]"
             >
               <Table
                 containerClassName="overflow-visible"
-                className={cn('w-full border-collapse table-fixed', isSales ? 'min-w-[1528px]' : 'min-w-[1388px]')}
+                className="w-full border-collapse table-fixed min-w-[1100px] text-[13px]"
               >
-                <colgroup>
-                  <col style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }} />
-                  <col style={{ width: '145px', minWidth: '145px', maxWidth: '145px' }} />
-                  <col style={{ width: '250px', minWidth: '250px', maxWidth: '250px' }} />
-                  <col style={{ width: '160px', minWidth: '160px', maxWidth: '160px' }} />
-                  <col style={{ width: '155px', minWidth: '155px', maxWidth: '155px' }} />
-                  <col style={{ width: '130px', minWidth: '130px', maxWidth: '130px' }} />
-                  <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
-                  <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
-                  <col style={{ width: '110px', minWidth: '110px', maxWidth: '110px' }} />
-                  {isSales && <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />}
-                  {isSales && <col style={{ width: '140px', minWidth: '140px', maxWidth: '140px' }} />}
-                  <col style={{ width: '125px', minWidth: '125px', maxWidth: '125px' }} />
-                  <col style={{ width: '70px', minWidth: '70px', maxWidth: '70px' }} />
-                </colgroup>
-                <TableHeader className="bg-slate-50/95 border-b border-slate-200/80 sticky top-0 z-20">
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[48px] max-w-[48px] text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3">
+                {isSales ? (
+                  <colgroup>
+                    <col style={{ width: '24px' }} />
+                    <col style={{ width: '116px' }} />
+                    <col style={{ width: '220px' }} />
+                    <col style={{ width: '135px' }} />
+                    <col style={{ width: '86px' }} />
+                    <col style={{ width: '90px' }} />
+                    <col style={{ width: '80px' }} />
+                    <col style={{ width: '44px' }} />
+                    <col style={{ width: '90px' }} />
+                    <col style={{ width: '112px' }} />
+                    <col style={{ width: '116px' }} />
+                    <col style={{ width: '90px' }} />
+                    <col style={{ width: '32px' }} />
+                  </colgroup>
+                ) : (
+                  <colgroup>
+                    <col style={{ width: '24px' }} />
+                    <col style={{ width: '116px' }} />
+                    <col style={{ width: '250px' }} />
+                    <col style={{ width: '150px' }} />
+                    <col style={{ width: '110px' }} />
+                    <col style={{ width: '110px' }} />
+                    <col style={{ width: '100px' }} />
+                    <col style={{ width: '50px' }} />
+                    <col style={{ width: '95px' }} />
+                    <col style={{ width: '105px' }} />
+                    <col style={{ width: '32px' }} />
+                  </colgroup>
+                )}
+                <TableHeader className="sticky top-0 z-20 bg-slate-50 border-b-0 [&_tr]:border-b-0">
+                  <TableRow className="hover:bg-transparent border-b-0">
+                    <TableHead title="#" className={cn(SALES_TH, 'px-0 text-center')}>
                       #
                     </TableHead>
-                    <TableHead className="w-[145px] max-w-[145px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title={isSales ? 'SALES DATE' : 'DATE'} className={SALES_TH}>
                       {isSales ? 'SALES DATE' : 'DATE'}
                     </TableHead>
-                    <TableHead className="w-[250px] max-w-[250px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
-                      PARTICULARS <span className="text-red-500">*</span>
+                    <TableHead title="PARTICULARS *" className={SALES_TH}>
+                      PARTICULARS <span className="text-red-700">*</span>
                     </TableHead>
-                    <TableHead className="w-[175px] max-w-[175px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title="CATEGORY" className={SALES_TH}>
                       CATEGORY
                     </TableHead>
-                    <TableHead className="w-[155px] max-w-[155px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title="PAYMENT" className={SALES_TH}>
                       PAYMENT
                     </TableHead>
-                    <TableHead className="w-[130px] max-w-[130px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title="CHEQUE / REF" className={SALES_TH}>
                       CHEQUE / REF
                     </TableHead>
-                    <TableHead className="w-[125px] max-w-[125px] text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title={isSales ? 'PRICE (₱) *' : 'AMOUNT (₱) *'} className={cn(SALES_TH, 'text-right')}>
                       {isSales ? 'PRICE (₱) *' : 'AMOUNT (₱) *'}
                     </TableHead>
-                    <TableHead className="w-[70px] max-w-[70px] text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2">
+                    <TableHead title="QTY" className={cn(SALES_TH, 'text-right')}>
                       QTY
                     </TableHead>
-                    <TableHead className="w-[110px] max-w-[110px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5">
+                    <TableHead title="STATUS" className={SALES_TH}>
                       STATUS
                     </TableHead>
                     {isSales && (
-                      <TableHead className="w-[125px] max-w-[125px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5">
+                      <TableHead title="DEPOSIT STATUS" className={SALES_TH}>
                         DEPOSIT STATUS
                       </TableHead>
                     )}
                     {isSales && (
                       <TableHead
                         title="Day the money was deposited. Defaults to the sales date for paid sales, or today when an undeposited sale is marked Deposited."
-                        className="w-[140px] max-w-[140px] text-left text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-2.5"
+                        className={SALES_TH}
                       >
                         DEPOSIT DATE
                       </TableHead>
                     )}
-                    <TableHead className="w-[125px] max-w-[125px] text-right text-[11px] font-bold uppercase tracking-wider text-muted-fg border-r border-slate-200/60 py-3 px-3">
+                    <TableHead title="TOTAL (₱)" className={cn(SALES_TH, 'text-right')}>
                       TOTAL (₱)
                     </TableHead>
-                    <TableHead className="w-[70px] max-w-[70px] text-center text-[11px] font-bold uppercase tracking-wider text-muted-fg py-3">
-                      ACTIONS
+                    <TableHead className={cn(SALES_TH, 'px-0 text-center border-r-0')}>
+                      <span className="sr-only">Actions</span>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
@@ -3342,33 +3315,37 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       <TableRow
                         key={row.id}
                         className={cn(
-                          'border-b border-slate-200/60 transition-colors',
+                          isSales ? 'border-b border-slate-200/70 transition-colors' : 'border-b border-slate-200/60 transition-colors',
                           rowErrors ? 'bg-rose-50/30' : row.isPartial ? 'bg-amber-50/40' : (!row.isEmpty ? 'hover:bg-slate-50/60' : '')
                         )}
                       >
                         {/* Row Index */}
-                        <TableCell className="w-[48px] max-w-[48px] text-center text-xs font-mono font-bold text-muted-fg/70 bg-slate-50/50 border-r border-slate-200/60 select-none py-2 px-1 relative box-border">
+                        <TableCell
+                          className={cn(
+                            SPREADSHEET_TD,
+                            'relative text-center text-[11px] font-semibold text-slate-500 tabular-nums bg-slate-50 select-none'
+                          )}
+                        >
                           {index + 1}
                           {rowErrors ? (
                             <span
-                              className="absolute left-1 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-rose-500 animate-pulse"
+                              className="absolute left-0.5 top-1/2 -translate-y-1/2 rounded-full bg-rose-500 animate-pulse w-1.5 h-1.5"
                               title="Row has missing or invalid fields"
                             />
                           ) : row.isPartial ? (
                             <span
-                              className="absolute left-1 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-amber-500"
+                              className="absolute left-0.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-amber-500"
                               title="Incomplete row data"
                             />
                           ) : null}
                         </TableCell>
 
                         {/* Date */}
-                        <TableCell className="w-[145px] max-w-[145px] border-r border-slate-200/60 p-1 px-2 box-border">
-                          <input
+                        <TableCell className={SPREADSHEET_TD}>
+                          <SalesDateCellInput
                             ref={(el) => {
                               cellRefs.current[`${index}-0`] = el
                             }}
-                            type="date"
                             max={todayIso}
                             value={row.date}
                             onChange={(e) =>
@@ -3376,13 +3353,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }
                             onKeyDown={(e) => handleCellKeyDown(e, index, 0)}
                             onPaste={(e) => handlePaste(e, index, 0)}
-                            className="w-full h-9 px-2 text-xs sm:text-sm text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:bg-white focus:outline-none focus:ring-1 focus:ring-focus transition-all cursor-pointer box-border"
+                            aria-label={`${isSales ? 'Sales' : 'Expense'} date, row ${index + 1}`}
                           />
                         </TableCell>
 
                         {/* Particulars Combobox */}
-                        <TableCell className="w-[250px] max-w-[250px] border-r border-slate-200/60 p-1 px-2 relative box-border">
+                        <TableCell className={cn(SPREADSHEET_TD, 'relative')}>
                           <ParticularsCombobox
+                            flat={true}
+                            ariaLabel={`Particulars, row ${index + 1}`}
                             inputRef={(el) => {
                               cellRefs.current[`${index}-1`] = el
                             }}
@@ -3405,8 +3384,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Category Combobox */}
-                        <TableCell className="w-[175px] max-w-[175px] border-r border-slate-200/60 p-1 px-2 relative box-border">
+                        <TableCell className={cn(SPREADSHEET_TD, 'relative')}>
                           <CategoryCombobox
+                            flat={true}
+                            ariaLabel={`Category, row ${index + 1}`}
                             inputRef={(el) => {
                               cellRefs.current[`${index}-2`] = el
                             }}
@@ -3431,56 +3412,61 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Payment Method */}
-                        <TableCell className="w-[155px] max-w-[155px] border-r border-slate-200/60 p-1 px-2 box-border">
-                          <select
-                            ref={(el) => {
-                              cellRefs.current[`${index}-3`] = el
-                            }}
-                            value={row.paymentMethod}
-                            onChange={(e) => {
-                              const val = e.target.value
-                              if (val === '__add_custom__') {
-                                setTargetRowForNewPaymentMethod(row.id)
-                                setNewPaymentMethodName('')
-                                setIsAddPaymentMethodModalOpen(true)
-                                return
-                              }
-                              handleRowChange(
-                                row.id,
-                                'paymentMethod',
-                                val
-                              )
-                              const valLower = val.toLowerCase()
-                              if (
-                                valLower === 'cash' ||
-                                valLower === 'cheque' ||
-                                valLower === 'petty cash'
-                              ) {
-                                handleRowChange(row.id, 'serviceFee', 0)
-                              } else if (
-                                row.serviceFee === undefined ||
-                                row.serviceFee === ''
-                              ) {
-                                handleRowChange(row.id, 'serviceFee', 0)
-                              }
-                            }}
-                            onKeyDown={(e) => handleCellKeyDown(e, index, 3)}
-                            className="w-full h-9 px-2 text-xs sm:text-sm text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:outline-none focus:ring-1 focus:ring-focus transition-all cursor-pointer truncate box-border"
-                          >
-                            {paymentOptions.map((pm) => (
-                              <option key={pm} value={pm}>
-                                {pm}
-                              </option>
-                            ))}
-                            <option
-                              value="__add_custom__"
-                              className="font-semibold text-[#960C01]"
+                        <TableCell className={SPREADSHEET_TD}>
+                          <div className="relative w-full flex items-center">
+                            <select
+                              aria-label={`Payment, row ${index + 1}`}
+                              title={row.paymentMethod || undefined}
+                              ref={(el) => {
+                                cellRefs.current[`${index}-3`] = el
+                              }}
+                              value={row.paymentMethod}
+                              onChange={(e) => {
+                                const val = e.target.value
+                                if (val === '__add_custom__') {
+                                  setTargetRowForNewPaymentMethod(row.id)
+                                  setNewPaymentMethodName('')
+                                  setIsAddPaymentMethodModalOpen(true)
+                                  return
+                                }
+                                handleRowChange(
+                                  row.id,
+                                  'paymentMethod',
+                                  val
+                                )
+                                const valLower = val.toLowerCase()
+                                if (
+                                  valLower === 'cash' ||
+                                  valLower === 'cheque' ||
+                                  valLower === 'petty cash'
+                                ) {
+                                  handleRowChange(row.id, 'serviceFee', 0)
+                                } else if (
+                                  row.serviceFee === undefined ||
+                                  row.serviceFee === ''
+                                ) {
+                                  handleRowChange(row.id, 'serviceFee', 0)
+                                }
+                              }}
+                              onKeyDown={(e) => handleCellKeyDown(e, index, 3)}
+                              className={cn(SPREADSHEET_INPUT, 'pr-6 appearance-none cursor-pointer')}
                             >
-                              + Add custom method...
-                            </option>
-                          </select>
+                              {paymentOptions.map((pm) => (
+                                <option key={pm} value={pm}>
+                                  {pm}
+                                </option>
+                              ))}
+                              <option
+                                value="__add_custom__"
+                                className="font-semibold text-[#960C01]"
+                              >
+                                + Add custom method...
+                              </option>
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                          </div>
                           {isFeeApplicable && (
-                            <div className="mt-1 flex items-center gap-1 bg-amber-50/80 border border-amber-200/90 rounded-md px-1.5 py-0.5">
+                            <div className="flex items-center gap-1 bg-amber-50/80 border border-amber-200/90 rounded-md px-1.5 py-0.5 mx-1.5 mb-1.5 focus-within:ring-2 focus-within:ring-focus">
                               <span className="text-[10px] font-semibold text-amber-800 shrink-0">
                                 Fee: ₱
                               </span>
@@ -3514,6 +3500,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                     isNaN(val) ? '' : val
                                   )
                                 }}
+                                aria-label={`Service fee, row ${index + 1}`}
                                 className="w-full text-xs font-mono font-medium text-focus bg-transparent focus:outline-none"
                               />
                             </div>
@@ -3521,7 +3508,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Cheque / Ref No. */}
-                        <TableCell className="w-[130px] max-w-[130px] border-r border-slate-200/60 p-1 px-2 box-border">
+                        <TableCell className={SPREADSHEET_TD}>
                           <input
                             ref={(el) => {
                               cellRefs.current[`${index}-4`] = el
@@ -3534,14 +3521,16 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }
                             onKeyDown={(e) => handleCellKeyDown(e, index, 4)}
                             onPaste={(e) => handlePaste(e, index, 4)}
-                            className="w-full h-9 px-2 text-xs sm:text-sm text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:bg-white focus:outline-none focus:ring-1 focus:ring-focus transition-all truncate box-border"
+                            aria-label={`Cheque / Ref, row ${index + 1}`}
+                            title={row.chequeNo || undefined}
+                            className={SPREADSHEET_INPUT}
                           />
                         </TableCell>
 
                         {/* Price / Amount */}
-                        <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-2 box-border">
+                        <TableCell className={SPREADSHEET_TD}>
                           <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-fg/70 pointer-events-none">
+                            <span className="absolute top-1/2 -translate-y-1/2 text-xs font-medium pointer-events-none left-2 text-slate-500">
                               ₱
                             </span>
                             <input
@@ -3566,20 +3555,24 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                               }}
                               onKeyDown={(e) => handleCellKeyDown(e, index, 5)}
                               onPaste={(e) => handlePaste(e, index, 5)}
+                              aria-label={`${isSales ? 'Price' : 'Amount'}, row ${index + 1}`}
+                              title={row.unitPrice !== '' ? String(row.unitPrice) : undefined}
                               className={cn(
-                                'w-full h-9 pl-6 pr-2 text-right text-xs sm:text-sm font-mono text-focus rounded-lg border focus:bg-white focus:outline-none focus:ring-1 transition-all box-border',
+                                SPREADSHEET_INPUT,
+                                SPREADSHEET_NUM_INPUT,
+                                'pl-5',
                                 rowErrors?.missingPrice
-                                  ? 'border-rose-500 bg-rose-50/20 focus:border-rose-600 focus:ring-rose-600'
+                                  ? 'bg-rose-50/60 ring-1 ring-inset ring-rose-500'
                                   : row.isPartial && (!row.unitPrice || row.unitPrice === 0)
-                                    ? 'border-amber-400 bg-amber-50/20 focus:border-amber-500 focus:ring-amber-500'
-                                    : 'border-slate-200/80 hover:border-slate-300 focus:border-focus focus:ring-focus'
+                                    ? 'bg-amber-50/60 ring-1 ring-inset ring-amber-400'
+                                    : ''
                               )}
                             />
                           </div>
                         </TableCell>
 
                         {/* Quantity */}
-                        <TableCell className="w-[70px] max-w-[70px] border-r border-slate-200/60 p-1 px-1.5 box-border">
+                        <TableCell className={SPREADSHEET_TD}>
                           <input
                             ref={(el) => {
                               cellRefs.current[`${index}-6`] = el
@@ -3602,38 +3595,46 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 6)}
                             onPaste={(e) => handlePaste(e, index, 6)}
-                            className="w-full h-9 px-1 text-center text-xs sm:text-sm font-mono text-focus rounded-lg border border-slate-200/80 bg-white hover:border-slate-300 focus:border-focus focus:bg-white focus:outline-none focus:ring-1 focus:ring-focus transition-all box-border"
+                            aria-label={`Qty, row ${index + 1}`}
+                            className={cn(SPREADSHEET_INPUT, SPREADSHEET_NUM_INPUT)}
                           />
                         </TableCell>
 
                         {/* Status */}
-                        <TableCell className="w-[110px] max-w-[110px] border-r border-slate-200/60 p-1 px-1.5 box-border">
-                          <select
-                            ref={(el) => {
-                              cellRefs.current[`${index}-7`] = el
-                            }}
-                            value={row.status}
-                            onChange={(e) =>
-                              handleRowChange(
-                                row.id,
-                                'status',
-                                e.target.value as 'Paid' | 'Unpaid' | 'Pending'
-                              )
-                            }
-                            onKeyDown={(e) => handleCellKeyDown(e, index, 7)}
-                            className={cn(
-                              'w-full h-9 px-1.5 text-xs font-semibold rounded-lg border focus:outline-none focus:ring-1 transition-all cursor-pointer truncate box-border',
-                              row.status === 'Paid'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500'
-                                : row.status === 'Unpaid'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-300 focus:border-rose-500 focus:ring-rose-500'
-                                  : 'bg-yellow-100 text-yellow-800 border-yellow-300 focus:border-yellow-500 focus:ring-yellow-500'
-                            )}
-                          >
-                            <option value="Paid">Paid</option>
-                            <option value="Unpaid">Unpaid</option>
-                            <option value="Pending">Pending</option>
-                          </select>
+                        <TableCell
+                          className={cn(
+                            SPREADSHEET_TD,
+                            // Full-cell tint; the text label always stays visible
+                            row.status === 'Paid'
+                              ? 'bg-emerald-50 text-emerald-800'
+                              : row.status === 'Unpaid'
+                                ? 'bg-rose-50 text-rose-700'
+                                : 'bg-amber-50 text-amber-800'
+                          )}
+                        >
+                          <div className="relative w-full flex items-center">
+                            <select
+                              ref={(el) => {
+                                cellRefs.current[`${index}-7`] = el
+                              }}
+                              value={row.status}
+                              onChange={(e) =>
+                                handleRowChange(
+                                  row.id,
+                                  'status',
+                                  e.target.value as 'Paid' | 'Unpaid' | 'Pending'
+                                )
+                              }
+                              onKeyDown={(e) => handleCellKeyDown(e, index, 7)}
+                              aria-label={`Status, row ${index + 1}`}
+                              className={cn(SPREADSHEET_STATUS_SELECT, 'pr-5')}
+                            >
+                              <option value="Paid">Paid</option>
+                              <option value="Unpaid">Unpaid</option>
+                              <option value="Pending">Pending</option>
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-60" />
+                          </div>
                           {row.status === 'Unpaid' && isSales && (() => {
                             const assign =
                               unpaidAssignments.find((u) => u.rowId === row.id) ||
@@ -3642,7 +3643,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             if (!debtorName) return null
                             return (
                               <div
-                                className="mt-1 flex items-center justify-between text-[10px] text-rose-700 bg-rose-50/90 border border-rose-200 rounded px-1.5 py-0.5 truncate"
+                                className="mx-1.5 mb-1.5 flex items-center justify-between text-[10px] text-rose-700 bg-rose-50/90 border border-rose-200 rounded px-1.5 py-0.5 truncate"
                                 title={`Assigned to: ${debtorName} (${assign?.customerType || 'External'})`}
                               >
                                 <span className="truncate font-semibold">
@@ -3654,43 +3655,59 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Deposit Status (Sales only) */}
-                        {isSales && (
-                          <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-1.5 box-border">
-                            {row.status === 'Unpaid' || row.status === 'Pending' ? (
+                        {isSales && (() => {
+                          const isDepositLocked = row.status === 'Unpaid' || row.status === 'Pending'
+                          const depositValue = row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')
+                          return (
+                          <TableCell
+                            className={cn(
+                              SPREADSHEET_TD,
+                              // Full-cell tint; the text label always stays visible
+                              !isDepositLocked && depositValue === 'Deposited'
+                                ? 'bg-emerald-50 text-emerald-800'
+                                : 'bg-slate-100 text-slate-700'
+                            )}
+                          >
+                            {isDepositLocked ? (
                               <div
                                 title="Deposit status is read only for Unpaid or Pending transactions"
-                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border bg-slate-100 text-slate-500 border-slate-200 flex items-center justify-center select-none truncate cursor-not-allowed"
+                                className="w-full h-11 px-2 text-xs font-bold flex items-center select-none truncate cursor-not-allowed"
                               >
                                 Not Deposited
                               </div>
                             ) : (
-                              <select
-                                value={row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')}
-                                onChange={(e) => {
-                                  const newDs = e.target.value as 'Deposited' | 'Not Deposited'
-                                  setErrorMessage(null)
-                                  handleRowChange(row.id, 'depositStatus', newDs)
-                                }}
-                                className={cn(
-                                  'w-full h-9 px-1.5 text-xs font-semibold rounded-lg border focus:outline-none focus:ring-1 transition-all cursor-pointer truncate box-border',
-                                  (row.depositStatus || (row.status === 'Paid' ? 'Deposited' : 'Not Deposited')) === 'Deposited'
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 focus:border-emerald-500 focus:ring-emerald-500'
-                                    : 'bg-slate-100 text-slate-700 border-slate-300 focus:border-slate-400 focus:ring-slate-400'
-                                )}
-                              >
-                                <option value="Deposited">Deposited</option>
-                                <option value="Not Deposited">Not Deposited</option>
-                              </select>
+                              <div className="relative w-full flex items-center">
+                                <select
+                                  value={depositValue}
+                                  onChange={(e) => {
+                                    const newDs = e.target.value as 'Deposited' | 'Not Deposited'
+                                    setErrorMessage(null)
+                                    handleRowChange(row.id, 'depositStatus', newDs)
+                                  }}
+                                  aria-label={`Deposit status, row ${index + 1}`}
+                                  className={cn(SPREADSHEET_STATUS_SELECT, 'pr-5')}
+                                >
+                                  <option value="Deposited">Deposited</option>
+                                  <option value="Not Deposited">Not Deposited</option>
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-60" />
+                              </div>
                             )}
                           </TableCell>
-                        )}
+                          )
+                        })()}
 
                         {/* Deposit Date (Sales only): editable once the row is Deposited */}
                         {isSales && (
-                          <TableCell className="w-[140px] max-w-[140px] border-r border-slate-200/60 p-1 px-1.5 box-border">
+                          <TableCell
+                            className={cn(
+                              SPREADSHEET_TD,
+                              !(row.depositStatus === 'Deposited' && row.status !== 'Unpaid' && row.status !== 'Pending') &&
+                                'bg-slate-100'
+                            )}
+                          >
                             {row.depositStatus === 'Deposited' && row.status !== 'Unpaid' && row.status !== 'Pending' ? (
-                              <input
-                                type="date"
+                              <SalesDateCellInput
                                 value={getRowDepositDate(row)}
                                 min={normalizeDateToYYYYMMDD(row.date) || undefined}
                                 max={todayIso}
@@ -3698,12 +3715,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                   setErrorMessage(null)
                                   handleRowChange(row.id, 'depositDate', e.target.value)
                                 }}
-                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border border-emerald-300 bg-white text-emerald-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 box-border"
+                                aria-label={`Deposit date, row ${index + 1}`}
                               />
                             ) : (
                               <div
                                 title="No deposit day until the sale is deposited"
-                                className="w-full h-9 px-1.5 text-xs font-semibold rounded-lg border bg-slate-100 text-slate-400 border-slate-200 flex items-center justify-center select-none"
+                                className="w-full h-11 px-2 text-xs font-semibold text-slate-500 flex items-center select-none"
                               >
                                 —
                               </div>
@@ -3712,15 +3729,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         )}
 
                         {/* Total Price */}
-                        <TableCell className="w-[125px] max-w-[125px] border-r border-slate-200/60 p-1 px-3 text-right box-border">
+                        <TableCell className={cn(SPREADSHEET_TD, 'text-right')}>
                           <span
+                            title={formatPHP(row.rowTotal)}
                             className={cn(
-                              'font-mono text-xs sm:text-sm font-bold block py-1.5 truncate',
-                              row.rowTotal > 0
-                                ? isSales
-                                  ? 'text-emerald-600'
-                                  : 'text-rose-600'
-                                : 'text-muted-fg/40'
+                              'block px-2 truncate text-[13px] font-bold tabular-nums',
+                              row.rowTotal > 0 ? (isSales ? 'text-focus' : 'text-rose-600') : 'text-slate-500'
                             )}
                           >
                             {formatPHP(row.rowTotal)}
@@ -3728,7 +3742,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Actions (3-dots menu) */}
-                        <TableCell className="w-[70px] max-w-[70px] text-center p-1 box-border">
+                        <TableCell className={cn(SPREADSHEET_TD, 'text-center border-r-0 px-0.5')}>
                           <div className="flex items-center justify-center">
                             <Button
                               type="button"
@@ -3756,7 +3770,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 })
                                 setOpenActionRowId(row.id)
                               }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                              className="h-7 w-7 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
                               title="Row actions"
                               aria-label={`Actions for row ${index + 1}`}
                               aria-haspopup="true"
@@ -3851,7 +3865,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 className="h-9 px-4 rounded-xl border-dashed border-slate-300 hover:border-focus text-xs font-semibold text-focus gap-2 cursor-pointer transition-all"
               >
                 <Plus className="w-3.5 h-3.5 text-primary" />
-                <span>+ Add row to sheet</span>
+                <span>Add row to sheet</span>
               </Button>
 
               <span className="text-xs text-muted-fg">
@@ -4074,14 +4088,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         ))}
                       </ul>
                     </div>
-                    <div className="min-w-0 space-y-1.5">
-                    {getDayRemark(isAuditor ? assignedCompany : selectedCompany, d).trim() && (
-                      <p className="rounded-lg bg-slate-50 border border-stroke/30 px-3 py-2 text-[11px] text-muted-fg break-words">
-                        <span className="font-semibold text-focus">Already saved for this day: </span>
-                        {getDayRemark(isAuditor ? assignedCompany : selectedCompany, d)}
-                        <span className="block mt-0.5">Anything you type below is added after it.</span>
-                      </p>
-                    )}
                     <textarea
                       rows={4}
                       value={dayRemarkDrafts[d] || ''}
@@ -4094,7 +4100,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       }
                       className="w-full px-3 py-2 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus resize-y min-w-0"
                     />
-                    </div>
                   </div>
                 </div>
               )
