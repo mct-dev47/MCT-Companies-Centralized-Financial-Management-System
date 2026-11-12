@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useSession } from '@/hooks/useSession'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { UserProfileDropdown } from '@/components/layout/UserProfileDropdown'
+import { OutboxIndicator } from '@/components/layout/OfflineOutbox'
 
 export const TopHeader: React.FC = () => {
   const { user } = useSession()
@@ -14,6 +15,7 @@ export const TopHeader: React.FC = () => {
 
       {/* Right side: Notification Bell & User Profile Dropdown */}
       <div className="flex items-center gap-3 sm:gap-4">
+        <OutboxIndicator />
         {!isAdmin && <NotificationBell />}
         {!isAdmin && <div className="w-px h-6 bg-stroke/30 mx-0.5 hidden sm:block" />}
         <UserProfileDropdown />

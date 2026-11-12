@@ -19,6 +19,7 @@ import {
   Pencil,
   MoreVertical,
   Info,
+  AlertTriangle,
   Loader2,
   Landmark,
   X,
@@ -52,13 +53,13 @@ import { expenseService } from '@/services/expenseService'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
 import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
-import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatPHP } from '@/lib/format'
-import { isDateInRange, normalizeDateToYYYYMMDD, formatDisplayDate } from '@/utils/dateUtils'
+import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { getParticularsSummary } from '@/utils/particularsUtils'
 import { getPaidDepositForSale, getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
@@ -82,22 +83,6 @@ const LEDGER_LOAN_STATUSES = new Set([
 ])
 
 /**
- * "Deposited Nov 11, 2026 (BDO)" for a sale whose money reached the bank, so the auditor reviewing the
- * sale-day row can see when and where it cleared. Null for anything that is not a deposited sale.
- */
-const getDepositBadgeText = (tx: DashboardTransactionItem): string | null => {
-  if (tx.type !== 'Sales') return null
-  if ((tx.depositStatus || tx.deposit_status) !== 'Deposited') return null
-  const day = tx.deposit_date || tx.depositDate
-  if (!day) return null
-  const bank =
-    (tx.bankAccountId
-      ? bankService.getCachedAccounts().find((a) => String(a.id) === String(tx.bankAccountId))?.bankName
-      : undefined) || tx.bankName
-  return `Deposited ${formatDisplayDate(day)}${bank ? ` (${bank})` : ''}`
-}
-
-/**
  * The day a sale's money was deposited, as MM/DD/YY (same format as the row date).
  * Null when the record is not a sale or the sale has not been deposited yet.
  */
@@ -118,7 +103,6 @@ const getDepositStatusLabel = (tx: DashboardTransactionItem): 'Deposited' | 'Not
 const DepositStatusBadge: React.FC<{ tx: DashboardTransactionItem }> = ({ tx }) => {
   const label = getDepositStatusLabel(tx)
   if (!label) return <span className="text-muted-fg/50">—</span>
-  const day = label === 'Deposited' ? tx.deposit_date || tx.depositDate : null
   return (
     <div className="flex flex-col items-center gap-0.5">
       <span
@@ -130,13 +114,21 @@ const DepositStatusBadge: React.FC<{ tx: DashboardTransactionItem }> = ({ tx }) 
       >
         {label}
       </span>
-      {day && <span className="text-[10px] text-muted-fg">{formatDisplayDate(day)}</span>}
     </div>
   )
 }
 
 const isAwaitingAudit = (status?: string | null): boolean =>
   (status || '').trim().toLowerCase() === 'pending audit approval'
+
+/** A timestamp -> MM/DD/YY in the viewer's local time (matches the bank entry written on that day). */
+const toLocalLedgerDate = (stamp: string): string => {
+  const d = new Date(stamp)
+  if (Number.isNaN(d.getTime())) return toLedgerDate(stamp)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mm}/${dd}/${String(d.getFullYear()).slice(2)}`
+}
 
 /** YYYY-MM-DD -> MM/DD/YY, the same display format the other ledger rows use. */
 const toLedgerDate = (iso: string): string => {
@@ -240,19 +232,29 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   const reqType = (m.requestType || '').trim().toLowerCase()
   const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
   const statusLower = (m.status || '').trim().toLowerCase()
-  const awaitingAudit = isAwaitingAudit(m.status) || statusLower.includes('pending')
+  const pendingWorkflow = isAwaitingAudit(m.status) || statusLower.includes('pending')
+  // A reimbursement only moves money when Finance runs the Reimburse step (bank payout). Until then
+  // (including after Audit approval) it stays off the cash ledger, marked as awaiting reimbursement.
+  const isPaidOut = statusLower === 'reimbursed'
+  const awaitingReimbursement = isReimbursement && !pendingWorkflow && !isPaidOut
+  const awaitingAudit = pendingWorkflow || awaitingReimbursement
   const isDisapproved = statusLower.includes('disapproved') || statusLower.includes('rejected')
-  const auditStatus: DashboardTransactionItem['auditStatus'] = awaitingAudit ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
+  const auditStatus: DashboardTransactionItem['auditStatus'] = pendingWorkflow ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
   const txStatus: DashboardTransactionItem['status'] = awaitingAudit ? 'Pending' : 'Paid'
+  // A paid-out reimbursement sits on the day the bank paid it, like the bank entry.
+  const rowDate = isReimbursement && isPaidOut && m.reimbursedAt ? toLocalLedgerDate(m.reimbursedAt) : toLedgerDate(m.date)
 
   const base = {
     refNo: m.refNo,
     chequeNo: '',
-    date: toLedgerDate(m.date),
+    date: rowDate,
+    pendingLabel: awaitingReimbursement ? 'Awaiting Reimbursement' : undefined,
     type: 'Petty Cash' as const,
     amount: m.amount,
     category: (m.category || 'Petty Cash') as any,
-    paymentMethod: m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
+    paymentMethod: isReimbursement
+      ? 'Bank Reimbursement'
+      : m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
     status: txStatus,
     awaitingAudit,
     auditStatus,
@@ -818,7 +820,10 @@ export const TransactionPage: React.FC = () => {
   // Bank accounts filtered by company scope
   const availableBankAccounts = React.useMemo(() => {
     if (effectiveTargetCompany) {
-      return bankAccounts.filter((a) => isAccountOwnedBy(a, effectiveTargetCompany))
+      return preferSoleOwnedBanks(
+        bankAccounts.filter((a) => isAccountOwnedBy(a, effectiveTargetCompany)),
+        effectiveTargetCompany
+      )
     }
     return bankAccounts
   }, [bankAccounts, effectiveTargetCompany])
@@ -1035,7 +1040,13 @@ export const TransactionPage: React.FC = () => {
         depositDate: s.deposit_date ?? s.depositDate ?? null,
       }))
 
-      const unifiedExpenses: DashboardTransactionItem[] = expenseData.map((e) => ({
+      // A REIMB-<id> expense is the bookkeeping record of a petty cash reimbursement payout. The payout
+      // itself is already shown as the petty cash row (with its bank), so listing it again would double it.
+      const isReimbursementPayoutExpense = (e: { refNo?: string; paymentMethod?: string }) =>
+        (e.refNo || '').toUpperCase().startsWith('REIMB-') ||
+        (e.paymentMethod || '').trim().toLowerCase() === 'bank reimbursement'
+
+      const unifiedExpenses: DashboardTransactionItem[] = expenseData.filter((e) => !isReimbursementPayoutExpense(e)).map((e) => ({
         id: e.id,
         refNo: e.refNo,
         chequeNo: e.chequeNo || '',
@@ -1130,7 +1141,40 @@ export const TransactionPage: React.FC = () => {
         }
       })
 
-      const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants]
+      // Deposits / withdrawals typed directly in Bank Management have no sale or expense record, but they
+      // move the bank balance, so they are listed here too (otherwise this ledger can't match the bank).
+      const unifiedManualBank: DashboardTransactionItem[] = []
+      bankAccountsData.forEach((acc) => {
+        ;(acc.transactions || []).forEach((bt) => {
+          if (bt.entrySource !== 'manual') return
+          const company = bt.companyName || acc.companyName || ''
+          if (targetCompany && !isCompanyMatch(company, targetCompany)) return
+          const amount = (bt.deposit || 0) > 0 ? bt.deposit || 0 : bt.withdrawal || 0
+          unifiedManualBank.push({
+            id: `bank_${bt.id}`,
+            refNo: bt.chequeNo || bt.id,
+            chequeNo: bt.chequeNo || '',
+            date: bt.date,
+            type: 'Bank',
+            company,
+            description: bt.particulars,
+            particulars: bt.particulars,
+            amount,
+            withdrawal: bt.withdrawal || 0,
+            deposit: bt.deposit || 0,
+            category: bt.category as any,
+            paymentMethod: 'Manual Bank Entry',
+            status: 'Paid',
+            auditStatus: 'Pending Audit',
+            createdAt: bt.createdAt || bt.date,
+            bankAccountId: acc.id,
+            bankName: acc.bankName,
+            paidAmount: amount,
+          })
+        })
+      })
+
+      const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants, ...unifiedManualBank]
       setTransactions(combined)
       setBankAccounts(bankAccountsData)
     } finally {
@@ -1202,6 +1246,8 @@ export const TransactionPage: React.FC = () => {
         }
         // All tenant rental collections / income are deposits
         if (t.type === 'Income') return true
+        // Manual Bank Management deposits and withdrawals always moved the bank
+        if (t.type === 'Bank') return true
         // Only PAID expenses are cash ledger withdrawals. Pending and Unpaid expenses have a withdrawal
         // amount but no money has left yet, so they stay in All Transactions only.
         if (t.type === 'Expense') return (t.paidAmount || 0) > 0
@@ -1658,7 +1704,41 @@ export const TransactionPage: React.FC = () => {
     return Math.round((activeStartingBalance + activeTotals.deposits - activeTotals.withdrawals) * 100) / 100
   }, [activeStartingBalance, activeTotals.deposits, activeTotals.withdrawals])
 
+  // Does this ledger agree with the bank? Starting balance + every deposit and withdrawal here must equal the
+  // balance Bank Management shows. Checked for the selected bank, on the whole ledger (no search / date filters).
+  const bankBalanceCheck = React.useMemo(() => {
+    if (!selectedBankAccount) return null
+    let net = 0
+    depositBaseList.forEach((t) => {
+      const { deposit, withdrawal } = getRowAmounts(t)
+      net += (deposit || 0) - (withdrawal || 0)
+    })
+    const ledger = Math.round(((Number(selectedBankAccount.startingBalance) || 0) + net) * 100) / 100
+    const bank = Math.round((Number(selectedBankAccount.currentBalance) || 0) * 100) / 100
+    return { ledger, bank, diff: Math.round((bank - ledger) * 100) / 100 }
+  }, [selectedBankAccount, depositBaseList, getRowAmounts])
+
+  // Re-sync every bank with this ledger (server posts only the differences, then re-derives balances)
+  const [isReconciling, setIsReconciling] = React.useState(false)
+  const handleReconcileBanks = async () => {
+    setIsReconciling(true)
+    try {
+      const result = await bankService.reconcileAll(userRole)
+      const stillOff = Object.keys(result.accounts_still_off || {})
+      if (stillOff.length > 0) {
+        notifyWarning(`Reconciled, but these banks still differ from their entries: ${stillOff.join(', ')}`)
+      }
+      await fetchAllTransactions(true)
+    } catch (err) {
+      notifyError(err)
+    } finally {
+      setIsReconciling(false)
+    }
+  }
+
   const handleRowClick = (tx: DashboardTransactionItem) => {
+    // A manual bank entry has no sale/expense record to open; it is managed in Bank Management
+    if (tx.type === 'Bank') return
     // The cash ledger tab shows only the paid part of a record. The detail window needs the full record.
     const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
     setSelectedTx(fullRecord)
@@ -1733,7 +1813,7 @@ export const TransactionPage: React.FC = () => {
   // Sales and Expense rows the auditor can review here (petty cash is a read only mirror,
   // loans awaiting audit are handled on their own page)
   const isRowAuditable = (tx: DashboardTransactionItem) =>
-    tx.type !== 'Petty Cash' && !tx.awaitingAudit
+    tx.type !== 'Petty Cash' && tx.type !== 'Bank' && !tx.awaitingAudit
 
   // Audit a whole day in one go: every auditable row that is not already audited or flagged.
   // Flagged rows keep their discrepancy and must be re-audited by hand.
@@ -1840,8 +1920,8 @@ export const TransactionPage: React.FC = () => {
   const handleExportCsv = () => {
     const isDeposit = activeTab === 'deposit'
     const headers = isDeposit
-      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
-      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
+      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BANK BALANCE', 'AUDIT STATUS']
+      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'BANK BALANCE', 'STATUS', 'AUDIT STATUS']
 
     const rows = (isDeposit ? filteredDepositTransactions : filteredSalesTransactions).map((t) => {
       const { deposit, withdrawal } = getRowAmounts(t)
@@ -1869,7 +1949,7 @@ export const TransactionPage: React.FC = () => {
         csvCell(t.paymentMethod || 'Cash'),
         deposit || 0,
         withdrawal || 0,
-        Math.round(((deposit || 0) - (withdrawal || 0)) * 100) / 100,
+        depositBalanceByKey.get(`${t.type}:${t.id}`) ?? '',
         csvCell(t.status || 'Paid'),
         csvCell(t.auditStatus || 'Pending Audit'),
       ]
@@ -1938,7 +2018,7 @@ export const TransactionPage: React.FC = () => {
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.paymentMethod || 'Cash')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #16a34a; font-weight: 700;">${fmtAmt(deposit)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #dc2626; font-weight: 700;">${fmtAmt(withdrawal)}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${fmtSigned(Math.round((deposit - withdrawal) * 100) / 100)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${depositBalanceByKey.has(`${tx.type}:${tx.id}`) ? fmtSigned(depositBalanceByKey.get(`${tx.type}:${tx.id}`) as number) : '—'}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.status || 'Paid')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${tx.auditStatus === 'Verified' ? 'Audited' : 'Pending Audit'}</td>
         </tr>
@@ -1985,7 +2065,7 @@ export const TransactionPage: React.FC = () => {
                 <th>${isDeposit ? 'Category' : 'Payment Method'}</th>
                 <th style="text-align: right;">Deposit</th>
                 <th style="text-align: right;">Withdrawal</th>
-                <th style="text-align: right;">${isDeposit ? 'Balance' : 'Net Amount'}</th>
+                <th style="text-align: right;">Bank Balance</th>
                 ${!isDeposit ? '<th>Status</th>' : ''}
                 <th>Audit Status</th>
               </tr>
@@ -2418,6 +2498,32 @@ export const TransactionPage: React.FC = () => {
         </div>
       )}
 
+      {bankBalanceCheck && Math.abs(bankBalanceCheck.diff) >= 0.01 && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900" role="alert">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <p>
+            <strong>Bank balance does not match.</strong> This ledger adds up to{' '}
+            <strong>{formatPHP(bankBalanceCheck.ledger)}</strong> but Bank Management shows{' '}
+            <strong>{formatPHP(bankBalanceCheck.bank)}</strong> for {selectedBankAccount?.bankName}
+            {selectedBankAccount?.accountName ? ` - ${selectedBankAccount.accountName}` : ''} (difference{' '}
+            <strong>{formatPHP(Math.abs(bankBalanceCheck.diff))}</strong>
+            {bankBalanceCheck.diff > 0 ? ', the bank is higher' : ', the bank is lower'}). First check each sale's Deposited /
+            Not Deposited status is right, then reconcile to bring the bank in line with this ledger.
+          </p>
+          {(isFinance || isSupervisor) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto shrink-0"
+              disabled={isReconciling}
+              onClick={handleReconcileBanks}
+            >
+              {isReconciling ? 'Reconciling...' : 'Reconcile now'}
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* 4. Table / Daily Summary Card Rendering Based on Active Tab & View Mode */}
       <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-4 border-b border-slate-100">
@@ -2645,11 +2751,6 @@ export const TransactionPage: React.FC = () => {
                                             <td className="px-3 py-2 text-muted-fg">{tx.bankName || tx.paymentMethod || '—'}</td>
                                             <td className="px-3 py-2 text-focus max-w-[260px]">
                                               <p className="truncate font-medium">{tx.particulars}</p>
-                                              {getDepositBadgeText(tx) && (
-                                                <span className="mt-0.5 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                                  {getDepositBadgeText(tx)}
-                                                </span>
-                                              )}
                                             </td>
                                             <td className="px-3 py-2 text-right font-bold tabular-nums text-emerald-600">
                                               {deposit > 0 ? formatPHP(deposit) : '—'}
@@ -2772,7 +2873,7 @@ export const TransactionPage: React.FC = () => {
                   WITHDRAWAL
                 </TableHead>
                 <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  {activeTab === 'deposit' ? 'BALANCE' : 'NET AMOUNT'}
+                  BANK BALANCE
                 </TableHead>
                 {/* Deposit tab rows are paid by definition, so no payment Status column there */}
                 {activeTab !== 'deposit' && (
@@ -2884,6 +2985,8 @@ export const TransactionPage: React.FC = () => {
                                 ? 'bg-sky-50 text-sky-700 border-sky-200'
                                 : tx.type === 'Petty Cash'
                                 ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : tx.type === 'Bank'
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
                                 : 'bg-slate-100 text-slate-700 border-slate-200'
                             )}
                           >
@@ -2918,20 +3021,19 @@ export const TransactionPage: React.FC = () => {
                                 <span className="truncate block font-medium">{summary.firstItemName}</span>
                                 <span
                                   className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
-                                  title="Endorsed by Finance. Waiting for Internal Audit approval."
+                                  title={
+                                    tx.pendingLabel
+                                      ? 'Approved. Waiting for Finance to pay it out from the bank (Reimburse).'
+                                      : 'Endorsed by Finance. Waiting for Internal Audit approval.'
+                                  }
                                 >
-                                  Pending Audit
+                                  {tx.pendingLabel || 'Pending Audit'}
                                 </span>
                               </div>
                             )
                           }
                           return <span className="truncate block font-medium">{summary.firstItemName}</span>
                         })()}
-                        {getDepositBadgeText(tx) && (
-                          <span className="mt-0.5 inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            {getDepositBadgeText(tx)}
-                          </span>
-                        )}
                       </TableCell>
 
                       {/* 5. Category or Payment Method */}
@@ -2949,12 +3051,20 @@ export const TransactionPage: React.FC = () => {
                         {withdrawalAmt > 0 ? formatPHP(withdrawalAmt) : <span className="text-muted-fg/50 font-normal">—</span>}
                       </TableCell>
 
-                      {/* 7b. Balance (Deposit tab: running total per company) or Net Amount (All tab: deposit minus withdrawal) */}
+                      {/* 7b. Bank balance: starting balance + every deposit and withdrawal up to this row.
+                          Same figure on both tabs. Rows that never touched the bank (Pending / Unpaid / not deposited) show a dash. */}
                       {(() => {
-                        const shown =
-                          activeTab === 'deposit'
-                            ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0
-                            : Math.round((depositAmt - withdrawalAmt) * 100) / 100
+                        const shown = depositBalanceByKey.get(`${tx.type}:${tx.id}`)
+                        if (shown === undefined) {
+                          return (
+                            <TableCell
+                              className="px-4 py-3.5 text-xs text-right text-muted-fg/50 whitespace-nowrap"
+                              title="This record has not moved money in the bank yet"
+                            >
+                              —
+                            </TableCell>
+                          )
+                        }
                         return (
                           <TableCell
                             className={cn(
@@ -2999,7 +3109,11 @@ export const TransactionPage: React.FC = () => {
 
                       {/* 8. Audit Status Badge (Visible for all roles) */}
                       <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
-                        {tx.auditStatus === 'Verified' ? (
+                        {tx.type === 'Bank' ? (
+                          <span className="text-[11px] text-muted-fg" title="Manual bank entry: managed in Bank Management, not audited here">
+                            Bank entry
+                          </span>
+                        ) : tx.auditStatus === 'Verified' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             <span>Audited</span>
@@ -3248,7 +3362,7 @@ export const TransactionPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {canAudit && (
+            {canAudit && activeMenuTx.type !== 'Bank' && (
               <>
                 <button
                   type="button"

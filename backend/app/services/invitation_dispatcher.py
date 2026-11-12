@@ -308,17 +308,10 @@ class InvitationDispatcher:
                 except Exception as supa_err:
                     logger.warning("Supabase Auth direct invite failed for %s: %s", mask_email(job.recipient_email), supa_err)
 
-                # Send copy to registered admin email if configured in settings or database
+                # Send copy to admin email resolved dynamically from is_admin role (or settings fallback)
                 try:
-                    admin_recipient = getattr(settings, "ADMIN_EMAIL", "") or ""
-                    if not admin_recipient:
-                        admin_user = (
-                            self.db.query(User)
-                            .filter(or_(User.role == "admin", User.is_admin.is_(True)))
-                            .first()
-                        )
-                        if admin_user and admin_user.email:
-                            admin_recipient = admin_user.email
+                    from app.core.errors import resolve_admin_email
+                    admin_recipient = resolve_admin_email(self.db)
                     if admin_recipient:
                         admin_notice_payload = json.dumps({
                             "sender": {

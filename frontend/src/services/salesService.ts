@@ -1,4 +1,5 @@
 import type { DashboardTransactionItem } from './dashboardService'
+import { HttpError, NetworkError } from '@/lib/requestErrors'
 import type { DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { formatCreatedAt, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { removeLegacyAuditStorage, saveAuditReview } from './auditReviewApi'
@@ -40,6 +41,8 @@ export interface SalesItem {
   bankAccountId?: string
   bankName?: string
   remarks?: string
+  /** Money collected so far from the server: [Paid] lines plus linked receivable payments (partial too). */
+  paidAmount?: number
   type: 'Sales'
 }
 
@@ -72,6 +75,8 @@ export interface NewSalesInput {
   createdBy?: string
   updatedBy?: string
   updatedAt?: string
+  /** Unique ID for this new record; resending it returns the existing record (spec 0038). */
+  clientRef?: string
 }
 
 removeLegacyAuditStorage()
@@ -157,12 +162,18 @@ function mapBackendSaleToItem(b: any): SalesItem {
     bankAccountId: b.bank_account_id || b.bankAccountId || undefined,
     bankName: b.bank_name || b.bankName || undefined,
     remarks: b.remarks || undefined,
+    paidAmount:
+      b.paid_amount !== undefined && b.paid_amount !== null ? Number(b.paid_amount) || 0 : undefined,
     type: 'Sales',
   }
 }
 
 const salesCache = new Map<string, { data: SalesItem[]; timestamp: number }>()
 const SALES_CACHE_TTL = 30000
+
+/** Shown when the backend can't be reached: nothing was saved, so the user must not be told it was. */
+const SERVER_UNREACHABLE =
+  "Can't reach the server, so nothing was saved. Check that the backend is running, then try again."
 
 export const salesService = {
   invalidateCache(): void {
@@ -295,6 +306,7 @@ export const salesService = {
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
       remarks: input.remarks || undefined,
+      client_ref: input.clientRef || undefined,
     }
 
     try {
@@ -346,53 +358,13 @@ export const salesService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new Error(errorMsg)
+        throw new HttpError(errorMsg, res.status)
       }
     } catch (err: any) {
-      if (err.message && !err.message.includes('fetch')) {
+      if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
         throw err
       }
-      console.warn('Backend POST /sales failed, creating local record:', err)
-      const id = `sale_${Date.now()}`
-      const refNo = `REF-${input.date.replace(/-/g, '')}-${Math.floor(100 + Math.random() * 900)}`
-      const [year, month, day] = input.date.split('-')
-      const displayDate = `${month}/${day}/${year?.slice(2) || '26'}`
-      const parsedItems =
-        input.items || parseParticulars(input.particulars, null, input.amount)
-
-      const newItem: SalesItem = {
-        id,
-        refNo,
-        chequeNo: input.chequeNo || '',
-        date: displayDate,
-        rawDate: input.date,
-        particulars: input.particulars,
-        withdrawal: 0,
-        deposit: input.amount,
-        netAmount: input.amount,
-        category: input.category || 'None',
-        paymentMethod: input.paymentMethod,
-        company: input.company,
-        items: parsedItems,
-        status: deriveRecordStatusFromParticulars(
-          parsedItems,
-          input.status === 'Unpaid'
-            ? 'Unpaid'
-            : input.status === 'Pending' || input.status === 'On hold'
-              ? 'Pending'
-              : 'Paid'
-        ),
-        auditStatus: 'Pending Audit',
-        createdBy: 'Company Staff',
-        createdAt: new Date().toISOString(),
-        updatedBy: input.updatedBy || s.updatedBy,
-        updatedAt: input.updatedAt || new Date().toISOString(),
-        type: 'Sales',
-      }
-
-      inMemorySales = [newItem, ...inMemorySales]
-      this.invalidateCache()
-      return newItem
+      throw new NetworkError(SERVER_UNREACHABLE)
     }
   },
 
@@ -468,48 +440,12 @@ export const salesService = {
         this.invalidateCache()
         return mapped
       }
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(typeof errData.detail === 'string' ? errData.detail : 'Failed to update sales entry.')
     } catch (err) {
-      console.warn('Backend update sale failed, updating locally:', err)
+      if (err instanceof TypeError) throw new Error(SERVER_UNREACHABLE)
+      throw err
     }
-
-    // Local update fallback
-    inMemorySales = inMemorySales.map((s) => {
-      if (s.id !== id) return s
-      const amt = input.amount !== undefined ? input.amount : s.deposit
-      const [year, month, day] = (input.date || s.rawDate || '').split('-')
-      const displayDate =
-        month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : s.date
-      const updatedParticulars = input.particulars || s.particulars
-      const updatedItems =
-        input.items || parseParticulars(updatedParticulars, s.items, amt)
-      return {
-        ...s,
-        date: input.date ? displayDate : s.date,
-        rawDate: input.date || s.rawDate,
-        particulars: updatedParticulars,
-        chequeNo: input.chequeNo !== undefined ? input.chequeNo : s.chequeNo,
-        category: input.category || s.category,
-        paymentMethod: input.paymentMethod || s.paymentMethod,
-        company: input.company || s.company,
-        status:
-          input.status ||
-          deriveRecordStatusFromParticulars(
-            updatedItems,
-            s.status === 'Unpaid'
-              ? 'Unpaid'
-              : s.status === 'Pending'
-                ? 'Pending'
-                : 'Paid'
-          ),
-        items: updatedItems,
-        deposit: amt,
-        netAmount: amt,
-        updatedBy: input.updatedBy || s.updatedBy,
-        updatedAt: input.updatedAt || new Date().toISOString(),
-      }
-    })
-    this.invalidateCache()
-    return inMemorySales.find((s) => s.id === id)!
   },
 
   async updateSaleDepositStatus(
@@ -642,8 +578,6 @@ export const salesService = {
               auditedBy: mapped.auditedBy,
               auditDate: mapped.auditDate,
               auditNotes: mapped.auditNotes,
-              updatedBy: input.updatedBy || s.updatedBy,
-        updatedAt: input.updatedAt || new Date().toISOString(),
             }
           : s
       )

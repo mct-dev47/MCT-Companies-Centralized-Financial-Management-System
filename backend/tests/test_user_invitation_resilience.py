@@ -422,15 +422,16 @@ class TestUserInvitationResilience(unittest.TestCase):
         # Re-invite user
         service.reinvite_user(resp.user_id)
 
-        # Verify old invitation was marked REVOKED
+        # Verify old invitation was marked REVOKED (token_hash is scrubbed to NULL on revocation per retention spec)
         old_invitation = (
             self.db.query(UserInvitation)
             .filter(
                 UserInvitation.user_id == resp.user_id,
-                UserInvitation.token_hash == hashlib.sha256(raw_token_1.encode("utf-8")).hexdigest(),
+                UserInvitation.status == "REVOKED",
             )
             .first()
         )
+        self.assertIsNotNone(old_invitation)
         self.assertEqual(old_invitation.status, "REVOKED")
 
         # Attempting to redeem revoked token fails

@@ -70,8 +70,19 @@ class BankTransaction(Base):
     source_sale_id = Column(Integer, nullable=True, index=True)
     # Same for an expense (spec 0044): the bank holds only the PAID part of an expense, kept in step on every edit.
     source_expense_id = Column(Integer, nullable=True, index=True)
+    # 'manual' = typed directly in Bank Management (no sale/expense/loan/petty-cash record behind it).
+    # Part of the table (so create_all / new databases get it) but NOT mapped by the ORM (see __mapper_args__):
+    # the ORM never names it in an INSERT or SELECT, so bank reads and writes keep working on a database where
+    # migration 0051 has not run yet. BankService reads/writes it with explicit SQL once the column exists.
+    entry_source = Column(String(30), nullable=True, index=True)
+    __mapper_args__ = {"exclude_properties": ["entry_source"]}
     # Which owner company this entry belongs to (only meaningful when the account has more than one owner).
     company_name = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")
+
+    @property
+    def entry_source_safe(self):
+        """entry_source as attached by BankService (None when unknown). Never triggers a query."""
+        return getattr(self, "_entry_source", None)

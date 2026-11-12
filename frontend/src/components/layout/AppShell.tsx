@@ -3,6 +3,8 @@ import { Outlet, useLocation } from 'react-router-dom'
 import { AppSidebar } from '@/components/layout/AppSidebar'
 import { MobileTopBar } from '@/components/layout/MobileTopBar'
 import { TopHeader } from '@/components/layout/TopHeader'
+import { useSession } from '@/hooks/useSession'
+import { useOfflineSyncLifecycle } from '@/hooks/useOutbox'
 
 interface AppShellProps {
   children?: React.ReactNode
@@ -10,6 +12,9 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const location = useLocation()
+  const { user } = useSession()
+  // Load this user's offline outbox and keep syncing it on every signed in page (spec 0038)
+  useOfflineSyncLifecycle(user?.id ?? null)
 
   React.useEffect(() => {
     const path = location.pathname.toLowerCase()

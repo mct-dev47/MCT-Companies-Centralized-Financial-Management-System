@@ -328,12 +328,20 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
     setWsStatus(websocketService.getStatus())
 
+    let refreshTimer: number | null = null
+
     const handleRefresh = () => {
-      try {
-        void fetchLiveNotifications(true)
-      } catch (err) {
-        console.warn('Real-time refresh error:', formatUserFriendlyErrorMessage(err))
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer)
       }
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null
+        try {
+          void fetchLiveNotifications(true)
+        } catch (err) {
+          console.warn('Real-time refresh error:', formatUserFriendlyErrorMessage(err))
+        }
+      }, 80)
     }
 
     const handleStatusChange = (status: ConnectionStatus) => {
@@ -377,6 +385,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     ]
 
     return () => {
+      if (refreshTimer !== null) {
+        window.clearTimeout(refreshTimer)
+        refreshTimer = null
+      }
       window.removeEventListener(NOTIFICATION_UPDATED_EVENT, handleRefresh)
       window.removeEventListener('storage', handleStorageSync)
       unsubs.forEach((off) => off())

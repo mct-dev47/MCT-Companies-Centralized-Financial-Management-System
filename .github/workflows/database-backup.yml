@@ -1,0 +1,101 @@
+name: "Off-Site Database Backup"
+
+on:
+  schedule:
+    # Runs daily at 02:00 UTC (10:00 AM PHT)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  database-backup:
+    name: "Supabase pg_dump Encrypted Backup & Cloud Archive"
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_DIRECT_DB_URL: ${{ secrets.SUPABASE_DIRECT_DB_URL }}
+      BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_ENDPOINT_URL: ${{ secrets.AWS_ENDPOINT_URL }}
+      BACKUP_BUCKET_NAME: ${{ secrets.BACKUP_BUCKET_NAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL Client & GPG
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client gnupg
+
+      - name: Run pg_dump, Verify, and Encrypt with AES-256
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_DIRECT_DB_URL:-}" ]; then
+            echo "::error::SUPABASE_DIRECT_DB_URL secret is not configured in repository settings."
+            exit 1
+          fi
+
+          if [ -z "${BACKUP_ENCRYPTION_KEY:-}" ]; then
+            echo "::error::BACKUP_ENCRYPTION_KEY secret is required to encrypt production database backups."
+            exit 1
+          fi
+
+          BACKUP_DIR="backups"
+          mkdir -p "$BACKUP_DIR"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          RAW_FILE="$BACKUP_DIR/mct_db_backup_${TIMESTAMP}.dump"
+          ENCRYPTED_FILE="${RAW_FILE}.gpg"
+
+          echo "Starting pg_dump against Supabase database..."
+          pg_dump -Fc --no-owner --no-privileges "$SUPABASE_DIRECT_DB_URL" > "$RAW_FILE"
+
+          if [ ! -s "$RAW_FILE" ]; then
+            echo "::error::pg_dump produced an empty backup file."
+            rm -f "$RAW_FILE"
+            exit 1
+          fi
+
+          RAW_SIZE=$(stat -c%s "$RAW_FILE")
+          echo "Raw dump created ($RAW_SIZE bytes). Encrypting with AES-256..."
+
+          gpg --batch --yes --passphrase "$BACKUP_ENCRYPTION_KEY" \
+            --symmetric --cipher-algo AES256 \
+            -o "$ENCRYPTED_FILE" "$RAW_FILE"
+
+          # Shred/remove plaintext dump immediately
+          rm -f "$RAW_FILE"
+
+          if [ ! -s "$ENCRYPTED_FILE" ]; then
+            echo "::error::Encrypted backup file was not created properly."
+            exit 1
+          fi
+
+          ENC_SIZE=$(stat -c%s "$ENCRYPTED_FILE")
+          echo "Encrypted backup ready: $ENCRYPTED_FILE ($ENC_SIZE bytes)"
+
+      - name: Upload Encrypted Backup to S3 / Cloudflare R2 Bucket
+        run: |
+          set -euo pipefail
+
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${BACKUP_BUCKET_NAME:-}" ]; then
+            echo "::error::Cloud storage secrets (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BACKUP_BUCKET_NAME) must be configured for off-site archival."
+            exit 1
+          fi
+
+          export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-1}"
+          ENCRYPTED_FILE=$(ls backups/*.dump.gpg | head -n 1)
+          FILENAME=$(basename "$ENCRYPTED_FILE")
+
+          EXTRA_ARGS=()
+          if [ -n "${AWS_ENDPOINT_URL:-}" ]; then
+            EXTRA_ARGS+=("--endpoint-url" "$AWS_ENDPOINT_URL")
+          fi
+
+          echo "Uploading $FILENAME to s3://$BACKUP_BUCKET_NAME/database-backups/$FILENAME (region: $AWS_DEFAULT_REGION)..."
+          aws s3 cp "$ENCRYPTED_FILE" "s3://$BACKUP_BUCKET_NAME/database-backups/$FILENAME" "${EXTRA_ARGS[@]}"
+          rm -f "$ENCRYPTED_FILE"
+          echo "Encrypted cloud archive upload complete."

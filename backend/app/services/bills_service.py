@@ -317,6 +317,24 @@ class BillsService:
             ],
         )
 
+    def count_bills(
+        self,
+        company_id: Optional[int] = None,
+        company_name: Optional[str] = None,
+        company_ids: Optional[List[int]] = None,
+    ) -> int:
+        query = self.db.query(Bill.bill_id)
+        if company_id:
+            query = query.filter(Bill.company_id == company_id)
+        elif company_name and company_name.lower() != "all companies":
+            resolved = _resolve_company(self.db, None, company_name)
+            query = query.filter(Bill.company_id == resolved.company_id)
+        elif company_ids is not None:
+            if not company_ids:
+                return 0
+            query = query.filter(Bill.company_id.in_(company_ids))
+        return query.count()
+
     def list_bills(
         self,
         company_id: Optional[int] = None,
@@ -331,7 +349,9 @@ class BillsService:
         elif company_name and company_name.lower() != "all companies":
             resolved = _resolve_company(self.db, None, company_name)
             query = query.filter(Bill.company_id == resolved.company_id)
-        elif company_ids:
+        elif company_ids is not None:
+            if not company_ids:
+                return []
             query = query.filter(Bill.company_id.in_(company_ids))
         query = query.order_by(Bill.created_at.desc(), Bill.bill_id.desc())
         if offset is not None:

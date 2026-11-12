@@ -49,15 +49,22 @@ def test_receivable_payment_follows_sale_deposit_status():
         1, ReceivablePaymentCreate(amount=Decimal("500.00"), payment_date=date.today(), bank_account_id="bnk-001")
     )
 
-    # Sale is Paid now but Not Deposited: the ledger shows no cash, so the bank must hold none.
+    # A collected payment auto-marks the sale Deposited on the payment day, so the bank holds it.
     sale = db.get(Sale, 1)
     assert "[Paid]" in sale.particulars
+    assert sale.deposit_status == "Deposited"
+    assert sale.deposit_date == date.today()
+    assert _bank(db) == Decimal("1500.00")
+
+    # A supervisor can still mark it Not Deposited: the ledger shows no cash, so the bank holds none.
+    sync = SalesReceivablesSyncService(db)
+    sync.set_sale_deposit(1, "Not Deposited")
+    db.commit()
     assert _bank(db) == Decimal("1000.00")
 
-    # Mark Deposited: the ledger counts 500, so the bank must too.
-    sale.deposit_status = "Deposited"
+    # ...and back to Deposited: the ledger counts 500, so the bank does too.
+    sync.set_sale_deposit(1, "Deposited")
     db.commit()
-    SalesReceivablesSyncService(db).reconcile_sale_bank(1)
     assert _bank(db) == Decimal("1500.00")
 
     # Reconciling again, or after an edit, must not double count the receivable payment.

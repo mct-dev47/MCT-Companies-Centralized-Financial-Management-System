@@ -30,6 +30,7 @@ class Receivable(Base):
     balance = Column(Numeric(15, 2), nullable=False, default=0.00)
     payment_status = Column(String(50), nullable=False, default="Unpaid")  # 'Unpaid', 'Partial', 'Paid'
     notes = Column(Text, nullable=True)
+    client_ref = Column(String(64), nullable=True, unique=True)  # offline queue dedupe (spec 0038)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

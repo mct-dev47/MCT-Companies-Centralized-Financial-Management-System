@@ -8,6 +8,7 @@ import {
 } from '@/services/authService'
 import type { SignInFormValues } from '@/lib/validation/auth'
 import { clearNotificationCache } from '@/services/notificationService'
+import { bankService } from '@/services/bankService'
 import { websocketService } from '@/services/websocketService'
 
 export type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated'
@@ -79,11 +80,13 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
         if (!isMounted) return
 
         if (sessionResult.user) {
+          bankService.invalidateCache()
           setUser(sessionResult.user)
           setStatus('authenticated')
         } else {
           setUser(null)
           clearNotificationCache()
+          bankService.invalidateCache()
           setStatus('unauthenticated')
           if (sessionResult.reason && typeof window !== 'undefined' && window.location.pathname !== '/login') {
             window.location.href = `/login?reason=${sessionResult.reason}`
@@ -93,6 +96,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
         if (!isMounted) return
         setUser(null)
         clearNotificationCache()
+        bankService.invalidateCache()
         setStatus('unauthenticated')
       }
     }
@@ -108,6 +112,8 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
     async (values: SignInFormValues): Promise<SignInResult> => {
       const result = await authService.signIn(values)
       if (result.status === 'authenticated') {
+        bankService.invalidateCache()
+        clearNotificationCache()
         setUser(result.user)
         setStatus('authenticated')
       }
@@ -130,6 +136,8 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const handleComplete2FA = React.useCallback(async (): Promise<void> => {
     const sessionUser = await authService.getSession()
+    bankService.invalidateCache()
+    clearNotificationCache()
     setUser(sessionUser)
     setStatus('authenticated')
   }, [])
@@ -141,6 +149,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
       // Regardless of outcome, clear session state in memory
       setUser(null)
       clearNotificationCache()
+      bankService.invalidateCache()
       if (typeof window !== 'undefined') {
         try {
           sessionStorage.removeItem('mct_active_company_session')
