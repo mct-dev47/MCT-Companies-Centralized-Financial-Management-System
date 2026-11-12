@@ -106,6 +106,8 @@ export function useReceivables(
         payment_status?: PaymentStatus
         payment_method?: string
         bank_account_id?: string
+        deposit_status?: 'Deposited' | 'Not Deposited'
+        deposit_date?: string
       }
     ) => {
       return receivablesStore.editSale(saleId, params)

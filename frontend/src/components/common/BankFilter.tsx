@@ -1,6 +1,13 @@
 import * as React from 'react'
 import { Landmark, ChevronDown } from 'lucide-react'
-import { bankService, type BankAccount } from '@/services/bankService'
+import {
+  bankService,
+  isAccountOwnedBy,
+  preferSoleOwnedBanks,
+  type BankAccount,
+} from '@/services/bankService'
+import { useSession } from '@/hooks/useSession'
+import { websocketService } from '@/services/websocketService'
 import { cn } from '@/lib/utils'
 
 const norm = (s?: string) => (s || '').trim().toLowerCase()
@@ -10,43 +17,71 @@ const norm = (s?: string) => (s || '').trim().toLowerCase()
  * selected bank. An empty selectedId means "All Banks".
  */
 export function useBankFilter(company: string) {
-  const [accounts, setAccounts] = React.useState<BankAccount[]>(() => bankService.getCachedAccounts())
+  const { user } = useSession()
+  const userId = user?.id
+  const userScopeKey = `${userId || ''}:${user?.role || ''}:${user?.assignedCompany || ''}`
+  const [accounts, setAccounts] = React.useState<BankAccount[]>(() =>
+    bankService.getCachedAccounts()
+  )
   const [selectedId, setSelectedId] = React.useState('')
 
   React.useEffect(() => {
+    if (!userId) return
+
     let mounted = true
-    bankService
-      .getAccounts()
-      .then((rows) => {
-        if (mounted && Array.isArray(rows)) setAccounts(rows)
-      })
-      .catch(() => {})
+    const loadAccounts = (forceRefresh = false) => {
+      bankService
+        .getAccounts(undefined, forceRefresh ? { forceRefresh: true } : undefined)
+        .then((rows) => {
+          if (mounted && Array.isArray(rows)) setAccounts(rows)
+        })
+        .catch(() => {})
+    }
+
+    loadAccounts(false)
+
+    const unsubBank = websocketService.subscribe('BANK_UPDATED', () => {
+      loadAccounts(true)
+    })
+
     return () => {
       mounted = false
+      unsubBank()
     }
-  }, [])
+  }, [userId, userScopeKey])
+
+  const scopedAccounts = React.useMemo(() => (userId ? accounts : []), [userId, accounts])
 
   const available = React.useMemo(() => {
     const target = norm(company)
-    if (!target || target === 'all companies') return accounts
-    return accounts.filter((a) => norm(a.companyName) === target)
-  }, [accounts, company])
+    if (!target || target === 'all companies') return scopedAccounts
+    return preferSoleOwnedBanks(
+      scopedAccounts.filter((a) => isAccountOwnedBy(a, company)),
+      company
+    )
+  }, [scopedAccounts, company])
 
-  // Drop the selection when the chosen bank is no longer in scope (e.g. the company changed)
-  React.useEffect(() => {
-    if (selectedId && !available.some((a) => String(a.id) === selectedId)) setSelectedId('')
+  const activeSelectedId = React.useMemo(() => {
+    if (!selectedId) return ''
+    return available.some((a) => String(a.id) === selectedId) ? selectedId : ''
   }, [available, selectedId])
 
   const bankLabel = React.useCallback(
     (id?: string) => {
       if (!id) return 'No bank'
-      const acc = accounts.find((a) => String(a.id) === String(id))
+      const acc = scopedAccounts.find((a) => String(a.id) === String(id))
       return acc ? `${acc.bankName}${acc.accountName ? ` - ${acc.accountName}` : ''}` : 'Unknown bank'
     },
-    [accounts]
+    [scopedAccounts]
   )
 
-  return { accounts, available, selectedId, setSelectedId, bankLabel }
+  return {
+    accounts: scopedAccounts,
+    available,
+    selectedId: activeSelectedId,
+    setSelectedId,
+    bankLabel,
+  }
 }
 
 interface BankFilterSelectProps {

@@ -112,6 +112,24 @@ def create_db_engine(
 engine = create_db_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+def backfill_sale_statuses(conn) -> None:
+    """
+    Fill in sales whose payment / deposit status is missing (AC-7). Runs on every startup, so it must
+    only touch blank values: it never changes a status someone chose. Overwriting 'Not Deposited' with
+    'Deposited' (or the reverse) in raw SQL bypasses the bank sync, so the bank and the Transactions
+    ledger stop matching.
+    """
+    from sqlalchemy import text
+
+    conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
+    conn.execute(text(
+        "UPDATE sales SET "
+        "deposit_status = CASE WHEN payment_status = 'Paid' THEN 'Deposited' ELSE 'Not Deposited' END, "
+        "deposit_date = CASE WHEN payment_status = 'Paid' THEN COALESCE(deposit_date, transaction_date) ELSE NULL END "
+        "WHERE deposit_status IS NULL OR deposit_status = ''"
+    ))
+
+
 def init_db():
     import app.models.company
     import app.models.finance
@@ -190,10 +208,9 @@ def init_db():
                     conn.execute(text("ALTER TABLE sales ADD COLUMN remarks TEXT NULL"))
                 if "bank_account_id" not in sales_cols:
                     conn.execute(text("ALTER TABLE sales ADD COLUMN bank_account_id VARCHAR(100) NULL"))
-                # Safe backfill (AC-7)
-                conn.execute(text("UPDATE sales SET payment_status = 'Paid' WHERE payment_status IS NULL OR payment_status = ''"))
-                conn.execute(text("UPDATE sales SET deposit_status = 'Deposited' WHERE payment_status = 'Paid' AND (deposit_status IS NULL OR deposit_status = '' OR deposit_status = 'Not Deposited')"))
-                conn.execute(text("UPDATE sales SET deposit_status = 'Not Deposited' WHERE payment_status IN ('Unpaid', 'Pending')"))
+            # Safe backfill (AC-7)
+            with engine.begin() as conn:
+                backfill_sale_statuses(conn)
 
         if "bank_transactions" in table_names:
             bank_tx_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
@@ -338,6 +355,19 @@ def init_db():
                     pass
     except Exception:
         pass
+
+    # Bank integrity on every start: drop entries whose sale/expense was deleted while nothing was watching,
+    # and re-derive every balance from its entries. Both are safe no matter what any record's status is.
+    try:
+        from app.services.bank_reconcile import repair_bank_integrity
+
+        _repair_db = SessionLocal()
+        try:
+            repair_bank_integrity(_repair_db)
+        finally:
+            _repair_db.close()
+    except Exception as e:
+        logger.warning(f"Bank integrity repair skipped on init: {e}")
 
     import threading
 

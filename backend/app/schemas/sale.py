@@ -47,6 +47,7 @@ class SaleCreate(SaleBase):
     description: Optional[str] = Field(None, max_length=500)
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=50)
+    client_ref: Optional[str] = Field(None, min_length=8, max_length=64, description="Unique ID from the client; resending it returns the existing record")
 
     @model_validator(mode="after")
     def validate_required_fields(self):
@@ -202,13 +203,8 @@ class SaleUpdate(StrictBaseModel):
         if self.payment_status == "Unpaid" and self.deposit_status == "Deposited":
             raise ValueError("Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.")
 
-        if self.payment_status == "Pending" and self.deposit_status == "Deposited":
-            pm = (self.payment_method or "").strip().lower()
-            chq =(self.cheque_no or self.chequeNo or "").strip()
-            if pm != "cheque" or not chq:
-                raise ValueError(
-                    "Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance."
-                )
+        # Pending + Deposited is checked by the endpoint: it is allowed once money was collected on
+        # the sale (e.g. a partial receivable payment), which the schema alone cannot see.
 
         return self
 
@@ -253,6 +249,9 @@ class SaleOut(BaseModel):
     audit_remarks: Optional[str] = None
     remarks: Optional[str] = None
     bank_account_id: Optional[str] = None
+    # Money collected so far: [Paid] lines plus payments on linked receivables (partial ones too).
+    # The ledger counts it only while the sale is Deposited.
+    paid_amount: Optional[Decimal] = None
 
     model_config = ConfigDict(from_attributes=True)
 

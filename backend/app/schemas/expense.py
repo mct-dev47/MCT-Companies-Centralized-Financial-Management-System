@@ -46,6 +46,7 @@ class ExpenseCreate(ExpenseBase):
     chequeNo: Optional[str] = Field(None, max_length=100)
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=50)
+    client_ref: Optional[str] = Field(None, min_length=8, max_length=64, description="Unique ID from the client; resending it returns the existing record")
 
     @model_validator(mode="after")
     def validate_required_fields(self):

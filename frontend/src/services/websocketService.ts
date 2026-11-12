@@ -31,6 +31,8 @@ class WebSocketService {
   private reconnectTimeout: number | null = null
   private pingInterval: number | null = null
   private stableTimer: number | null = null
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private pendingNotifications: Map<string, any> = new Map()
   private broadcastChannel: BroadcastChannel | null = null
   private isConnecting: boolean = false
   private reconnectAttempts: number = 0
@@ -42,7 +44,7 @@ class WebSocketService {
         this.broadcastChannel = new BroadcastChannel('mct_realtime_sync')
         this.broadcastChannel.onmessage = (event) => {
           if (event.data && event.data.type) {
-            this.notifyListeners(event.data.type, event.data.payload)
+            this.enqueueNotification(event.data.type, event.data.payload)
           }
         }
       } catch {
@@ -116,7 +118,7 @@ class WebSocketService {
           const data = JSON.parse(event.data)
           if (data && data.type === 'authenticated') return
           if (data && data.type) {
-            this.notifyListeners(data.type, data.payload || data)
+            this.enqueueNotification(data.type, data.payload || data)
             this.broadcastChannel?.postMessage(data)
           }
         } catch {
@@ -143,6 +145,11 @@ class WebSocketService {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
     }
+    if (this.flushTimer !== null) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    this.pendingNotifications.clear()
     this.stopPing()
     this.isConnecting = false
     if (this.socket) {
@@ -213,8 +220,24 @@ class WebSocketService {
   }
 
   public emitLocal(type: SyncEventType, payload?: any): void {
-    this.notifyListeners(type, payload)
+    this.enqueueNotification(type, payload)
     this.broadcastChannel?.postMessage({ type, payload })
+  }
+
+  private enqueueNotification(type: string, payload?: any): void {
+    // Coalesce burst notifications of the same type within one tick so socket.onmessage
+    // yields immediately without triggering blocking listener cascades.
+    this.pendingNotifications.set(type, payload)
+    if (this.flushTimer === null) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null
+        const batch = Array.from(this.pendingNotifications.entries())
+        this.pendingNotifications.clear()
+        for (const [eventType, eventPayload] of batch) {
+          this.notifyListeners(eventType, eventPayload)
+        }
+      }, 0)
+    }
   }
 
   private notifyListeners(type: string, payload?: any): void {

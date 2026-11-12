@@ -26,7 +26,8 @@ export interface DashboardTransactionItem {
   refNo: string
   chequeNo?: string
   date: string // e.g. "October 1, 2026" or "2026-10-01"
-  type: 'Expense' | 'Sales' | 'Loan' | 'Income' | 'Petty Cash'
+  /** 'Bank' = a deposit/withdrawal typed directly in Bank Management (no sale/expense record behind it) */
+  type: 'Expense' | 'Sales' | 'Loan' | 'Income' | 'Petty Cash' | 'Bank'
   company: string
   description: string
   particulars?: string
@@ -50,6 +51,8 @@ export interface DashboardTransactionItem {
   isMirrorRow?: boolean
   /** Endorsed by Finance but not yet approved by Internal Audit. */
   awaitingAudit?: boolean
+  /** Label for the pending badge when the row is waiting on something other than Audit (e.g. "Awaiting Reimbursement"). */
+  pendingLabel?: string
   /** The paid part of a sale or expense (spec 0013, AC-10). Used by the cash ledger tab. */
   paidAmount?: number
   bankAccountId?: string

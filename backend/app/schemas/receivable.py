@@ -79,6 +79,7 @@ class ReceivableCreate(ReceivableBase):
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=100)
     date: Optional[str] = None
+    client_ref: Optional[str] = Field(None, min_length=8, max_length=64, description="Unique ID from the client; resending it returns the existing record")
 
     @model_validator(mode="before")
     @classmethod
@@ -113,6 +114,9 @@ class ReceivableUpdate(StrictBaseModel):
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=1000)
+    # Deposit Status tab: applied to the linked sale (Deposited / Not Deposited, date defaults to today)
+    deposit_status: Optional[str] = Field(None, max_length=50)
+    deposit_date: Optional[date] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -140,6 +144,16 @@ class ReceivableUpdate(StrictBaseModel):
                     data["payment_status"] = "Partial"
                 elif ps == "unpaid":
                     data["payment_status"] = "Unpaid"
+            if isinstance(data.get("deposit_status"), str):
+                ds = data["deposit_status"].strip().lower()
+                if ds in ("deposited", "deposit"):
+                    data["deposit_status"] = "Deposited"
+                elif ds in ("not deposited", "not_deposited", "notdeposited"):
+                    data["deposit_status"] = "Not Deposited"
+                elif not ds:
+                    data["deposit_status"] = None
+                else:
+                    raise ValueError("Deposit status must be either 'Deposited' or 'Not Deposited'.")
         return data
 
 
@@ -152,6 +166,12 @@ class ReceivableOut(ReceivableBase):
     balance: Decimal
     payment_status: str
     is_locked: bool = False
+    # Bank every payment on this receivable goes to (its sale's bank, else its first payment's bank)
+    origin_bank_account_id: Optional[str] = None
+    origin_bank_name: Optional[str] = None
+    # Deposit status/date of the linked sale
+    sale_deposit_status: Optional[str] = None
+    sale_deposit_date: Optional[date] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     payments: List[ReceivablePaymentOut] = []
