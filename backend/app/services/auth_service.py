@@ -66,6 +66,8 @@ def _pad_duration(start_perf: float, floor_seconds: float) -> None:
 
 
 def _mask_email(email: str) -> str:
+    if not email or "@" not in email:
+        return "***"
     local, domain = email.split("@", 1)
     return f"{local[:1]}***@{domain}"
 
@@ -307,13 +309,22 @@ def _send_login_otp(email: str, otp: str, wait: bool = True) -> bool:
             <p style="color: #94a3b8; font-size: 12px;">MCT Companies Centralized Financial Management System</p>
         </div>
         """
-        return bool(send_transactional_email(
-            to_email=email,
-            subject=subject,
-            html_content=html_content,
-            text_content=text_content,
-            enforce_cooldown=False,
-        ))
+        try:
+            sent = bool(send_transactional_email(
+                to_email=email,
+                subject=subject,
+                html_content=html_content,
+                text_content=text_content,
+                enforce_cooldown=False,
+            ))
+            if sent:
+                logger.info("OTP verification email dispatched to %s via Brevo.", _mask_email(email))
+            else:
+                logger.warning("Failed to dispatch OTP verification email to %s via Brevo.", _mask_email(email))
+            return sent
+        except Exception as exc:
+            logger.warning("OTP email dispatch raised an exception for %s: %s", _mask_email(email), exc)
+            return False
 
     if wait:
         try:
