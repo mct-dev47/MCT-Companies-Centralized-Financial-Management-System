@@ -632,6 +632,18 @@ export const PettyCashPage: React.FC = () => {
 
       return true
     })
+    // Most recent at the top: newest date first, then (same day) the most recently created first.
+    // Each row keeps the running balance the server worked out in chronological order.
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => {
+      const byDate = String(b.item.date || '').slice(0, 10).localeCompare(String(a.item.date || '').slice(0, 10))
+      if (byDate !== 0) return byDate
+      const aTime = a.item.createdAt ? Date.parse(a.item.createdAt) : NaN
+      const bTime = b.item.createdAt ? Date.parse(b.item.createdAt) : NaN
+      if (!isNaN(aTime) && !isNaN(bTime) && aTime !== bTime) return bTime - aTime
+      return a.idx - b.idx
+    })
+    .map(({ item }) => item)
   }, [ledger, isAllCompanies, selectedCompany, statusFilter, typeFilter, auditStatusFilter, searchQuery, dateRange, isAudit])
 
   // Pagination calculation

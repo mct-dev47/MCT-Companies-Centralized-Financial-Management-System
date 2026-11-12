@@ -104,6 +104,18 @@ def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[st
     return (has_url or count > 0), count
 
 
+def _remarks_suffix(finance_remark: Optional[str], audit_remark: Optional[str]) -> str:
+    """Every remark Finance and Audit left on a request, so a notification always carries both."""
+    parts = []
+    fin = (finance_remark or "").strip()
+    aud = (audit_remark or "").strip()
+    if fin:
+        parts.append(f"Finance remark: {fin}")
+    if aud:
+        parts.append(f"Audit remark: {aud}")
+    return (" " + " | ".join(parts)) if parts else ""
+
+
 def is_petty_cash(payment_method: Optional[str] = None, category_name: Optional[str] = None) -> bool:
     pm = (payment_method or "").strip().lower()
     cat = (category_name or "").strip().lower()
@@ -1023,7 +1035,7 @@ class PettyCashService:
                     message = (
                         f"Petty cash {kind_label} of ₱{amt_val:,.2f} for {cname} (Ref: {ref}) "
                         f"was endorsed by Finance and awaits Audit approval."
-                    )
+                    ) + _remarks_suffix(finance_remark, remark)
                     recipient_ids.update(
                         self.db.scalars(
                             select(User.user_id).where(
@@ -1054,8 +1066,9 @@ class PettyCashService:
                             else f"Your petty cash top-up of ₱{amt_val:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
                         )
                     else:
-                        reason = remark or finance_remark or "Request declined."
-                        message = f"Your petty cash {kind_noun} of ₱{amt_val:,.2f} (Ref: {ref}) was {status_lower}: {reason}"
+                        message = f"Your petty cash {kind_noun} of ₱{amt_val:,.2f} (Ref: {ref}) was {status_lower}."
+                    remarks = _remarks_suffix(finance_remark, remark)
+                    message += remarks if remarks else ("" if is_approved else " Request declined.")
 
                     recipient_ids.update(
                         self.db.scalars(

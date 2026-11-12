@@ -51,7 +51,7 @@ import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionMo
 import { salesService } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
 import { loanService, type LoanItem } from '@/services/loanService'
-import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
+import { pettyCashService, type PettyCashMovement, type PettyCashSummary, type PettyCashLedgerEntry } from '@/services/pettyCashService'
 import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
 import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
@@ -475,6 +475,32 @@ const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
   )
 }
 
+/** An expense paid from the petty cash wallet. It lowers petty cash, not any bank balance. */
+const isPettyCashExpense = (tx: DashboardTransactionItem): boolean =>
+  tx.type === 'Expense' && (tx.paymentMethod || '').toLowerCase().includes('petty cash')
+
+/** Each company's petty cash wallet is offered in the bank dropdown as `petty-cash:<companyId>`.
+ * It is not a bank: its ledger comes from the Petty Cash page (top-ups in, petty cash expenses out). */
+const PETTY_CASH_ACCOUNT_PREFIX = 'petty-cash:'
+const isPettyCashAccount = (acc?: Pick<BankAccount, 'id'> | null): boolean =>
+  !!acc && String(acc.id).startsWith(PETTY_CASH_ACCOUNT_PREFIX)
+
+const pettyCashWalletToAccount = (w: PettyCashSummary): BankAccount => ({
+  id: `${PETTY_CASH_ACCOUNT_PREFIX}${w.companyId}`,
+  bankName: 'Petty Cash',
+  accountName: '',
+  accountNumber: '',
+  companyName: w.companyName,
+  companyNames: [w.companyName],
+  companyId: w.companyId,
+  accountType: 'Checking',
+  branch: '',
+  currentBalance: w.balance,
+  startingBalance: 0,
+  colorTheme: 'grey',
+  transactions: [],
+})
+
 const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAccount): boolean => {
   // 1. Direct bankAccountId match
   if (tx.bankAccountId && String(tx.bankAccountId) === String(account.id)) {
@@ -664,9 +690,9 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
                     <div className="flex items-center gap-1.5 shrink-0 text-right">
                       <div className="flex flex-col text-right">
                         <span className="text-[11px] font-semibold text-focus">
-                          {formatPHP(acc.startingBalance)}
+                          {formatPHP(isPettyCashAccount(acc) ? acc.currentBalance : acc.startingBalance)}
                         </span>
-                        <span className="text-[9px] text-muted-fg">start bal</span>
+                        <span className="text-[9px] text-muted-fg">{isPettyCashAccount(acc) ? 'balance' : 'start bal'}</span>
                       </div>
                       {isSelected && (
                         <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
@@ -814,6 +840,7 @@ export const TransactionPage: React.FC = () => {
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
+  const [pettyCashWallets, setPettyCashWallets] = React.useState<PettyCashSummary[]>([])
   const [loading, setLoading] = React.useState(true)
   const [isRefreshing, setIsRefreshing] = React.useState(false)
 
@@ -828,26 +855,46 @@ export const TransactionPage: React.FC = () => {
     return bankAccounts
   }, [bankAccounts, effectiveTargetCompany])
 
+  // Each company in scope also gets its own "Petty Cash" entry, listed after its banks.
+  const pettyCashAccounts = React.useMemo(
+    () =>
+      pettyCashWallets
+        .filter((w) => !effectiveTargetCompany || isCompanyMatch(w.companyName, effectiveTargetCompany))
+        .map(pettyCashWalletToAccount),
+    [pettyCashWallets, effectiveTargetCompany]
+  )
+
+  // Everything the bank dropdown offers: real banks first, then each company's petty cash.
+  const ledgerAccounts = React.useMemo(
+    () => [...availableBankAccounts, ...pettyCashAccounts],
+    [availableBankAccounts, pettyCashAccounts]
+  )
+
   // The page always shows one bank. Pick the first bank in scope when none (or an out of scope one) is chosen.
   React.useEffect(() => {
-    if (availableBankAccounts.length > 0) {
-      const exists = availableBankAccounts.some((a) => String(a.id) === String(selectedBankAccountId))
-      if (!exists) setSelectedBankAccountId(String(availableBankAccounts[0].id))
+    if (ledgerAccounts.length > 0) {
+      const exists = ledgerAccounts.some((a) => String(a.id) === String(selectedBankAccountId))
+      if (!exists) setSelectedBankAccountId(String(ledgerAccounts[0].id))
     } else if (selectedBankAccountId) {
       setSelectedBankAccountId('')
     }
-  }, [availableBankAccounts, selectedBankAccountId])
+  }, [ledgerAccounts, selectedBankAccountId])
 
   const selectedBankAccount = React.useMemo(
     () =>
-      availableBankAccounts.find((a) => String(a.id) === String(selectedBankAccountId)) ||
-      availableBankAccounts[0],
-    [availableBankAccounts, selectedBankAccountId]
+      ledgerAccounts.find((a) => String(a.id) === String(selectedBankAccountId)) ||
+      ledgerAccounts[0],
+    [ledgerAccounts, selectedBankAccountId]
   )
+
+  // "Petty Cash" picked in the bank dropdown: the ledger below is that company's petty cash wallet.
+  const selectedPettyCash = isPettyCashAccount(selectedBankAccount) ? selectedBankAccount : undefined
 
   // Which registered bank account a record belongs to (stored bank id first, then name / ledger matching).
   const resolveTxBank = React.useCallback(
     (tx: DashboardTransactionItem): BankAccount | undefined => {
+      // Paid from petty cash: no bank is involved (don't guess one from names or ledger matching)
+      if (isPettyCashExpense(tx)) return undefined
       if (tx.bankAccountId) {
         const byId = availableBankAccounts.find((a) => String(a.id) === String(tx.bankAccountId))
         if (byId) return byId
@@ -862,6 +909,72 @@ export const TransactionPage: React.FC = () => {
     },
     [availableBankAccounts]
   )
+
+  // The petty cash wallet's own ledger, straight from the server (same numbers as the Petty Cash page).
+  // Reloaded whenever the rest of the ledger reloads, so it stays in step with new expenses and top-ups.
+  const [pettyCashLedger, setPettyCashLedger] = React.useState<PettyCashLedgerEntry[]>([])
+  const pettyCashCompany = selectedPettyCash?.companyName
+  React.useEffect(() => {
+    if (!pettyCashCompany) {
+      setPettyCashLedger([])
+      return
+    }
+    let cancelled = false
+    pettyCashService
+      .getLedger(pettyCashCompany)
+      .then((entries) => {
+        if (!cancelled) setPettyCashLedger(entries || [])
+      })
+      .catch(() => {
+        if (!cancelled) setPettyCashLedger([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pettyCashCompany, transactions])
+
+  // Ledger entries that moved petty cash, as table rows. A petty cash expense reuses its Expense row
+  // (so it opens and audits like any expense); top-ups and other movements get their own row.
+  const pettyCashLedgerRows = React.useMemo((): DashboardTransactionItem[] => {
+    if (!selectedPettyCash) return []
+    return pettyCashLedger
+      .filter((e) => (e.amountIn || 0) > 0 || (e.amountOut || 0) > 0)
+      .map((e): DashboardTransactionItem => {
+        const deposit = e.amountIn || 0
+        const withdrawal = deposit > 0 ? 0 : e.amountOut || 0
+        const amount = deposit > 0 ? deposit : withdrawal
+        const expenseId = e.expenseId ?? (e.type === 'expense' ? e.recordId : null)
+        const existing =
+          expenseId != null
+            ? transactions.find((t) => t.type === 'Expense' && String(t.id) === String(expenseId))
+            : undefined
+        if (existing) {
+          return { ...existing, amount, deposit, withdrawal, paidAmount: amount }
+        }
+        return {
+          id: `pcw_${e.id}`,
+          refNo: e.referenceNo || String(e.recordId),
+          chequeNo: '',
+          date: toLedgerDate(e.date),
+          type: e.type === 'expense' ? 'Expense' : 'Petty Cash',
+          company: e.companyName || selectedPettyCash.companyName,
+          description: e.description,
+          particulars: e.description,
+          amount,
+          deposit,
+          withdrawal,
+          category: (e.category || 'Petty Cash') as any,
+          paymentMethod: 'Petty Cash',
+          status: 'Paid',
+          auditStatus: e.auditStatus || 'Pending Audit',
+          auditedBy: e.auditedBy || e.reviewedBy || undefined,
+          auditNotes: e.auditNotes || e.remark || undefined,
+          createdAt: e.createdAt || e.date,
+          isMirrorRow: true,
+          paidAmount: amount,
+        }
+      })
+  }, [selectedPettyCash, pettyCashLedger, transactions])
 
   // Starting balances from registered bank accounts grouped by company
   const getStartingBalanceForCompany = React.useCallback(
@@ -1003,6 +1116,8 @@ export const TransactionPage: React.FC = () => {
           : Promise.resolve([] as TenantLease[]),
         bankService.getAccounts(targetCompany).catch(() => [] as BankAccount[]),
       ])
+      // Petty cash wallets (shown as "Petty Cash" in the bank dropdown) reload with the rest of the ledger.
+      const walletsData = await pettyCashService.getAllSummaries().catch(() => [] as PettyCashSummary[])
 
       const unifiedSales: DashboardTransactionItem[] = salesData.map((s) => ({
         id: s.id,
@@ -1177,6 +1292,7 @@ export const TransactionPage: React.FC = () => {
       const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants, ...unifiedManualBank]
       setTransactions(combined)
       setBankAccounts(bankAccountsData)
+      setPettyCashWallets(walletsData)
     } finally {
       setLoading(false)
       setIsRefreshing(false)
@@ -1234,6 +1350,8 @@ export const TransactionPage: React.FC = () => {
   //    Spec 0016: loans and petty cash top ups still waiting for Audit are not money movement yet, so
   //    they are kept off this tab. They stay on the All tab, marked pending.
   const depositBaseList = React.useMemo(() => {
+    // Petty cash wallet picked: only its own movements (top-ups in, petty cash expenses out)
+    if (selectedPettyCash) return pettyCashLedgerRows
     // Spec 0013 & updated deposit filter: Any transaction that represents a deposit / money in
     // (Sales, Rental Income, Loan deposit to borrower, Petty Cash top up received) is included.
     let list = transactions
@@ -1250,7 +1368,9 @@ export const TransactionPage: React.FC = () => {
         if (t.type === 'Bank') return true
         // Only PAID expenses are cash ledger withdrawals. Pending and Unpaid expenses have a withdrawal
         // amount but no money has left yet, so they stay in All Transactions only.
-        if (t.type === 'Expense') return (t.paidAmount || 0) > 0
+        // Petty cash expenses come out of the petty cash wallet, never a bank, so they are kept off
+        // this bank ledger (and its running balance). They stay in All Transactions.
+        if (t.type === 'Expense') return (t.paidAmount || 0) > 0 && !isPettyCashExpense(t)
         // Loans and petty cash movements are included once approved (not awaiting audit)
         if (t.type === 'Loan' || t.type === 'Petty Cash') return !t.awaitingAudit
         // Any other record with explicit deposit > 0
@@ -1289,7 +1409,7 @@ export const TransactionPage: React.FC = () => {
     }
 
     return list
-  }, [transactions, effectiveTargetCompany, selectedBankAccount, resolveTxBank])
+  }, [transactions, effectiveTargetCompany, selectedBankAccount, resolveTxBank, selectedPettyCash, pettyCashLedgerRows])
 
   // Running balance per company or selected bank account (deposits minus withdrawals, oldest first, seeded from bank starting balances).
   // It is worked out over the whole company scoped ledger, before the search, direction and date filters,
@@ -1420,8 +1540,14 @@ export const TransactionPage: React.FC = () => {
       list = list.filter((t) => isCompanyMatch(t.company, effectiveTargetCompany))
     }
 
-    // Bank scope
-    if (selectedBankAccount) {
+    // Bank scope (petty cash wallet: that company's petty cash expenses and petty cash requests)
+    if (selectedPettyCash) {
+      list = list.filter(
+        (t) =>
+          isCompanyMatch(t.company, selectedPettyCash.companyName) &&
+          (isPettyCashExpense(t) || t.type === 'Petty Cash')
+      )
+    } else if (selectedBankAccount) {
       list = list.filter((t) => resolveTxBank(t)?.id === selectedBankAccount.id)
     }
 
@@ -1477,6 +1603,7 @@ export const TransactionPage: React.FC = () => {
     transactions,
     effectiveTargetCompany,
     selectedBankAccount,
+    selectedPettyCash,
     resolveTxBank,
     salesTypeFilter,
     salesStatusFilter,
@@ -1707,7 +1834,8 @@ export const TransactionPage: React.FC = () => {
   // Does this ledger agree with the bank? Starting balance + every deposit and withdrawal here must equal the
   // balance Bank Management shows. Checked for the selected bank, on the whole ledger (no search / date filters).
   const bankBalanceCheck = React.useMemo(() => {
-    if (!selectedBankAccount) return null
+    // Petty cash is not a bank: its ledger comes from the server, so there is nothing to reconcile
+    if (!selectedBankAccount || isPettyCashAccount(selectedBankAccount)) return null
     let net = 0
     depositBaseList.forEach((t) => {
       const { deposit, withdrawal } = getRowAmounts(t)
@@ -2229,10 +2357,10 @@ export const TransactionPage: React.FC = () => {
               </div>
             )}
 
-            {availableBankAccounts.length > 0 && (
+            {ledgerAccounts.length > 0 && (
               <BankAccountFilterDropdown
                 selectedAccountId={selectedBankAccountId}
-                bankAccounts={availableBankAccounts}
+                bankAccounts={ledgerAccounts}
                 onSelectAccount={(id) => {
                   setSelectedBankAccountId(id)
                   setDepositCurrentPage(1)
@@ -3187,7 +3315,9 @@ export const TransactionPage: React.FC = () => {
               className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-sky-200/70 bg-sky-50/60"
               title={
                 selectedBankAccount
-                  ? `${selectedBankAccount.bankName} (${selectedBankAccount.accountType}) starting balance`
+                  ? isPettyCashAccount(selectedBankAccount)
+                    ? `Petty Cash (${selectedBankAccount.companyName}) starting balance`
+                    : `${selectedBankAccount.bankName} (${selectedBankAccount.accountType}) starting balance`
                   : `Consolidated starting balance (${availableBankAccounts.length} bank account${availableBankAccounts.length === 1 ? '' : 's'})`
               }
             >

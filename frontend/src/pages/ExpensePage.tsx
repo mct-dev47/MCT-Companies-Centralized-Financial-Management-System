@@ -45,7 +45,7 @@ import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
-import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { BankFilterSelect, useBankFilter, PETTY_CASH_BANK_ID, isPettyCashPayment } from '@/components/common/BankFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -397,7 +397,7 @@ export const ExpensePage: React.FC = () => {
     selectedId: selectedBankId,
     setSelectedId: setSelectedBankId,
     bankLabel,
-  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany)
+  } = useBankFilter(isCompanyScoped ? assignedCompany : selectedCompany, { includePettyCash: true })
 
   const baseFilteredExpenses = React.useMemo(() => {
     const targetCompany = isCompanyScoped ? assignedCompany : selectedCompany
@@ -411,9 +411,15 @@ export const ExpensePage: React.FC = () => {
           return false
         }
 
-        // Bank filter ('' = All Banks)
-        if (selectedBankId && String(item.bankAccountId || '') !== selectedBankId) {
-          return false
+        // Bank filter ('' = All Banks). "Petty Cash" lists expenses paid from petty cash; a real bank
+        // never lists them, since petty cash expenses don't come out of any bank.
+        if (selectedBankId) {
+          const isPetty = isPettyCashPayment(item.paymentMethod)
+          if (selectedBankId === PETTY_CASH_BANK_ID) {
+            if (!isPetty) return false
+          } else if (isPetty || String(item.bankAccountId || '') !== selectedBankId) {
+            return false
+          }
         }
 
         if (
@@ -1113,6 +1119,7 @@ export const ExpensePage: React.FC = () => {
               accounts={bankOptions}
               value={selectedBankId}
               onChange={setSelectedBankId}
+              includePettyCash
             />
 
             {/* Tab Switcher: Withdraw / Expense Record */}
@@ -1492,7 +1499,8 @@ export const ExpensePage: React.FC = () => {
                                 {(() => {
                                   const byBank = new Map<string, { count: number; total: number }>()
                                   group.items.forEach((it) => {
-                                    const key = String(it.bankAccountId || '')
+                                    // Petty cash expenses are grouped under "Petty Cash", not "No bank"
+                                    const key = isPettyCashPayment(it.paymentMethod) ? PETTY_CASH_BANK_ID : String(it.bankAccountId || '')
                                     const entry = byBank.get(key) || { count: 0, total: 0 }
                                     entry.count += 1
                                     entry.total += (tableTab === 'Withdraw' ? getPaidDisbursementForExpense(it) : it.withdrawal)

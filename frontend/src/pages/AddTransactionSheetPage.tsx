@@ -1779,9 +1779,22 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         }
         // New paid rows keep depositDate empty, so the deposit day follows the sales date
 
+        // Expense paid with petty cash: the category is always Petty Cash. Switching away from petty cash
+        // puts back the default category instead of leaving a petty cash category on a bank expense.
+        let category = field === 'category' ? value : r.category
+        if (!isSales && field === 'paymentMethod') {
+          const pmLower = String(value || '').trim().toLowerCase()
+          if (pmLower === 'petty cash') {
+            category = 'Petty Cash'
+          } else if ((r.category || '').trim().toLowerCase() === 'petty cash') {
+            category = defaultCategory
+          }
+        }
+
         return {
           ...r,
           [field]: value,
+          category,
           depositStatus: finalDepositStatus,
           depositDate,
         }

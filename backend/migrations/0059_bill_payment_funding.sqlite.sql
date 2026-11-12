@@ -1,0 +1,6 @@
+-- 0059_bill_payment_funding.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE bill_payments ADD COLUMN funding_source VARCHAR(20) NULL;
+-- ALTER TABLE bill_payments ADD COLUMN bank_account_id VARCHAR(100) NULL;
+-- ALTER TABLE bill_payments ADD COLUMN expense_id INTEGER NULL;

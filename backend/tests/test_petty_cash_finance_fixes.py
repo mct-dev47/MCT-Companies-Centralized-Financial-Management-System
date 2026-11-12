@@ -271,7 +271,8 @@ def test_supervisor_petty_cash_notifies_finance_on_cold_and_warm_db(env):
         assert topup_out.topup_id in ref_ids
         assert reimb_out.topup_id in ref_ids
         assert legacy_row.topup_id in ref_ids
-        assert any(n.notification_id == "bill-due-existing-1" for n in feed_warm.items)
+        # Bill due-date reminders are for the company supervisor only, never Finance
+        assert not any(n.notification_id == "bill-due-existing-1" for n in feed_warm.items)
 
         # Verify replenishment notification title/details
         reimb_notif = next(n for n in feed_warm.items if n.reference_id == reimb_out.topup_id)

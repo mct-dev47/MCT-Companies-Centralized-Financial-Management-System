@@ -460,6 +460,24 @@ def _run_postgresql_migrations(conn) -> list[str]:
             except Exception as exc:
                 logger.error("Migration 0058_compound_performance_indexes failed and was skipped: %s", exc)
 
+    # 25. 0059: bill payments record their funding source (bank / petty cash) and the expense that moves the money
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+
+    if not result_0059:
+        script_0059 = MIGRATIONS_DIR / "0059_bill_payment_funding.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0059.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+            applied.append("0059_bill_payment_funding")
+            logger.info("Migration 0059_bill_payment_funding applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0059_bill_payment_funding failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1131,6 +1149,26 @@ def _run_sqlite_migrations(conn) -> list[str]:
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
         applied.append("0058_compound_performance_indexes")
         logger.info("SQLite migration 0058_compound_performance_indexes applied successfully.")
+
+    # 24. 0059: bill payment funding source, bank account and linked expense
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+    if not result_0059:
+        exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bill_payments'")
+        ).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bill_payments)")).fetchall()}
+            for col_name, col_def in (
+                ("funding_source", "VARCHAR(20) NULL"),
+                ("bank_account_id", "VARCHAR(100) NULL"),
+                ("expense_id", "INTEGER NULL"),
+            ):
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE bill_payments ADD COLUMN {col_name} {col_def}"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+        applied.append("0059_bill_payment_funding")
 
     conn.commit()
     return applied
