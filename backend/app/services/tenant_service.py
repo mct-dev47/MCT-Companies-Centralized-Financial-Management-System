@@ -19,6 +19,7 @@ from app.models.company import Company
 from app.models.tenant import TenantLease, TenantLeasePayment
 from app.models.user import User
 from app.schemas.audit_review import PENDING_AUDIT
+from app.services import income_bank_links as links
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +91,12 @@ def _to_date(value: Any) -> Optional[date]:
 LEASE_COLUMNS = (
     "lease_id", "tenant_ref", "company_id", "tenant_name", "unit_name", "rent_amount",
     "contract_date", "due_date", "lease_end_date", "repeat_mode", "penalty_rate",
-    "total_amount_payable", "status", "notes", "audit_status", "audited_by", "audited_at",
+    "total_amount_payable", "status", "notes", "bank_account_id", "audit_status", "audited_by", "audited_at",
     "audit_remarks", "created_by", "created_at", "updated_at",
 )
 PAYMENT_COLUMNS = (
     "payment_id", "lease_id", "payment_date", "amount", "method", "reference_no", "notes",
-    "status", "missed_reason", "period_index", "created_by", "created_at",
+    "status", "missed_reason", "period_index", "sale_id", "created_by", "created_at",
 )
 
 
@@ -567,6 +568,9 @@ class TenantService:
             raise HTTPException(status_code=400, detail="A company is required for a tenant lease.")
         company = resolve_company(self.db, company_id=body.company_id, company_name=body.company_name)
         check_company_access(user, company.company_id)
+        bank_account_id = None
+        if (body.bank_account_id or "").strip():
+            bank_account_id = links.validate_company_bank(self.db, company.company_id, body.bank_account_id).id
 
         merged = self._normalise_lease({
             "tenant_name": body.tenant_name.strip(),
@@ -604,6 +608,7 @@ class TenantService:
             "company_id": company.company_id,
             "status": body.status,
             "notes": (body.notes or "").strip() or None,
+            "bank_account_id": bank_account_id,
             "audit_status": PENDING_AUDIT,
             "audited_by": None,
             "audited_at": None,
@@ -667,6 +672,12 @@ class TenantService:
             update["status"] = provided["status"]
         if "notes" in provided:
             update["notes"] = (provided["notes"] or "").strip() or None
+        if "bank_account_id" in provided:
+            # New payments go to the new bank; payments already recorded keep the sale (and bank) they have.
+            raw_bank = (provided["bank_account_id"] or "").strip()
+            update["bank_account_id"] = (
+                links.validate_company_bank(self.db, old["company_id"], raw_bank).id if raw_bank else None
+            )
         update.update(self._audit_reset(old))
         row = self._run("update_lease", lease_id, update)
         system_cache.invalidate_tag("notifications")
@@ -674,6 +685,11 @@ class TenantService:
 
     def delete_lease(self, lease_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         row = self.get_row(lease_id, user)
+        payments = row.get("payments") or []
+        for p in payments:
+            links.assert_sale_editable(self.db, p.get("sale_id"), "lease's payment")
+        for p in payments:
+            links.remove_income_sale(self.db, p.get("sale_id"))
         self._run("delete_lease", lease_id)
         system_cache.invalidate_tag("notifications")
         return row
@@ -735,11 +751,55 @@ class TenantService:
         system_cache.invalidate_tag("notifications")
         return self.to_out(self._run("get_lease", lease["lease_id"]))
 
+    def _sale_text(self, lease: Dict[str, Any], data: Dict[str, Any]) -> str:
+        text = f"Rent: {lease.get('tenant_name')} - {lease.get('unit_name')}"
+        if data.get("period_index"):
+            text += f" - Period {data['period_index']}"
+        return f"{text} - {lease.get('tenant_ref')}"
+
+    def _save_sale(self, lease: Dict[str, Any], data: Dict[str, Any], sale_id: Optional[int],
+                   bank_account_id: Optional[str]) -> Optional[int]:
+        """Money received on a lease becomes a Sale on the bank. Missed marks and leases without a bank don't."""
+        if data.get("status") == "Missed" or float(data.get("amount") or 0) <= 0 or not bank_account_id:
+            if sale_id:
+                links.remove_income_sale(self.db, sale_id)
+            return None
+        new_id = links.save_income_sale(
+            self.db,
+            sale_id=sale_id,
+            company_id=lease["company_id"],
+            bank_account_id=bank_account_id,
+            amount=data["amount"],
+            tx_date=_to_date(data["payment_date"]),
+            particulars=self._sale_text(lease, data),
+            category=links.RENT_CATEGORY,
+            payment_method=data.get("method"),
+            reference_no=data.get("reference_no"),
+        )
+        self.db.commit()
+        return new_id
+
+    def _sale_bank(self, sale_id: Optional[int], lease: Dict[str, Any]) -> Optional[str]:
+        """An existing sale keeps its own bank; a new one uses the lease's bank."""
+        if sale_id:
+            from app.models.finance import Sale
+            sale = self.db.query(Sale).filter(Sale.sales_id == sale_id).first()
+            if sale is not None and sale.bank_account_id:
+                return sale.bank_account_id
+        return lease.get("bank_account_id")
+
     def add_payment(self, lease_id: int, body: Any, user: AuthenticatedUser) -> Dict[str, Any]:
         lease = self.get_row(lease_id, user)
         data = self._payment_data(lease, body, None)
         data.update({"lease_id": lease_id, "created_by": user.get("user_id")})
-        self._run("insert_payment", data)
+        sale_id = self._save_sale(lease, data, None, lease.get("bank_account_id"))
+        data["sale_id"] = sale_id
+        try:
+            self._run("insert_payment", data)
+        except Exception:
+            links.remove_income_sale(self.db, sale_id)
+            raise
+        links.reconcile_sale(self.db, sale_id)
         return self._after_payment_change(lease)
 
     def _find_payment(self, lease: Dict[str, Any], payment_id: int) -> Dict[str, Any]:
@@ -750,14 +810,20 @@ class TenantService:
 
     def update_payment(self, lease_id: int, payment_id: int, body: Any, user: AuthenticatedUser) -> Dict[str, Any]:
         lease = self.get_row(lease_id, user)
-        self._find_payment(lease, payment_id)
+        old = self._find_payment(lease, payment_id)
+        links.assert_sale_editable(self.db, old.get("sale_id"))
         data = self._payment_data(lease, body, payment_id)
+        sale_id = self._save_sale(lease, data, old.get("sale_id"), self._sale_bank(old.get("sale_id"), lease))
+        data["sale_id"] = sale_id
         self._run("update_payment", payment_id, data)
+        links.reconcile_sale(self.db, sale_id)
         return self._after_payment_change(lease)
 
     def delete_payment(self, lease_id: int, payment_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         lease = self.get_row(lease_id, user)
-        self._find_payment(lease, payment_id)
+        old = self._find_payment(lease, payment_id)
+        links.assert_sale_editable(self.db, old.get("sale_id"))
+        links.remove_income_sale(self.db, old.get("sale_id"))
         self._run("delete_payment", payment_id)
         return self._after_payment_change(lease)
 

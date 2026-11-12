@@ -26,6 +26,8 @@ class LeaseCreate(BaseModel):
     total_amount_payable: Optional[float] = Field(None, allow_inf_nan=False, le=MAX_MONEY)
     status: LeaseStatus = "Active"
     notes: Optional[str] = Field(None, max_length=4000)
+    # Bank that every rent payment is credited to, as a Sale (spec 0045)
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
 
 class LeaseUpdate(BaseModel):
@@ -40,6 +42,7 @@ class LeaseUpdate(BaseModel):
     total_amount_payable: Optional[float] = Field(None, allow_inf_nan=False, le=MAX_MONEY)
     status: Optional[LeaseStatus] = None
     notes: Optional[str] = Field(None, max_length=4000)
+    bank_account_id: Optional[str] = Field(None, max_length=100)
     # Sent as true to clear the penalty or end date (a plain null means "not provided").
     clear_penalty_rate: bool = False
     clear_lease_end_date: bool = False
@@ -67,6 +70,7 @@ class PaymentOut(BaseModel):
     status: str
     missed_reason: Optional[str] = None
     period_index: Optional[int] = None
+    sale_id: Optional[int] = None
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
     created_at: Optional[str] = None
@@ -88,6 +92,7 @@ class LeaseOut(BaseModel):
     total_amount_payable: float
     status: str
     notes: Optional[str] = None
+    bank_account_id: Optional[str] = None
     amount_paid: float
     remaining_balance: float
     audit_status: str = "Pending Audit"

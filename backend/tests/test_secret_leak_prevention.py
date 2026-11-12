@@ -98,13 +98,18 @@ class TestSecretLeakPrevention(unittest.TestCase):
 
     def test_supabase_admin_client_accepts_secretstr_without_header_typeerror(self):
         """Regression test: Ensures SecretStr service role key is unwrapped to str when creating Supabase client."""
-        from app.db.supabase import get_supabase_admin_client
-        with patch.object(settings, "SUPABASE_SERVICE_ROLE_KEY", SecretStr("test-service-key")), \
-             patch.object(settings, "SUPABASE_URL", "https://test.supabase.co"):
-            client = get_supabase_admin_client()
-            # .table() initializes postgrest headers which previously failed with TypeError
-            table_builder = client.table("audit_logs")
-            self.assertIsNotNone(table_builder)
+        from app.db.supabase import get_supabase_admin_client, reset_supabase_clients
+        reset_supabase_clients()
+        try:
+            with patch.dict(os.environ, {"ALLOW_LIVE_SUPABASE_IN_TEST": "1"}), \
+                 patch.object(settings, "SUPABASE_SERVICE_ROLE_KEY", SecretStr("test-service-key")), \
+                 patch.object(settings, "SUPABASE_URL", "https://test.supabase.co"):
+                client = get_supabase_admin_client()
+                # .table() initializes postgrest headers which previously failed with TypeError
+                table_builder = client.table("audit_logs")
+                self.assertIsNotNone(table_builder)
+        finally:
+            reset_supabase_clients()
 
 
 if __name__ == "__main__":

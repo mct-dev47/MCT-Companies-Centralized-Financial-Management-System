@@ -79,6 +79,9 @@ export interface LendingFacility {
   missedCyclesCount?: number
   lenderCompany?: string
   notes?: string
+  /** Bank the loan was released from (Expense) and repayments go to (Sales) - spec 0045. */
+  bankAccountId?: string | null
+  releaseExpenseId?: number | null
   dailyPayments: DailyPaymentRecord[]
   auditStatus?: 'Verified' | 'Flagged'
   auditDate?: string
@@ -124,6 +127,7 @@ export interface LendingCreateFacilityPayload {
   dueDate?: string
   termDays?: number
   notes?: string
+  bankAccountId?: string
 }
 
 export interface LendingRecordPaymentPayload {
@@ -379,6 +383,7 @@ class LendingServiceGateway {
           date_borrowed: payload.dateBorrowed,
           due_date: payload.dueDate || '',
           notes: payload.notes || '',
+          bank_account_id: payload.bankAccountId || null,
         }),
       })
       if (!res.ok) {
@@ -413,6 +418,7 @@ class LendingServiceGateway {
       dueDate?: string
       status?: string
       notes?: string
+      bankAccountId?: string
     }
   ): Promise<LendingFacility> {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
@@ -430,6 +436,7 @@ class LendingServiceGateway {
           due_date: payload.dueDate,
           status: payload.status,
           notes: payload.notes,
+          ...(payload.bankAccountId !== undefined ? { bank_account_id: payload.bankAccountId || null } : {}),
         }),
       })
       if (!res.ok) {
