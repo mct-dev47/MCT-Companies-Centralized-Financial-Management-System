@@ -439,6 +439,27 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0057_sale_deposit_guard failed and was skipped: %s", exc)
 
+    # 24. 0058: compound performance indexes for high-frequency transaction queries
+    result_0058 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0058_compound_performance_indexes'")
+    ).first()
+
+    if not result_0058:
+        script_0058 = MIGRATIONS_DIR / "0058_compound_performance_indexes.postgres.sql"
+        if script_0058.exists():
+            try:
+                with conn.begin_nested():
+                    with open(script_0058, "r", encoding="utf-8") as f:
+                        for stmt in f.read().split(";"):
+                            clean_stmt = "\n".join(l for l in stmt.splitlines() if not l.strip().startswith("--")).strip()
+                            if clean_stmt:
+                                conn.execute(text(clean_stmt))
+                    conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
+                applied.append("0058_compound_performance_indexes")
+                logger.info("Migration 0058_compound_performance_indexes applied successfully.")
+            except Exception as exc:
+                logger.error("Migration 0058_compound_performance_indexes failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1082,6 +1103,34 @@ def _run_sqlite_migrations(conn) -> list[str]:
         install_sqlite_trigger(conn)
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0057_sale_deposit_guard')"))
         applied.append("0057_sale_deposit_guard")
+
+    # 23. 0058: compound performance indexes for high-frequency queries
+    result_0058 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0058_compound_performance_indexes'")
+    ).first()
+    if not result_0058:
+        index_specs = [
+            ("sales", "CREATE INDEX IF NOT EXISTS idx_sales_company_transaction_date ON sales (company_id, transaction_date DESC)"),
+            ("sales", "CREATE INDEX IF NOT EXISTS idx_sales_company_deposit_status ON sales (company_id, deposit_status, transaction_date DESC)"),
+            ("expenses", "CREATE INDEX IF NOT EXISTS idx_expenses_company_expense_date ON expenses (company_id, expense_date DESC)"),
+            ("bank_transactions", "CREATE INDEX IF NOT EXISTS idx_bank_transactions_account_date ON bank_transactions (bank_account_id, transaction_date DESC)"),
+            ("bills", "CREATE INDEX IF NOT EXISTS idx_bills_company_due_date ON bills (company_id, due_date ASC)"),
+            ("loan", "CREATE INDEX IF NOT EXISTS idx_loan_borrower_date ON loan (borrower, loan_date DESC)"),
+            ("loan", "CREATE INDEX IF NOT EXISTS idx_loan_lender_date ON loan (lender, loan_date DESC)"),
+        ]
+        existing_tables = {
+            row[0]
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        for tbl_name, idx_sql in index_specs:
+            if tbl_name in existing_tables:
+                try:
+                    conn.execute(text(idx_sql))
+                except Exception as exc:
+                    logger.warning("SQLite index skipped on %s: %s", tbl_name, exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
+        applied.append("0058_compound_performance_indexes")
+        logger.info("SQLite migration 0058_compound_performance_indexes applied successfully.")
 
     conn.commit()
     return applied

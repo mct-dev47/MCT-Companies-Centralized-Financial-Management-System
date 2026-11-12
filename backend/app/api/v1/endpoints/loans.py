@@ -26,6 +26,7 @@ from app.schemas.loan import (
     CompanyLoanListOut,
 )
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, FinanceUser, check_company_access, require_auditor_user, require_business_reader, require_business_writer, require_finance_user
+from app.core.pagination import PaginationParams
 from app.core.cache import system_cache
 from app.core.websocket import ws_manager
 from app.services.finance_service import FinanceService, FinanceCalculator
@@ -378,6 +379,7 @@ def export_company_loans(
 
 @router.get("", response_model=List[LoanOut], summary="List loans from Supabase / DB")
 def get_loans(
+    response: Response,
     borrower_id: Optional[int] = Query(None, description="Filter by Borrower Company ID"),
     lender_id: Optional[int] = Query(None, description="Filter by Lender Company ID"),
     company_name: Optional[str] = Query(None, description="Filter by Company Name (matches borrower or lender)"),
@@ -386,6 +388,7 @@ def get_loans(
     start_date: Optional[date] = Query(None, description="Filter from loan date"),
     end_date: Optional[date] = Query(None, description="Filter to loan date"),
     user_role: Optional[str] = Query(None, description="Current user role"),
+    pagination: PaginationParams = Depends(),
     request: Request = None,
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
@@ -399,9 +402,17 @@ def get_loans(
         user_company_ids = [current_user["company_id"]]
 
     scope_cids = "all" if is_privileged else ",".join(str(c) for c in sorted(user_company_ids))
-    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}"
+    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}_{pagination.limit}_{pagination.offset}"
     cached = system_cache.get(cache_key)
     if cached is not None:
+        if isinstance(cached, dict) and "items" in cached:
+            response.headers["X-Total-Count"] = str(cached.get("total", len(cached["items"])))
+            response.headers["X-Page-Limit"] = str(pagination.limit)
+            response.headers["X-Page-Offset"] = str(pagination.offset)
+            return cached["items"]
+        response.headers["X-Total-Count"] = str(len(cached))
+        response.headers["X-Page-Limit"] = str(pagination.limit)
+        response.headers["X-Page-Offset"] = str(pagination.offset)
         return cached
 
     if borrower_id:
@@ -419,7 +430,7 @@ def get_loans(
             if resolved_target_cid and not is_privileged:
                 check_company_access(current_user, resolved_target_cid)
 
-        sb_query = client.table("loan").select("*")
+        sb_query = client.table("loan").select("*", count="exact")
 
         if isinstance(borrower_id, int):
             sb_query = sb_query.eq("borrower", borrower_id)
@@ -436,6 +447,9 @@ def get_loans(
                 sb_query = sb_query.or_(f"borrower.eq.{resolved_target_cid},lender.eq.{resolved_target_cid}")
         elif not is_privileged:
             if not user_company_ids:
+                response.headers["X-Total-Count"] = "0"
+                response.headers["X-Page-Limit"] = str(pagination.limit)
+                response.headers["X-Page-Offset"] = str(pagination.offset)
                 return []
             if len(user_company_ids) == 1:
                 cid = user_company_ids[0]
@@ -452,7 +466,16 @@ def get_loans(
         if isinstance(end_date, (date, datetime)):
             sb_query = sb_query.lte("loan_date", end_date.isoformat())
 
-        res = sb_query.order("loan_date", desc=True).order("loan_id", desc=True).execute()
+        res = (
+            sb_query.order("loan_date", desc=True)
+            .order("loan_id", desc=True)
+            .range(pagination.offset, pagination.offset + pagination.limit - 1)
+            .execute()
+        )
+        total_count = res.count if getattr(res, "count", None) is not None else len(res.data or [])
+        response.headers["X-Total-Count"] = str(total_count)
+        response.headers["X-Page-Limit"] = str(pagination.limit)
+        response.headers["X-Page-Offset"] = str(pagination.offset)
         rows = res.data or []
 
         result: List[LoanOut] = []
@@ -494,7 +517,7 @@ def get_loans(
                     updated_at=r.get("updated_at"),
                 )
             )
-        system_cache.set(cache_key, result, ttl=45, tags=["loans"])
+        system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
         return result
 
     except HTTPException:
@@ -523,6 +546,9 @@ def get_loans(
                 query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
         elif not is_privileged:
             if not user_company_ids:
+                response.headers["X-Total-Count"] = "0"
+                response.headers["X-Page-Limit"] = str(pagination.limit)
+                response.headers["X-Page-Offset"] = str(pagination.offset)
                 return []
             query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
 
@@ -537,7 +563,12 @@ def get_loans(
         if isinstance(end_date, (date, datetime)):
             query = query.filter(Loan.loan_date <= end_date)
 
-        loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).all()
+        total_count = query.count()
+        response.headers["X-Total-Count"] = str(total_count)
+        response.headers["X-Page-Limit"] = str(pagination.limit)
+        response.headers["X-Page-Offset"] = str(pagination.offset)
+
+        loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
         companies = db.query(Company).all()
         comp_map = {c.company_id: c.company_name for c in companies}
@@ -571,7 +602,7 @@ def get_loans(
             )
             for l in loans
         ]
-        system_cache.set(cache_key, fallback_result, ttl=45, tags=["loans"])
+        system_cache.set(cache_key, {"items": fallback_result, "total": total_count}, ttl=45, tags=["loans"])
         return fallback_result
 
 

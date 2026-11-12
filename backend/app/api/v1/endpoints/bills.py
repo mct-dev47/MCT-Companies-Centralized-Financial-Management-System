@@ -60,6 +60,7 @@ def _resolve_caller_scope(
 
 @router.get("", response_model=List[BillOut], summary="List company bills")
 def list_bills(
+    response: Response,
     user: AuthenticatedUser = Depends(require_business_reader),
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
@@ -68,9 +69,15 @@ def list_bills(
     db: Session = Depends(get_db),
 ):
     cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
-    return BillsService(db).list_bills(
+    resolved_cname = None if cid is not None else cname
+    service = BillsService(db)
+    total_count = service.count_bills(company_id=cid, company_name=resolved_cname, company_ids=cids)
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Page-Limit"] = str(pagination.limit)
+    response.headers["X-Page-Offset"] = str(pagination.offset)
+    return service.list_bills(
         company_id=cid,
-        company_name=cname,
+        company_name=resolved_cname,
         company_ids=cids,
         limit=pagination.limit,
         offset=pagination.offset,
