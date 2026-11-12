@@ -74,9 +74,29 @@ import {
   pettyCashService,
   type PettyCashLedgerEntry,
 } from '@/services/pettyCashService'
+import { saveAuditReview, reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { websocketService } from '@/services/websocketService'
 
 export type PettyCashTransaction = PettyCashLedgerEntry
+
+function getAuditableExpenseId(entry: PettyCashTransaction | null | undefined): number | null {
+  if (!entry) return null
+  if (entry.expenseId != null) return entry.expenseId
+  if (entry.type === 'expense' && (!entry.requestType || entry.requestType === 'expense') && entry.recordId > 0) {
+    return entry.recordId
+  }
+  return null
+}
+
+function isBlankStatusEntry(entry: PettyCashTransaction | null | undefined): boolean {
+  if (!entry) return false
+  return (
+    entry.type === 'expense' ||
+    entry.requestType === 'disbursement' ||
+    entry.requestType === 'replenishment_disbursement' ||
+    !entry.status
+  )
+}
 
 const COMPANY_LIST = [
   'All Companies',
@@ -172,13 +192,17 @@ export const PettyCashPage: React.FC = () => {
 
   // Company balances & ledger directly from backend
   const [balances, setBalances] = React.useState<Record<string, number>>({})
+  const [unreservedBalances, setUnreservedBalances] = React.useState<Record<string, number>>({})
   const [ledger, setLedger] = React.useState<PettyCashTransaction[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
 
   // Filters state
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<
-    'All' | 'Approved' | 'Pending Finance Endorsement' | 'Pending Audit Approval' | 'Disapproved' | 'Expense'
+    'All' | 'Approved' | 'Pending Finance Endorsement' | 'Pending Audit Approval' | 'Disapproved' | 'Settled' | 'Reimbursed'
+  >('All')
+  const [auditStatusFilter, setAuditStatusFilter] = React.useState<
+    'All' | 'Pending Audit' | 'Verified' | 'Flagged'
   >('All')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
@@ -192,16 +216,18 @@ export const PettyCashPage: React.FC = () => {
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
   const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
+  const [isAuditStatusDropdownOpen, setIsAuditStatusDropdownOpen] = React.useState(false)
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
+  const auditStatusDropdownRef = React.useRef<HTMLDivElement>(null)
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const requestDropdownRef = React.useRef<HTMLDivElement>(null)
   const typeDropdownRef = React.useRef<HTMLDivElement>(null)
   const [isRequestDropdownOpen, setIsRequestDropdownOpen] = React.useState(false)
-  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Top-up' | 'Reimbursement'>('All')
+  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Top-up' | 'Disbursement' | 'Reimburse' | 'Expense'>('All')
   const [isTypeDropdownOpen, setIsTypeDropdownOpen] = React.useState(false)
   const [isReimbursementModalOpen, setIsReimbursementModalOpen] = React.useState(false)
 
@@ -269,36 +295,12 @@ export const PettyCashPage: React.FC = () => {
     }
   }, [])
 
-  const handleMarkPettyAudit = (entry: PettyCashTransaction, status: 'Verified' | 'Flagged') => {
-    const timestamp = new Date().toLocaleString('en-US', {
-      month: 'short',
-      day: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-    const updatedEntry: PettyCashTransaction = {
-      ...entry,
-      auditStatus: status,
-      auditDate: timestamp,
-      auditedBy: formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer'),
-      status: status === 'Verified' && entry.status === 'Pending Audit Approval' ? 'Approved' : entry.status,
-    }
-    setLedger((prev) => prev.map((e) => (e.id === entry.id ? updatedEntry : e)))
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem('petty_cash_audit_records')
-      } catch {
-        // ignore
-      }
-    }
-    setOpenMenuPettyId(null)
-  }
-
   // Load live data from backend database
-  const loadData = React.useCallback(async () => {
+  const loadData = React.useCallback(async (options?: { silent?: boolean }) => {
     try {
-      setIsLoading(true)
+      if (!options?.silent) {
+        setIsLoading(true)
+      }
       const compParam = selectedCompany !== 'All Companies' ? selectedCompany : undefined
       const [summariesRes, ledgerRes] = await Promise.allSettled([
         pettyCashService.getAllSummaries(),
@@ -310,10 +312,13 @@ export const PettyCashPage: React.FC = () => {
 
       if (summariesRes.status === 'fulfilled') {
         const balanceMap: Record<string, number> = {}
+        const unreservedMap: Record<string, number> = {}
         summariesRes.value.forEach((s) => {
           balanceMap[s.companyName] = s.balance
+          unreservedMap[s.companyName] = s.unreservedBalance
         })
         setBalances(balanceMap)
+        setUnreservedBalances(unreservedMap)
       } else {
         console.error('Failed to load petty cash summaries from backend:', summariesRes.reason)
       }
@@ -331,19 +336,79 @@ export const PettyCashPage: React.FC = () => {
     }
   }, [selectedCompany, dateRange.startDate, dateRange.endDate])
 
+  const handleMarkPettyAudit = async (entry: PettyCashTransaction, status: 'Verified' | 'Flagged' | 'Pending Audit') => {
+    const expenseId = getAuditableExpenseId(entry)
+    setOpenMenuPettyId(null)
+    setMenuPosition(null)
+    setActiveMenuPetty(null)
+    if (expenseId == null) {
+      return
+    }
+    const auditorName = formatRealName(
+      user?.fullName || user?.name || user?.email || 'Audit Officer',
+      user?.role || 'Audit Officer'
+    )
+    const nowIso = new Date().toISOString()
+    setLedger((prev) =>
+      prev.map((e) =>
+        e.id === entry.id || getAuditableExpenseId(e) === expenseId
+          ? { ...e, auditStatus: status, auditDate: nowIso, auditedBy: auditorName }
+          : e
+      )
+    )
+    setTargetEntry((prev) =>
+      prev && (prev.id === entry.id || getAuditableExpenseId(prev) === expenseId)
+        ? { ...prev, auditStatus: status, auditDate: nowIso, auditedBy: auditorName }
+        : prev
+    )
+    try {
+      await saveAuditReview('expenses', String(expenseId), status)
+      pettyCashService.invalidateCache({ notifyBell: false })
+      setApprovalFeedback(
+        status === 'Verified'
+          ? 'Marked transaction as Audited.'
+          : status === 'Flagged'
+          ? 'Flagged discrepancy on transaction.'
+          : 'Audit status reset to Pending Audit.'
+      )
+      setTimeout(() => setApprovalFeedback(null), 4000)
+    } catch (err) {
+      reportAuditSaveFailure(err)
+      void loadData({ silent: true })
+    }
+  }
+
   React.useEffect(() => {
-    loadData()
+    void loadData()
   }, [loadData])
 
-  // Realtime multi-tab WebSocket synchronization
+  // Realtime multi-tab WebSocket synchronization (coalesced silent refresh)
   React.useEffect(() => {
-    const unsubscribe = websocketService.subscribe('PETTY_CASH_UPDATED', () => {
-      // Another user (for example Audit) changed a top up: drop the 30 second cache so the reload is real
-      pettyCashService.invalidateCache()
-      loadData()
-    })
+    let reloadTimer: number | null = null
+    const scheduleReload = () => {
+      if (reloadTimer !== null) {
+        window.clearTimeout(reloadTimer)
+      }
+      reloadTimer = window.setTimeout(() => {
+        reloadTimer = null
+        pettyCashService.invalidateCache({ notifyBell: false })
+        void loadData({ silent: true })
+      }, 80)
+    }
+    const events = [
+      'PETTY_CASH_UPDATED',
+      'AUDIT_UPDATED',
+      'EXPENSE_CREATED',
+      'EXPENSE_UPDATED',
+      'EXPENSE_DELETED',
+    ] as const
+    const unsubs = events.map((evt) => websocketService.subscribe(evt, scheduleReload))
     return () => {
-      unsubscribe()
+      if (reloadTimer !== null) {
+        window.clearTimeout(reloadTimer)
+        reloadTimer = null
+      }
+      unsubs.forEach((unsub) => unsub())
     }
   }, [loadData])
 
@@ -351,6 +416,8 @@ export const PettyCashPage: React.FC = () => {
   const [editEntry, setEditEntry] = React.useState<PettyCashTransaction | null>(null)
   const [editAmount, setEditAmount] = React.useState('')
   const [editDescription, setEditDescription] = React.useState('')
+  const [editPaidBy, setEditPaidBy] = React.useState('')
+  const [editCategory, setEditCategory] = React.useState('')
   const [isEditing, setIsEditing] = React.useState(false)
   const [editError, setEditError] = React.useState('')
 
@@ -360,8 +427,11 @@ export const PettyCashPage: React.FC = () => {
 
   const handleOpenEdit = (entry: PettyCashTransaction) => {
     setEditEntry(entry)
-    setEditAmount(entry.amountRequested ? String(entry.amountRequested) : '')
+    const initialAmt = entry.amountRequested || entry.amountIn || entry.amountOut || 0
+    setEditAmount(initialAmt > 0 ? String(initialAmt) : '')
     setEditDescription(entry.description || '')
+    setEditPaidBy(entry.paidBy || '')
+    setEditCategory(entry.category || '')
     setEditError('')
   }
 
@@ -375,10 +445,17 @@ export const PettyCashPage: React.FC = () => {
     }
     setIsEditing(true)
     setEditError('')
+    // Paid By / Category are only editable (and only sent) when the modal shows them, so a hidden
+    // field never wipes a stored value. An emptied visible field is sent as '' so the clear is saved.
+    const showsClaimFields =
+      editEntry.requestType === 'reimbursement' ||
+      editEntry.requestType === 'replenishment_disbursement' ||
+      Boolean(editEntry.paidBy)
     try {
       await pettyCashService.updateTopUp(editEntry.recordId, {
         amount: numericAmount,
         description: editDescription.trim(),
+        ...(showsClaimFields ? { paid_by: editPaidBy.trim(), category: editCategory.trim() } : {}),
       })
       setEditEntry(null)
       await loadData()
@@ -430,6 +507,9 @@ export const PettyCashPage: React.FC = () => {
       if (statusDropdownRef.current && !statusDropdownRef.current.contains(target)) {
         setIsStatusDropdownOpen(false)
       }
+      if (auditStatusDropdownRef.current && !auditStatusDropdownRef.current.contains(target)) {
+        setIsAuditStatusDropdownOpen(false)
+      }
       if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
         setIsCompanyDropdownOpen(false)
       }
@@ -460,6 +540,20 @@ export const PettyCashPage: React.FC = () => {
     return 0
   }, [balances, selectedCompany, isAllCompanies])
 
+  const currentUnreservedBalance = React.useMemo(() => {
+    if (isAllCompanies) {
+      return Object.values(unreservedBalances).reduce((sum, b) => sum + b, 0)
+    }
+    if (unreservedBalances[selectedCompany] !== undefined) {
+      return unreservedBalances[selectedCompany]
+    }
+    const matchedKey = Object.keys(unreservedBalances).find((k) => isCompanyMatch(k, selectedCompany))
+    if (matchedKey && unreservedBalances[matchedKey] !== undefined) {
+      return unreservedBalances[matchedKey]
+    }
+    return currentBalance
+  }, [unreservedBalances, selectedCompany, isAllCompanies, currentBalance])
+
   // Filtered ledger records
   const filteredLedger = React.useMemo(() => {
     return ledger.filter((item) => {
@@ -480,9 +574,13 @@ export const PettyCashPage: React.FC = () => {
         }
       }
 
-      // 2. Status Filter
+      // 2. Status Filter (Disbursement & Expense rows have blank workflow status)
       if (statusFilter !== 'All') {
+        const blankStatus = isBlankStatusEntry(item)
+        if (blankStatus) return false
         if (statusFilter === 'Approved' && item.status !== 'Approved') return false
+        if (statusFilter === 'Settled' && item.status !== 'Settled') return false
+        if (statusFilter === 'Reimbursed' && item.status !== 'Reimbursed') return false
         if (
           statusFilter === 'Pending Finance Endorsement' &&
           item.status !== 'Pending Finance Endorsement' &&
@@ -494,14 +592,20 @@ export const PettyCashPage: React.FC = () => {
         if (statusFilter === 'Disapproved' && !['Disapproved', 'Rejected', 'Rejected by Finance', 'Disapproved by Audit'].includes(item.status)) {
           return false
         }
-        if (statusFilter === 'Expense' && item.type !== 'expense') return false
       }
 
-      // 2b. Type Filter (All / Top-up / Replenishment)
+      // 2b. Type Filter (All / Top-up / Disbursement / Reimburse / Expense)
       if (typeFilter !== 'All') {
         const reqType = (item.requestType || (item.type === 'expense' ? 'expense' : 'topup')).toLowerCase()
         if (typeFilter === 'Top-up' && (reqType !== 'topup' || item.type === 'expense')) return false
-        if (typeFilter === 'Reimbursement' && reqType !== 'reimbursement' && reqType !== 'replenishment' && reqType !== 'replenishment_disbursement') return false
+        if (typeFilter === 'Disbursement' && reqType !== 'disbursement' && reqType !== 'replenishment_disbursement') return false
+        if (typeFilter === 'Reimburse' && reqType !== 'reimbursement' && reqType !== 'replenishment') return false
+        if (typeFilter === 'Expense' && (item.type !== 'expense' || reqType === 'disbursement' || reqType === 'replenishment_disbursement')) return false
+      }
+
+      // 2c. Audit Status Filter (All / Pending Audit / Verified / Flagged)
+      if (auditStatusFilter !== 'All') {
+        if ((item.auditStatus || '') !== auditStatusFilter) return false
       }
 
       // 3. Search Query Filter
@@ -528,7 +632,7 @@ export const PettyCashPage: React.FC = () => {
 
       return true
     })
-  }, [ledger, isAllCompanies, selectedCompany, statusFilter, typeFilter, searchQuery, dateRange, isAudit])
+  }, [ledger, isAllCompanies, selectedCompany, statusFilter, typeFilter, auditStatusFilter, searchQuery, dateRange, isAudit])
 
   // Pagination calculation
   const totalPages = Math.max(1, Math.ceil(filteredLedger.length / itemsPerPage))
@@ -814,12 +918,11 @@ export const PettyCashPage: React.FC = () => {
     }
   }
 
-  // Handle new request success
-  const handleTopUpSuccess = async () => {
+  // Handle new request success (WS PETTY_CASH_UPDATED listener runs coalesced silent refresh)
+  const handleTopUpSuccess = () => {
     setCurrentPage(1)
     setStatusFilter('All')
     setSearchQuery('')
-    await loadData()
     setApprovalFeedback(isFinance ? 'Petty cash top up endorsed directly to Internal Audit.' : 'Petty cash request submitted to the Finance team successfully.')
     setTimeout(() => setApprovalFeedback(null), 5000)
   }
@@ -836,22 +939,35 @@ export const PettyCashPage: React.FC = () => {
       'Cash Out (PHP)',
       'Running Balance (PHP)',
       'Status',
+      'Audit Status',
+      'Audited By',
       'Remark',
       'Reviewed By',
     ]
 
-    const rows = filteredLedger.map((e) => [
-      `"${e.date}"`,
-      `"${(e.companyName || '').replace(/"/g, '""')}"`,
-      `"${(e.description || '').replace(/"/g, '""')}"`,
-      e.amountRequested,
-      e.amountIn,
-      e.amountOut,
-      e.runningBalance,
-      `"${e.status}"`,
-      `"${(e.remark || '').replace(/"/g, '""')}"`,
-      `"${(e.reviewedBy || '').replace(/"/g, '""')}"`,
-    ])
+    const rows = filteredLedger.map((e) => {
+      const displayAuditStatus =
+        e.auditStatus === 'Verified'
+          ? 'Audited'
+          : e.auditStatus === 'Flagged'
+          ? 'Discrepancy'
+          : e.auditStatus || ''
+      const displayStatus = isBlankStatusEntry(e) ? '' : (e.status || '')
+      return [
+        `"${e.date}"`,
+        `"${(e.companyName || '').replace(/"/g, '""')}"`,
+        `"${(e.description || '').replace(/"/g, '""')}"`,
+        e.amountRequested,
+        e.amountIn,
+        e.amountOut,
+        e.runningBalance,
+        `"${displayStatus}"`,
+        `"${displayAuditStatus}"`,
+        `"${(e.auditedBy || '').replace(/"/g, '""')}"`,
+        `"${(e.remark || '').replace(/"/g, '""')}"`,
+        `"${(e.reviewedBy || '').replace(/"/g, '""')}"`,
+      ]
+    })
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
     const encodedUri = encodeURI(csvContent)
@@ -948,24 +1064,24 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
-            {/* Request Petty Cash Dropdown Button (Role-gated: AC-5) */}
+            {/* Request Petty Cash Dropdown Button (Role-gated: AC-1) */}
             {!isAudit && !isOwner && (
-              canRequestTopUp ? (
-                <div ref={requestDropdownRef} className="relative inline-block">
-                  <Button
-                    type="button"
-                    onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
-                    className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
-                    aria-haspopup="true"
-                    aria-expanded={isRequestDropdownOpen}
-                  >
-                    <Plus className="h-4 w-4 shrink-0" />
-                    <span>Request Petty Cash</span>
-                    <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
-                  </Button>
+              <div ref={requestDropdownRef} className="relative inline-block">
+                <Button
+                  type="button"
+                  onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
+                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                  aria-haspopup="true"
+                  aria-expanded={isRequestDropdownOpen}
+                >
+                  <Plus className="h-4 w-4 shrink-0" />
+                  <span>Request Petty Cash</span>
+                  <ChevronDown className={cn('h-3.5 w-3.5 ml-0.5 text-white/90 transition-transform duration-200', isRequestDropdownOpen && 'transform rotate-180')} />
+                </Button>
 
-                  {isRequestDropdownOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                {isRequestDropdownOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    {canRequestTopUp && (
                       <button
                         type="button"
                         onClick={() => {
@@ -984,38 +1100,32 @@ export const PettyCashPage: React.FC = () => {
                           </div>
                         </div>
                       </button>
+                    )}
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsRequestDropdownOpen(false)
-                          setIsReimbursementModalOpen(true)
-                        }}
-                        className="w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group border-t border-stroke/20 mt-1"
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
-                          <Receipt className="w-4 h-4" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsRequestDropdownOpen(false)
+                        setIsReimbursementModalOpen(true)
+                      }}
+                      className={cn(
+                        'w-full flex items-start gap-3 p-3 rounded-xl text-left hover:bg-slate-50 transition-colors cursor-pointer group',
+                        canRequestTopUp && 'border-t border-stroke/20 mt-1'
+                      )}
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-700 flex items-center justify-center shrink-0 mt-0.5 group-hover:bg-amber-600 group-hover:text-white transition-colors">
+                        <Receipt className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Reimbursement</div>
+                        <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
+                          Get paid back for out of pocket or mixed split petty cash expenses.
                         </div>
-                        <div>
-                          <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Reimbursement</div>
-                          <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
-                            Get paid back for expenses you paid out of your own pocket.
-                          </div>
-                        </div>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  onClick={() => setIsReimbursementModalOpen(true)}
-                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
-                >
-                  <Receipt className="h-4 w-4 shrink-0" />
-                  <span>Request Reimbursement</span>
-                </Button>
-              )
+                      </div>
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -1050,11 +1160,7 @@ export const PettyCashPage: React.FC = () => {
                 )}
               >
                 <span className="font-medium">
-                  {typeFilter === 'All'
-                    ? 'All'
-                    : typeFilter === 'Top-up'
-                    ? 'Petty Cash Request'
-                    : 'Reimbursement'}
+                  {typeFilter}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -1065,11 +1171,13 @@ export const PettyCashPage: React.FC = () => {
               </button>
 
               {isTypeDropdownOpen && (
-                <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
                   {[
                     { id: 'All', label: 'All' },
-                    { id: 'Top-up', label: 'Petty Cash Request' },
-                    { id: 'Reimbursement', label: 'Reimbursement' },
+                    { id: 'Top-up', label: 'Top-up' },
+                    { id: 'Disbursement', label: 'Disbursement' },
+                    { id: 'Reimburse', label: 'Reimburse' },
+                    { id: 'Expense', label: 'Expense' },
                   ].map((tp) => (
                     <button
                       key={tp.id}
@@ -1176,8 +1284,9 @@ export const PettyCashPage: React.FC = () => {
                           { id: 'Pending Audit Approval', label: 'Pending Audit' },
                         ]),
                     { id: 'Approved', label: 'Approved' },
+                    { id: 'Reimbursed', label: 'Reimbursed' },
+                    { id: 'Settled', label: 'Settled' },
                     { id: 'Disapproved', label: 'Rejected / Disapproved' },
-                    { id: 'Expense', label: 'Expenses' },
                   ].map((st) => (
                     <button
                       key={st.id}
@@ -1196,6 +1305,66 @@ export const PettyCashPage: React.FC = () => {
                     >
                       <span>{st.label}</span>
                       {statusFilter === st.id && (
+                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Audit Status Filter Dropdown */}
+            <div ref={auditStatusDropdownRef} className="relative inline-block">
+              <button
+                type="button"
+                onClick={() => setIsAuditStatusDropdownOpen((prev) => !prev)}
+                className={cn(
+                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  isAuditStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                )}
+              >
+                <span className="font-medium text-focus/90">
+                  {auditStatusFilter === 'All'
+                    ? 'Audit Status'
+                    : auditStatusFilter === 'Verified'
+                    ? 'Audited'
+                    : auditStatusFilter === 'Flagged'
+                    ? 'Discrepancy'
+                    : 'Pending Audit'}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                    isAuditStatusDropdownOpen && 'transform rotate-180'
+                  )}
+                />
+              </button>
+
+              {isAuditStatusDropdownOpen && (
+                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                  {[
+                    { id: 'All', label: 'All Audit Status' },
+                    { id: 'Pending Audit', label: 'Pending Audit' },
+                    { id: 'Verified', label: 'Audited' },
+                    { id: 'Flagged', label: 'Discrepancy' },
+                  ].map((ast) => (
+                    <button
+                      key={ast.id}
+                      type="button"
+                      onClick={() => {
+                        setAuditStatusFilter(ast.id as any)
+                        setIsAuditStatusDropdownOpen(false)
+                        setCurrentPage(1)
+                      }}
+                      className={cn(
+                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                        auditStatusFilter === ast.id
+                          ? 'bg-primary/10 text-primary font-semibold'
+                          : 'text-focus/80 hover:bg-slate-50'
+                      )}
+                    >
+                      <span>{ast.label}</span>
+                      {auditStatusFilter === ast.id && (
                         <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
                       )}
                     </button>
@@ -1297,19 +1466,20 @@ export const PettyCashPage: React.FC = () => {
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
         {/* Clean Table Structure: Reference / Voucher No and Funding Source are Removed */}
         <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className="w-full table-fixed min-w-[1000px]">
+          <Table className="w-full table-fixed min-w-[1120px]">
             <colgroup>
+              <col style={{ width: '8%' }} />
               <col style={{ width: '9%' }} />
-              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '13%' }} />
               <col style={{ width: '9%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '11%' }} />
-              <col style={{ width: '9%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '7%' }} />
+              <col style={{ width: '7%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
               <col style={{ width: '8%' }} />
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '6%' }} />
+              <col style={{ width: '5%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
@@ -1344,6 +1514,9 @@ export const PettyCashPage: React.FC = () => {
                   STATUS
                 </TableHead>
                 <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  AUDIT STATUS
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1351,10 +1524,10 @@ export const PettyCashPage: React.FC = () => {
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={11} />
+                <TableSkeleton rows={5} columns={12} />
               ) : paginatedLedger.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
+                  <TableCell colSpan={12} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
                     <Wallet className="w-8 h-8 text-muted-fg/40 mx-auto mb-2" />
                     No petty cash transactions found for the selected criteria.
                   </TableCell>
@@ -1384,20 +1557,6 @@ export const PettyCashPage: React.FC = () => {
                               <span className="tabular-nums">{formatCreatedAt(entry.createdAt, { timeOnly: true })}</span>
                             </span>
                           )}
-                          {entry.auditDate && (
-                            <span className="text-[10px] text-slate-500 font-normal flex items-center gap-1" title={`Audited at: ${entry.auditDate}`}>
-                              <Clock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                              <span className="truncate max-w-[120px]">{entry.auditDate}</span>
-                            </span>
-                          )}
-                          {entry.auditStatus && (
-                            <span className={cn(
-                              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold w-fit",
-                              entry.auditStatus === 'Verified' ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80" : "bg-amber-50 text-amber-700 border border-amber-200/80"
-                            )}>
-                              {entry.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
-                            </span>
-                          )}
                         </div>
                       </TableCell>
 
@@ -1412,16 +1571,16 @@ export const PettyCashPage: React.FC = () => {
                       </TableCell>
 
                       {/* 2b. Type Indicator */}
-                      <TableCell className="px-3 py-3.5 text-center">
-                        {entry.requestType === 'replenishment_disbursement' ? (
+                      <TableCell className="px-3 py-3.5 text-center overflow-hidden">
+                        {entry.requestType === 'disbursement' || entry.requestType === 'replenishment_disbursement' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300 whitespace-nowrap">
                             <Wallet className="w-3 h-3 text-slate-600 shrink-0" />
-                            <span>Petty Cash Disbursement</span>
+                            <span>Disbursement</span>
                           </span>
                         ) : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
                             <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Reimbursement</span>
+                            <span>Reimburse</span>
                           </span>
                         ) : entry.type === 'expense' ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
@@ -1437,7 +1596,7 @@ export const PettyCashPage: React.FC = () => {
 
                       {/* 3. Particulars & Category (Remarks shown in modal per specification) */}
                       <TableCell className="px-3 py-3.5">
-                        {(entry.requestType === 'reimbursement' || entry.requestType === 'replenishment_disbursement' || entry.requestType === 'replenishment') && entry.paidBy && (
+                        {(entry.requestType === 'reimbursement' || entry.requestType === 'disbursement' || entry.requestType === 'replenishment_disbursement' || entry.requestType === 'replenishment') && entry.paidBy && (
                           <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
                             <User className="w-3 h-3 text-slate-400 shrink-0" />
                             <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
@@ -1472,6 +1631,14 @@ export const PettyCashPage: React.FC = () => {
                         <div className="text-[11px] text-muted-fg line-clamp-1 mt-0.5">
                           {entry.category || 'General'}
                         </div>
+                        {(entry.requestType === 'reimbursement' || entry.requestType === 'replenishment') &&
+                          entry.totalExpenses !== undefined &&
+                          entry.totalExpenses !== null && (
+                            <div className="text-[10.5px] text-slate-600 tabular-nums mt-0.5 truncate" title={`Total ${formatPHP(entry.totalExpenses)} | Petty Cash ${formatPHP(entry.companyFundedAmount || 0)} | Out of Pocket ${formatPHP(entry.employeeOutOfPocket ?? entry.amountRequested)}`}>
+                              E {formatPHP(entry.totalExpenses)} · PC {formatPHP(entry.companyFundedAmount || 0)} · O {formatPHP(entry.employeeOutOfPocket ?? entry.amountRequested)}
+                              {entry.existingExpenseId ? ` · #${entry.existingExpenseId}` : ''}
+                            </div>
+                          )}
                       </TableCell>
 
                       {/* 3b. Funding Bank (spec 0014): the bank Finance chose and the company that owns it */}
@@ -1508,9 +1675,9 @@ export const PettyCashPage: React.FC = () => {
                         {formatPHP(entry.runningBalance)}
                       </TableCell>
 
-                      {/* 8. Status */}
+                      {/* 8. Status (Blank for Disbursement & Expense rows) */}
                       <TableCell className="px-3 py-3.5 text-center">
-                        {isPendingFinance ? (
+                        {isBlankStatusEntry(entry) ? null : isPendingFinance ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
                             <Clock className="w-3 h-3 shrink-0" />
                             <span>Pending Finance</span>
@@ -1555,20 +1722,41 @@ export const PettyCashPage: React.FC = () => {
                             <CheckCircle2 className="w-3 h-3 shrink-0" />
                             <span>Reimbursed</span>
                           </span>
-                        ) : entry.type === 'expense' ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-50 text-slate-700 border border-slate-200 whitespace-nowrap">
-                            <ArrowUpRight className="w-3 h-3" />
-                            <span>Expense</span>
-                          </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
                             <Check className="w-3 h-3" />
-                            <span>Approved</span>
+                            <span>{entry.status}</span>
                           </span>
                         )}
                       </TableCell>
 
-                      {/* 9. Actions */}
+                      {/* 9. Audit Status */}
+                      <TableCell className="px-3 py-3.5 text-center">
+                        {entry.auditStatus === 'Verified' ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
+                            title={entry.auditedBy ? `Audited by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Audited'}
+                          >
+                            <CheckCircle2 className="w-3 h-3 shrink-0" />
+                            <span>Audited</span>
+                          </span>
+                        ) : entry.auditStatus === 'Flagged' ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap"
+                            title={entry.auditedBy ? `Flagged by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Discrepancy'}
+                          >
+                            <AlertCircle className="w-3 h-3 shrink-0" />
+                            <span>Discrepancy</span>
+                          </span>
+                        ) : entry.auditStatus === 'Pending Audit' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            <Clock className="w-3 h-3 shrink-0" />
+                            <span>Pending Audit</span>
+                          </span>
+                        ) : null}
+                      </TableCell>
+
+                      {/* 10. Actions */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-center">
                           <Button
@@ -1662,23 +1850,45 @@ export const PettyCashPage: React.FC = () => {
       <Dialog open={isSummaryModalOpen} onOpenChange={setIsSummaryModalOpen}>
         <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="pb-3 border-b border-stroke/20">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
                 <Wallet className="w-5 h-5 text-primary" />
                 <span>Petty Cash Transaction Details</span>
               </DialogTitle>
-              <span
-                className={cn(
-                  'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider',
-                  targetEntry?.status === 'Approved' && 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-                  targetEntry?.status === 'Pending Finance Approval' &&
-                    'bg-amber-50 text-amber-700 border border-amber-200',
-                  (targetEntry?.status === 'Disapproved' || targetEntry?.status === 'Rejected') &&
-                    'bg-red-50 text-red-700 border border-red-200'
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {!isBlankStatusEntry(targetEntry) && targetEntry?.status && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider',
+                      targetEntry?.status === 'Approved' && 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+                      (targetEntry?.status === 'Pending Finance Approval' || targetEntry?.status === 'Pending Finance Endorsement') &&
+                        'bg-amber-50 text-amber-700 border border-amber-200',
+                      (targetEntry?.status === 'Disapproved' || targetEntry?.status === 'Disapproved by Audit' || targetEntry?.status === 'Rejected' || targetEntry?.status === 'Rejected by Finance') &&
+                        'bg-red-50 text-red-700 border border-red-200'
+                    )}
+                  >
+                    {targetEntry?.status}
+                  </span>
                 )}
-              >
-                {targetEntry?.status}
-              </span>
+                {targetEntry?.auditStatus && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border',
+                      targetEntry.auditStatus === 'Verified'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : targetEntry.auditStatus === 'Flagged'
+                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                    )}
+                  >
+                    {targetEntry.auditStatus === 'Verified'
+                      ? 'Audited'
+                      : targetEntry.auditStatus === 'Flagged'
+                      ? 'Discrepancy'
+                      : 'Pending Audit'}
+                  </span>
+                )}
+              </div>
             </div>
             <DialogDescription className="text-xs text-muted-fg">
               {targetEntry?.companyName} • {targetEntry?.date}
@@ -1794,8 +2004,8 @@ export const PettyCashPage: React.FC = () => {
                           <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.totalExpenses)}</span>
                         </div>
                         <div className="p-2 rounded-lg bg-white border border-stroke/20">
-                          <span className="text-[10.5px] text-muted-fg block">Company Cash Paid (C)</span>
-                          <span className="font-bold text-focus text-sm">{formatPHP(targetEntry.companyFundedAmount || 0)}</span>
+                          <span className="text-[10.5px] text-muted-fg block">Paid from Petty Cash (C)</span>
+                          <span className="font-bold text-focus text-sm tabular-nums">{formatPHP(targetEntry.companyFundedAmount || 0)}</span>
                           {targetEntry.existingExpenseId && (
                             <span className="text-[10px] text-muted-fg block truncate" title={`Expense #${targetEntry.existingExpenseId}`}>
                               Pre recorded #{targetEntry.existingExpenseId}
@@ -2006,7 +2216,13 @@ export const PettyCashPage: React.FC = () => {
                   <div className="min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-focus">
-                        {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') ? 'Reimbursement filed by' : 'Requested by'}{' '}
+                        {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement'
+                          ? 'Disbursement recorded by'
+                          : targetEntry.type === 'expense'
+                          ? 'Petty cash expense recorded by'
+                          : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
+                          ? 'Reimbursement filed by'
+                          : 'Requested by'}{' '}
                         <span className="text-primary font-bold">
                           {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
                         </span>
@@ -2016,7 +2232,9 @@ export const PettyCashPage: React.FC = () => {
                       </span>
                     </div>
                     <p className="text-[11px] text-muted-fg mt-0.5">
-                      {(targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment')
+                      {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.type === 'expense'
+                        ? `Deducted immediately from ${targetEntry.companyName || 'Company'} petty cash fund`
+                        : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
                         ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
                         : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
                     </p>
@@ -2052,46 +2270,90 @@ export const PettyCashPage: React.FC = () => {
 
                   {/* Audit Review Event */}
                   <div className="pt-2 border-t border-stroke/15 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-focus">
-                        {targetEntry.status === 'Approved' ? (
-                          <span className="text-emerald-700 font-bold">
-                            Audited & Approved
-                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                    {isBlankStatusEntry(targetEntry) ? (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {targetEntry.auditStatus === 'Verified' ? (
+                              <span className="text-emerald-700 font-bold">
+                                Audited
+                                {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : targetEntry.auditStatus === 'Flagged' ? (
+                              <span className="text-rose-700 font-bold">
+                                Discrepancy Flagged
+                                {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-amber-700 font-semibold">
+                                Pending Audit
+                              </span>
+                            )}
                           </span>
-                        ) : targetEntry.status === 'Disapproved' ? (
-                          <span className="text-rose-700 font-bold">
-                            Rejected / Disapproved
-                            {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
-                          </span>
-                        ) : targetEntry.status === 'Pending Audit Approval' ? (
-                          <span className="text-amber-700 font-semibold">
-                            Pending Audit Review
-                          </span>
+                          {targetEntry.auditDate && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(targetEntry.auditDate)}
+                            </span>
+                          )}
+                        </div>
+                        {targetEntry.auditNotes ? (
+                          <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                            Audit Notes: &ldquo;{targetEntry.auditNotes}&rdquo;
+                          </div>
                         ) : (
-                          <span className="text-slate-600 font-medium">
-                            {targetEntry.status}
-                          </span>
+                          <p className="text-[11px] text-muted-fg mt-0.5">
+                            {targetEntry.auditStatus === 'Verified'
+                              ? 'Verified by Internal Audit.'
+                              : targetEntry.auditStatus === 'Flagged'
+                              ? 'Flagged for discrepancy by Internal Audit.'
+                              : 'Awaiting Internal Audit verification.'}
+                          </p>
                         )}
-                      </span>
-                      {targetEntry.reviewedAt && (
-                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                          {formatTimelineDateTime(targetEntry.reviewedAt)}
-                        </span>
-                      )}
-                    </div>
-                    {targetEntry.remark ? (
-                      <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
-                        Remarks: &ldquo;{targetEntry.remark}&rdquo;
-                      </div>
+                      </>
                     ) : (
-                      <p className="text-[11px] text-muted-fg mt-0.5">
-                        {targetEntry.status === 'Approved'
-                          ? 'Approved by Internal Audit.'
-                          : targetEntry.status === 'Disapproved'
-                          ? 'Request rejected by reviewer.'
-                          : 'Awaiting audit review and verification.'}
-                      </p>
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {targetEntry.status === 'Approved' ? (
+                              <span className="text-emerald-700 font-bold">
+                                Audited & Approved
+                                {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' ? (
+                              <span className="text-rose-700 font-bold">
+                                Rejected / Disapproved
+                                {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                              </span>
+                            ) : targetEntry.status === 'Pending Audit Approval' ? (
+                              <span className="text-amber-700 font-semibold">
+                                Pending Audit Review
+                              </span>
+                            ) : (
+                              <span className="text-slate-600 font-medium">
+                                {targetEntry.status}
+                              </span>
+                            )}
+                          </span>
+                          {targetEntry.reviewedAt && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(targetEntry.reviewedAt)}
+                            </span>
+                          )}
+                        </div>
+                        {targetEntry.remark ? (
+                          <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                            Remarks: &ldquo;{targetEntry.remark}&rdquo;
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-muted-fg mt-0.5">
+                            {targetEntry.status === 'Approved'
+                              ? 'Approved by Internal Audit.'
+                              : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit'
+                              ? 'Request rejected by reviewer.'
+                              : 'Awaiting audit review and verification.'}
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
 
@@ -2149,10 +2411,9 @@ export const PettyCashPage: React.FC = () => {
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
 
 
-                {/* Pending Finance: Allow Edit / Delete for topups */}
-                {targetEntry.type === 'topup' &&
-                  (targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') &&
-                  !isAudit && !isOwner && (
+                {/* Pending Finance: Allow Edit / Delete for unendorsed requests */}
+                {(targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') &&
+                  !isAudit && !isOwner && !isAdmin && (
                     <div className="flex items-center gap-2">
                       <Button
                         type="button"
@@ -2209,8 +2470,8 @@ export const PettyCashPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* Audit Team Actions: Approve or Disapprove */}
-                {canAuditActions && targetEntry.status === 'Pending Audit Approval' && (
+                {/* Audit Team Actions: Approve or Disapprove Top-up / Reimbursement requests */}
+                {canAuditActions && !isBlankStatusEntry(targetEntry) && targetEntry.status === 'Pending Audit Approval' && (
                   <div className="flex items-center gap-2">
                     <Button
                       type="button"
@@ -2233,8 +2494,32 @@ export const PettyCashPage: React.FC = () => {
                   </div>
                 )}
 
+                {/* Audit Team Actions: Mark Disbursement / Petty Cash Expense audit status */}
+                {canAuditActions && isBlankStatusEntry(targetEntry) && getAuditableExpenseId(targetEntry) != null && (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleMarkPettyAudit(targetEntry, 'Flagged')}
+                      className="h-9 px-4 text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      <span>Flag Discrepancy</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleMarkPettyAudit(targetEntry, 'Verified')}
+                      className="h-9 px-4 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Mark as Audited</span>
+                    </Button>
+                  </div>
+                )}
+
                 {/* Finance Team Actions: Lifecycle execution for reimbursements */}
-                {canExecuteFinancialActions && (targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.requestType === 'replenishment') && (
+                {canExecuteFinancialActions && !isBlankStatusEntry(targetEntry) && (targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment') && (
                   <div className="flex items-center gap-2 flex-wrap">
                     {/* Zero Excess Claim in Approved status: Finalize Settlement */}
                     {targetEntry.status === 'Approved' &&
@@ -2404,13 +2689,51 @@ export const PettyCashPage: React.FC = () => {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-fg">Amount:</span>
-                <span className="font-bold text-focus">{formatPHP(targetEntry?.amountRequested || 0)}</span>
+                <span className="font-bold text-focus tabular-nums">{formatPHP(targetEntry?.amountRequested || 0)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-fg">Particulars:</span>
                 <span className="font-medium text-focus truncate max-w-[240px]">{targetEntry?.description}</span>
               </div>
             </div>
+
+            {/* Funding Breakdown Summary (Spec 0043 AC-5) */}
+            {reviewAction === 'endorse' &&
+              targetEntry?.totalExpenses !== undefined &&
+              targetEntry?.totalExpenses !== null && (
+                <div className="p-3 rounded-xl bg-slate-50 border border-stroke/30 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-muted-fg uppercase tracking-wider">
+                      Funding Breakdown
+                    </span>
+                    {targetEntry.existingExpenseId && (
+                      <span className="text-[10.5px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                        Pre recorded #{targetEntry.existingExpenseId}
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                      <span className="text-[10px] text-muted-fg block">Total Expenses (E)</span>
+                      <span className="font-bold text-focus tabular-nums">
+                        {formatPHP(targetEntry.totalExpenses)}
+                      </span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-white border border-stroke/20">
+                      <span className="text-[10px] text-muted-fg block">Paid from Petty Cash (C)</span>
+                      <span className="font-bold text-focus tabular-nums">
+                        {formatPHP(targetEntry.companyFundedAmount || 0)}
+                      </span>
+                    </div>
+                    <div className="p-2 rounded-lg bg-emerald-50/70 border border-emerald-200">
+                      <span className="text-[10px] text-emerald-800 block">Out of Pocket (O)</span>
+                      <span className="font-bold text-emerald-900 tabular-nums">
+                        {formatPHP(targetEntry.employeeOutOfPocket ?? targetEntry.amountRequested)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
             {/* Funding Bank Picker (Finance endorsement only, spec 0012 & 0038) */}
             {reviewAction === 'endorse' && (() => {
@@ -2548,7 +2871,7 @@ export const PettyCashPage: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Top Up Request Modal */}
+      {/* Edit Petty Cash / Reimbursement Request Modal */}
       <Dialog open={Boolean(editEntry)} onOpenChange={(open) => !open && setEditEntry(null)}>
         <DialogContent className="sm:max-w-[540px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
           <DialogHeader className="pb-3 border-b border-stroke/30 text-left">
@@ -2558,10 +2881,12 @@ export const PettyCashPage: React.FC = () => {
               </div>
               <div>
                 <DialogTitle className="text-lg font-extrabold text-focus">
-                  Edit Petty Cash Request
+                  {editEntry?.requestType === 'reimbursement' || editEntry?.requestType === 'replenishment_disbursement'
+                    ? 'Edit Reimbursement Request'
+                    : 'Edit Petty Cash Request'}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  Update the requested amount or particulars before finance reviews it.
+                  Update the requested amount or particulars before finance endorses it.
                 </DialogDescription>
               </div>
             </div>
@@ -2575,10 +2900,21 @@ export const PettyCashPage: React.FC = () => {
                 </div>
               )}
 
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold text-focus">Company</Label>
-                <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-stroke/40 text-xs font-semibold text-focus">
-                  {editEntry.companyName}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-focus">Company</Label>
+                  <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-stroke/40 text-xs font-semibold text-focus">
+                    {editEntry.companyName}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-focus">Request Type</Label>
+                  <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 border border-stroke/40 text-xs font-semibold text-focus capitalize">
+                    {editEntry.requestType === 'reimbursement' || editEntry.requestType === 'replenishment_disbursement'
+                      ? 'Reimbursement'
+                      : 'Top-Up'}
+                  </div>
                 </div>
               </div>
 
@@ -2590,7 +2926,7 @@ export const PettyCashPage: React.FC = () => {
                   id="edit-amount"
                   type="number"
                   step="0.01"
-                  min="1"
+                  min="0.01"
                   value={editAmount}
                   onChange={(e) => setEditAmount(e.target.value)}
                   placeholder="e.g. 5000"
@@ -2608,10 +2944,42 @@ export const PettyCashPage: React.FC = () => {
                   type="text"
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
-                  placeholder="Reason or purpose for top up"
+                  placeholder="Reason or purpose for request"
                   className="h-10 text-xs rounded-xl"
                 />
               </div>
+
+              {(editEntry.requestType === 'reimbursement' || editEntry.requestType === 'replenishment_disbursement' || editEntry.paidBy) && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-paid-by" className="text-xs font-semibold text-focus">
+                      Paid By / Claimed By
+                    </Label>
+                    <Input
+                      id="edit-paid-by"
+                      type="text"
+                      value={editPaidBy}
+                      onChange={(e) => setEditPaidBy(e.target.value)}
+                      placeholder="e.g. Juan Dela Cruz"
+                      className="h-10 text-xs rounded-xl"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-category" className="text-xs font-semibold text-focus">
+                      Category
+                    </Label>
+                    <Input
+                      id="edit-category"
+                      type="text"
+                      value={editCategory}
+                      onChange={(e) => setEditCategory(e.target.value)}
+                      placeholder="e.g. Office Supplies, Travel"
+                      className="h-10 text-xs rounded-xl"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
                 <Button
@@ -2639,7 +3007,11 @@ export const PettyCashPage: React.FC = () => {
       <ConfirmModal
         open={Boolean(deleteConfirmEntry)}
         onOpenChange={(open) => !open && setDeleteConfirmEntry(null)}
-        title="Delete Petty Cash Request"
+        title={
+          deleteConfirmEntry?.requestType === 'reimbursement' || deleteConfirmEntry?.requestType === 'replenishment_disbursement'
+            ? 'Delete Reimbursement Request'
+            : 'Delete Petty Cash Request'
+        }
         description={
           <>
             Are you sure you want to delete this pending request? This action cannot be undone.
@@ -2663,7 +3035,7 @@ export const PettyCashPage: React.FC = () => {
                 <div className="flex justify-between">
                   <span className="text-muted-fg">Amount:</span>
                   <span className="font-bold text-rose-600">
-                    {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn)}
+                    {formatPHP(deleteConfirmEntry.amountRequested || deleteConfirmEntry.amountIn || deleteConfirmEntry.amountOut)}
                   </span>
                 </div>
               </div>
@@ -2698,6 +3070,8 @@ export const PettyCashPage: React.FC = () => {
         onOpenChange={setIsReimbursementModalOpen}
         company={selectedCompany !== 'All Companies' ? selectedCompany : (activeCompany !== 'All Companies' ? activeCompany : (user?.assignedCompany || 'MCT Kitchen'))}
         currentBalance={currentBalance}
+        unreservedBalance={currentUnreservedBalance}
+        unreservedBalances={unreservedBalances}
         companies={companyList}
         bankAccounts={bankAccounts}
         banksLoading={banksLoading}
@@ -2707,8 +3081,9 @@ export const PettyCashPage: React.FC = () => {
           if (newRecord) {
             setLedger((prev) => [newRecord, ...prev])
           }
-          loadData()
           setIsReimbursementModalOpen(false)
+          pettyCashService.invalidateCache({ notifyBell: false })
+          void loadData({ silent: true })
         }}
       />
 
@@ -2803,28 +3178,46 @@ export const PettyCashPage: React.FC = () => {
             </button>
 
             {canAuditActions ? (
-              <>
+              getAuditableExpenseId(activeMenuPetty) != null ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkPettyAudit(activeMenuPetty, 'Verified')}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Mark as Audited</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
+                    className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag Discrepancy</span>
+                  </button>
+                </>
+              ) : !isBlankStatusEntry(activeMenuPetty) && activeMenuPetty.status === 'Pending Audit Approval' ? (
                 <button
                   type="button"
-                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Verified')}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenSummary(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-primary hover:bg-primary/5 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Mark as Audited</span>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span>Review & Approve</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => handleMarkPettyAudit(activeMenuPetty, 'Flagged')}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-                >
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Flag Discrepancy</span>
-                </button>
-              </>
+              ) : null
             ) : !isOwner &&
+              !isAdmin &&
+              !isBlankStatusEntry(activeMenuPetty) &&
               (activeMenuPetty.status === 'Pending Finance Endorsement' ||
-                activeMenuPetty.status === 'Pending Finance Approval') &&
-              activeMenuPetty.type === 'topup' ? (
+                activeMenuPetty.status === 'Pending Finance Approval') ? (
               <>
                 <button
                   type="button"
@@ -2838,7 +3231,11 @@ export const PettyCashPage: React.FC = () => {
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
                 >
                   <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                  <span>Edit Top-Up Request</span>
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Edit Reimbursement'
+                      : 'Edit Petty Cash Request'}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -2852,10 +3249,14 @@ export const PettyCashPage: React.FC = () => {
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Delete Top-Up Request</span>
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Delete Reimbursement'
+                      : 'Delete Petty Cash Request'}
+                  </span>
                 </button>
               </>
-            ) : canExecuteFinancialActions && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement' || activeMenuPetty.requestType === 'replenishment') ? (
+            ) : canExecuteFinancialActions && !isBlankStatusEntry(activeMenuPetty) && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment') ? (
               <>
                 {/* Zero excess claim */}
                 {activeMenuPetty.status === 'Approved' &&

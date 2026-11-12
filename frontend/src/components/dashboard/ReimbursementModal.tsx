@@ -51,6 +51,8 @@ export interface ReimbursementModalProps {
   onOpenChange: (open: boolean) => void
   company: string
   currentBalance?: number | null
+  unreservedBalance?: number | null
+  unreservedBalances?: Record<string, number>
   companies?: string[]
   bankAccounts?: BankAccount[]
   banksLoading?: boolean
@@ -100,6 +102,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   onOpenChange,
   company,
   currentBalance = 0,
+  unreservedBalance,
+  unreservedBalances,
   companies = [],
   bankAccounts: initialBankAccounts,
   banksLoading = false,
@@ -309,6 +313,18 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       mounted = false
     }
   }, [open, requestingCompany])
+
+  // Effective unreserved petty cash balance for the selected company
+  const effectiveUnreservedBalance = React.useMemo(() => {
+    if (
+      unreservedBalances &&
+      requestingCompany &&
+      typeof unreservedBalances[requestingCompany] === 'number'
+    ) {
+      return unreservedBalances[requestingCompany]
+    }
+    return unreservedBalance ?? currentBalance ?? 0
+  }, [unreservedBalances, requestingCompany, unreservedBalance, currentBalance])
 
   // Reset form when modal opens
   React.useEffect(() => {
@@ -813,6 +829,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
     const totalAmount = validLines.reduce((acc, l) => acc + l.amount, 0)
     const roundedTotal = Math.round(totalAmount * 100) / 100
+
+    // Check if any file is still uploading
+    const isFileUploading = attachments.some((att) => att.status === 'uploading')
+    if (isFileUploading) {
+      setGeneralError('Please wait for files to finish uploading before submitting.')
+      return
+    }
+
     const parsedCompanyFunded = parseFloat(companyFundedAmount)
     const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
     const parsedOutOfPocket = parseFloat(employeeOutOfPocketAmount)
@@ -822,6 +846,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       errors.companyFunded = 'Company petty cash amount cannot be negative.'
     } else if (validCompanyFunded > roundedTotal) {
       errors.companyFunded = 'Company petty cash portion cannot exceed total expenses.'
+    } else if (!isPreRecorded && validCompanyFunded > 0 && validCompanyFunded > effectiveUnreservedBalance) {
+      errors.companyFunded = `Paid from company petty cash (${formatPHP(validCompanyFunded)}) exceeds available unreserved petty cash (${formatPHP(effectiveUnreservedBalance)}).`
     }
 
     if (validOutOfPocket < 0) {
@@ -861,13 +887,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       }
     }
 
-    // Check if any file is still uploading
-    const isFileUploading = attachments.some((att) => att.status === 'uploading')
-    if (isFileUploading) {
-      setGeneralError('Please wait for files to finish uploading before submitting.')
-      return
-    }
-
     // If there are validation errors, block submit
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
@@ -889,11 +908,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
       const combinedDescription = validLines.map((l) => l.particulars).join(', ')
       const netOutOfPocket = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
+      const roundedCompanyFunded = Math.round(validCompanyFunded * 100) / 100
       const primaryReceiptUrl = uploadedAttachments[0]?.file_url || null
       const httpReceiptUrl =
         primaryReceiptUrl && primaryReceiptUrl.startsWith('data:') ? null : primaryReceiptUrl
       const attachmentsJson = uploadedAttachments.length > 0 ? JSON.stringify(uploadedAttachments) : null
-      const targetStatus = isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval'
+      const targetStatus = isZeroExcessSubmit
+        ? 'Settled'
+        : (isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval')
 
       await pettyCashService.createTopUp({
         company: requestingCompany,
@@ -908,22 +930,28 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
         category: category.trim(),
-        bank_account_id: isFinance && fundingBankId ? fundingBankId : undefined,
-        finance_remark: remarks.trim() || undefined,
-        endorsement_remark: remarks.trim() || undefined,
+        bank_account_id: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
+        finance_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
+        endorsement_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
         total_expenses: roundedTotal,
-        company_funded_amount: Math.round(validCompanyFunded * 100) / 100,
+        company_funded_amount: roundedCompanyFunded,
         employee_out_of_pocket: netOutOfPocket,
         existing_expense_id: parsedExpenseId,
       })
 
-      notifySuccess('Reimbursement request submitted successfully.')
+      notifySuccess(
+        isZeroExcessSubmit
+          ? 'Petty cash disbursement deducted immediately.'
+          : roundedCompanyFunded > 0 && !parsedExpenseId
+          ? 'Company petty cash deducted immediately; excess out-of-pocket claim submitted.'
+          : 'Reimbursement request submitted successfully.'
+      )
 
       const newEntry: PettyCashLedgerEntry = {
         id: `pc-${Date.now()}`,
         recordId: Date.now(),
-        type: 'request',
-        requestType: 'reimbursement',
+        type: isZeroExcessSubmit ? 'expense' : 'request',
+        requestType: isZeroExcessSubmit ? 'replenishment_disbursement' : 'reimbursement',
         companyName: requestingCompany,
         date: expenseDate,
         description: combinedDescription,
@@ -932,21 +960,22 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         receiptUrl: primaryReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
-        amountRequested: netOutOfPocket,
+        amountRequested: isZeroExcessSubmit ? roundedCompanyFunded : netOutOfPocket,
         totalExpenses: roundedTotal,
-        companyFundedAmount: Math.round(validCompanyFunded * 100) / 100,
+        companyFundedAmount: roundedCompanyFunded,
         employeeOutOfPocket: netOutOfPocket,
         existingExpenseId: parsedExpenseId || undefined,
-        fundingBankId: isFinance && fundingBankId ? fundingBankId : undefined,
-        fundingBankName: isFinance && selectedBankForSubmit ? selectedBankForSubmit.bankName : undefined,
-        fundingAccountName: isFinance && selectedBankForSubmit ? selectedBankForSubmit.accountName : undefined,
-        fundingCompanyName: isFinance && selectedBankForSubmit ? selectedBankForSubmit.companyName : undefined,
-        isOwnAccount: isFinance && selectedBankForSubmit ? true : undefined,
-        financeRemark: isFinance && remarks.trim() ? remarks.trim() : undefined,
+        fundingBankId: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
+        fundingBankName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.bankName : undefined,
+        fundingAccountName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.accountName : undefined,
+        fundingCompanyName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.companyName : undefined,
+        isOwnAccount: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? true : undefined,
+        financeRemark: !isZeroExcessSubmit && isFinance && remarks.trim() ? remarks.trim() : undefined,
         amountIn: 0,
-        amountOut: 0,
+        amountOut: isZeroExcessSubmit && !parsedExpenseId ? roundedCompanyFunded : 0,
         runningBalance: currentBalance || 0,
-        status: targetStatus,
+        status: isZeroExcessSubmit ? '' : targetStatus,
+        auditStatus: isZeroExcessSubmit ? 'Pending Audit' : null,
         createdAt: new Date().toISOString(),
       }
 
@@ -993,7 +1022,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   Reimbursement Request
                 </DialogTitle>
                 <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-                  For expenses paid from company petty cash and out-of-pocket reimbursement.
+                  For expenses paid out of pocket or split with company petty cash.
                 </DialogDescription>
               </div>
             </div>
@@ -1405,16 +1434,15 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               )}
             </div>
 
-            {/* Funding Breakdown (Spec 0038) */}
             <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-bold text-focus flex items-center gap-1.5">
                   <Building2 className="w-4 h-4 text-primary" />
                   <span>Funding Breakdown</span>
                 </div>
                 {employeeOutOfPocket === 0 && grandTotal > 0 && (
-                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                    Zero excess claim (Float settlement only)
+                  <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                    100% Company Petty Cash (Deducts Immediately)
                   </span>
                 )}
               </div>
@@ -1459,7 +1487,9 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
                   )}
                   <p className="text-[10.5px] text-muted-fg">
-                    Enter ₱0.00 if paid entirely out of pocket.
+                    {isPreRecorded
+                      ? 'Matched to your selected pre-recorded expense.'
+                      : `Available float: ${formatPHP(effectiveUnreservedBalance)}. Deducts immediately on save.`}
                   </p>
                 </div>
 
@@ -1499,13 +1529,21 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     )}
                   />
                   <p className="text-[10.5px] text-muted-fg">
-                    Net amount to be disbursed to employee.
+                    {employeeOutOfPocket === 0 && grandTotal > 0
+                      ? '₱0.00 out of pocket — skips Finance/Audit approval queue.'
+                      : 'Goes to Finance & Audit approval for employee reimbursement.'}
                   </p>
                 </div>
               </div>
 
+              {employeeOutOfPocket === 0 && grandTotal > 0 && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800 font-medium">
+                  Covered 100% by company petty cash: deducts immediately with no Finance endorsement or bank payout needed, and tracks under Audit Status.
+                </div>
+              )}
+
               {/* Finance Funding Bank Selection (direct endorsement to Internal Audit) */}
-              {isFinance && (
+              {isFinance && !(employeeOutOfPocket === 0 && grandTotal > 0) && (
                 <div className="pt-2.5 border-t border-stroke/20 space-y-3">
                   <div className="space-y-1">
                     <Label htmlFor="reimbursement-funding-bank" className="text-xs font-semibold text-focus flex items-center gap-1.5">
@@ -1924,7 +1962,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       <ConfirmModal
         open={isDiscardModalOpen}
         title="Discard changes?"
-        description="You have unsaved changes in this reimbursement request. Are you sure you want to discard them?"
+        description="You have unsaved changes in this petty cash entry. Are you sure you want to discard them?"
         confirmLabel="Discard changes"
         cancelLabel="Keep editing"
         variant="destructive"

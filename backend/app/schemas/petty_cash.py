@@ -111,6 +111,42 @@ class PettyCashTopUpCreate(StrictBaseModel):
         return _validate_attachments_json(v)
 
 
+class PettyCashDisbursementCreate(StrictBaseModel):
+    company_id: Optional[int] = None
+    company: Optional[str] = Field(None, min_length=1, max_length=100)
+    company_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    amount: Decimal = Field(..., gt=0, decimal_places=2)
+    topup_date: date
+    reference_no: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = Field(None, max_length=1000)
+    paid_by: Optional[str] = Field(None, max_length=100)
+    category: Optional[str] = Field(None, max_length=100)
+    items: Optional[str] = Field(None, max_length=16000)
+    receipt_url: Optional[str] = Field(None, max_length=7500000)
+    attachments: Optional[str] = Field(None, max_length=15000000)
+    created_by: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_fields(self):
+        if not self.company_id and not self.company and not self.company_name:
+            raise ValueError("Company identifier (company_id or company name) is required.")
+        if self.amount <= Decimal("0.00"):
+            raise ValueError("Disbursement amount must be greater than zero.")
+        if self.topup_date > date.today():
+            raise ValueError("Disbursement date cannot be in the future.")
+        return self
+
+    @field_validator("receipt_url")
+    @classmethod
+    def validate_receipt_url(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_receipt_or_data_url(v)
+
+    @field_validator("attachments")
+    @classmethod
+    def validate_attachments(cls, v: Optional[str]) -> Optional[str]:
+        return _validate_attachments_json(v)
+
+
 class PettyCashTopUpUpdate(StrictBaseModel):
     amount: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
     description: Optional[str] = Field(None, max_length=1000)
@@ -259,6 +295,7 @@ class PettyCashSummaryOut(BaseModel):
     company_id: int
     company_name: str
     balance: Decimal
+    unreserved_balance: Decimal = Decimal("0.00")
     total_topups: Decimal
     total_spent: Decimal
     period_topups: Decimal
@@ -284,6 +321,8 @@ class PettyCashMovementOut(BaseModel):
     company_name: Optional[str] = None
     funding_company_id: Optional[int] = None
     funding_company_name: Optional[str] = None
+    funding_bank_id: Optional[str] = None
+    funding_bank_name: Optional[str] = None
     is_own_account: bool = False
     created_at: Optional[datetime] = None
     request_type: Optional[str] = "topup"
@@ -325,8 +364,13 @@ class PettyCashLedgerEntry(BaseModel):
     amount_in: Decimal
     amount_out: Decimal
     running_balance: Decimal
-    status: Optional[str] = "Approved"
+    status: Optional[str] = ""
     request_type: Optional[str] = "topup"
+    audit_status: Optional[str] = None
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
+    expense_id: Optional[int] = None
     paid_by: Optional[str] = None
     receipt_url: Optional[str] = None
     attachments: Optional[str] = None

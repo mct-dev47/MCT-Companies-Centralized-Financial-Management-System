@@ -35,7 +35,6 @@ from app.services.petty_cash_service import PettyCashService
 
 @pytest.fixture()
 def env(monkeypatch):
-    monkeypatch.setattr("app.services.petty_cash_service.get_supabase_admin_client", lambda: None)
     monkeypatch.setattr("app.services.activity_log_service.get_supabase_admin_client", lambda: None)
     monkeypatch.setattr("app.core.events.dispatch_activity_event", lambda *args, **kwargs: None)
 
@@ -529,7 +528,7 @@ def test_finance_direct_replenishment_funding_bank_validation_and_persistence(en
         tf_res = pc_svc.initiate_transfer(tf_claim.topup_id, current_user=FINANCE_AUTH)
         assert tf_res.status == "Transfer In Transit"
 
-        # 8. Zero-excess claim succeeds without funding bank
+        # 8. Zero-excess claim settles immediately without funding bank or Audit approval queue
         zero_claim = pc_svc.create_topup(
             PettyCashTopUpCreate(
                 company_id=101,
@@ -545,8 +544,9 @@ def test_finance_direct_replenishment_funding_bank_validation_and_persistence(en
             ),
             current_user=FINANCE_AUTH,
         )
-        assert zero_claim.status == "Pending Audit Approval"
+        assert zero_claim.status == "Settled"
         assert zero_claim.bank_account_id is None
+        assert zero_claim.petty_cash_expense_id is not None
 
 
 def test_reimbursement_accepts_base64_receipt_data_urls_and_blocks_unsafe_schemes(env):

@@ -51,6 +51,8 @@ export interface DashboardTransactionItem {
   isMirrorRow?: boolean
   /** Endorsed by Finance but not yet approved by Internal Audit. */
   awaitingAudit?: boolean
+  /** Label for the pending badge when the row is waiting on something other than Audit (e.g. "Awaiting Reimbursement"). */
+  pendingLabel?: string
   /** The paid part of a sale or expense (spec 0013, AC-10). Used by the cash ledger tab. */
   paidAmount?: number
   bankAccountId?: string

@@ -15,6 +15,7 @@ export interface PettyCashSummary {
   companyId: number
   companyName: string
   balance: number
+  unreservedBalance: number
   totalTopUps: number
   totalSpent: number
   periodTopUps: number
@@ -33,7 +34,7 @@ export interface PettyCashCategory {
 export interface PettyCashLedgerEntry {
   id: string
   type: 'topup' | 'expense' | 'request'
-  requestType?: 'topup' | 'reimbursement' | 'replenishment_disbursement' | string
+  requestType?: 'topup' | 'reimbursement' | 'disbursement' | 'replenishment_disbursement' | string
   paidBy?: string | null
   receiptUrl?: string | null
   attachments?: string | null
@@ -66,9 +67,11 @@ export interface PettyCashLedgerEntry {
   fundingCompanyName?: string | null
   /** The funding bank belongs to the requesting company itself. */
   isOwnAccount?: boolean
-  auditStatus?: 'Verified' | 'Pending Audit' | 'Flagged'
+  auditStatus?: 'Verified' | 'Pending Audit' | 'Flagged' | null
   auditDate?: string | null
   auditedBy?: string | null
+  auditNotes?: string | null
+  expenseId?: number | null
   totalExpenses?: number | null
   companyFundedAmount?: number | null
   employeeOutOfPocket?: number | null
@@ -109,6 +112,19 @@ export interface NewPettyCashTopUpInput {
   company_funded_amount?: number | null
   employee_out_of_pocket?: number | null
   existing_expense_id?: number | null
+}
+
+export interface NewPettyCashDisbursementInput {
+  company?: string
+  company_name?: string
+  amount: number
+  date: string
+  description?: string
+  paid_by?: string | null
+  receipt_url?: string | null
+  attachments?: string | null
+  items?: string | null
+  category?: string | null
 }
 
 export interface IntercompanyTransfer {
@@ -235,6 +251,7 @@ interface BackendSummary {
   company_id: number
   company_name: string
   balance: string | number
+  unreserved_balance?: string | number
   total_topups: string | number
   total_spent: string | number
   period_topups: string | number
@@ -291,6 +308,11 @@ interface BackendLedgerEntry {
   reimbursed_by?: string | null
   transfer_received_at?: string | null
   transfer_received_by?: string | null
+  audit_status?: string | null
+  audited_by?: string | null
+  audited_at?: string | null
+  audit_remarks?: string | null
+  expense_id?: number | null
 }
 
 function backendHeaders(): HeadersInit {
@@ -332,6 +354,7 @@ function mapSummary(data: BackendSummary): PettyCashSummary {
     companyId: data.company_id,
     companyName: data.company_name,
     balance: Number(data.balance),
+    unreservedBalance: Number(data.unreserved_balance ?? data.balance),
     totalTopUps: Number(data.total_topups),
     totalSpent: Number(data.total_spent),
     periodTopUps: Number(data.period_topups),
@@ -356,7 +379,7 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     amountIn: Number(data.amount_in),
     amountOut: Number(data.amount_out),
     runningBalance: Number(data.running_balance),
-    status: (data.status as any) || 'Approved',
+    status: data.status ?? '',
     remark: data.remark,
     reviewedBy: data.reviewed_by,
     reviewedAt: data.reviewed_at,
@@ -369,7 +392,7 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     fundingAccountName: data.funding_account_name,
     fundingCompanyName: data.funding_company_name,
     isOwnAccount: Boolean(data.is_own_account),
-    requestType: data.request_type || (data.entry_type === 'topup' ? 'topup' : 'topup'),
+    requestType: data.request_type || (data.entry_type === 'expense' ? 'expense' : 'topup'),
     paidBy: data.paid_by,
     receiptUrl: data.receipt_url,
     attachments: data.attachments,
@@ -390,6 +413,11 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     reimbursedBy: data.reimbursed_by ?? null,
     transferReceivedAt: data.transfer_received_at ?? null,
     transferReceivedBy: data.transfer_received_by ?? null,
+    auditStatus: (data.audit_status as PettyCashLedgerEntry['auditStatus']) ?? null,
+    auditedBy: data.audited_by ?? null,
+    auditDate: data.audited_at ?? null,
+    auditNotes: data.audit_remarks ?? null,
+    expenseId: data.expense_id ?? null,
   }
 }
 
@@ -423,10 +451,12 @@ const receiptCache = new Map<number, PettyCashTopUpReceipts>()
 const PC_CACHE_TTL = 30000
 
 export const pettyCashService = {
-  invalidateCache(): void {
+  invalidateCache(options?: { notifyBell?: boolean }): void {
     pcCache.clear()
     receiptCache.clear()
-    notifyNotificationsUpdated()
+    if (options?.notifyBell !== false) {
+      notifyNotificationsUpdated()
+    }
   },
 
   async getTopUpReceipts(
@@ -635,21 +665,62 @@ export const pettyCashService = {
       }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
-  async updateTopUp(recordId: number, input: { amount?: number; description?: string }): Promise<void> {
+  async createDisbursement(input: NewPettyCashDisbursementInput): Promise<void> {
+    const comp = input.company || input.company_name || ''
+    const response = await fetch('/api/v1/petty-cash/disbursements', {
+      method: 'POST',
+      headers: backendHeaders(),
+      body: JSON.stringify({
+        company: comp,
+        company_name: comp,
+        amount: input.amount,
+        topup_date: input.date,
+        description: input.description || null,
+        paid_by: input.paid_by || null,
+        receipt_url: input.receipt_url || null,
+        attachments: input.attachments || null,
+        items: input.items || null,
+        category: input.category || null,
+      }),
+    })
+    if (!response.ok) throw await getBackendError(response)
+    this.invalidateCache({ notifyBell: false })
+    websocketService.emitLocal('PETTY_CASH_UPDATED')
+    websocketService.emitLocal('EXPENSE_CREATED')
+  },
+
+  async updateTopUp(
+    recordId: number,
+    input: {
+      amount?: number
+      description?: string
+      paid_by?: string
+      category?: string
+      total_expenses?: number
+      company_funded_amount?: number
+      existing_expense_id?: number
+    }
+  ): Promise<void> {
     const response = await fetch(`/api/v1/petty-cash/topups/${recordId}`, {
       method: 'PUT',
       headers: backendHeaders(),
       body: JSON.stringify({
         amount: input.amount,
-        description: input.description || null,
+        // undefined = leave unchanged; '' = clear the stored value (the backend saves it as empty).
+        description: input.description,
+        paid_by: input.paid_by,
+        category: input.category,
+        total_expenses: input.total_expenses,
+        company_funded_amount: input.company_funded_amount,
+        existing_expense_id: input.existing_expense_id,
       }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -673,7 +744,7 @@ export const pettyCashService = {
       }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -687,7 +758,7 @@ export const pettyCashService = {
       body: JSON.stringify({ notes: notes || null }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -701,7 +772,7 @@ export const pettyCashService = {
       body: JSON.stringify({ notes: notes || null }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -715,7 +786,7 @@ export const pettyCashService = {
       body: JSON.stringify({ notes: notes || null }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -729,7 +800,7 @@ export const pettyCashService = {
       body: JSON.stringify({ notes: notes || null }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -743,7 +814,7 @@ export const pettyCashService = {
       body: JSON.stringify({ reason }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -757,7 +828,7 @@ export const pettyCashService = {
       body: JSON.stringify({ verification_notes: verificationNotes || null }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -815,7 +886,7 @@ export const pettyCashService = {
       body: JSON.stringify(input),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -826,7 +897,7 @@ export const pettyCashService = {
       body: JSON.stringify({ action, remark }),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 
@@ -836,7 +907,7 @@ export const pettyCashService = {
       headers: backendHeaders(),
     })
     if (!response.ok) throw await getBackendError(response)
-    this.invalidateCache()
+    this.invalidateCache({ notifyBell: false })
     websocketService.emitLocal('PETTY_CASH_UPDATED')
   },
 

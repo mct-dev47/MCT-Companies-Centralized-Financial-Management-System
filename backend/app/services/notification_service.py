@@ -1723,7 +1723,8 @@ class NotificationService:
                     continue
                 if t.reference_no and str(t.reference_no).upper().startswith("SEED-"):
                     continue
-                if (t.status or "Approved").lower() == "approved":
+                req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
+                if (t.status or "Approved").lower() == "approved" and req_type == "topup":
                     amt = Decimal(str(t.amount or 0)).quantize(Decimal("0.01"))
                     topups_by_company[t.company_id] = topups_by_company.get(t.company_id, Decimal("0.00")) + amt
 

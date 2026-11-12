@@ -33,7 +33,7 @@ router = APIRouter()
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.pagination import PaginationParams
-from app.core.cache import get_cached, set_cached
+from app.core.cache import get_cached, set_cached, system_cache
 
 def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
@@ -636,6 +636,7 @@ def create_expense(
 
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=sb_expense_id)
+        system_cache.invalidate_tag("petty_cash")
 
         # Particulars library + audit log don't change the response: do them after it is sent
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
@@ -729,6 +730,7 @@ def create_expense(
 
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=expense.expense_id)
+        system_cache.invalidate_tag("petty_cash")
 
         # Auto-save particulars to company library
         try:
@@ -976,6 +978,7 @@ def update_expense(
 
     # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
     reconcile_expense_bank(db, expense_id=expense_id)
+    system_cache.invalidate_tag("petty_cash")
 
     # Auto-save updated particulars to company library
     if parts:
@@ -1226,6 +1229,8 @@ def delete_expense(
     if deleted_day:
         from app.services.daily_remark_cascade import purge_orphan_daily_remark
         purge_orphan_daily_remark(db, client, "expense", deleted_company_id, deleted_day)
+
+    system_cache.invalidate_tag("petty_cash")
 
     try:
         log_transaction(

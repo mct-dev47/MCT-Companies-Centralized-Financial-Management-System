@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, Response, status
 from sqlalchemy import delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -189,17 +190,35 @@ def _revoke_session_family(
         _revoked_families[family_id] = exp_ts
     try:
         family_hash = hashlib.sha256(family_id.encode("utf-8")).hexdigest()
-        existing = db.query(RevokedToken).filter(RevokedToken.token_hash == family_hash).first()
-        if not existing:
-            db.add(RevokedToken(token_hash=family_hash, user_id=user_id, expires_at=exp_dt))
-        elif existing.expires_at is None:
-            existing.expires_at = exp_dt
+        try:
+            with db.begin_nested():
+                existing = db.query(RevokedToken).filter(RevokedToken.token_hash == family_hash).first()
+                if not existing:
+                    db.add(RevokedToken(token_hash=family_hash, user_id=user_id, expires_at=exp_dt))
+                    db.flush()
+                elif existing.expires_at is None and exp_dt is not None:
+                    existing.expires_at = exp_dt
+                    db.flush()
+        except IntegrityError:
+            pass
+        except Exception:
+            pass
+
         try:
             db.query(UserSession).filter(UserSession.family_id == family_id).delete(synchronize_session=False)
         except Exception:
             pass
         db.commit()
+    except IntegrityError:
+        try:
+            db.rollback()
+        except Exception:
+            pass
     except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.warning(f"Failed to record family revocation in database: {exc}")
 
 
@@ -225,13 +244,21 @@ def revoke_session(
     if family_id:
         hashes_to_revoke.append(hashlib.sha256(family_id.encode("utf-8")).hexdigest())
 
+    # Deduplicate in-memory to prevent inserting identical hash twice in the same batch
+    hashes_to_revoke = list(dict.fromkeys(hashes_to_revoke))
+
     for th in hashes_to_revoke:
         try:
-            existing = db.query(RevokedToken).filter(RevokedToken.token_hash == th).first()
-            if not existing:
-                db.add(RevokedToken(token_hash=th, user_id=user_id, expires_at=exp_dt))
-            elif existing.expires_at is None:
-                existing.expires_at = exp_dt
+            with db.begin_nested():
+                existing = db.query(RevokedToken).filter(RevokedToken.token_hash == th).first()
+                if not existing:
+                    db.add(RevokedToken(token_hash=th, user_id=user_id, expires_at=exp_dt))
+                    db.flush()
+                elif existing.expires_at is None and exp_dt is not None:
+                    existing.expires_at = exp_dt
+                    db.flush()
+        except IntegrityError:
+            pass
         except Exception:
             pass
 
@@ -248,7 +275,16 @@ def revoke_session(
 
     try:
         db.commit()
+    except IntegrityError:
+        try:
+            db.rollback()
+        except Exception:
+            pass
     except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
         logger.warning(f"Failed committing revoked tokens: {exc}")
 
 

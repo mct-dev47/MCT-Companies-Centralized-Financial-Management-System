@@ -146,42 +146,50 @@ class TestPettyCashReplenishmentAndCategories(unittest.TestCase):
         matching_entries = [e for e in ledger_pending if e.record_id == created.topup_id]
         self.assertEqual(len(matching_entries), 2, "Must produce two rows for mixed replenishment claim")
 
-        # Verify Petty Cash Disbursement row
+        # Verify Petty Cash Disbursement row (deducted immediately, blank workflow status, Pending Audit)
         pc_row = next(e for e in matching_entries if e.request_type == "replenishment_disbursement")
         self.assertEqual(pc_row.entry_id, f"topup-{created.topup_id}-pc")
         self.assertEqual(pc_row.amount_requested, Decimal("5000.00"))
-        self.assertEqual(pc_row.amount_out, Decimal("0.00")) # not yet settled
-        self.assertEqual(pc_row.status, "Pending Finance Endorsement")
+        self.assertEqual(pc_row.amount_out, Decimal("5000.00"))
+        self.assertEqual(pc_row.status, "")
+        self.assertEqual(pc_row.audit_status, "Pending Audit")
+        self.assertIsNotNone(pc_row.expense_id)
         self.assertIn("[Petty Cash]", pc_row.description)
 
-        # Verify Reimbursement row
+        # Verify Reimbursement row (only out-of-pocket 3,000 goes through Finance/Audit workflow)
         reimb_row = next(e for e in matching_entries if e.request_type == "reimbursement")
         self.assertEqual(reimb_row.entry_id, f"topup-{created.topup_id}-reimb")
         self.assertEqual(reimb_row.amount_requested, Decimal("3000.00"))
         self.assertEqual(reimb_row.amount_out, Decimal("0.00"))
         self.assertEqual(reimb_row.status, "Pending Finance Endorsement")
+        self.assertIsNone(reimb_row.audit_status)
         self.assertIn("[Reimbursement]", reimb_row.description)
 
         # Unified lifecycle: Finance endorses, Audit approves
         self.service.endorse_topup(created.topup_id, action="endorse", remark="Endorsed", bank_account_id="BANK-A-01")
+        ledger_endorsed = self.service.list_ledger(company=self.comp_a)
+        reimb_endorsed = next(e for e in ledger_endorsed if e.entry_id == f"topup-{created.topup_id}-reimb")
+        self.assertEqual(reimb_endorsed.audit_status, "Pending Audit")
+
         self.service.review_topup(created.topup_id, action="approve", remark="Audit verified")
 
         # Finance reimburses
         reimbursed = self.service.reimburse(created.topup_id, current_user={"full_name": "Finance Officer"})
         self.assertEqual(reimbursed.status, "Reimbursed")
 
-        # Check list_ledger after reimbursement
+        # Check list_ledger after reimbursement (no duplicate PC-EXP created; status remains blank for disbursement)
         ledger_reimbursed = self.service.list_ledger(company=self.comp_a)
         matching_after = [e for e in ledger_reimbursed if e.record_id == created.topup_id]
         self.assertEqual(len(matching_after), 2)
 
         pc_after = next(e for e in matching_after if e.request_type == "replenishment_disbursement")
         self.assertEqual(pc_after.amount_out, Decimal("5000.00"), "Petty cash disbursement row records OUT (-) 5,000")
-        self.assertEqual(pc_after.status, "Reimbursed")
+        self.assertEqual(pc_after.status, "")
 
         reimb_after = next(e for e in matching_after if e.request_type == "reimbursement")
         self.assertEqual(reimb_after.amount_out, Decimal("0.00"), "Reimbursement is paid from bank, float is unchanged")
         self.assertEqual(reimb_after.status, "Reimbursed")
+        self.assertEqual(reimb_after.audit_status, "Verified")
 
     def test_zero_company_cash_omits_disbursement_row(self):
         """When 100% is paid out-of-pocket (C = 0), only the Replenishment row appears."""

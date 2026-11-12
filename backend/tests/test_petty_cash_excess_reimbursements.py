@@ -132,7 +132,9 @@ def test_ac1_funding_breakdown_and_validation(db_session, test_setup):
     assert out.company_funded_amount == Decimal("5000.00")
     assert out.employee_out_of_pocket == Decimal("3000.00")
     assert out.amount == Decimal("3000.00")
-    assert out.reserved_amount == Decimal("5000.00")
+    assert out.reserved_amount == Decimal("0.00")
+    assert out.petty_cash_expense_id is not None
+    assert svc.get_balance(comp_a.company_id) == Decimal("5000.00")
     assert out.status == "Pending Finance Endorsement"
 
     # Rejection: E <= 0
@@ -170,14 +172,14 @@ def test_ac1_funding_breakdown_and_validation(db_session, test_setup):
 
 
 def test_ac2_reservation_logic_concurrency_hold(db_session, test_setup):
-    """AC-2: Active pending claims place reservation hold; excess fails with 422."""
+    """AC-2: Immediate petty cash deduction updates balance atomically; excess fails with 422."""
     svc = PettyCashService(db_session)
     comp_a = test_setup["comp_a"]
 
     # Initial available float is 10,000.00
     assert svc.get_unreserved_balance(comp_a.company_id) == Decimal("10000.00")
 
-    # Claim 1 reserves 6,000.00
+    # Claim 1 immediately deducts 6,000.00 from petty cash float
     c1 = svc.create_topup(
         PettyCashTopUpCreate(
             company_id=comp_a.company_id,
@@ -188,7 +190,9 @@ def test_ac2_reservation_logic_concurrency_hold(db_session, test_setup):
             request_type="reimbursement",
         )
     )
-    assert c1.reserved_amount == Decimal("6000.00")
+    assert c1.reserved_amount == Decimal("0.00")
+    assert c1.petty_cash_expense_id is not None
+    assert svc.get_balance(comp_a.company_id) == Decimal("4000.00")
     assert svc.get_unreserved_balance(comp_a.company_id) == Decimal("4000.00")
 
     # Claim 2 tries to reserve 5,000.00 (exceeds remaining 4,000.00) -> 422
@@ -278,7 +282,7 @@ def test_ac2_ac3_prerecorded_expense_validation_and_deduplication(db_session, te
 
 
 def test_ac4_zero_excess_finalization(db_session, test_setup):
-    """AC-4: Zero excess claim (E=5000, C=5000, O=0) finalizes settlement without bank payout."""
+    """AC-4: Zero excess unrecorded claim (E=5000, C=5000, O=0) deducts & settles immediately without Finance/Audit approval or bank payout."""
     svc = PettyCashService(db_session)
     comp_a = test_setup["comp_a"]
 
@@ -296,34 +300,32 @@ def test_ac4_zero_excess_finalization(db_session, test_setup):
         )
     )
     assert claim.amount == Decimal("0.00")
-    assert claim.reserved_amount == Decimal("5000.00")
+    assert claim.reserved_amount == Decimal("0.00")
+    assert claim.status == "Settled"
+    assert claim.petty_cash_expense_id is not None
 
-    # Endorse (no bank account required for zero excess)
-    endorsed = svc.endorse_topup(
-        topup_id=claim.topup_id,
-        action="endorse",
-        remark="Zero excess claim",
-    )
-    assert endorsed.status == "Pending Audit Approval"
-
-    # Approve
-    approved = svc.review_topup(
-        topup_id=claim.topup_id,
-        action="approve",
-        remark="Approved for settlement",
-    )
-    assert approved.status == "Approved"
-
-    # Finalize settlement
-    settled = svc.finalize_settlement(claim.topup_id)
-    assert settled.status == "Settled"
-    assert settled.reserved_amount == Decimal("0.00")
-
-    # PC-EXP expense was created
+    # PC-EXP expense was created immediately and deducted from float
     pc_exp = db_session.query(Expense).filter(Expense.reference_no == f"PC-EXP-{claim.topup_id}").first()
     assert pc_exp is not None
     assert pc_exp.amount == Decimal("5000.00")
     assert pc_exp.payment_method == "Petty Cash"
+    assert pc_exp.audit_status == "Pending Audit"
+    assert svc.get_balance(comp_a.company_id) == Decimal("5000.00")
+
+    # Finalize settlement remains idempotent and does not duplicate Expense
+    settled = svc.finalize_settlement(claim.topup_id)
+    assert settled.status == "Settled"
+    assert db_session.query(Expense).filter(Expense.reference_no == f"PC-EXP-{claim.topup_id}").count() == 1
+
+    # Ledger shows only replenishment_disbursement with blank status & Pending Audit audit_status
+    ledger = svc.list_ledger(company=comp_a)
+    matching = [e for e in ledger if e.record_id == claim.topup_id]
+    assert len(matching) == 1
+    assert matching[0].request_type == "replenishment_disbursement"
+    assert matching[0].amount_out == Decimal("5000.00")
+    assert matching[0].status == ""
+    assert matching[0].audit_status == "Pending Audit"
+    assert matching[0].expense_id == pc_exp.expense_id
 
     # Bank balance remains untouched
     db_session.refresh(test_setup["bank_a"])
@@ -596,3 +598,64 @@ def test_ac15_idempotency_retries(db_session, test_setup):
     db_session.refresh(bank_a)
     # Bank balance was NOT deducted twice
     assert bank_a.current_balance == bal_after_first
+
+
+def test_reimburse_step_withdraws_from_assigned_bank_and_reflects_everywhere(db_session, test_setup):
+    """Audit approval of a reimbursement moves no money; the Reimburse step withdraws from the assigned
+    funding bank, and the movement shows in the bank, the petty cash ledger, and Transaction page movements.
+    A top-up is withdrawn from its funding bank on approval."""
+    from app.models.bank import BankTransaction
+
+    svc = PettyCashService(db_session)
+    comp_a = test_setup["comp_a"]
+    bank_a = test_setup["bank_a"]
+    start_balance = Decimal(str(bank_a.current_balance))
+
+    # Reimbursement: E=4000, C=1000 from petty cash, O=3000 out of pocket
+    claim = svc.create_topup(
+        PettyCashTopUpCreate(
+            company_id=comp_a.company_id,
+            amount=Decimal("3000.00"),
+            total_expenses=Decimal("4000.00"),
+            company_funded_amount=Decimal("1000.00"),
+            topup_date=date.today(),
+            request_type="reimbursement",
+            paid_by="Juan",
+        )
+    )
+    svc.endorse_topup(claim.topup_id, "endorse", "OK", bank_account_id=bank_a.id)
+    approved = svc.review_topup(claim.topup_id, "approve", "Approved")
+    assert approved.status == "Approved"
+    db_session.refresh(bank_a)
+    assert bank_a.current_balance == start_balance  # approval alone moves no money
+
+    out = svc.reimburse(claim.topup_id, current_user={"full_name": "Finance Officer"})
+    assert out.status == "Reimbursed"
+    db_session.refresh(bank_a)
+    assert bank_a.current_balance == start_balance - Decimal("3000.00")
+    bank_tx = db_session.query(BankTransaction).filter(BankTransaction.bank_account_id == bank_a.id).all()
+    assert any(t.withdrawal == Decimal("3000.00") for t in bank_tx)
+
+    ledger = svc.list_ledger(comp_a)
+    reimb_rows = [e for e in ledger if e.record_id == claim.topup_id and e.request_type == "reimbursement"]
+    assert reimb_rows and reimb_rows[0].status == "Reimbursed"
+
+    movements = svc.list_movements(comp_a)
+    assert any(m.topup_id == claim.topup_id and m.status == "Reimbursed" for m in movements)
+
+    # Top-up: approval withdraws from the assigned bank and credits the petty cash wallet
+    before_balance = svc.get_balance(comp_a.company_id)
+    topup = svc.create_topup(
+        PettyCashTopUpCreate(
+            company_id=comp_a.company_id,
+            amount=Decimal("2000.00"),
+            topup_date=date.today(),
+            request_type="topup",
+        )
+    )
+    svc.endorse_topup(topup.topup_id, "endorse", "OK", bank_account_id=bank_a.id)
+    out2 = svc.review_topup(topup.topup_id, "approve", "Approved")
+    assert out2.status == "Approved"
+    db_session.refresh(bank_a)
+    assert bank_a.current_balance == start_balance - Decimal("5000.00")
+    assert svc.get_balance(comp_a.company_id) == before_balance + Decimal("2000.00")

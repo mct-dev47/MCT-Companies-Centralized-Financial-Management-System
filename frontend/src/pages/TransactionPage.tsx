@@ -121,6 +121,15 @@ const DepositStatusBadge: React.FC<{ tx: DashboardTransactionItem }> = ({ tx }) 
 const isAwaitingAudit = (status?: string | null): boolean =>
   (status || '').trim().toLowerCase() === 'pending audit approval'
 
+/** A timestamp -> MM/DD/YY in the viewer's local time (matches the bank entry written on that day). */
+const toLocalLedgerDate = (stamp: string): string => {
+  const d = new Date(stamp)
+  if (Number.isNaN(d.getTime())) return toLedgerDate(stamp)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mm}/${dd}/${String(d.getFullYear()).slice(2)}`
+}
+
 /** YYYY-MM-DD -> MM/DD/YY, the same display format the other ledger rows use. */
 const toLedgerDate = (iso: string): string => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
@@ -223,19 +232,29 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   const reqType = (m.requestType || '').trim().toLowerCase()
   const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
   const statusLower = (m.status || '').trim().toLowerCase()
-  const awaitingAudit = isAwaitingAudit(m.status) || statusLower.includes('pending')
+  const pendingWorkflow = isAwaitingAudit(m.status) || statusLower.includes('pending')
+  // A reimbursement only moves money when Finance runs the Reimburse step (bank payout). Until then
+  // (including after Audit approval) it stays off the cash ledger, marked as awaiting reimbursement.
+  const isPaidOut = statusLower === 'reimbursed'
+  const awaitingReimbursement = isReimbursement && !pendingWorkflow && !isPaidOut
+  const awaitingAudit = pendingWorkflow || awaitingReimbursement
   const isDisapproved = statusLower.includes('disapproved') || statusLower.includes('rejected')
-  const auditStatus: DashboardTransactionItem['auditStatus'] = awaitingAudit ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
+  const auditStatus: DashboardTransactionItem['auditStatus'] = pendingWorkflow ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
   const txStatus: DashboardTransactionItem['status'] = awaitingAudit ? 'Pending' : 'Paid'
+  // A paid-out reimbursement sits on the day the bank paid it, like the bank entry.
+  const rowDate = isReimbursement && isPaidOut && m.reimbursedAt ? toLocalLedgerDate(m.reimbursedAt) : toLedgerDate(m.date)
 
   const base = {
     refNo: m.refNo,
     chequeNo: '',
-    date: toLedgerDate(m.date),
+    date: rowDate,
+    pendingLabel: awaitingReimbursement ? 'Awaiting Reimbursement' : undefined,
     type: 'Petty Cash' as const,
     amount: m.amount,
     category: (m.category || 'Petty Cash') as any,
-    paymentMethod: m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
+    paymentMethod: isReimbursement
+      ? 'Bank Reimbursement'
+      : m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
     status: txStatus,
     awaitingAudit,
     auditStatus,
@@ -1021,7 +1040,13 @@ export const TransactionPage: React.FC = () => {
         depositDate: s.deposit_date ?? s.depositDate ?? null,
       }))
 
-      const unifiedExpenses: DashboardTransactionItem[] = expenseData.map((e) => ({
+      // A REIMB-<id> expense is the bookkeeping record of a petty cash reimbursement payout. The payout
+      // itself is already shown as the petty cash row (with its bank), so listing it again would double it.
+      const isReimbursementPayoutExpense = (e: { refNo?: string; paymentMethod?: string }) =>
+        (e.refNo || '').toUpperCase().startsWith('REIMB-') ||
+        (e.paymentMethod || '').trim().toLowerCase() === 'bank reimbursement'
+
+      const unifiedExpenses: DashboardTransactionItem[] = expenseData.filter((e) => !isReimbursementPayoutExpense(e)).map((e) => ({
         id: e.id,
         refNo: e.refNo,
         chequeNo: e.chequeNo || '',
@@ -2996,9 +3021,13 @@ export const TransactionPage: React.FC = () => {
                                 <span className="truncate block font-medium">{summary.firstItemName}</span>
                                 <span
                                   className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
-                                  title="Endorsed by Finance. Waiting for Internal Audit approval."
+                                  title={
+                                    tx.pendingLabel
+                                      ? 'Approved. Waiting for Finance to pay it out from the bank (Reimburse).'
+                                      : 'Endorsed by Finance. Waiting for Internal Audit approval.'
+                                  }
                                 >
-                                  Pending Audit
+                                  {tx.pendingLabel || 'Pending Audit'}
                                 </span>
                               </div>
                             )

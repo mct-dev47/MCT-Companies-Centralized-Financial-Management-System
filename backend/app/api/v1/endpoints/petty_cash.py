@@ -26,6 +26,7 @@ from app.schemas.petty_cash import (
     IntercompanyTransferOut,
     PettyCashCategoryCreate,
     PettyCashCategoryOut,
+    PettyCashDisbursementCreate,
     PettyCashEndorseIn,
     PettyCashLedgerEntry,
     PettyCashMovementOut,
@@ -40,7 +41,7 @@ from app.schemas.petty_cash import (
     TransferCancelIn,
     TransferReversalConfirmIn,
 )
-from app.models.petty_cash import PettyCashCategory
+from app.models.petty_cash import PettyCashCategory, PettyCashTopUp
 from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
 
@@ -166,6 +167,28 @@ def get_movements(
     return service.list_movements(company)
 
 
+@router.post("/disbursements", response_model=PettyCashTopUpOut, status_code=status.HTTP_201_CREATED, summary="Record a direct petty cash disbursement")
+def create_disbursement(
+    disb_in: PettyCashDisbursementCreate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    service = PettyCashService(db)
+    company_identifier = disb_in.company_name or disb_in.company
+    target_comp = service.resolve_company(disb_in.company_id, company_identifier)
+    check_company_access(current_user, target_comp.company_id)
+    topup = service.create_disbursement(disb_in, current_user=current_user)
+    log_transaction(
+        db, AuditAction.PETTY_CASH_TOPUP_CREATED,
+        user_id=current_user.get("user_id"), company_id=topup.company_id,
+        ip_address=_client_ip(request),
+        record_id=topup.topup_id, record_type="petty_cash_disbursement",
+        extra={"amount": float(topup.amount), "expense_id": topup.petty_cash_expense_id},
+    )
+    return topup
+
+
 @router.post("/reimbursements", response_model=PettyCashTopUpOut, status_code=status.HTTP_201_CREATED, summary="Submit expense reimbursement claim")
 def submit_reimbursement(
     claim_in: PettyCashTopUpCreate,
@@ -217,6 +240,11 @@ def update_topup(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
+    topup_record = db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+    if not topup_record:
+        raise HTTPException(status_code=404, detail="Petty cash request not found.")
+    check_company_access(current_user, topup_record.company_id)
+
     topup = PettyCashService(db).update_topup(
         topup_id=topup_id,
         amount=topup_update.amount,
@@ -224,8 +252,12 @@ def update_topup(
         total_expenses=topup_update.total_expenses,
         company_funded_amount=topup_update.company_funded_amount,
         existing_expense_id=topup_update.existing_expense_id,
+        paid_by=topup_update.paid_by,
+        category=topup_update.category,
+        receipt_url=topup_update.receipt_url,
+        attachments=topup_update.attachments,
+        items=topup_update.items,
     )
-    check_company_access(current_user, topup.company_id)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_CREATED,
         user_id=current_user.get("user_id"), company_id=topup.company_id,
@@ -459,8 +491,12 @@ def delete_topup(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db),
 ):
+    topup_record = db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+    if not topup_record:
+        raise HTTPException(status_code=404, detail="Petty cash request not found.")
+    check_company_access(current_user, topup_record.company_id)
+
     topup = PettyCashService(db).delete_topup(topup_id)
-    check_company_access(current_user, topup.company_id)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_DELETED,
         user_id=current_user.get("user_id"), company_id=topup.company_id,

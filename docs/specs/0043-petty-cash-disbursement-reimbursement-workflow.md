@@ -1,7 +1,7 @@
 # 0043. Petty Cash Disbursement Separation, Short Type Labels, Funding Breakdown Visibility, and Message Handler Optimization
 
 **Date**: 2026-11-12
-**Status**: Proposed
+**Status**: Implemented
 
 ## Summary
 
@@ -148,4 +148,10 @@ Specifically, `_build_summary` and `get_balance` currently classify any `request
 ## Follow-up
 
 - [ ] Reconcile `docs/specs/0042-petty-cash-company-bank-scoping-and-optimization.md` uncommitted changes on `dev` before starting `/develop 0043` so both specs stay cleanly separated.
-- [ ] Verify whether `PC-EXP-` rows in `_petty_cash_expenses` (from settled pre-0043 mixed Reimbursements) also need the same `get_balance` inclusion rule as `PC-DISB-` during Slice 1 implementation.
+- [x] Verify whether `PC-EXP-` rows in `_petty_cash_expenses` (from settled pre-0043 mixed Reimbursements) also need the same `get_balance` inclusion rule as `PC-DISB-` during Slice 1 implementation.
+
+## Revision Note (Immediate Disbursement Deduction, Blank Status & Audit Status Column)
+
+- **Removed `Disbursement` creation UI**: Direct petty cash expenses are recorded through the Expenses module (`Payment Method = Petty Cash`) or inside `Request Reimbursement` (`Paid from company petty cash`). `PettyCashPage` `Request Petty Cash` now offers `Top-up Request` and `Request Reimbursement`, and `ReimbursementModal` no longer shows the `Disbursement | Reimbursement` tab switcher.
+- **Immediate company float deduction**: Submitting `Request Reimbursement` with unrecorded `company_funded_amount > 0` deducts petty cash immediately by creating the `Expense` row (`PC-EXP-<id>`, `reserved_amount = 0.00`). Only `employee_out_of_pocket > 0` routes to `Pending Finance Endorsement` / `Pending Audit Approval` and triggers workflow notifications; `employee_out_of_pocket == 0` settles immediately (`status = 'Settled'`) without bank selection.
+- **Blank `STATUS` & real `AUDIT STATUS` column**: `Disbursement` (`disbursement`, `replenishment_disbursement`) and `Expense` (`expense`) rows render blank workflow `STATUS` (`""`) and never appear under workflow status filters (`Pending Finance`, `Pending Audit`, `Approved`, `Rejected / Disapproved`). Their `AUDIT STATUS` reflects `Expense.audit_status` (`Pending Audit`, `Audited` [`Verified`], `Discrepancy` [`Flagged`]) persisted via `PATCH /api/v1/expenses/{expense_id}/audit`. `Top-up` and `Reimburse` rows show workflow-derived `AUDIT STATUS` (`blank` before Finance endorsement/on Finance rejection, `Pending Audit` during `Pending Audit Approval`, `Audited` once `Approved`/`Reimbursed`/`Settled`, `Discrepancy` on `Disapproved by Audit`).
