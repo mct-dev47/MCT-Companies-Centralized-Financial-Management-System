@@ -1,6 +1,8 @@
 import { formatRealName } from '@/utils/formatRealName'
 import { formatCreatedAt } from '@/utils/dateUtils'
 import * as React from 'react'
+import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
+import type { BankAccount } from '@/services/bankService'
 import { createPortal } from 'react-dom'
 import {
   ShieldCheck,
@@ -288,6 +290,7 @@ export const LendingPage: React.FC = () => {
     dueDate: string
     paymentFrequency: 'Daily' | 'Monthly'
     notes: string
+    bankAccountId: string
   }>(() => {
     const today = formatToYYYYMMDD(new Date())
     const initialDue = new Date()
@@ -301,8 +304,10 @@ export const LendingPage: React.FC = () => {
       dueDate: formatToYYYYMMDD(initialDue),
       paymentFrequency: 'Daily',
       notes: '',
+      bankAccountId: '',
     }
   })
+  const [lendingBanks, setLendingBanks] = React.useState<BankAccount[]>([])
 
   // Form state for Edit Lending Facility Modal
   const [editFormData, setEditFormData] = React.useState<{
@@ -315,6 +320,7 @@ export const LendingPage: React.FC = () => {
     status: LendingFacility['status']
     paymentFrequency: 'Daily' | 'Monthly'
     notes: string
+    bankAccountId: string
   }>({
     borrowerName: '',
     loanAmount: '',
@@ -325,6 +331,7 @@ export const LendingPage: React.FC = () => {
     status: 'Active',
     paymentFrequency: 'Daily',
     notes: '',
+    bankAccountId: '',
   })
 
   // Search query and pagination for Payment History in Lending Information View
@@ -638,6 +645,17 @@ export const LendingPage: React.FC = () => {
       setAddModalError('Please specify both Date Borrowed and Due Date.')
       return
     }
+    if (!formData.bankAccountId) {
+      setAddModalError('Please choose the bank account the loan is released from.')
+      return
+    }
+    const releaseBank = lendingBanks.find((b) => String(b.id) === formData.bankAccountId)
+    if (releaseBank && principalNum > (Number(releaseBank.currentBalance) || 0) + 0.005) {
+      setAddModalError(
+        `Loan amount is more than the balance of ${releaseBank.bankName} (${formatPHP(Number(releaseBank.currentBalance) || 0)}).`
+      )
+      return
+    }
 
     const termDaysNum = parseInt(formData.termDays || (formData.paymentFrequency === 'Daily' ? '40' : '2'), 10)
 
@@ -652,6 +670,7 @@ export const LendingPage: React.FC = () => {
         dateBorrowed: formData.dateBorrowed,
         dueDate: formData.dueDate,
         notes: formData.notes.trim(),
+        bankAccountId: formData.bankAccountId,
       })
 
       await fetchFacilities()
@@ -669,6 +688,7 @@ export const LendingPage: React.FC = () => {
         dueDate: calculateProjectedDueDate(currentToday, '40'),
         paymentFrequency: 'Daily',
         notes: '',
+        bankAccountId: '',
       })
 
       // Reset filters and highlight newly created item
@@ -713,6 +733,7 @@ export const LendingPage: React.FC = () => {
       status: facility.status,
       paymentFrequency: facility.paymentFrequency || 'Daily',
       notes: facility.notes || '',
+      bankAccountId: facility.bankAccountId || '',
     })
     setIsEditModalOpen(true)
   }
@@ -731,6 +752,10 @@ export const LendingPage: React.FC = () => {
       setEditModalError('Please fill out all required fields with valid values.')
       return
     }
+    if (activeFacility.bankAccountId && !editFormData.bankAccountId) {
+      setEditModalError('Please choose the bank account for this loan.')
+      return
+    }
 
     const borrowerDbId = activeFacility.borrower_id || activeFacility.borrowerId || activeFacility.id
 
@@ -746,6 +771,7 @@ export const LendingPage: React.FC = () => {
         status: editFormData.status,
         paymentFrequency: editFormData.paymentFrequency,
         notes: editFormData.notes.trim(),
+        bankAccountId: editFormData.bankAccountId,
       })
 
       await fetchFacilities()
@@ -2339,6 +2365,17 @@ export const LendingPage: React.FC = () => {
               )
             })()}
 
+            {/* Bank the loan is released from; repayments are deposited back to it (spec 0045) */}
+            <CompanyBankSelect
+              company={COMPANY_NAME}
+              value={formData.bankAccountId}
+              onChange={(id) => setFormData({ ...formData, bankAccountId: id })}
+              onAccountsLoaded={setLendingBanks}
+              label="Release From / Deposit To Bank"
+              hint="The loan amount is recorded as an Expense from this bank. Every payment from the borrower is added to Sales and deposited here."
+              required
+            />
+
             {/* Optional Loan Purpose / Notes */}
             <div>
               <label className="text-xs font-semibold text-focus block mb-1">
@@ -2778,6 +2815,19 @@ export const LendingPage: React.FC = () => {
                   aria-label="Status"
                 />
               </div>
+
+              <CompanyBankSelect
+                company={COMPANY_NAME}
+                value={editFormData.bankAccountId}
+                onChange={(id) => setEditFormData({ ...editFormData, bankAccountId: id })}
+                label="Release From / Deposit To Bank"
+                hint={
+                  activeFacility?.releaseExpenseId
+                    ? 'Changing the bank moves the loan release to the new bank. New payments go to the new bank; recorded payments keep theirs.'
+                    : 'Payments from this borrower are added to Sales and deposited to this bank.'
+                }
+                required={Boolean(activeFacility?.bankAccountId)}
+              />
 
               <div>
                 <label className="text-xs font-semibold text-focus block mb-1">

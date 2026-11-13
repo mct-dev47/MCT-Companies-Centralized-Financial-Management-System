@@ -41,6 +41,8 @@ export interface TenantLease {
   status: 'Active' | 'Completed' | 'Overdue' | 'Pending'
   companyName: string
   notes?: string
+  /** Bank every rent payment is credited to, as a Sale (spec 0045). */
+  bankAccountId?: string
   dailyPayments: DailyRentRecord[]
   repeat?: LeaseRepeat
   leaseEndDate?: string
@@ -66,6 +68,7 @@ export interface LeaseInput {
   totalAmountPayable?: number
   status: TenantLease['status']
   notes?: string
+  bankAccountId?: string
 }
 
 export interface PaymentInput {
@@ -143,6 +146,7 @@ export function mapLease(b: any): TenantLease {
     status: b.status,
     companyName: b.company_name || TENANT_COMPANY_NAME,
     notes: b.notes || undefined,
+    bankAccountId: b.bank_account_id || undefined,
     repeat,
     leaseEndDate: b.lease_end_date ? String(b.lease_end_date).slice(0, 10) : undefined,
     penaltyRate: b.penalty_rate === null || b.penalty_rate === undefined ? undefined : Number(b.penalty_rate),
@@ -182,6 +186,7 @@ function leaseBody(input: Partial<LeaseInput>): Record<string, unknown> {
   if (input.totalAmountPayable !== undefined) body.total_amount_payable = input.totalAmountPayable
   if (input.status !== undefined) body.status = input.status
   if (input.notes !== undefined) body.notes = input.notes
+  if (input.bankAccountId !== undefined) body.bank_account_id = input.bankAccountId || null
   return body
 }
 

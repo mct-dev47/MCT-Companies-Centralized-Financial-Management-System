@@ -1383,6 +1383,28 @@ class NotificationService:
                         created_at=loan.created_at or datetime.now(timezone.utc),
                     ))
 
+            if role in ("finance", "admin"):
+                ready_to_disburse = [
+                    l for l in loans
+                    if l.status == "Approved"
+                    and (company_id is None or l.borrower == company_id or l.lender == company_id)
+                ][:20]
+                for loan in ready_to_disburse:
+                    borrower_name = _company_name(self.db, loan.borrower, name_map)
+                    ref = loan.loan_ref_no or str(loan.loan_id)
+                    amt = loan.principal_amount or Decimal("0.00")
+                    results.append(NotificationOut(
+                        notification_id=_make_id(NotificationType.LOAN_REQUEST_FINANCE, loan.loan_id, "Ready_To_Disburse"),
+                        notification_type=NotificationType.LOAN_REQUEST_FINANCE,
+                        title="Loan Ready to Disburse",
+                        message=f"Audit approved the loan of ₱{amt:,.2f} for {borrower_name} (Ref: {ref}). Please disburse the funds.",
+                        company_id=loan.borrower,
+                        reference_type="loan",
+                        reference_id=loan.loan_id,
+                        is_read=False,
+                        created_at=loan.audit_reviewed_at or loan.updated_at or datetime.now(timezone.utc),
+                    ))
+
             if role in ("audit", "auditor", "admin"):
                 pending_audit = sorted(
                     [
@@ -1417,7 +1439,7 @@ class NotificationService:
                 supervisor_loans = sorted(
                     [
                         l for l in loans
-                        if l.status in ("Approved", "Disapproved by Audit", "Rejected by Finance")
+                        if l.status in ("Approved", "Disbursed", "Disapproved by Audit", "Rejected by Finance")
                         and (company_id is None or l.borrower == company_id)
                     ],
                     key=lambda l: _normalize_dt(l.updated_at or l.created_at),
@@ -1427,11 +1449,18 @@ class NotificationService:
                     lender_name = _company_name(self.db, loan.lender, name_map) if loan.lender else "Corporate Treasury"
                     ref = loan.loan_ref_no or str(loan.loan_id)
                     amt = loan.principal_amount or Decimal("0.00")
-                    is_approved = loan.status == "Approved"
+                    is_disbursed = loan.status == "Disbursed"
+                    is_approved = loan.status == "Approved" or is_disbursed
                     ntype = NotificationType.LOAN_APPROVED_SUPERVISOR if is_approved else NotificationType.LOAN_REJECTED_SUPERVISOR
-                    title = "Loan Request Approved" if is_approved else f"Loan Request {loan.status}"
-                    if is_approved:
-                        msg = f"Your loan request of ₱{amt:,.2f} from {lender_name} (Ref: {ref}) has been approved by Internal Audit. Funds disbursed to your account."
+                    title = (
+                        "Loan Disbursed" if is_disbursed
+                        else "Loan Request Approved" if is_approved
+                        else f"Loan Request {loan.status}"
+                    )
+                    if is_disbursed:
+                        msg = f"Your loan of ₱{amt:,.2f} from {lender_name} (Ref: {ref}) has been disbursed by Finance. Funds were deposited to your account."
+                    elif is_approved:
+                        msg = f"Your loan request of ₱{amt:,.2f} from {lender_name} (Ref: {ref}) has been approved by Internal Audit and is waiting for Finance to disburse it."
                     else:
                         msg = f"Your loan request (Ref: {ref}) of ₱{amt:,.2f} was {loan.status.lower()}."
                     remarks = _remarks_suffix(loan.finance_remark, loan.audit_remark)

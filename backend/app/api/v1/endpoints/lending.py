@@ -118,6 +118,7 @@ def create_borrower(
         due_date_val=payload.due_date,
         term_days_val=payload.term_days,
         notes=payload.notes,
+        bank_account_id=payload.bank_account_id,
     )
 
 

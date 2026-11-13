@@ -42,6 +42,8 @@ export interface LoanItem {
   auditReviewedBy?: string
   auditReviewedAt?: string
   auditRemark?: string
+  disbursedBy?: string
+  disbursedAt?: string
   auditStatus: 'Verified' | 'Pending Audit' | 'Flagged'
   auditedBy?: string
   auditNotes?: string
@@ -192,6 +194,8 @@ function mapBackendLoanToItem(l: any): LoanItem {
     auditReviewedBy: l.audit_reviewed_by,
     auditReviewedAt: l.audit_reviewed_at,
     auditRemark: l.audit_remark,
+    disbursedBy: l.disbursed_by || undefined,
+    disbursedAt: l.disbursed_at || undefined,
     // Audit's approval is the audit (spec 0014, AC-8). Every status after approval counts as audited.
     auditStatus: AUDITED_LOAN_STATUSES.has((l.status || '').trim().toLowerCase()) ? 'Verified' : 'Pending Audit',
     auditedBy: l.audit_reviewed_by || undefined,
@@ -202,7 +206,7 @@ function mapBackendLoanToItem(l: any): LoanItem {
 }
 
 /** Loan statuses reached only after Internal Audit approved the loan. */
-const AUDITED_LOAN_STATUSES = new Set(['approved', 'paid', 'partially paid', 'overdue'])
+const AUDITED_LOAN_STATUSES = new Set(['approved', 'disbursed', 'paid', 'partially paid', 'overdue'])
 
 const loanCache = new Map<string, { data: any; timestamp: number }>()
 const LOAN_CACHE_TTL = 30000
@@ -752,6 +756,42 @@ export const loanService = {
     return mapped
   },
 
+  /** Finance releases the money of an Audit-approved loan (spec 0046): Approved -> Disbursed. */
+  async disburseLoan(id: string): Promise<LoanItem> {
+    const numericId = id.replace(/^loan_/, '')
+    const token = typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const userStr =
+      typeof window !== 'undefined'
+        ? sessionStorage.getItem('mct_session_user') || sessionStorage.getItem('mct_user')
+        : null
+    let userName = ''
+    if (userStr) {
+      try {
+        const u = JSON.parse(userStr)
+        userName = u.fullName || u.email || ''
+      } catch {
+        // ignore
+      }
+    }
+    const res = await fetch(`/api/v1/loans/${numericId}/disburse`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(userName ? { 'X-User-Name': userName } : {}),
+      },
+    })
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error(errData.detail || 'Failed to disburse loan.')
+    }
+    const mapped = mapBackendLoanToItem(await res.json())
+    inMemoryLoans = inMemoryLoans.map((l) => (l.id === id || l.id === `loan_${numericId}` ? mapped : l))
+    saveStoredLoans(inMemoryLoans)
+    loanCache.clear()
+    return mapped
+  },
+
   async auditReviewLoan(
     id: string,
     payload: {
@@ -998,7 +1038,7 @@ export const loanService = {
       withdrawal: loan.amount,
       deposit: 0,
       category: 'In-house',
-      status: loan.status === 'Approved' ? 'Paid' : 'Pending',
+      status: ['Disbursed', 'Paid', 'Partially Paid', 'Overdue'].includes(loan.status) ? 'Paid' : 'Pending',
       auditStatus: loan.auditStatus,
       auditedBy: loan.auditedBy,
       auditNotes: loan.auditNotes,

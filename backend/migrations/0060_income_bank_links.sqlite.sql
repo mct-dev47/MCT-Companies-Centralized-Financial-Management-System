@@ -1,0 +1,8 @@
+-- 0060_income_bank_links.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE tenant_leases ADD COLUMN bank_account_id VARCHAR(100) NULL;
+-- ALTER TABLE tenant_lease_payments ADD COLUMN sale_id INTEGER NULL;
+-- ALTER TABLE borrowers ADD COLUMN bank_account_id VARCHAR(100) NULL;
+-- ALTER TABLE borrowers ADD COLUMN release_expense_id INTEGER NULL;
+-- ALTER TABLE lending_transactions ADD COLUMN sale_id INTEGER NULL;

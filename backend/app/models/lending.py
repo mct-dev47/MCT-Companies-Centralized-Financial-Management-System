@@ -30,6 +30,9 @@ class Borrower(Base):
     audited_at = Column(DateTime(timezone=True), nullable=True)
     audit_remarks = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
+    # Bank the loan is released from (an Expense) and repayments are credited to (Sales) - spec 0045
+    bank_account_id = Column(String(100), nullable=True)
+    release_expense_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -70,6 +73,8 @@ class LendingTransaction(Base):
     status = Column(String(50), nullable=False, default="Completed")  # Completed, Pending, Advance Paid, Missed
     notes = Column(Text, nullable=True)
     recorded_by = Column(String(255), nullable=True)
+    # The Sale this repayment created on the borrower's bank (spec 0045)
+    sale_id = Column(Integer, nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

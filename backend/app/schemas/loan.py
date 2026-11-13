@@ -42,7 +42,7 @@ class LoanBase(BaseModel):
     due_date: Optional[date] = None
     description: Optional[str] = None
     particulars: Optional[str] = None
-    status: str = Field(default="Pending Finance Endorsement", description="Pending Finance Endorsement, Pending Audit Approval, Approved, Paid, Overdue, Rejected")
+    status: str = Field(default="Pending Finance Endorsement", description="Pending Finance Endorsement, Pending Audit Approval, Approved (awaiting disbursement), Disbursed, Paid, Overdue, Rejected")
 
 class LoanCreate(LoanBase):
     borrower_company: Optional[str] = None
@@ -101,6 +101,8 @@ class LoanOut(LoanBase):
     audit_reviewed_by: Optional[str] = None
     audit_reviewed_at: Optional[datetime] = None
     audit_remark: Optional[str] = None
+    disbursed_by: Optional[str] = None
+    disbursed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
