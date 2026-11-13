@@ -14,6 +14,8 @@ export interface ToastItem {
   message: string
   title?: string
   duration: number
+  onUndo?: () => void
+  undoLabel?: string
 }
 
 type Listener = (toasts: ToastItem[]) => void
@@ -51,6 +53,8 @@ export function pushToast(input: {
   message: string
   title?: string
   duration?: number
+  onUndo?: () => void
+  undoLabel?: string
 }): number {
   const message = input.message.trim()
   if (!message) return -1
@@ -65,6 +69,8 @@ export function pushToast(input: {
     message,
     title: input.title,
     duration: input.duration ?? DEFAULT_DURATION[input.variant],
+    onUndo: input.onUndo,
+    undoLabel: input.undoLabel,
   }
 
   toasts = [...toasts, item].slice(-MAX_VISIBLE)
