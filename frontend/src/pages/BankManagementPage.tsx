@@ -49,6 +49,8 @@ import {
 
 import { Card } from '@/components/ui/card'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 
 import { Button } from '@/components/ui/button'
 
@@ -485,6 +487,12 @@ export const BankManagementPage: React.FC = () => {
   // Modals state
 
   const [isAddBankModalOpen, setIsAddBankModalOpen] = React.useState(false)
+  // Review step states for modals (Phase 2 Standard F)
+  const [isReviewingAddBank, setIsReviewingAddBank] = React.useState(false)
+  const [isReviewingDeposit, setIsReviewingDeposit] = React.useState(false)
+  const [isReviewingEditBank, setIsReviewingEditBank] = React.useState(false)
+  const [bankActionError, setBankActionError] = React.useState<string | null>(null)
+
 
   const [isDepositModalOpen, setIsDepositModalOpen] = React.useState(false)
 
@@ -765,7 +773,7 @@ export const BankManagementPage: React.FC = () => {
 
       websocketService.emitLocal('BANK_UPDATED', { accountId: updatedAccount.id })
 
-      setIsEditModalOpen(false)
+      setIsEditModalOpen(false); setIsReviewingEditBank(false); setBankActionError(null)
 
     } catch (err: any) {
 
@@ -1239,7 +1247,7 @@ export const BankManagementPage: React.FC = () => {
 
       } else {
 
-        setIsAddBankModalOpen(false)
+        setIsAddBankModalOpen(false); setIsReviewingAddBank(false); setBankActionError(null)
 
         setAddBankSuccessMessage(null)
 
@@ -1333,7 +1341,7 @@ export const BankManagementPage: React.FC = () => {
 
       websocketService.emitLocal('BANK_UPDATED', { accountId: updatedAccount.id })
 
-      setIsDepositModalOpen(false)
+      setIsDepositModalOpen(false); setIsReviewingDeposit(false); setBankActionError(null)
 
       setDepositForm({
 
@@ -3950,7 +3958,7 @@ export const BankManagementPage: React.FC = () => {
 
                 onClick={() => {
 
-                  setIsAddBankModalOpen(false)
+                  setIsAddBankModalOpen(false); setIsReviewingAddBank(false); setBankActionError(null)
 
                   setAddBankSuccessMessage(null)
 
@@ -4195,7 +4203,7 @@ export const BankManagementPage: React.FC = () => {
 
                 disabled={isSubmittingDeposit}
 
-                onClick={() => setIsDepositModalOpen(false)}
+                onClick={() => { setIsDepositModalOpen(false); setIsReviewingDeposit(false); setBankActionError(null); }}
 
                 className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
 
@@ -4619,40 +4627,36 @@ export const BankManagementPage: React.FC = () => {
 
       </Dialog>
 
-      {/* Modal: Confirm hard delete of bank account (Finance only) */}
-      <Dialog open={isFinance && !!accountToDelete} onOpenChange={(open) => { if (!open && !isDeletingAccount) setAccountToDelete(null) }}>
-        <DialogContent className="sm:max-w-[440px] bg-white rounded-[24px] p-6 shadow-2xl">
-          <DialogHeader className="space-y-1.5">
-            <DialogTitle className="text-lg font-bold text-focus">Delete Bank Account</DialogTitle>
-            <DialogDescription className="text-sm text-muted-fg">
-              Permanently delete {accountToDelete?.bankName} ({accountToDelete?.accountNumber})? This also deletes all of its transactions and cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1.5 mt-2">
-            <label htmlFor="delete-bank-confirm" className="text-xs text-muted-fg">
-              Type <span className="font-bold text-focus select-all">{deleteConfirmTarget}</span> to confirm.
-            </label>
-            <input
-              id="delete-bank-confirm"
-              type="text"
-              autoComplete="off"
-              value={deleteConfirmText}
-              onChange={(e) => setDeleteConfirmText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && isDeleteConfirmed) handleConfirmDeleteAccount() }}
-              disabled={isDeletingAccount}
-              className="w-full h-10 rounded-lg border border-slate-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
-            />
-          </div>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button type="button" variant="outline" disabled={isDeletingAccount} onClick={() => setAccountToDelete(null)}>
-              Cancel
-            </Button>
-            <Button type="button" disabled={isDeletingAccount || !isDeleteConfirmed} onClick={handleConfirmDeleteAccount} className="bg-red-600 hover:bg-red-700 text-white">
-              {isDeletingAccount ? 'Deleting...' : 'Delete'}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Modal: Confirm hard delete of bank account (Finance only) - Standard ConfirmModal */}
+      <ConfirmModal
+        open={isFinance && !!accountToDelete}
+        onOpenChange={(open) => { if (!open && !isDeletingAccount) setAccountToDelete(null) }}
+        title="Delete Bank Account"
+        description={`Permanently delete ${accountToDelete?.bankName} (${accountToDelete?.accountNumber})? All associated records will be deleted. This action cannot be undone.`}
+        confirmLabel="Delete Account"
+        cancelLabel="Cancel"
+        variant="destructive"
+        action="delete"
+        isLoading={isDeletingAccount}
+        confirmDisabled={!isDeleteConfirmed}
+        onConfirm={handleConfirmDeleteAccount}
+      >
+        <div className="space-y-1.5 mt-2">
+          <label htmlFor="delete-bank-confirm" className="text-xs text-muted-fg">
+            Type <span className="font-bold text-focus select-all">{deleteConfirmTarget}</span> to confirm.
+          </label>
+          <input
+            id="delete-bank-confirm"
+            type="text"
+            autoComplete="off"
+            value={deleteConfirmText}
+            onChange={(e) => setDeleteConfirmText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && isDeleteConfirmed) handleConfirmDeleteAccount() }}
+            disabled={isDeletingAccount}
+            className="w-full h-11 rounded-[10px] border border-stroke/50 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+          />
+        </div>
+      </ConfirmModal>
 
       {/* Modal E: Edit Bank Account Details */}
 
@@ -4835,7 +4839,7 @@ export const BankManagementPage: React.FC = () => {
 
                 disabled={isSubmittingEdit}
 
-                onClick={() => setIsEditModalOpen(false)}
+                onClick={() => { setIsEditModalOpen(false); setIsReviewingEditBank(false); setBankActionError(null); }}
 
                 className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
 

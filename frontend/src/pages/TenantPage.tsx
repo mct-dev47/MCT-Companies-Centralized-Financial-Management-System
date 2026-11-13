@@ -34,6 +34,7 @@ import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -280,6 +281,7 @@ export const TenantPage: React.FC = () => {
     }
   }, [selectedPeriod])
   const [isSubmittingAdd, setIsSubmittingAdd] = React.useState(false)
+  const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = React.useState(false)
   const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isSubmittingDelete, setIsSubmittingDelete] = React.useState(false)
@@ -748,6 +750,10 @@ export const TenantPage: React.FC = () => {
     e.preventDefault()
     if (isSubmittingAdd) return
     if (!validateForm()) return
+    if (!isReviewingAdd) {
+      setIsReviewingAdd(true)
+      return
+    }
 
     setIsSubmittingAdd(true)
     const rent = parseFloat(formData.rentAmount)
@@ -2823,6 +2829,22 @@ export const TenantPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleSubmitAdd} className="space-y-3.5 pt-3">
+            {isReviewingAdd ? (
+              <ModalReviewStep
+                title="Review Lease Agreement"
+                subtitle="Please verify tenant and unit terms before creating this lease."
+                errorMessage={formErrors.form}
+                items={[
+                  { label: 'Tenant Name', value: formData.tenantName.trim(), highlight: true },
+                  { label: 'Unit / Property', value: `${formData.propertyName || ''} · ${formData.unitName}` },
+                  { label: 'Monthly Rent', value: formatPHP(formData.monthlyRent), isCurrency: true },
+                  { label: 'Security Deposit', value: formatPHP(formData.securityDeposit), isCurrency: true },
+                  { label: 'Lease Term', value: formData.leasePeriod },
+                  { label: 'Notes', value: formData.notes || 'None' },
+                ]}
+              />
+            ) : (
+              <>
             {formErrors.form && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
@@ -3017,22 +3039,33 @@ export const TenantPage: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
+              </>
+            )}
+
+            <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => setIsAddModalOpen(false)}
-                className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 hover:bg-slate-50 text-focus cursor-pointer"
+                variant="secondary"
+                onClick={() => {
+                  if (isReviewingAdd) {
+                    setIsReviewingAdd(false)
+                  } else {
+                    setIsAddModalOpen(false)
+                  }
+                }}
+                disabled={isSubmittingAdd}
+                className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                Cancel
+                {isReviewingAdd ? 'Back to Edit' : 'Cancel'}
               </Button>
               <Button
                 type="submit"
+                variant="primary"
                 disabled={isSubmittingAdd}
-                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                isLoading={isSubmittingAdd}
+                className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                {isSubmittingAdd && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
-                <span>{isSubmittingAdd ? 'Saving...' : 'Create Lease'}</span>
+                <span>{isReviewingAdd ? 'Create Lease' : 'Review Lease'}</span>
               </Button>
             </div>
           </form>

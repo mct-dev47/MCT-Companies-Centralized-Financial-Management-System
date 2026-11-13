@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -297,6 +298,22 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-5 mt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Utang Payment"
+              subtitle="Please verify the repayment remittance before recording."
+              errorMessage={error}
+              items={[
+                { label: 'Debtor / Customer', value: debtor?.name, highlight: true },
+                { label: 'Amount to Pay', value: formatPHP(numericAmount), isCurrency: true },
+                { label: 'Payment Method', value: paymentMethod },
+                { label: 'Payment Date', value: paymentDate },
+                { label: 'Remaining Balance After', value: formatPHP(Math.max(0, currentBalance - numericAmount)), isCurrency: true },
+                { label: 'Notes', value: notes.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {error && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
@@ -699,27 +716,35 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                   className="h-10 text-xs rounded-xl border-stroke/60"
                 />
               </div>
+            </div>
+          </div>
+        </>
+      )}
 
-              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+      <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+                  variant="secondary"
+                  onClick={() => {
+                    if (isReviewing) {
+                      setIsReviewing(false)
+                    } else {
+                      onOpenChange(false)
+                    }
+                  }}
+                  className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
                 >
-                  Cancel
+                  {isReviewing ? 'Back to Edit' : 'Cancel'}
                 </Button>
                 <Button
                   type="submit"
+                  variant="primary"
                   disabled={!isAmountValid}
-                  className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
                 >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Confirm & Record Payment</span>
+                  <span>{isReviewing ? 'Record Payment' : 'Review Payment'}</span>
                 </Button>
               </div>
-            </div>
-          </div>
         </form>
       </DialogContent>
     </Dialog>

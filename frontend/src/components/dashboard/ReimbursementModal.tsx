@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -169,6 +170,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   const [generalError, setGeneralError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
 
   // Discard Confirmation Modal
   const [isDiscardModalOpen, setIsDiscardModalOpen] = React.useState(false)
@@ -892,6 +894,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       setGeneralError('Please fix the highlighted fields before submitting.')
+      return
+    }
+
+    if (!isReviewing) {
+      setIsReviewing(true)
       return
     }
 
@@ -1911,27 +1918,28 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               <div className="flex items-center justify-end gap-2.5 shrink-0 self-end sm:self-auto">
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={handleRequestClose}
+                  variant="secondary"
+                  onClick={() => {
+                    if (isReviewing) {
+                      setIsReviewing(false)
+                    } else {
+                      handleRequestClose()
+                    }
+                  }}
                   disabled={isSubmitting}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold border-stroke/60 text-focus hover:bg-slate-50 cursor-pointer shadow-2xs"
+                  className="h-11 px-5 rounded-[10px] text-xs font-semibold cursor-pointer"
                 >
-                  Cancel
+                  {isReviewing ? 'Back to Edit' : 'Cancel'}
                 </Button>
 
                 <Button
                   type="submit"
+                  variant="primary"
                   disabled={isSubmitting || isUploadingActive}
-                  className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs font-semibold shadow-xs flex items-center gap-2 cursor-pointer transition-all"
+                  isLoading={isSubmitting}
+                  className="h-11 px-6 rounded-[10px] text-xs font-semibold cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Submitting…</span>
-                    </>
-                  ) : (
-                    <span>Submit Reimbursement</span>
-                  )}
+                  <span>{isReviewing ? 'Submit Reimbursement' : 'Review Reimbursement'}</span>
                 </Button>
               </div>
             </div>

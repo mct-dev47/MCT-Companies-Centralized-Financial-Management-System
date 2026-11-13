@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -52,6 +53,7 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
   const lenderContainerRef = React.useRef<HTMLDivElement>(null)
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
     date?: string
@@ -143,6 +145,11 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
       return
     }
 
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
+    }
+
     setIsSubmitting(true)
     try {
       const updated = await loanService.updateLoan(loan.id, {
@@ -187,6 +194,21 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Loan Updates"
+              subtitle="Please confirm the updated loan details before saving."
+              errorMessage={error}
+              items={[
+                { label: 'Borrower', value: loan?.borrower, highlight: true },
+                { label: 'Principal Amount', value: `₱${parseFloat(amount.replace(/,/g, '') || '0').toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, isCurrency: true },
+                { label: 'Interest Rate', value: `${parseFloat(interestRate) || 0}%` },
+                { label: 'Start Date', value: date },
+                { label: 'Particulars', value: particulars },
+              ]}
+            />
+          ) : (
+            <>
           {error && (
             <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -345,21 +367,33 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
             </div>
           </div>
 
-          <div className="pt-3 flex items-center justify-end gap-2.5 border-t border-stroke/20">
+            </>
+          )}
+
+          <div className="pt-3 flex items-center justify-between gap-3 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-10 px-4 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs sm:text-sm font-semibold shadow-xs cursor-pointer"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              {isSubmitting ? 'Saving Changes…' : 'Save Changes'}
+              <span>{isReviewing ? 'Update Loan' : 'Review Updates'}</span>
             </Button>
           </div>
         </form>

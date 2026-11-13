@@ -8,6 +8,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -86,7 +87,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [amountPaid, setAmountPaid] = React.useState('')
 
   // Confirmation dialogue state
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
@@ -197,7 +198,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setAmountPaid('')
       setError('')
       setFieldErrors({})
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     }
   }, [open])
 
@@ -258,7 +259,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
 
     setFieldErrors({})
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   // Step 2: Confirmed submission
@@ -323,14 +324,14 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       }
 
       // Close confirmation and modal
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
 
       // Trigger callback to redirect & highlight newly added row in table
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record sales entry.'))
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }

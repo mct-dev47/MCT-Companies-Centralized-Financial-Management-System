@@ -20,6 +20,7 @@ import {
 import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
 import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { Card } from '@/components/ui/card'
 import { BackButton, ErrorBanner } from '@/components/common'
@@ -1254,11 +1255,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
-  const handleDeleteParticularFromList = async (id: number) => {
+  const handleDeleteParticularFromList = (id: number, name?: string) => {
+    const target = savedParticulars.find((p) => p.id === id)
+    setParticularToDelete({ id, name: name || target?.name || 'this item' })
+  }
+
+  const confirmDeleteParticular = async () => {
+    if (!particularToDelete) return
+    const { id } = particularToDelete
     const comp = effectiveParticularsCompany
     const txType = isSales ? 'Sales' : 'Expense'
     setSavedParticulars((prev) => prev.filter((p) => p.id !== id))
     await particularsService.deleteParticular(id, comp, txType)
+    setParticularToDelete(null)
   }
 
   // Company Custom Payment Methods (per company)
@@ -2191,6 +2200,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  // Confirmation modals state (Phase 2 Standard F)
+  const [isBatchSaveConfirmOpen, setIsBatchSaveConfirmOpen] = React.useState(false)
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = React.useState(false)
+  const [particularToDelete, setParticularToDelete] = React.useState<{ id: number; name: string } | null>(null)
+
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null)
   const [successBanner, setSuccessBanner] = React.useState<{
     count: number
@@ -2198,8 +2212,28 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     type: string
   } | null>(null)
 
-  // Save handler
-  const handleSave = async () => {
+  // Save handler with confirmation
+  const handleSave = async (forceConfirmed = false) => {
+    if (!forceConfirmed && !isBatchSaveConfirmOpen) {
+      // Validate first before opening confirm
+      const nonBlank = rows.filter(
+        (r) =>
+          r.particulars.trim().length > 0 ||
+          (r.category || '').trim().length > 0 ||
+          (r.unitPrice !== '' && Number(r.unitPrice) > 0) ||
+          r.chequeNo.trim().length > 0
+      )
+      if (nonBlank.length === 0) return
+      // If sales and unpaid total > 0, proceed to receivables step directly (it has its own confirm)
+      const hasUnpaid = isSales && rows.some((r) => r.status === 'Unpaid' && Number(r.unitPrice) > 0)
+      if (currentStep === 'encode' && hasUnpaid) {
+        // Proceeds to step 2 (review debtors)
+      } else {
+        setIsBatchSaveConfirmOpen(true)
+        return
+      }
+    }
+    setIsBatchSaveConfirmOpen(false)
     const remarkPromptConfirmed = dayRemarkConfirmedRef.current
     dayRemarkConfirmedRef.current = false
     const skipDayRemarks = dayRemarkSkipRef.current
@@ -3122,7 +3156,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={handleReset}
+                    onClick={() => setIsResetConfirmOpen(true)}
                     className="h-8 px-3 rounded-xl border-slate-200 text-xs font-semibold text-muted-fg hover:text-focus cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5 mr-1" />

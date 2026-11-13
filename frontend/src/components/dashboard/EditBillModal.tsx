@@ -1,4 +1,5 @@
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import * as React from 'react'
 import {
   Dialog,
@@ -111,6 +112,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
   const [notes, setNotes] = React.useState('')
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
     billerName?: string
@@ -220,7 +222,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
+      <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto rounded-[16px] p-6 bg-white border border-stroke/40 shadow-modal">
         <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -238,6 +240,22 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Bill Updates"
+              subtitle="Please confirm the updated bill details before saving."
+              errorMessage={error}
+              items={[
+                { label: 'Provider / Biller', value: billerName.trim(), highlight: true },
+                { label: 'Company', value: targetCompany },
+                { label: 'Billing Cycle', value: billingCycle },
+                { label: 'Next Due Date', value: computedDueDate ? formatDisplayDate(computedDueDate) : `Day ${dueDayOfMonth} of month` },
+                { label: 'Reminder', value: `${reminderDaysBefore} day(s) before` },
+                { label: 'Notes', value: notes.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {error && (
             <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -410,24 +428,35 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
             />
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>{isSubmitting ? 'Saving...' : 'Save Changes'}</span>
+              <span>{isReviewing ? 'Update Bill' : 'Review Updates'}</span>
             </Button>
           </div>
         </form>

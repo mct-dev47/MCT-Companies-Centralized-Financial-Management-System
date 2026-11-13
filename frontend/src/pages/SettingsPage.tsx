@@ -13,6 +13,7 @@ import {
   Save,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
@@ -48,6 +49,7 @@ export const SettingsPage: React.FC = () => {
   const [selectedCompanyId, setSelectedCompanyId] = React.useState<string>('')
   const [loading, setLoading] = React.useState(true)
   const [saving, setSaving] = React.useState(false)
+  const [isSaveConfirmOpen, setIsSaveConfirmOpen] = React.useState(false)
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
 
@@ -166,10 +168,15 @@ export const SettingsPage: React.FC = () => {
     updateUser({ avatarUrl: logo2Url })
   }
 
-  // Save changes handler
-  const handleSaveChanges = async (e?: React.FormEvent) => {
+  // Save changes handler with confirmation
+  const handleSaveChanges = async (e?: React.FormEvent, forceConfirmed = false) => {
     if (e) e.preventDefault()
     if (!selectedCompanyId) return
+    if (!forceConfirmed) {
+      setIsSaveConfirmOpen(true)
+      return
+    }
+    setIsSaveConfirmOpen(false)
 
     try {
       setSaving(true)
@@ -618,6 +625,20 @@ export const SettingsPage: React.FC = () => {
         onCropComplete={handleCropComplete}
         initialShape="square"
         title="Crop & Zoom Company Photo"
+      />
+    
+      {/* Phase 2: Action 28 Save Profile Confirmation */}
+      <ConfirmModal
+        open={isSaveConfirmOpen}
+        onOpenChange={setIsSaveConfirmOpen}
+        title="Save Company Profile?"
+        description={`Save company profile updates for "${companyName}"?`}
+        confirmLabel="Save Profile"
+        cancelLabel="Keep Editing"
+        variant="primary"
+        action="submit"
+        isLoading={saving}
+        onConfirm={() => handleSaveChanges(undefined, true)}
       />
     </div>
   )

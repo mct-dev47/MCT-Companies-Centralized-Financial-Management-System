@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -426,21 +427,30 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
+            </>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20 shrink-0">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-9 sm:h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
-              className="h-9 sm:h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+              variant="primary"
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <Check className="w-3.5 h-3.5" />
-              <span>Record Food Sale</span>
+              <span>{isReviewing ? 'Record Sale' : 'Review Sale'}</span>
             </Button>
           </div>
         </form>

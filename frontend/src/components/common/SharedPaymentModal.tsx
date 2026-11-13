@@ -15,6 +15,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -193,6 +194,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   const [paymentError, setPaymentError] = React.useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [isConfirmModalOpen, setIsConfirmModalOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [pendingConfirm, setPendingConfirm] = React.useState<CompletedPaymentReceiptData | null>(null)
   const [completedReceipt, setCompletedReceipt] = React.useState<CompletedPaymentReceiptData | null>(null)
   const [isSuccessModalOpen, setIsSuccessModalOpen] = React.useState(false)
@@ -492,7 +494,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
     }
 
     setPendingConfirm(confirmData)
-    setIsConfirmModalOpen(true)
+    setIsReviewing(true)
   }
 
   // Execute confirmed payment
@@ -515,13 +517,13 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
       })
 
       setCompletedReceipt(pendingConfirm)
-      setIsConfirmModalOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
       setIsSuccessModalOpen(true)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Unable to complete payment transaction. Please try again.'
       setPaymentError(msg)
-      setIsConfirmModalOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }
@@ -554,7 +556,24 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
             </div>
           </DialogHeader>
 
-          <form onSubmit={handleReviewPayment} className="space-y-5 mt-2">
+          <form onSubmit={isReviewing ? (e) => { e.preventDefault(); handleConfirmPayment(); } : handleReviewPayment} className="space-y-5 mt-2">
+            {isReviewing && pendingConfirm ? (
+              <ModalReviewStep
+                title={isEditMode ? "Review Updated Payment" : "Review Payment Transaction"}
+                subtitle="Please verify the remittance details before recording."
+                errorMessage={paymentError}
+                items={[
+                  { label: 'Payee / Debtor', value: entityName, highlight: true },
+                  { label: 'Payment Amount', value: formatPHP(pendingConfirm.amount), isCurrency: true },
+                  { label: 'Payment Method', value: pendingConfirm.method },
+                  { label: 'Payment Date', value: pendingConfirm.paymentDate },
+                  ...(pendingConfirm.penaltyPortion ? [{ label: 'Penalty Portion', value: formatPHP(pendingConfirm.penaltyPortion), isCurrency: true }] : []),
+                  { label: 'Reference No.', value: pendingConfirm.referenceNo || 'None' },
+                  { label: 'Notes', value: pendingConfirm.notes || 'None' },
+                ]}
+              />
+            ) : (
+              <>
             {/* Inline Error Banner */}
             {paymentError && (
               <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01]">
@@ -1115,191 +1134,41 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+                          </>
+            )}
+
+            {/* Action Buttons - Standard Phase 2 Layout */}
+            <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+                variant="secondary"
+                onClick={() => {
+                  if (isReviewing) {
+                    setIsReviewing(false)
+                  } else {
+                    onOpenChange(false)
+                  }
+                }}
+                disabled={isSubmitting}
+                className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                Cancel
+                {isReviewing ? 'Back to Edit' : 'Cancel'}
               </Button>
               <Button
                 type="submit"
-                disabled={!isAmountValid || isAudit}
-                className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                variant="primary"
+                disabled={!isAmountValid || isAudit || isSubmitting}
+                isLoading={isSubmitting}
+                className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                <Coins className="h-4 w-4" />
-                <span>Review & Confirm Payment</span>
+                <span>{isReviewing ? 'Record Payment' : 'Review Payment'}</span>
               </Button>
             </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      {/* 2. Modal: Payment Confirmation Modal */}
-      <Dialog open={isConfirmModalOpen} onOpenChange={setIsConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
-                <Coins className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-extrabold text-focus">
-                  {isEditMode ? 'Confirm Updated Payment Transaction' : 'Confirm Payment Transaction'}
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  {isEditMode
-                    ? 'Please review the updated payment details below before saving this transaction.'
-                    : 'Please review the payment details below before recording this transaction.'}
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          {pendingConfirm && (
-            <div className="space-y-4 mt-2">
-              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-xl space-y-2.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Name:</span>
-                  <span className="font-bold text-focus text-right">{pendingConfirm.entityName}</span>
-                </div>
-                {pendingConfirm.referenceNumber && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-fg">Reference:</span>
-                    <span className="font-mono font-semibold text-focus">{pendingConfirm.referenceNumber}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Installment Due Date:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingConfirm.targetInstallmentDate || pendingConfirm.paymentDate}
-                    {pendingConfirm.periodLabel ? ` (${pendingConfirm.periodLabel})` : ''}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Date Cash Received:</span>
-                  <span className="font-mono font-semibold text-focus">
-                    {pendingConfirm.paymentDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Timeliness:</span>
-                  {pendingConfirm.isLate ? (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                      <AlertCircle className="w-3 h-3 text-[#960C01]" />
-                      <span>{pendingConfirm.daysLate} Days Late</span>
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>On Time (0 penalty)</span>
-                    </span>
-                  )}
-                </div>
-                {Boolean(pendingConfirm.penaltyPortion) ? (
-                  <div className="flex justify-between items-center text-[#960C01]">
-                    <span className="font-medium">Late Payment Charges (Fee):</span>
-                    <span className="font-bold">+{formatPHP(pendingConfirm.penaltyPortion || 0)}</span>
-                  </div>
-                ) : pendingConfirm.isLate ? (
-                  <div className="flex justify-between items-center text-muted-fg">
-                    <span>Late Payment Charges:</span>
-                    <span className="font-semibold text-emerald-600">Waived (₱0.00)</span>
-                  </div>
-                ) : null}
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-focus">Installment Payment:</span>
-                  <span className="font-semibold text-emerald-600 text-xs">
-                    {formatPHP(pendingConfirm.amount)}
-                  </span>
-                </div>
-                {Boolean(pendingConfirm.penaltyPortion) && (
-                  <div className="flex justify-between items-center bg-amber-50/80 p-2 rounded-lg border border-amber-200/80 font-bold">
-                    <span className="text-focus text-[11px]">Total Cash to Collect:</span>
-                    <span className="text-amber-800 text-sm font-mono">
-                      {formatPHP(pendingConfirm.amount + (pendingConfirm.penaltyPortion || 0))}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Status Tag:</span>
-                  {pendingConfirm.paymentStatus === 'Partially Paid' ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                      Partially Paid
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                      <Check className="w-3 h-3 text-emerald-600" />
-                      <span>Paid</span>
-                    </span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Payment Method:</span>
-                  <span className="font-semibold text-focus">{pendingConfirm.method}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Receipt / Ref No.:</span>
-                  <span className="font-mono text-focus">{pendingConfirm.referenceNo || '—'}</span>
-                </div>
-                {pendingConfirm.notes && (
-                  <div className="flex justify-between items-start gap-3">
-                    <span className="text-muted-fg shrink-0">Remarks:</span>
-                    <span className="text-focus text-right">{pendingConfirm.notes}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center border-t border-slate-200/70 pt-2">
-                  <span className="text-muted-fg">Remaining {accountTypeLabel} Balance After:</span>
-                  <span className="font-bold text-amber-600">
-                    {formatPHP(pendingConfirm.remainingBalanceAfter)}
-                  </span>
-                </div>
-              </div>
-
-              {pendingConfirm.paymentStatus === 'Partially Paid' && (
-                <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-900 space-y-1">
-                  <div className="font-bold text-amber-800 flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>Partial Payment Notice</span>
-                  </div>
-                  <p className="text-[11px] text-amber-700 leading-relaxed">
-                    This payment is less than the installment due. It will be tagged as{' '}
-                    <strong>Partially Paid</strong> (not Paid), and the remaining{' '}
-                    <strong>{formatPHP(pendingConfirm.periodRemainingAfter)}</strong> for this period will remain open for settlement.
-                  </p>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={isSubmitting}
-                  onClick={() => setIsConfirmModalOpen(false)}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-                >
-                  Back to Edit
-                </Button>
-                <Button
-                  type="button"
-                  disabled={isSubmitting}
-                  onClick={handleConfirmPayment}
-                  className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
-                >
-                  {isSubmitting
-                    ? (isEditMode ? 'Updating...' : 'Recording...')
-                    : (isEditMode ? 'Confirm & Update Payment' : 'Confirm & Record Payment')}
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* 3. Modal: Payment Success Modal / Receipt */}
+        {/* 3. Modal: Payment Success Modal / Receipt */}
       <Dialog open={isSuccessModalOpen} onOpenChange={setIsSuccessModalOpen}>
         <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
           {completedReceipt && (

@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -161,7 +162,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   }, [open, assignedCompany])
 
   // Confirmation dialogue state
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
@@ -258,7 +259,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       }
       setIsCategoryOpen(false)
       setIsCategoryTyping(false)
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       setIsSubmitting(false)
       setError('')
       setFieldErrors({})
@@ -326,7 +327,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
 
     setFieldErrors({})
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   // Confirmed submission
@@ -377,12 +378,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         particularsService.invalidateCache(assignedCompany, 'Expense')
       }
 
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record expense entry.'))
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }

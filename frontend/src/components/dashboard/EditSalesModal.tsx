@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -63,6 +64,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
     date?: string
@@ -361,29 +363,33 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
 
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">
+            </>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-10 px-5 text-xs font-medium rounded-xl border-stroke/50"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-6 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                'Save Changes'
-              )}
+              <span>{isReviewing ? 'Save Changes' : 'Review Updates'}</span>
             </Button>
           </div>
         </form>

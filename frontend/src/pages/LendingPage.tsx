@@ -31,6 +31,7 @@ import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -234,6 +235,7 @@ export const LendingPage: React.FC = () => {
   const [deleteModalError, setDeleteModalError] = React.useState<string | null>(null)
   const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isCreatingBorrower, setIsCreatingBorrower] = React.useState(false)
+  const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isUpdatingBorrower, setIsUpdatingBorrower] = React.useState(false)
   const [isDeletingBorrower, setIsDeletingBorrower] = React.useState(false)
 
@@ -2108,7 +2110,7 @@ export const LendingPage: React.FC = () => {
 
       {/* 4. Modal: New Lending Facility (Requirement 2) */}
       <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto bg-white rounded-[16px] p-6 border border-stroke/40 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
@@ -2126,6 +2128,23 @@ export const LendingPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleCreateFacility} className="space-y-4 mt-3">
+            {isReviewingAdd ? (
+              <ModalReviewStep
+                title="Review Credit Agreement"
+                subtitle="Please verify the borrower and loan parameters before creating."
+                errorMessage={addModalError}
+                items={[
+                  { label: 'Borrower Name', value: formData.borrowerName.trim(), highlight: true },
+                  { label: 'Facility Type', value: formData.loanType },
+                  { label: 'Principal Loan Amount', value: formatPHP(formData.loanAmount), isCurrency: true },
+                  { label: 'Payment Frequency', value: formData.paymentFrequency },
+                  { label: 'Total Repayable', value: formatPHP(formData.totalLoanAmount), isCurrency: true },
+                  { label: 'Start / Contract Date', value: formData.dateBorrowed },
+                  { label: 'Maturity / Due Date', value: formData.dueDate },
+                ]}
+              />
+            ) : (
+              <>
             {/* Inline Error Banner */}
             {addModalError && (
               <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01]">
@@ -2344,32 +2363,36 @@ export const LendingPage: React.FC = () => {
               />
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isCreatingBorrower}
-                onClick={() => setIsAddModalOpen(false)}
-                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={isCreatingBorrower}
-                className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 shadow-xs"
-              >
-                {isCreatingBorrower ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Creating...</span>
-                  </>
-                ) : (
-                  <span>Create Borrower</span>
-                )}
-              </Button>
-            </div>
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={isCreatingBorrower}
+              onClick={() => {
+                if (isReviewingAdd) {
+                  setIsReviewingAdd(false)
+                } else {
+                  setIsAddModalOpen(false)
+                }
+              }}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              {isReviewingAdd ? 'Back to Edit' : 'Cancel'}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isCreatingBorrower}
+              isLoading={isCreatingBorrower}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <span>{isReviewingAdd ? 'Create Facility' : 'Review Facility'}</span>
+            </Button>
+          </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -2538,7 +2561,7 @@ export const LendingPage: React.FC = () => {
 
       {/* 6. Modal: Edit Borrower Details */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto bg-white rounded-[16px] p-6 border border-stroke/40 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">

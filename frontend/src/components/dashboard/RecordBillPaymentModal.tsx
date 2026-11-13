@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -108,6 +109,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   const [dailyCalendarMonth, setDailyCalendarMonth] = React.useState<Date>(() => new Date())
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
 
@@ -404,6 +406,23 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Bill Payment Details"
+              subtitle="Please verify the payment details before submitting this remittance."
+              errorMessage={error}
+              items={[
+                { label: 'Provider / Bill', value: bill?.billerName, highlight: true },
+                { label: 'Amount Paid', value: `₱${amountNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, isCurrency: true },
+                { label: 'Payment Method', value: paymentMethod },
+                { label: 'Funding Bank', value: fundingBank ? `${fundingBank.bankName} (${fundingBank.accountNumber})` : 'None' },
+                { label: 'Payment Date', value: paymentDate },
+                { label: 'Billing Period', value: computedBillingPeriod },
+                { label: 'Remarks / Notes', value: notes.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {/* Error Banner */}
           {error && (
             <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/30 rounded-xl flex items-start gap-2 text-xs text-[#960C01]">
@@ -1034,30 +1053,34 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting || !isAmountValid || isPeriodPaid || !paymentDate || Boolean(fundingError)}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Recording...</span>
-                </>
-              ) : (
-                <span>Confirm Payment</span>
-              )}
+              <span>{isReviewing ? 'Record Payment' : 'Review Payment'}</span>
             </Button>
           </div>
         </form>
