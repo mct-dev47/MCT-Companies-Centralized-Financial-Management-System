@@ -37,6 +37,8 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TablePagination } from '@/components/common/TablePagination'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableErrorState } from '@/components/common/TableErrorState'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
   Table,
@@ -2812,16 +2814,16 @@ export const TransactionPage: React.FC = () => {
               <TableHeader>
                 {activeTab === 'deposit' ? (
                   <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       DATE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       CHECK NO
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       WITHDRAWAL
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       DEPOSIT
                     </TableHead>
                     <TableHead
@@ -2830,37 +2832,33 @@ export const TransactionPage: React.FC = () => {
                     >
                       BALANCE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       TRAN-CODE
                     </TableHead>
                   </TableRow>
                 ) : (
                   <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
                     {showDayCompanyColumn && (
-                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
                     )}
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY IN</TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY OUT</TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">NET</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">MONEY IN</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">MONEY OUT</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">NET</TableHead>
                     {showDayBalanceColumn && (
-                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right" title="End-of-day balance">BANK BALANCE</TableHead>
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right" title="End-of-day balance">BANK BALANCE</TableHead>
                     )}
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
                     {showActionColumn && (
-                      <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
+                      <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
                     )}
                   </TableRow>
                 )}
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={dayColCount} className="py-12 text-center text-sm text-muted-fg">
-                      <Loader2 className="w-6 h-6 animate-spin text-primary inline-block" />
-                    </TableCell>
-                  </TableRow>
+                  <TableSkeleton rows={5} columns={dayColCount} />
                 ) : visibleDayGroups.length === 0 ? (
                   <TableEmptyState
                     colSpan={dayColCount}
@@ -3330,16 +3328,16 @@ export const TransactionPage: React.FC = () => {
             <TableHeader>
               {activeTab === 'deposit' ? (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHECK NO
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     WITHDRAWAL
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     DEPOSIT
                   </TableHead>
                   <TableHead
@@ -3348,25 +3346,25 @@ export const TransactionPage: React.FC = () => {
                   >
                     BALANCE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     TRAN-CODE
                   </TableHead>
                 </TableRow>
               ) : (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     PARTICULARS
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     METHOD
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     AMOUNT
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHEQUE NO.
                   </TableHead>
                   <TableHead
@@ -3381,11 +3379,11 @@ export const TransactionPage: React.FC = () => {
                   >
                     AMOUNT DEPOSIT
                   </TableHead>
-                  <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="pl-3 pr-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     STATUS
                   </TableHead>
                   {showActionColumn && (
-                    <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-1.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       ACTION
                     </TableHead>
                   )}
@@ -3395,36 +3393,7 @@ export const TransactionPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                Array.from({ length: 8 }).map((_, i) => (
-                  <TableRow key={i} className="border-b border-slate-100">
-                    {activeTab === 'deposit' ? (
-                      <>
-                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-24 rounded-md ml-auto" /></TableCell>
-                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
-                      </>
-                    ) : (
-                      <>
-                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-44 rounded-md" /></TableCell>
-                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-14 rounded-md" /></TableCell>
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                        <TableCell className="pl-3 pr-2 py-3 text-center"><Skeleton className="h-5 w-24 rounded-full mx-auto" /></TableCell>
-                        {showActionColumn && (
-                          <TableCell className="px-1.5 py-3 text-center">
-                            <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
-                          </TableCell>
-                        )}
-                      </>
-                    )}
-                  </TableRow>
-                ))
+                <TableSkeleton rows={8} columns={activeTab === 'deposit' ? 6 : (8 + (showActionColumn ? 1 : 0))} />
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
                   colSpan={activeTab === 'deposit' ? 6 : (8 + (showActionColumn ? 1 : 0))}

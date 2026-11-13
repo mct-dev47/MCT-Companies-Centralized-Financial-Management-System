@@ -16,7 +16,9 @@ import {
   DropdownFilter,
   ErrorBanner,
   StatusBadge,
+  StatusPill,
   TableEmptyState,
+  TableErrorState,
   TablePagination,
   TableSkeleton,
 } from '@/components/common'
@@ -264,7 +266,7 @@ export const CompanyLoansPage: React.FC = () => {
                   'Int. Rate',
                   'Status',
                 ].map((heading) => (
-                  <TableHead key={heading}>{heading}</TableHead>
+                  <TableHead key={heading} className="text-[11px] font-semibold uppercase tracking-wider text-muted-fg">{heading}</TableHead>
                 ))}
               </TableRow>
             </TableHeader>
@@ -282,6 +284,13 @@ export const CompanyLoansPage: React.FC = () => {
                     { width: 'w-16' },
                     { width: 'w-20', shape: 'pill' },
                   ]}
+                />
+              ) : error ? (
+                <TableErrorState
+                  colSpan={8}
+                  title="Unable to load company loans"
+                  message={error}
+                  onRetry={loadGroups}
                 />
               ) : groups.length === 0 ? (
                 <TableEmptyState
@@ -315,7 +324,7 @@ export const CompanyLoansPage: React.FC = () => {
                       {group.interestDisplay}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={group.paymentStatus} />
+                      <StatusPill status={group.paymentStatus} />
                     </TableCell>
                   </TableRow>
                 ))

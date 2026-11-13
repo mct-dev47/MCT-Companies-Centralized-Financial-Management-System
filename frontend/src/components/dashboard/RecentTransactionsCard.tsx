@@ -15,6 +15,8 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TablePagination } from '@/components/common/TablePagination'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
@@ -110,25 +112,25 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
         <Table>
           <TableHeader>
             <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg">
                 DATE
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg">
                 CHEQUE NO.
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg">
                 PARTICULARS
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                 WITHDRAWAL
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                 DEPOSIT
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg">
                 CATEGORY
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+              <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                 NET AMOUNT
               </TableHead>
             </TableRow>
@@ -136,14 +138,11 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
 
           <TableBody>
             {paginatedTransactions.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className="py-12 text-center text-xs sm:text-sm text-muted-fg"
-                >
-                  No transactions found for the selected date range.
-                </TableCell>
-              </TableRow>
+              <TableEmptyState
+                colSpan={7}
+                title="No transactions found"
+                description="No transactions found for the selected date range."
+              />
             ) : (
               paginatedTransactions.map((tx) => {
                 const netAmount = (tx.deposit || 0) - (tx.withdrawal || 0)
@@ -210,45 +209,18 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
         </Table>
       </div>
 
-      {/* 3. Pagination Footer matching Sales table */}
-      <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-        {/* Left: Record summary */}
-        <span className="font-medium text-focus/80">
-          {totalItems === 0
-            ? 'Showing 0 of 0 records'
-            : `Showing ${startIndex + 1}-${endIndex} of ${totalItems} records`}
-        </span>
-
-        {/* Right: Page Indicator & Navigation without words Previous and Next */}
-        <div className="flex items-center gap-2 self-end sm:self-auto">
-          <span className="text-xs text-muted-fg italic">
-            Page {currentPage} out of {totalPages}
-          </span>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            aria-label="Next page"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
+      {/* 3. Pagination Footer */}
+      <div className="pt-4 mt-2 border-t border-slate-100">
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalRecords={totalItems}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          pageSize={ITEMS_PER_PAGE}
+          onPageChange={setCurrentPage}
+          itemLabel="transactions"
+        />
       </div>
 
       {/* 4. Complete Read-Only Transaction Details Modal */}

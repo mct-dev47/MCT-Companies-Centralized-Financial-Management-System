@@ -27,6 +27,10 @@ import {
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
@@ -1735,28 +1739,28 @@ export const LendingPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="w-[22%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[22%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   BORROWER'S NAME
                 </TableHead>
-                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[12%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   LOAN AMOUNT
                 </TableHead>
-                <TableHead className="w-[16%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[16%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[12%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[14%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   AUDIT TAG
                 </TableHead>
-                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[6%] px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1765,17 +1769,22 @@ export const LendingPage: React.FC = () => {
               {isLoading ? (
                 <TableSkeleton rows={5} columns={8} />
               ) : paginatedFacilities.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-44 text-center py-8">
-                    <div className="flex flex-col items-center justify-center text-muted-fg">
-                      <CreditCard className="h-8 w-8 text-muted-fg/40 mb-2" />
-                      <p className="text-sm font-semibold">No borrowers found</p>
-                      <p className="text-xs text-muted-fg/70 mt-0.5">
-                        Try adjusting your search, status, or date range filter, or click &quot;New Borrower&quot;.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={8}
+                  title="No borrowers found"
+                  description="Try adjusting your search, status, or date range filter, or click 'New Borrower'."
+                  action={
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="rounded-[10px]"
+                    >
+                      New Borrower
+                    </Button>
+                  }
+                />
               ) : (
                 paginatedFacilities.map((facility) => {
                   const statusColorText = {
@@ -1833,9 +1842,7 @@ export const LendingPage: React.FC = () => {
 
                       {/* 6. Status */}
                       <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusColorText)}>
-                          {facility.status}
-                        </span>
+                        <StatusPill status={facility.status} />
                       </TableCell>
 
                       {/* 7. Audit Tag (Visible to all authenticated roles) */}
@@ -1920,45 +1927,18 @@ export const LendingPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* 6. Pagination Footer (Matching Sales table reference: Showing X of Y and Page 1 out of 10) */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {/* Left: Record summary */}
-          <span className="font-medium text-focus/80">
-            {filteredFacilities.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredFacilities.length} records`}
-          </span>
-
-          {/* Right: Page Indicator & Navigation */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+        {/* 6. Pagination Footer */}
+        <div className="pt-4 mt-2 border-t border-slate-100">
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredFacilities.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            itemLabel="borrowers"
+          />
         </div>
       </Card>
       </>

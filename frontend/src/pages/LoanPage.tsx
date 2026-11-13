@@ -29,6 +29,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { TablePagination, ConfirmModal } from '@/components/common'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { StatusPill } from '@/components/common/StatusPill'
 import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
@@ -1128,34 +1131,34 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   DATE
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REF NO.
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   {loanType === 'Borrower' ? 'LENDER COMPANY' : 'BORROWER COMPANY'}
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   DUE DATE
                 </TableHead>
                 {/* Interest Rate ONLY in Borrower Tab per user instructions */}
                 {loanType === 'Borrower' && (
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap" title="Interest Rate">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap" title="Interest Rate">
                     INT. RATE
                   </TableHead>
                 )}
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1165,25 +1168,24 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               {loading ? (
                 <TableSkeleton rows={6} columns={loanType === 'Borrower' ? 9 : 8} />
               ) : paginatedLoans.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={loanType === 'Borrower' ? 9 : 8}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No loan transaction yet
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no {loanType.toLowerCase()} loan records found for {displayedCompanyTitle} matching your current filters.
-                        {loanType === 'Borrower' && ' Click "Request Loan" above to initiate a new borrowing request.'}
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={loanType === 'Borrower' ? 9 : 8}
+                  title="No loan transaction yet"
+                  description={`There are no ${loanType.toLowerCase()} loan records found for ${displayedCompanyTitle} matching your current filters.${loanType === 'Borrower' ? ' Click "Request Loan" above to initiate a new borrowing request.' : ''}`}
+                  action={
+                    loanType === 'Borrower' ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        Request Loan
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedLoans.map((loan) => {
                   const isPendingFinance =
@@ -1298,48 +1300,30 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 8. Status */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                        {isPendingFinance ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Pending Finance</span>
-                          </span>
-                        ) : isPendingAudit ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-indigo-600 shrink-0" />
-                            <span>Pending Audit</span>
-                          </span>
-                        ) : isRejectedFinance ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 text-[11px] font-semibold shadow-2xs"
-                            title={loan.financeRemark || 'Rejected by finance'}
-                          >
-                            <X className="w-3 h-3 text-rose-600 shrink-0" />
-                            <span>Rejected</span>
-                          </span>
-                        ) : isDisapprovedAudit ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 text-[11px] font-semibold shadow-2xs"
-                            title={loan.auditRemark || 'Disapproved by audit'}
-                          >
-                            <X className="w-3 h-3 text-rose-600 shrink-0" />
-                            <span>Disapproved</span>
-                          </span>
-                        ) : loan.status === 'Paid' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span>Paid</span>
-                          </span>
-                        ) : loan.status === 'Partially Paid' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-blue-600 shrink-0" />
-                            <span>Partially Paid</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span>Approved</span>
-                          </span>
-                        )}
+                        <StatusPill
+                          status={
+                            isPendingFinance
+                              ? 'Pending Finance'
+                              : isPendingAudit
+                              ? 'Pending Audit'
+                              : isRejectedFinance
+                              ? 'Rejected'
+                              : isDisapprovedAudit
+                              ? 'Disapproved'
+                              : loan.status || 'Pending'
+                          }
+                          label={
+                            isPendingFinance
+                              ? 'Pending Finance'
+                              : isPendingAudit
+                              ? 'Pending Audit'
+                              : isRejectedFinance
+                              ? 'Rejected'
+                              : isDisapprovedAudit
+                              ? 'Disapproved'
+                              : loan.status || 'Pending'
+                          }
+                        />
                       </TableCell>
 
                       {/* 9. Actions (3 Dots Menu) */}

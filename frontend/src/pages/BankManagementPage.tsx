@@ -48,6 +48,10 @@ import {
 } from 'lucide-react'
 
 import { Card } from '@/components/ui/card'
+import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
@@ -3307,7 +3311,7 @@ export const BankManagementPage: React.FC = () => {
 
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[12%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[12%]">
 
                   DATE
 
@@ -3315,7 +3319,7 @@ export const BankManagementPage: React.FC = () => {
 
                 {showCompanyColumn && (
 
-                  <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[14%]">
+                  <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[14%]">
 
                     COMPANY
 
@@ -3323,37 +3327,37 @@ export const BankManagementPage: React.FC = () => {
 
                 )}
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[15%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[15%]">
 
                   CHEQUE NO.
 
                 </TableHead>
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[28%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[28%]">
 
                   PARTICULARS
 
                 </TableHead>
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-right w-[13%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[13%]">
 
                   WITHDRAWAL
 
                 </TableHead>
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-right w-[13%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[13%]">
 
                   DEPOSIT
 
                 </TableHead>
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-left w-[14%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[14%]">
 
                   CATEGORY
 
                 </TableHead>
 
-                <TableHead className="px-4 py-3.5 font-bold text-muted-fg uppercase tracking-wider text-xs text-right w-[15%]">
+                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[15%]">
 
                   CURRENT BALANCE
 
@@ -3366,59 +3370,13 @@ export const BankManagementPage: React.FC = () => {
             <TableBody>
 
               {isLoading ? (
-
-                Array.from({ length: 5 }).map((_, i) => (
-
-                  <TableRow key={i} className="animate-pulse">
-
-                    <TableCell className="px-4 py-3.5"><div className="h-4 w-20 bg-slate-200 rounded" /></TableCell>
-
-                    {showCompanyColumn && (
-
-                      <TableCell className="px-4 py-3.5"><div className="h-4 w-24 bg-slate-200 rounded" /></TableCell>
-
-                    )}
-
-                    <TableCell className="px-4 py-3.5"><div className="h-4 w-24 bg-slate-200 rounded" /></TableCell>
-
-                    <TableCell className="px-4 py-3.5"><div className="h-4 w-48 bg-slate-200 rounded" /></TableCell>
-
-                    <TableCell className="px-4 py-3.5 text-right"><div className="h-4 w-20 bg-slate-200 rounded ml-auto" /></TableCell>
-
-                    <TableCell className="px-4 py-3.5 text-right"><div className="h-4 w-20 bg-slate-200 rounded ml-auto" /></TableCell>
-
-                    <TableCell className="px-4 py-3.5"><div className="h-4 w-24 bg-slate-200 rounded" /></TableCell>
-
-                    <TableCell className="px-4 py-3.5 text-right"><div className="h-4 w-24 bg-slate-200 rounded ml-auto" /></TableCell>
-
-                  </TableRow>
-
-                ))
-
+                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
               ) : paginatedTransactions.length === 0 ? (
-
-                <TableRow>
-
-                  <TableCell colSpan={showCompanyColumn ? 8 : 7} className="h-44 text-center py-8">
-
-                    <div className="flex flex-col items-center justify-center text-muted-fg">
-
-                      <CreditCard className="h-8 w-8 text-muted-fg/40 mb-2" />
-
-                      <p className="text-sm font-semibold">No bank transactions found</p>
-
-                      <p className="text-xs text-muted-fg/70 mt-0.5">
-
-                        {tableSearchQuery ? 'Try clearing your search query' : 'Deposit or withdraw funds to record transactions'}
-
-                      </p>
-
-                    </div>
-
-                  </TableCell>
-
-                </TableRow>
-
+                <TableEmptyState
+                  colSpan={showCompanyColumn ? 8 : 7}
+                  title="No bank transactions found"
+                  description={tableSearchQuery ? 'Try clearing your search query' : 'Deposit or withdraw funds to record transactions'}
+                />
               ) : (
 
                 paginatedTransactions.map((tx) => (
@@ -3592,71 +3550,15 @@ export const BankManagementPage: React.FC = () => {
         </div>
 
         {/* Pagination Footer */}
-
-        <div className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg border-t border-slate-100">
-
-          <span>
-
-            {filteredTransactions.length === 0
-
-              ? 'Showing 0 of 0 records'
-
-              : `Showing ${(currentPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(currentPage * ITEMS_PER_PAGE, filteredTransactions.length)} of ${filteredTransactions.length} records`}
-
-          </span>
-
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-
-            <span className="italic">
-
-              Page {currentPage} out of {totalPages}
-
-            </span>
-
-            <Button
-
-              type="button"
-
-              variant="outline"
-
-              size="sm"
-
-              disabled={currentPage <= 1}
-
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 cursor-pointer"
-              aria-label="Previous page"
-
-            >
-
-              <ChevronLeft className="w-4 h-4" />
-
-            </Button>
-
-            <Button
-
-              type="button"
-
-              variant="outline"
-
-              size="sm"
-
-              disabled={currentPage >= totalPages}
-
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 cursor-pointer"
-              aria-label="Next page"
-
-            >
-
-              <ChevronRight className="w-4 h-4" />
-
-            </Button>
-
-          </div>
-
+        <div className="p-4 border-t border-slate-100">
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredTransactions.length}
+            pageSize={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            itemLabel="records"
+          />
         </div>
 
       </Card>

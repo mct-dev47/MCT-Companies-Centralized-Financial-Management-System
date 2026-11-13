@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { StatusPill } from '@/components/common/StatusPill'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { ConfirmModal, TablePagination, TableEmptyState, Dropdown } from '@/components/common'
 import { notifySuccess } from '@/utils/errorUtils'
@@ -1028,25 +1030,25 @@ export const ReceivablesPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                <TableHead className="w-[22%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[22%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   CUSTOMER / STAFF
                 </TableHead>
-                <TableHead className="w-[12%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[12%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   TYPE
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[14%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   TOTAL PURCHASES
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[14%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[14%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   TOTAL OWED
                 </TableHead>
-                <TableHead className="w-[11%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="w-[11%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   STATUS
                 </TableHead>
-                <TableHead className="w-[13%] px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="w-[13%] px-3.5 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1170,24 +1172,7 @@ export const ReceivablesPage: React.FC = () => {
 
                       {/* 6. Status Badge */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-left whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold border tracking-wide uppercase',
-                            p.status === 'Paid' && 'bg-emerald-50 text-emerald-700 border-emerald-300',
-                            p.status === 'Partial' && 'bg-amber-50 text-amber-700 border-amber-300',
-                            p.status === 'Unpaid' && 'bg-rose-50 text-rose-700 border-rose-300'
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              'w-1.5 h-1.5 rounded-full',
-                              p.status === 'Paid' && 'bg-emerald-500',
-                              p.status === 'Partial' && 'bg-amber-500',
-                              p.status === 'Unpaid' && 'bg-rose-500'
-                            )}
-                          />
-                          <span>{p.status}</span>
-                        </span>
+                        <StatusPill status={p.status} />
                       </TableCell>
 
                       {/* 7. Actions (Standard 3-dots Menu matching system) */}

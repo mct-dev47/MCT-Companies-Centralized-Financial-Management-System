@@ -32,6 +32,10 @@ import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -539,10 +543,12 @@ export const SalesPage: React.FC = () => {
   // Data state
   const [sales, setSales] = React.useState<SalesItem[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load sales data. `silent` reloads without the loading skeleton (used by realtime updates).
   const loadSales = React.useCallback(async (silent = false, forceRefresh = false) => {
     if (!silent) setLoading(true)
+    setLoadError(null)
     try {
       const targetCompany = isCompanyScoped
         ? assignedCompany
@@ -553,6 +559,7 @@ export const SalesPage: React.FC = () => {
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
+      setLoadError('Unable to load sales records. Please check your connection and try again.')
       notifyError(err, 'Unable to load sales records. Please try again.')
     } finally {
       setLoading(false)
@@ -1629,16 +1636,16 @@ export const SalesPage: React.FC = () => {
               <TableHeader>
                 {tableTab === 'Deposit' ? (
                   <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       DATE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       CHECK NO
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       WITHDRAWAL
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       DEPOSIT
                     </TableHead>
                     <TableHead
@@ -1647,31 +1654,31 @@ export const SalesPage: React.FC = () => {
                     >
                       BALANCE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       TRAN-CODE
                     </TableHead>
                   </TableRow>
                 ) : (
                   <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       SALES DATE & DAY
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       TRANSACTIONS
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       GROSS SALES
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       REALIZED CASH
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       DAY REMARK
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       AUDIT STATUS
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       ACTION
                     </TableHead>
                   </TableRow>
@@ -1680,25 +1687,18 @@ export const SalesPage: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 6 : 7} />
+                ) : loadError ? (
+                  <TableErrorState
+                    colSpan={tableTab === 'Deposit' ? 6 : 7}
+                    message={loadError}
+                    onRetry={() => loadSales(false, true)}
+                  />
                 ) : paginatedDailyGroups.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={tableTab === 'Deposit' ? 6 : 7}
-                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                    >
-                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                        </div>
-                        <p className="font-semibold text-focus text-sm sm:text-base">
-                          No daily {tableTab === 'Deposit' ? 'deposit' : 'sales'} records found
-                        </p>
-                        <p className="text-xs text-muted-fg leading-relaxed">
-                          There are no {tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for this period matching your filters.
-                        </p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                  <TableEmptyState
+                    colSpan={tableTab === 'Deposit' ? 6 : 7}
+                    title={`No daily ${tableTab === 'Deposit' ? 'deposit' : 'sales'} records found`}
+                    description={`There are no ${tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for this period matching your filters.`}
+                  />
                 ) : (
                   paginatedDailyGroups.map((group) => {
                     if (tableTab === 'Deposit') {
@@ -2047,16 +2047,16 @@ export const SalesPage: React.FC = () => {
             <TableHeader>
               {tableTab === 'Deposit' ? (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHECK NO
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     WITHDRAWAL
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     DEPOSIT
                   </TableHead>
                   <TableHead
@@ -2065,37 +2065,37 @@ export const SalesPage: React.FC = () => {
                   >
                     BALANCE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     TRAN-CODE
                   </TableHead>
                 </TableRow>
               ) : (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     PARTICULARS
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     METHOD
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     AMOUNT
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHEQUE NO.
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DEPOSIT DATE
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     AMOUNT DEPOSIT
                   </TableHead>
-                  <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="pl-3 pr-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     STATUS
                   </TableHead>
-                  <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-1.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     ACTION
                   </TableHead>
                 </TableRow>
@@ -2105,25 +2105,31 @@ export const SalesPage: React.FC = () => {
             <TableBody>
               {loading ? (
                 <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 6 : 9} />
+              ) : loadError ? (
+                <TableErrorState
+                  colSpan={tableTab === 'Deposit' ? 6 : 9}
+                  message={loadError}
+                  onRetry={() => loadSales(false, true)}
+                />
               ) : paginatedSales.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={tableTab === 'Deposit' ? 6 : 9}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No {tableTab === 'Deposit' ? 'deposit' : 'sales'} records found
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no {tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for {displayedCompanyTitle} matching your current filters.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={tableTab === 'Deposit' ? 6 : 9}
+                  title={`No ${tableTab === 'Deposit' ? 'deposit' : 'sales'} records found`}
+                  description={`There are no ${tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for ${displayedCompanyTitle} matching your current filters.`}
+                  action={
+                    tableTab !== 'Deposit' ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        Record New Sale
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedSales.map((sale) => {
                   if (tableTab === 'Deposit') {
@@ -2251,18 +2257,7 @@ export const SalesPage: React.FC = () => {
 
                       {/* 8. Status Badge */}
                       <TableCell className="pl-3 pr-2 py-3 text-center align-top">
-                        <span
-                          className={cn(
-                            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border tracking-wide uppercase',
-                            sale.status === 'Paid'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                              : sale.status === 'Pending'
-                              ? 'bg-amber-50 text-amber-700 border-amber-300'
-                              : 'bg-rose-50 text-rose-700 border-rose-300'
-                          )}
-                        >
-                          {sale.status || 'Paid'}
-                        </span>
+                        <StatusPill status={sale.status || 'Paid'} />
                       </TableCell>
 
                       {/* 9. Action: 3 dots action button */}
@@ -2311,100 +2306,42 @@ export const SalesPage: React.FC = () => {
         )}
 
         {/* 6. Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {subTab === 'Daily Summary' ? (
-            hasFocusedDay ? (
-              <div className="flex items-center justify-between w-full">
-                <span className="font-semibold text-focus">
-                  Viewing transactions for {paginatedDailyGroups[0]?.formattedDate}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setExpandedDates(new Set())}
-                  className="text-xs text-primary font-semibold hover:underline cursor-pointer"
-                >
-                  Back to all days
-                </button>
-              </div>
-            ) : (
-              <>
-                <span className="font-medium text-focus/80">
-                  {dailySalesGroups.length === 0
-                    ? 'Showing 0 of 0 days'
-                    : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailySalesGroups.length)} of ${dailySalesGroups.length} days`}
-                </span>
-
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <span className="text-xs text-muted-fg italic">
-                    Page {dailyPage} out of {totalDailyPages}
-                  </span>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage <= 1}
-                    onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Previous day page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage >= totalDailyPages}
-                    onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Next day page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </>
-            )
-          ) : (
-            <>
-              <span className="font-medium text-focus/80">
-                {filteredSales.length === 0
-                  ? 'Showing 0 of 0 records'
-                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
+        {subTab === 'Daily Summary' ? (
+          hasFocusedDay ? (
+            <div className="pt-4 mt-2 flex items-center justify-between w-full text-xs text-muted-fg">
+              <span className="font-semibold text-focus">
+                Viewing transactions for {paginatedDailyGroups[0]?.formattedDate}
               </span>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <span className="text-xs text-muted-fg italic">
-                  Page {currentPage} out of {totalPages}
-                </span>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Next page"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
+              <button
+                type="button"
+                onClick={() => setExpandedDates(new Set())}
+                className="text-xs text-primary font-semibold hover:underline cursor-pointer"
+              >
+                Back to all days
+              </button>
+            </div>
+          ) : (
+            <TablePagination
+              currentPage={dailyPage}
+              totalPages={totalDailyPages}
+              totalRecords={dailySalesGroups.length}
+              pageSize={ITEMS_PER_PAGE}
+              onPageChange={setDailyPage}
+              itemLabel="days"
+            />
+          )
+        ) : (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredSales.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            itemLabel="records"
+          />
+        )}
       </Card>
 
 

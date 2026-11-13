@@ -32,6 +32,10 @@ import {
 import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
 import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -1496,40 +1500,40 @@ export const PettyCashPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   COMPANY
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   TYPE
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   FUNDING BANK
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   AMOUNT REQUESTED
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   IN (+)
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   OUT (-)
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   RUNNING BALANCE
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   STATUS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   AUDIT STATUS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1539,12 +1543,24 @@ export const PettyCashPage: React.FC = () => {
               {isLoading ? (
                 <TableSkeleton rows={5} columns={12} />
               ) : paginatedLedger.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={12} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
-                    <Wallet className="w-8 h-8 text-muted-fg/40 mx-auto mb-2" />
-                    No petty cash transactions found for the selected criteria.
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={12}
+                  title="No petty cash transactions found"
+                  description="No transactions match your active company or filter criteria."
+                  action={
+                    canTransact ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsTopUpModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        Top Up Petty Cash
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedLedger.map((entry) => {
                   const isPendingFinance = entry.status === 'Pending Finance Endorsement' || entry.status === 'Pending Finance Approval'
@@ -1811,8 +1827,8 @@ export const PettyCashPage: React.FC = () => {
         </div>
 
         {/* Pagination Toolbar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-5 mt-2 border-t border-slate-100 text-xs text-muted-fg">
-          <div className="flex items-center gap-2">
+        <div className="pt-4 mt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-muted-fg">
             <span>Rows per page:</span>
             <div className="w-20">
               <Dropdown
@@ -1826,35 +1842,15 @@ export const PettyCashPage: React.FC = () => {
                 aria-label="Rows per page"
               />
             </div>
-            <span className="ml-2">
-              Showing {filteredLedger.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to{' '}
-              {Math.min(currentPage * itemsPerPage, filteredLedger.length)} of {filteredLedger.length} records
-            </span>
           </div>
-
-          <div className="flex items-center gap-1 self-end sm:self-auto">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 border-stroke/60"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <span className="text-xs font-semibold px-2">
-              Page {currentPage} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 border-stroke/60"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredLedger.length}
+            pageSize={itemsPerPage}
+            onPageChange={setCurrentPage}
+            itemLabel="entries"
+          />
         </div>
       </Card>
 

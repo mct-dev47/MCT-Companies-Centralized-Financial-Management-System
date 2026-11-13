@@ -470,14 +470,14 @@ export const ActivityLogPage: React.FC = () => {
         <div className="overflow-x-auto rounded-xl border border-slate-100">
           <Table className="w-full min-w-[980px] text-left">
             <TableHeader>
-              <TableRow>
-                <TableHead className="px-5 w-[18%]">Company</TableHead>
-                <TableHead className="px-5 w-[18%]">Action</TableHead>
-                <TableHead className="px-4 w-[12%]">Module</TableHead>
-                <TableHead className="px-4 w-[13%]">Record</TableHead>
-                <TableHead className="px-4 w-[15%]">Client IP</TableHead>
-                <TableHead className="px-4 w-[14%]">Time</TableHead>
-                <TableHead className="px-4 w-[10%] text-right">Details</TableHead>
+              <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                <TableHead className="px-5 w-[18%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Company</TableHead>
+                <TableHead className="px-5 w-[18%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Action</TableHead>
+                <TableHead className="px-4 w-[12%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Module</TableHead>
+                <TableHead className="px-4 w-[13%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Record</TableHead>
+                <TableHead className="px-4 w-[15%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Client IP</TableHead>
+                <TableHead className="px-4 w-[14%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Time</TableHead>
+                <TableHead className="px-4 w-[10%] text-right text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -494,34 +494,25 @@ export const ActivityLogPage: React.FC = () => {
                     { width: 'w-16' },
                   ]}
                 />
+              ) : loadError ? (
+                <TableErrorState
+                  colSpan={7}
+                  title="Unable to load activity logs"
+                  message={loadError}
+                  onRetry={fetchLogs}
+                />
               ) : displayedLogs.length === 0 ? (
                 <TableEmptyState
                   colSpan={7}
                   icon={Clock}
-                  title={
-                    loadError
-                      ? 'Unable to load activity logs'
-                      : 'No activity logs found'
-                  }
+                  title="No activity logs found"
                   description={
-                    loadError
-                      ? loadError
-                      : hasActiveFilters
-                        ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
-                        : 'No recent system activity records have been recorded yet.'
+                    hasActiveFilters
+                      ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
+                      : 'No recent system activity records have been recorded yet.'
                   }
                   action={
-                    loadError ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={fetchLogs}
-                        className="text-xs font-semibold rounded-lg"
-                      >
-                        Try again
-                      </Button>
-                    ) : hasActiveFilters ? (
+                    hasActiveFilters ? (
                       <Button
                         type="button"
                         variant="outline"
