@@ -1879,7 +1879,7 @@ export const ExpensePage: React.FC = () => {
             totalRecords={filteredExpenses.length}
             startIndex={startIndex}
             endIndex={endIndex}
-            pageSize={pageSize}
+            pageSize={ITEMS_PER_PAGE}
             onPageChange={setCurrentPage}
             itemLabel="records"
           />

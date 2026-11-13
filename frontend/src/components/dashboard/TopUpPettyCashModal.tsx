@@ -307,9 +307,14 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
               errorMessage={error}
               items={[
                 { label: 'Requesting Company', value: requestingCompany, highlight: true },
-                { label: 'Amount', value: formatPHP(amountNum), isCurrency: true },
-                { label: 'Funding Bank', value: selectedBank ? `${selectedBank.bankName} (${selectedBank.accountNumber})` : 'Default account' },
-                { label: 'Date', value: expenseDate },
+                { label: 'Amount', value: parseFloat(amountInput) || 0, isCurrency: true },
+                {
+                  label: 'Funding Bank',
+                  value: bankAccountsList.find((a) => String(a.id) === String(fundingBankId))
+                    ? `${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.bankName} (${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.accountNumber})`
+                    : 'Default account',
+                },
+                { label: 'Date', value: requestDate },
                 { label: 'Particulars / Reason', value: particulars.trim() || 'None' },
               ]}
             />

@@ -247,9 +247,9 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
               errorMessage={error}
               items={[
                 { label: 'Provider / Biller', value: billerName.trim(), highlight: true },
-                { label: 'Company', value: targetCompany },
+                { label: 'Company', value: company || 'N/A' },
                 { label: 'Billing Cycle', value: billingCycle },
-                { label: 'Next Due Date', value: computedDueDate ? formatDisplayDate(computedDueDate) : `Day ${dueDayOfMonth} of month` },
+                { label: 'Next Due Date', value: getComputedDueDate() || `Day ${dueDayOfMonth} of month` },
                 { label: 'Reminder', value: `${reminderDaysBefore} day(s) before` },
                 { label: 'Notes', value: notes.trim() || 'None' },
               ]}
@@ -301,7 +301,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <Dropdown
                   value={company}
                   onChange={(val) => setCompany(String(val))}
-                  options={companyOptions.map((c) => ({ value: c, label: c }))}
+                  options={dbCompanies.map((c) => ({ value: c, label: c }))}
                   aria-label="Company"
                 />
               ) : (

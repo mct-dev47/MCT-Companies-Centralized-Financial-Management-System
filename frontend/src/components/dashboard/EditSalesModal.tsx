@@ -150,6 +150,11 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
       return
     }
 
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
+    }
+
     setFieldErrors({})
     setIsSubmitting(true)
 
@@ -206,7 +211,24 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Sale Entry Updates"
+              subtitle="Please verify your updated values before saving."
+              errorMessage={error}
+              items={[
+                { label: 'Company', value: sale.company || 'N/A' },
+                { label: 'Reference No.', value: sale.refNo || 'N/A' },
+                { label: 'Date', value: date },
+                { label: 'Particulars', value: particulars, highlight: true },
+                { label: 'Amount', value: parseFloat(amount) || 0, isCurrency: true },
+                { label: 'Category', value: category || 'None' },
+                { label: 'Cheque No.', value: chequeNo.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {/* Date */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-focus block">

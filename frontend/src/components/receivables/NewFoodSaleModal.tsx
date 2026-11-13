@@ -67,6 +67,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
   const [saleDate, setSaleDate] = React.useState<string>(() => formatToYYYYMMDD(new Date()))
   const [notes, setNotes] = React.useState<string>('')
   const [error, setError] = React.useState<string>('')
+  const [isReviewing, setIsReviewing] = React.useState<boolean>(false)
 
   const filteredPeople = React.useMemo(() => {
     return existingPeople.filter((p) => p.type === customerType)
@@ -85,6 +86,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
       setSaleDate(formatToYYYYMMDD(new Date()))
       setNotes('')
       setError('')
+      setIsReviewing(false)
     }
   }, [open])
 
@@ -97,14 +99,16 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
     return Math.max(0, totalAmount - amountPaid)
   }, [paymentOption, totalAmount, amountPaid])
 
+  const currentCustomerName =
+    selectedPersonName === '__NEW__' || !selectedPersonName
+      ? customName.trim()
+      : selectedPersonName.trim()
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
 
-    const finalName =
-      selectedPersonName === '__NEW__' || !selectedPersonName
-        ? customName.trim()
-        : selectedPersonName.trim()
+    const finalName = currentCustomerName
 
     if (!finalName) {
       setError('Please select or enter the customer or staff member name.')
@@ -130,6 +134,11 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
         setError('Partial payment amount cannot equal or exceed total amount. Select "Paid in full" instead.')
         return
       }
+    }
+
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
     }
 
     const newSale = onAddNewSale({
@@ -176,7 +185,33 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
             </div>
           )}
 
-          <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-0 text-left">
+          {isReviewing ? (
+            <div className="overflow-y-auto flex-1 min-h-0">
+              <ModalReviewStep
+                title="Review Food Sale Details"
+                subtitle="Please verify customer, order items, and payment remittance."
+                errorMessage={error}
+                items={[
+                  { label: 'Customer', value: currentCustomerName || 'Unspecified', highlight: true },
+                  { label: 'Type', value: customerType },
+                  { label: 'Items / Meal', value: itemsSummary.trim() },
+                  { label: 'Total Amount', value: totalAmount, isCurrency: true },
+                  { label: 'Payment Terms', value: paymentOption },
+                  ...(paymentOption === 'Partial'
+                    ? [
+                        { label: 'Amount Paid', value: amountPaid, isCurrency: true },
+                        { label: 'Remaining Balance', value: computedBalance, isCurrency: true },
+                      ]
+                    : []),
+                  ...(paymentOption !== 'Pay Later' ? [{ label: 'Payment Method', value: paymentMethod }] : []),
+                  { label: 'Sale Date', value: saleDate },
+                  { label: 'Notes', value: notes.trim() || 'None' },
+                ]}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-0 text-left">
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-focus">Customer Type</Label>
               <div className="flex gap-2">

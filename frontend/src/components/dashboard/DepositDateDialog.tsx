@@ -89,7 +89,7 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
                 Mark as Deposited
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                {sale ? `Record deposit of ₱${Number(sale.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${sale.particulars || sale.category || 'sale'} (${formatDisplayDate(saleDay)}).` : ''}
+                {sale ? `Record deposit of ₱${Number(sale.deposit ?? sale.netAmount ?? (sale as any).amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${sale.particulars || sale.category || 'sale'} (${formatDisplayDate(saleDay)}).` : ''}
               </DialogDescription>
             </div>
           </div>

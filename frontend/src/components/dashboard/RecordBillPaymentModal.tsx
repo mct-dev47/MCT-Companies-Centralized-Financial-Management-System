@@ -413,11 +413,19 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
               errorMessage={error}
               items={[
                 { label: 'Provider / Bill', value: bill?.billerName, highlight: true },
-                { label: 'Amount Paid', value: `₱${amountNum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, isCurrency: true },
+                { label: 'Amount Paid', value: parseFloat(amountInput) || 0, isCurrency: true },
                 { label: 'Payment Method', value: paymentMethod },
-                { label: 'Funding Bank', value: fundingBank ? `${fundingBank.bankName} (${fundingBank.accountNumber})` : 'None' },
+                {
+                  label: 'Funding Source',
+                  value:
+                    fundingSource === 'petty_cash'
+                      ? 'Petty Cash'
+                      : fundingSource === 'bank' && bankAccounts.find((a) => String(a.id) === String(bankAccountId))
+                        ? `${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.bankName} (${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.accountNumber})`
+                        : 'Unassigned',
+                },
                 { label: 'Payment Date', value: paymentDate },
-                { label: 'Billing Period', value: computedBillingPeriod },
+                { label: 'Billing Period', value: selectedPeriod?.label || 'Current Period' },
                 { label: 'Remarks / Notes', value: notes.trim() || 'None' },
               ]}
             />

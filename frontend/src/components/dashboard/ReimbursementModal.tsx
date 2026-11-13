@@ -593,7 +593,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const trimmed = name.trim()
     if (!trimmed || !requestingCompany) return
     try {
-      const saved = await particularsService.saveParticular(requestingCompany, trimmed)
+      const saved = await particularsService.addParticular(requestingCompany, trimmed)
       if (saved) {
         setSavedParticulars((prev) => [saved, ...prev.filter((p) => p.name.toLowerCase() !== trimmed.toLowerCase())])
       }

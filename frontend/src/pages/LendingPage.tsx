@@ -1935,7 +1935,7 @@ export const LendingPage: React.FC = () => {
             totalRecords={filteredFacilities.length}
             startIndex={startIndex}
             endIndex={endIndex}
-            pageSize={pageSize}
+            pageSize={ITEMS_PER_PAGE}
             onPageChange={setCurrentPage}
             itemLabel="borrowers"
           />

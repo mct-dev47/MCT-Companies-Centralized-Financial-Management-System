@@ -25,7 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
-import { TablePagination, TableSkeleton, TableEmptyState, ConfirmModal, CardSkeleton } from '@/components/common'
+import { TablePagination, TableSkeleton, TableEmptyState, TableErrorState, StatusPill, ConfirmModal, CardSkeleton } from '@/components/common'
 import { Skeleton } from '@/components/ui/skeleton'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {

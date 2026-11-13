@@ -25,6 +25,7 @@ import {
 import {
   ErrorBanner,
   TableEmptyState,
+  TableErrorState,
   TablePagination,
   TableSkeleton,
 } from '@/components/common'

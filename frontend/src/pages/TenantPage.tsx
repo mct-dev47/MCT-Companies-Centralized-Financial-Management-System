@@ -2657,7 +2657,7 @@ export const TenantPage: React.FC = () => {
             totalRecords={filteredTenants.length}
             startIndex={startIndex}
             endIndex={endIndex}
-            pageSize={pageSize}
+            pageSize={ITEMS_PER_PAGE}
             onPageChange={setCurrentPage}
             itemLabel="tenants"
           />

@@ -2968,7 +2968,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
               <Button
                 type="button"
-                onClick={handleSave}
+                onClick={() => void handleSave()}
                 disabled={isSubmitting}
                 className="h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
               >
@@ -3991,7 +3991,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
               <Button
                 type="button"
-                onClick={handleSave}
+                onClick={() => void handleSave()}
                 disabled={isSubmitting || exceedsPettyCash}
                 className={cn(
                   'h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all',

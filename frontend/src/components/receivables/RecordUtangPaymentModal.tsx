@@ -75,6 +75,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
   const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
   const [notes, setNotes] = React.useState<string>('')
   const [error, setError] = React.useState<string>('')
+  const [isReviewing, setIsReviewing] = React.useState(false)
 
   const unlockedPersonSales = React.useMemo(
     () => (person ? person.sales.filter((s) => s.balance > 0 && !s.is_locked) : []),
@@ -148,6 +149,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
     setSelectedSaleId(sale?.id || '')
     setNotes('')
     setError('')
+    setIsReviewing(false)
 
     const filterForCompany = (list: BankAccount[]) => {
       if (!targetCompany || targetCompany === 'All Companies') return list
@@ -221,6 +223,11 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
       setError(
         `Payment amount (${formatPHP(numericAmount)}) cannot exceed unlocked balance (${formatPHP(maxBalance)}).`
       )
+      return
+    }
+
+    if (!isReviewing) {
+      setIsReviewing(true)
       return
     }
 
@@ -304,11 +311,11 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
               subtitle="Please verify the repayment remittance before recording."
               errorMessage={error}
               items={[
-                { label: 'Debtor / Customer', value: debtor?.name, highlight: true },
-                { label: 'Amount to Pay', value: formatPHP(numericAmount), isCurrency: true },
+                { label: 'Debtor / Customer', value: customerName, highlight: true },
+                { label: 'Amount to Pay', value: numericAmount, isCurrency: true },
                 { label: 'Payment Method', value: paymentMethod },
                 { label: 'Payment Date', value: paymentDate },
-                { label: 'Remaining Balance After', value: formatPHP(Math.max(0, currentBalance - numericAmount)), isCurrency: true },
+                { label: 'Remaining Balance After', value: remainingAfterPayment, isCurrency: true },
                 { label: 'Notes', value: notes.trim() || 'None' },
               ]}
             />

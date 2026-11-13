@@ -233,7 +233,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
   const targetName = isLoan
     ? (loan?.borrower || loan?.lender || loan?.particulars || loan?.refNo)
-    : (expense?.particulars || expense?.vendor || expense?.refNo)
+    : (expense?.particulars || (expense as any)?.vendor || expense?.refNo)
 
   const targetDetail = isLoan
     ? (loan?.refNo ? `Ref: ${loan.refNo}` : 'Loan Facility')
