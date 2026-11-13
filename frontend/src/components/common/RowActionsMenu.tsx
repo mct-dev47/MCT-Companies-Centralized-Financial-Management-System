@@ -101,7 +101,7 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
         variant="ghost"
         size="sm"
         onClick={handleOpen}
-        className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+        className="h-10 w-10 p-0 rounded-[10px] text-muted-fg hover:text-focus hover:bg-surface cursor-pointer flex items-center justify-center transition-colors focus-visible:ring-2 focus-visible:ring-focus/40"
         title="Actions"
         aria-label="Open action menu"
         aria-haspopup="true"
@@ -115,7 +115,7 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-52 bg-white rounded-[16px] border border-stroke/30 shadow-soft p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -132,7 +132,7 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
                   handleClose()
                   onViewDetails()
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[40px]"
               >
                 <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
                 <span>{viewLabel}</span>
@@ -147,7 +147,7 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
                   handleClose()
                   onEdit()
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[40px]"
               >
                 <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
                 <span>{editLabel}</span>
@@ -164,9 +164,9 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
                       handleClose()
                       onMarkAudited()
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-emerald-800 hover:bg-emerald-50 transition-colors text-left cursor-pointer min-h-[40px]"
                   >
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
                     <span>{isVerified ? 'Re-Audit' : 'Mark as Audited'}</span>
                   </button>
                 )}
@@ -178,9 +178,9 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
                       handleClose()
                       onFlagDiscrepancy()
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-rose-800 hover:bg-rose-50 transition-colors text-left cursor-pointer min-h-[40px]"
                   >
-                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-700 shrink-0" />
                     <span>Flag Discrepancy</span>
                   </button>
                 )}
@@ -198,7 +198,7 @@ export const RowActionsMenu: React.FC<RowActionsMenuProps> = ({
                   handleClose()
                   onDelete()
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer border-t border-stroke/20 mt-1 pt-2 min-h-[40px]"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                 <span>{deleteLabel}</span>

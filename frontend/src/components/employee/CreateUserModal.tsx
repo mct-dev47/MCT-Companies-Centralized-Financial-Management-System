@@ -19,6 +19,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -66,7 +69,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
 }) => {
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [pendingValues, setPendingValues] = React.useState<CreateUserFormValues | null>(null)
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
 
   // Profile image upload state
   const [profilePreview, setProfilePreview] = React.useState<string | null>(null)
@@ -223,7 +226,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     setValidationWarning(null)
     setSubmitError(null)
     setPendingValues(null)
-    setIsConfirmOpen(false)
+    setIsReviewing(false)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -291,7 +294,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
     setSubmitError(null)
     setValidationWarning(null)
     setPendingValues(values)
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   const handleConfirmCreate = async () => {
@@ -321,12 +324,12 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       }
       onSuccess?.(created)
       resetFormState()
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
     } catch (error) {
       const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to create user. Please try again.')
       setSubmitError(errorMsg)
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       notifyError(error, 'Unable to create user. Please try again.')
     } finally {
       setIsSubmitting(false)
@@ -406,7 +409,21 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           )}
 
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-4 pt-2" autoComplete="off">
+            <form onSubmit={isReviewing ? (e) => { e.preventDefault(); handleConfirmCreate(); } : form.handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-4 pt-2" autoComplete="off">
+              {isReviewing ? (
+                <ModalReviewStep
+                  title="Review New User Account"
+                  subtitle="Please verify the user credentials and permissions before creating."
+                  errorMessage={submitError}
+                  items={[
+                    { label: 'Full Name', value: pendingValues?.fullName, highlight: true },
+                    { label: 'Email', value: pendingValues?.email },
+                    { label: 'Role', value: pendingValues?.role },
+                    { label: 'Assigned Companies', value: selectedCompanies.join(', ') || 'All / None' },
+                  ]}
+                />
+              ) : (
+                <>
               {/* 1. Display Profile Image Upload */}
               <div className="flex flex-col items-center justify-center py-1">
                 <div
@@ -586,27 +603,17 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     </Label>
                     <FormControl>
                       <div className="relative">
-                        <select
+                        <Dropdown
                           id="create-user-role"
                           value={field.value}
-                          onChange={(e) => {
-                            handleRoleChange(e.target.value)
+                          onChange={(val) => {
+                            handleRoleChange(String(val))
                             setValidationWarning(null)
                           }}
-                          className={cn(
-                            'flex h-11 w-full rounded-xl border-[0.5px] bg-background px-3.5 py-2.5 text-sm text-focus shadow-none transition-colors appearance-none focus-visible:outline-none focus-visible:ring-1 cursor-pointer',
-                            fieldState.error
-                              ? 'border-red-500 ring-1 ring-red-500 focus-visible:border-red-500 focus-visible:ring-red-500 bg-red-50/10'
-                              : 'border-stroke/60 focus-visible:border-focus focus-visible:ring-focus'
-                          )}
-                          aria-invalid={!!fieldState.error}
-                        >
-                          {ROLES.map((role) => (
-                            <option key={role} value={role}>
-                              {role}
-                            </option>
-                          ))}
-                        </select>
+                          options={ROLES.map((role) => ({ value: role, label: role }))}
+                          aria-label="User Role"
+                          error={fieldState.error?.message}
+                        />
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-fg">
                           <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20">
                             <path
@@ -734,82 +741,43 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     })
                   )}
                 </div>
-                {companyError && (
-                  <p className="text-xs text-red-600 font-medium pt-1 animate-in fade-in-50">
-                    {companyError}
-                  </p>
-                )}
+                <FormFieldError error={companyError} />
               </div>
 
+                </>
+              )}
 
-
-              {/* Modal Actions */}
-              <div className="flex items-center justify-end gap-3 pt-4">
+              {/* Action buttons - Standard Phase 2 Layout */}
+              <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
+                  variant="secondary"
+                  onClick={() => {
+                    if (isReviewing) {
+                      setIsReviewing(false)
+                    } else {
+                      onOpenChange(false)
+                    }
+                  }}
                   disabled={isSubmitting}
-                  className="h-11 px-7 rounded-xl border border-stroke/50 text-focus hover:bg-surface font-medium text-sm transition-colors cursor-pointer"
+                  className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
                 >
-                  Cancel
+                  {isReviewing ? 'Back to Edit' : 'Cancel'}
                 </Button>
                 <Button
                   type="submit"
+                  variant="primary"
                   disabled={isSubmitting}
-                  className="h-11 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                  isLoading={isSubmitting}
+                  className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      <span>Creating…</span>
-                    </>
-                  ) : (
-                    <>
-                      <UserPlus className="h-4 w-4" />
-                      <span>Create User</span>
-                    </>
-                  )}
+                  <span>{isReviewing ? 'Create User' : 'Review User'}</span>
                 </Button>
               </div>
             </form>
           </Form>
         </DialogContent>
       </Dialog>
-
-      {/* Confirmation Modal */}
-      <ConfirmationDialog
-        open={isConfirmOpen}
-        onOpenChange={setIsConfirmOpen}
-        title="Confirm User Creation"
-        description={
-          <span className="block space-y-2.5">
-            <span>
-              Are you sure you want to add{' '}
-              <strong className="text-focus">{pendingValues?.fullName}</strong>{' '}
-              as <strong className="text-focus">{pendingValues?.role}</strong>?
-            </span>
-            {selectedCompanies.length > 0 && (
-              <span className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-                {selectedCompanies.map((cName) => (
-                  <span
-                    key={cName}
-                    className="inline-flex items-center gap-1 text-xs px-2.5 py-0.5 rounded-full font-medium bg-slate-100 text-focus border border-slate-200/80 shadow-2xs"
-                  >
-                    <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
-                    <span>{cName}</span>
-                  </span>
-                ))}
-              </span>
-            )}
-          </span>
-        }
-        confirmLabel="Yes, Create User"
-        actionType="add"
-        variant="primary"
-        isLoading={isSubmitting}
-        onConfirm={handleConfirmCreate}
-      />
 
       {/* Image Cropper Modal */}
       <ImageCropperModal

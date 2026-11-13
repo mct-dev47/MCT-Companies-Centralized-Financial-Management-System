@@ -6,6 +6,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -128,7 +131,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
   const lenderRef = React.useRef<HTMLDivElement>(null)
 
   // Confirmation dialogue state
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
@@ -173,7 +176,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       )
       setLenderCompany(eligible[0] || '')
       setIsLenderOpen(false)
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       setIsSubmitting(false)
       setError('')
       setFieldErrors({})
@@ -214,7 +217,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
     }
 
     setFieldErrors({})
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   // Confirmed submission
@@ -240,12 +243,12 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       }
       const created = await loanService.addLoan(payload)
 
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record loan entry.'))
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }
@@ -275,6 +278,22 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
           </DialogHeader>
 
           <form onSubmit={handlePreSubmit} className="space-y-4 pt-2">
+            {isReviewing ? (
+              <ModalReviewStep
+                title="Review Loan Issuance Details"
+                subtitle="Please verify inter-company loan terms before issuing."
+                errorMessage={error}
+                warningNotice="Note: This loan request will be placed in Pending Approval until confirmed by management."
+                items={[
+                  { label: 'Borrower', value: borrowerCompany, highlight: true },
+                  { label: 'Principal Amount', value: formatPHP(parseFloat(amount.replace(/,/g, '')) || 0), isCurrency: true },
+                  ...(isFinanceUser ? [{ label: 'Interest Rate', value: `${parseFloat(interestRate) || 0}%` }] : []),
+                  { label: 'Start Date', value: date },
+                  { label: 'Particulars / Purpose', value: particulars || 'None' },
+                ]}
+              />
+            ) : (
+              <>
             {error && (
               <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -311,7 +330,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     required
                   />
                 </div>
-                {fieldErrors.date && <p className="text-2xs text-red-500">{fieldErrors.date}</p>}
+                <FormFieldError error={fieldErrors.date} />
               </div>
 
               {/* 2. Borrower Company */}
@@ -321,20 +340,13 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                 </Label>
                 {isFinanceUser ? (
                   <div className="relative">
-                    <select
+                    <Dropdown
                       value={borrowerCompany}
-                      onChange={(e) => handleBorrowerChange(e.target.value)}
-                      className={cn(
-                        'w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer',
-                        fieldErrors.borrower && 'border-red-500'
-                      )}
-                    >
-                      {allCompanyNames.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => handleBorrowerChange(String(val))}
+                      options={allCompanyNames.map((name) => ({ value: name, label: name }))}
+                      error={fieldErrors.borrower}
+                      aria-label="Borrower Company"
+                    />
                   </div>
                 ) : (
                   <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-focus/90 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xs select-none">
@@ -347,9 +359,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     </span>
                   </div>
                 )}
-                {fieldErrors.borrower && (
-                  <p className="text-2xs text-red-500">{fieldErrors.borrower}</p>
-                )}
+                <FormFieldError error={fieldErrors.borrower} />
               </div>
 
               {/* 4. Lender Company */}
@@ -437,7 +447,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     required
                   />
                 </div>
-                {fieldErrors.amount && <p className="text-2xs text-red-500">{fieldErrors.amount}</p>}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 6. Interest Rate (Admin/Finance only) */}
@@ -479,74 +489,43 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                   className={cn('h-10 text-xs sm:text-sm rounded-xl', fieldErrors.particulars && 'border-red-500')}
                   required
                 />
-                {fieldErrors.particulars && <p className="text-2xs text-red-500">{fieldErrors.particulars}</p>}
+                <FormFieldError error={fieldErrors.particulars} />
               </div>
             </div>
 
-            <div className="pt-3 flex items-center justify-end gap-2.5 border-t border-stroke/20">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                className="h-10 px-4 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs sm:text-sm font-semibold shadow-xs cursor-pointer"
-              >
-                {isCompanyUser ? 'Submit Loan Request' : 'Record Loan'}
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 2. Confirmation Dialog */}
-      <ConfirmModal
-        open={isConfirmOpen}
-        onOpenChange={setIsConfirmOpen}
-        title="Confirm Loan Submission"
-        description="Please verify the inter-company loan details before submitting."
-        confirmLabel="Confirm & Submit"
-        cancelLabel="Back"
-        variant="primary"
-        actionType="submit"
-        onConfirm={handleConfirmedSubmit}
-        isLoading={isSubmitting}
-        loadingLabel="Recording…"
-      >
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-2 my-2">
-          <div className="flex justify-between">
-            <span className="text-muted-fg font-medium">Borrower:</span>
-            <span className="font-bold text-focus">{borrowerCompany}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-fg font-medium">Principal Amount:</span>
-            <span className="font-bold text-emerald-600 tabular-nums">
-              {formatPHP(parseFloat(amount.replace(/,/g, '')) || 0)}
-            </span>
-          </div>
-          {isFinanceUser && (
-            <div className="flex justify-between">
-              <span className="text-muted-fg font-medium">Interest Rate:</span>
-              <span className="font-bold text-primary">{parseFloat(interestRate) || 0}%</span>
-            </div>
+            </>
           )}
-          <div className="flex justify-between">
-            <span className="text-muted-fg font-medium">Date:</span>
-            <span className="font-medium text-focus">{date}</span>
+
+          {/* Action buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isSubmitting}
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <span>{isReviewing ? 'Issue Loan' : 'Review Loan'}</span>
+            </Button>
           </div>
-          <div className="pt-2 border-t border-slate-200">
-            <span className="text-muted-fg block">Purpose:</span>
-            <span className="font-medium text-focus italic">{particulars}</span>
-          </div>
-        </div>
-        <p className="text-2xs text-muted-fg mt-2">
-          * Note: This loan request will be placed in <strong>Pending Approval</strong> until confirmed by management.
-        </p>
-      </ConfirmModal>
+        </form>
+      </DialogContent>
+    </Dialog>
     </>
   )
 }

@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import {
   User,
@@ -867,16 +868,15 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
 
                   <div>
                     <label className="font-semibold text-focus block mb-1">Customer Type</label>
-                    <select
+                    <Dropdown
                       value={editCustomerType}
-                      onChange={(e) =>
-                        setEditCustomerType(e.target.value === 'Staff' ? 'Staff' : 'External')
-                      }
-                      className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                    >
-                      <option value="External">External</option>
-                      <option value="Staff">Staff</option>
-                    </select>
+                      onChange={(val) => setEditCustomerType(val === 'Staff' ? 'Staff' : 'External')}
+                      options={[
+                        { value: 'External', label: 'External' },
+                        { value: 'Staff', label: 'Staff' },
+                      ]}
+                      aria-label="Customer Type"
+                    />
                   </div>
                 </div>
 
@@ -893,15 +893,16 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
 
                   <div>
                     <label className="font-semibold text-focus block mb-1">Payment Status</label>
-                    <select
+                    <Dropdown
                       value={editPaymentStatus}
-                      onChange={(e) => setEditPaymentStatus(e.target.value as PaymentStatus)}
-                      className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white font-semibold focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                    >
-                      <option value="Unpaid">Unpaid</option>
-                      <option value="Partial">Partial</option>
-                      <option value="Paid">Paid</option>
-                    </select>
+                      onChange={(val) => setEditPaymentStatus(val as PaymentStatus)}
+                      options={[
+                        { value: 'Unpaid', label: 'Unpaid' },
+                        { value: 'Partial', label: 'Partial' },
+                        { value: 'Paid', label: 'Paid' },
+                      ]}
+                      aria-label="Payment Status"
+                    />
                   </div>
                 </div>
 
@@ -943,33 +944,32 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
                         <label className="font-semibold text-emerald-900 block mb-1">
                           Payment Method
                         </label>
-                        <select
+                        <Dropdown
                           value={editPaymentMethod}
-                          onChange={(e) => setEditPaymentMethod(e.target.value)}
-                          className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
-                        >
-                          <option value="Cash">Cash</option>
-                          <option value="GCash">GCash</option>
-                          <option value="Bank Transfer">Bank Transfer</option>
-                        </select>
+                          onChange={(val) => setEditPaymentMethod(String(val))}
+                          options={[
+                            { value: 'Cash', label: 'Cash' },
+                            { value: 'GCash', label: 'GCash' },
+                            { value: 'Bank Transfer', label: 'Bank Transfer' },
+                          ]}
+                          aria-label="Payment Method"
+                        />
                       </div>
 
                       <div>
                         <label className="font-semibold text-emerald-900 block mb-1">
                           Deposit Bank (Optional)
                         </label>
-                        <select
+                        <Dropdown
                           value={editBankAccountId}
-                          onChange={(e) => setEditBankAccountId(e.target.value)}
-                          className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
-                        >
-                          <option value="">No bank deposit</option>
-                          {editBankAccounts.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.bankName}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(val) => setEditBankAccountId(String(val))}
+                          placeholder="No bank deposit"
+                          options={[
+                            { value: '', label: 'No bank deposit' },
+                            ...editBankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
+                          ]}
+                          aria-label="Bank Deposit Account"
+                        />
                       </div>
                     </div>
                   </div>

@@ -319,10 +319,23 @@ export function formatUserFriendlyErrorMessage(
  */
 export function notifyError(
   err: unknown,
-  fallbackMessage: string = 'An unexpected error occurred. Please try again.'
+  fallbackMessage: string = 'An unexpected error occurred. Please try again.',
+  options?: {
+    title?: string
+    onRetry?: () => void
+    retryLabel?: string
+    duration?: number
+  }
 ): string {
   const message = formatUserFriendlyErrorMessage(err, fallbackMessage)
-  pushToast({ variant: 'error', message })
+  pushToast({
+    variant: 'error',
+    message,
+    title: options?.title,
+    onRetry: options?.onRetry,
+    retryLabel: options?.retryLabel,
+    duration: options?.duration,
+  })
   return message
 }
 

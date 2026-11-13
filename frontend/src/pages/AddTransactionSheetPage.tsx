@@ -20,6 +20,8 @@ import {
 import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
 import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Card } from '@/components/ui/card'
 import { BackButton, ErrorBanner } from '@/components/common'
 import {
@@ -1253,11 +1255,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
-  const handleDeleteParticularFromList = async (id: number) => {
+  const handleDeleteParticularFromList = (id: number, name?: string) => {
+    const target = savedParticulars.find((p) => p.id === id)
+    setParticularToDelete({ id, name: name || target?.name || 'this item' })
+  }
+
+  const confirmDeleteParticular = async () => {
+    if (!particularToDelete) return
+    const { id } = particularToDelete
     const comp = effectiveParticularsCompany
     const txType = isSales ? 'Sales' : 'Expense'
     setSavedParticulars((prev) => prev.filter((p) => p.id !== id))
     await particularsService.deleteParticular(id, comp, txType)
+    setParticularToDelete(null)
   }
 
   // Company Custom Payment Methods (per company)
@@ -2190,6 +2200,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  // Confirmation modals state (Phase 2 Standard F)
+  const [isBatchSaveConfirmOpen, setIsBatchSaveConfirmOpen] = React.useState(false)
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = React.useState(false)
+  const [particularToDelete, setParticularToDelete] = React.useState<{ id: number; name: string } | null>(null)
+
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null)
   const [successBanner, setSuccessBanner] = React.useState<{
     count: number
@@ -2197,8 +2212,28 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     type: string
   } | null>(null)
 
-  // Save handler
-  const handleSave = async () => {
+  // Save handler with confirmation
+  const handleSave = async (forceConfirmed = false) => {
+    if (!forceConfirmed && !isBatchSaveConfirmOpen) {
+      // Validate first before opening confirm
+      const nonBlank = rows.filter(
+        (r) =>
+          r.particulars.trim().length > 0 ||
+          (r.category || '').trim().length > 0 ||
+          (r.unitPrice !== '' && Number(r.unitPrice) > 0) ||
+          r.chequeNo.trim().length > 0
+      )
+      if (nonBlank.length === 0) return
+      // If sales and unpaid total > 0, proceed to receivables step directly (it has its own confirm)
+      const hasUnpaid = isSales && rows.some((r) => r.status === 'Unpaid' && Number(r.unitPrice) > 0)
+      if (currentStep === 'encode' && hasUnpaid) {
+        // Proceeds to step 2 (review debtors)
+      } else {
+        setIsBatchSaveConfirmOpen(true)
+        return
+      }
+    }
+    setIsBatchSaveConfirmOpen(false)
     const remarkPromptConfirmed = dayRemarkConfirmedRef.current
     dayRemarkConfirmedRef.current = false
     const skipDayRemarks = dayRemarkSkipRef.current
@@ -2707,7 +2742,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   return (
     <div
       className={cn(
-        'space-y-6 pb-16 animate-in fade-in duration-300',
+        'w-full space-y-6 pb-16 animate-in fade-in duration-300',
         // Sales: trim outer gutter to ~20px (offsets the shared AppShell padding locally)
         isSales
           ? 'sm:-mx-1 lg:-mx-3'
@@ -2926,14 +2961,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   setCurrentStep('encode')
                 }}
                 disabled={isSubmitting}
-                className="h-11 px-5 rounded-xl border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
+                className="h-11 px-5 rounded-full border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
               >
                 Back to Spreadsheet
               </Button>
 
               <Button
                 type="button"
-                onClick={handleSave}
+                onClick={() => void handleSave()}
                 disabled={isSubmitting}
                 className="h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white"
               >
@@ -3045,17 +3080,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         : selectedCompany}
                   </div>
                 ) : (
-                  <select
+                  <Dropdown
                     value={selectedCompany}
-                    onChange={(e) => setSelectedCompany(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                  >
-                    {dbCompanies.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setSelectedCompany(String(val))}
+                    options={dbCompanies.map((c) => ({ value: c, label: c }))}
+                    aria-label="Company"
+                  />
                 )}
               </div>
 
@@ -3067,32 +3097,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     {isSales ? 'Deposit Bank' : 'Deposit Bank / Withdraw Bank'}
                   </span>
                 </label>
-                <select
+                <Dropdown
                   value={selectedBankAccountId}
-                  onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                  onChange={(val) => setSelectedBankAccountId(String(val))}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer disabled:opacity-70"
-                >
-                  {availableBankAccounts.length === 0 ? (
-                    <option value="">
-                      {isLoadingBanks
+                  placeholder={
+                    availableBankAccounts.length === 0
+                      ? isLoadingBanks
                         ? 'Loading bank accounts...'
-                        : 'No Bank Registered'}
-                    </option>
-                  ) : (
-                    <>
-                      <option value="" disabled>
-                        Select a bank account
-                      </option>
-                      {availableBankAccounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} - {acc.accountName || acc.accountNumber}{' '}
-                          ({formatPHP(acc.currentBalance)})
-                        </option>
-                      ))}
-                    </>
-                  )}
-                </select>
+                        : 'No Bank Registered'
+                      : 'Select a bank account'
+                  }
+                  options={availableBankAccounts.map((acc) => ({
+                    value: acc.id,
+                    label: `${acc.bankName} - ${acc.accountName || acc.accountNumber} (${formatPHP(acc.currentBalance)})`,
+                  }))}
+                  aria-label="Deposit Bank"
+                />
                 {!isLoadingBanks && availableBankAccounts.length === 0 && (
                   <p className="text-[11px] font-medium text-amber-700 flex items-center gap-1 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
@@ -3135,7 +3156,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={handleReset}
+                    onClick={() => setIsResetConfirmOpen(true)}
                     className="h-8 px-3 rounded-xl border-slate-200 text-xs font-semibold text-muted-fg hover:text-focus cursor-pointer"
                   >
                     <RotateCcw className="w-3.5 h-3.5 mr-1" />
@@ -3970,7 +3991,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
               <Button
                 type="button"
-                onClick={handleSave}
+                onClick={() => void handleSave()}
                 disabled={isSubmitting || exceedsPettyCash}
                 className={cn(
                   'h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all',
@@ -4111,7 +4132,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               type="button"
               variant="outline"
               onClick={() => setIsDayRemarkOpen(false)}
-              className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              className="h-9 px-4 text-xs font-medium rounded-full border-stroke/50 cursor-pointer"
             >
               Back
             </Button>
@@ -4147,7 +4168,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       {/* Modal: Add Custom Payment Method */}
       {isAddPaymentMethodModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in-50 duration-150">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-focus">
                 Add Custom Payment Method

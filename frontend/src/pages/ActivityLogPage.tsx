@@ -11,6 +11,7 @@ import {
   Copy,
   Check,
   Eye,
+  HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -25,10 +26,12 @@ import {
 import {
   ErrorBanner,
   TableEmptyState,
+  TableErrorState,
   TablePagination,
   TableSkeleton,
 } from '@/components/common'
-import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
+import { type DateRange } from '@/components/employee/DateRangeFilter'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { ActivityLogDetailDrawer } from '@/components/admin/ActivityLogDetailDrawer'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { formatRealName } from '@/utils/formatRealName'
@@ -345,15 +348,23 @@ export const ActivityLogPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12">
       {/* 1. Header & Actions Block */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-            Activity Log
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Activity Log
+            </h1>
+            <span
+              className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+              title="Audit trail of authentication events, financial data mutations, and user activities"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </span>
+          </div>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {logs.length} system activity records tracked across all companies · 6-month retention policy
+            System events, audit records, and user activity history
           </p>
         </div>
 
@@ -441,12 +452,13 @@ export const ActivityLogPage: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
           {/* Date Range Filter */}
-          <DateRangeFilter
-            value={dateRange}
+          <TransactionDateRangeControl
+            value={dateRange as any}
             onChange={(newRange) => {
               setDateRange(newRange)
               setCurrentPage(1)
             }}
+            className="shrink-0"
           />
 
           {/* Clear Filters Button */}
@@ -467,17 +479,17 @@ export const ActivityLogPage: React.FC = () => {
 
       {/* Main Table Card */}
       <div className="bg-white rounded-[20px] border border-stroke/30 shadow-xs p-4 sm:p-6 lg:p-8">
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full min-w-[980px] text-left">
             <TableHeader>
-              <TableRow>
-                <TableHead className="px-5 w-[18%]">Company</TableHead>
-                <TableHead className="px-5 w-[18%]">Action</TableHead>
-                <TableHead className="px-4 w-[12%]">Module</TableHead>
-                <TableHead className="px-4 w-[13%]">Record</TableHead>
-                <TableHead className="px-4 w-[15%]">Client IP</TableHead>
-                <TableHead className="px-4 w-[14%]">Time</TableHead>
-                <TableHead className="px-4 w-[10%] text-right">Details</TableHead>
+              <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                <TableHead className="px-5 w-[18%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Company</TableHead>
+                <TableHead className="px-5 w-[18%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Action</TableHead>
+                <TableHead className="px-4 w-[12%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Module</TableHead>
+                <TableHead className="px-4 w-[13%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Record</TableHead>
+                <TableHead className="px-4 w-[15%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Client IP</TableHead>
+                <TableHead className="px-4 w-[14%] text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Time</TableHead>
+                <TableHead className="px-4 w-[10%] text-right text-[11px] font-semibold uppercase tracking-wider text-muted-fg">Details</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -494,34 +506,25 @@ export const ActivityLogPage: React.FC = () => {
                     { width: 'w-16' },
                   ]}
                 />
+              ) : loadError ? (
+                <TableErrorState
+                  colSpan={7}
+                  title="Unable to load activity logs"
+                  message={loadError}
+                  onRetry={fetchLogs}
+                />
               ) : displayedLogs.length === 0 ? (
                 <TableEmptyState
                   colSpan={7}
                   icon={Clock}
-                  title={
-                    loadError
-                      ? 'Unable to load activity logs'
-                      : 'No activity logs found'
-                  }
+                  title="No activity logs found"
                   description={
-                    loadError
-                      ? loadError
-                      : hasActiveFilters
-                        ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
-                        : 'No recent system activity records have been recorded yet.'
+                    hasActiveFilters
+                      ? 'No activity logs matched your current search and filter criteria. Try adjusting your query or date range.'
+                      : 'No recent system activity records have been recorded yet.'
                   }
                   action={
-                    loadError ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={fetchLogs}
-                        className="text-xs font-semibold rounded-lg"
-                      >
-                        Try again
-                      </Button>
-                    ) : hasActiveFilters ? (
+                    hasActiveFilters ? (
                       <Button
                         type="button"
                         variant="outline"

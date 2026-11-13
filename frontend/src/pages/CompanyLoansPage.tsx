@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Building2, Download, Search, Tag, X } from 'lucide-react'
+import { Building2, Download, HelpCircle, Search, Tag, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -16,7 +16,9 @@ import {
   DropdownFilter,
   ErrorBanner,
   StatusBadge,
+  StatusPill,
   TableEmptyState,
+  TableErrorState,
   TablePagination,
   TableSkeleton,
 } from '@/components/common'
@@ -170,11 +172,19 @@ export const CompanyLoansPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-focus">Company Loans</h1>
-          <p className="text-sm text-muted-fg">
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold text-focus">Company Loans</h1>
+            <span
+              className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+              title="Approved loans grouped by borrower, lender, and category"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-muted-fg mt-0.5">
             Approved loans grouped by borrower, lender, and category.
           </p>
         </div>
@@ -250,7 +260,7 @@ export const CompanyLoansPage: React.FC = () => {
       />
 
       <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs">
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full min-w-[1000px] text-left text-xs">
             <TableHeader>
               <TableRow>
@@ -264,7 +274,7 @@ export const CompanyLoansPage: React.FC = () => {
                   'Int. Rate',
                   'Status',
                 ].map((heading) => (
-                  <TableHead key={heading}>{heading}</TableHead>
+                  <TableHead key={heading} className="text-[11px] font-semibold uppercase tracking-wider text-muted-fg">{heading}</TableHead>
                 ))}
               </TableRow>
             </TableHeader>
@@ -282,6 +292,13 @@ export const CompanyLoansPage: React.FC = () => {
                     { width: 'w-16' },
                     { width: 'w-20', shape: 'pill' },
                   ]}
+                />
+              ) : error ? (
+                <TableErrorState
+                  colSpan={8}
+                  title="Unable to load company loans"
+                  message={error}
+                  onRetry={loadGroups}
                 />
               ) : groups.length === 0 ? (
                 <TableEmptyState
@@ -315,7 +332,7 @@ export const CompanyLoansPage: React.FC = () => {
                       {group.interestDisplay}
                     </TableCell>
                     <TableCell>
-                      <StatusBadge status={group.paymentStatus} />
+                      <StatusPill status={group.paymentStatus} />
                     </TableCell>
                   </TableRow>
                 ))

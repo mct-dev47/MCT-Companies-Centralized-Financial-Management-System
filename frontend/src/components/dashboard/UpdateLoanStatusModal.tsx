@@ -110,7 +110,7 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
+      <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto rounded-[16px] p-6 bg-white border border-stroke/40 shadow-modal">
         <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -212,30 +212,25 @@ export const UpdateLoanStatusModal: React.FC<UpdateLoanStatusModalProps> = ({
             />
           </div>
 
-          {/* Action buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">
+          {/* Action buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
-              className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              className="h-11 px-5 text-xs sm:text-sm font-semibold rounded-[10px] cursor-pointer"
             >
               Cancel
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-5 text-xs font-semibold rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white cursor-pointer shadow-xs"
+              isLoading={isSubmitting}
+              className="h-11 px-6 text-xs sm:text-sm font-semibold rounded-[10px] cursor-pointer"
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  Updating…
-                </>
-              ) : (
-                'Save Status'
-              )}
+              <span>Confirm Status</span>
             </Button>
           </div>
         </form>

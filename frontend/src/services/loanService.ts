@@ -514,8 +514,8 @@ export const loanService = {
       auditStatus: 'Pending Audit',
       type: 'Loan',
       createdAt: new Date().toISOString(),
-      updatedBy: updates.updatedBy || existing.updatedBy,
-      updatedAt: updates.updatedAt || new Date().toISOString(),
+      updatedBy: (input as any).updatedBy || (input as any).createdBy || '',
+      updatedAt: new Date().toISOString(),
     }
 
     inMemoryLoans = [newLoan, ...inMemoryLoans]
@@ -688,8 +688,8 @@ export const loanService = {
       outstandingBalance: newRemaining,
       status: newStatus,
       repayments: [repRecord, ...(loan.repayments || [])],
-      updatedBy: updates.updatedBy || existing.updatedBy,
-      updatedAt: updates.updatedAt || new Date().toISOString(),
+      updatedBy: (repayment as any).updatedBy || loan.updatedBy || '',
+      updatedAt: new Date().toISOString(),
     }
 
     inMemoryLoans[index] = updatedLoan

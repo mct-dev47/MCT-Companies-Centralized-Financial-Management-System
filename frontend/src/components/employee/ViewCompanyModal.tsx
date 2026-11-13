@@ -25,6 +25,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { sanitizeNumericInput } from '@/utils/numericInputUtils'
 
@@ -430,9 +431,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       className="h-10 rounded-xl text-sm"
                       required
                     />
-                    {formErrors.contactNumber && (
-                      <p className="text-xs text-rose-500">{formErrors.contactNumber}</p>
-                    )}
+                    <FormFieldError error={formErrors.contactNumber} />
                   </div>
 
                   <div className="space-y-1">
@@ -454,9 +453,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       placeholder="81234567"
                       className="h-10 rounded-xl text-sm"
                     />
-                    {formErrors.telephoneNumber && (
-                      <p className="text-xs text-rose-500">{formErrors.telephoneNumber}</p>
-                    )}
+                    <FormFieldError error={formErrors.telephoneNumber} />
                   </div>
                 </div>
 

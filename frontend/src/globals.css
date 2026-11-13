@@ -15,6 +15,10 @@
   --chart-neutral: rgb(151 151 151 / 0.6);
   --icon-tile: #E5E5E5;
   --radius: 15px;
+  --radius-control: 10px;
+  --radius-surface: 16px;
+  --radius-item: 8px;
+  --shadow-soft: 0 4px 20px -2px rgba(0, 0, 0, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
 }
 
 @layer base {
@@ -48,6 +52,15 @@
     }
     100% {
       transform: translateX(-50%);
+    }
+  }
+
+  @keyframes toast-progress {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
     }
   }
 
