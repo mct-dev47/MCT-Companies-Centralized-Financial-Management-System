@@ -7,9 +7,9 @@ import {
   Search,
 } from 'lucide-react'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { ALL_COMPANIES_LIST } from '@/context/CompanyContext'
 import { cn } from '@/lib/utils'
 
@@ -170,11 +170,12 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
       {/* Uniform Filter Bar: Shared Date Picker + Company Scope */}
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 flex-wrap sm:flex-nowrap self-start sm:self-auto max-w-full">
         {/* 1. Global Custom Date Picker */}
-        <DateRangePicker
+        <TransactionDateRangeControl
           value={filters.dateRange}
           onChange={(newDateRange) => {
             onFiltersChange({ ...filters, dateRange: newDateRange })
           }}
+          className="shrink-0"
         />
 
         {/* 2. Company Scope: Dropdown for Finance/Audit/Admin */}
@@ -185,7 +186,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               onClick={() => setIsOpen((prev) => !prev)}
               title={buttonTooltip}
               className={cn(
-                'inline-flex items-center gap-2 h-10 sm:h-11 px-3.5 sm:px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
+                'inline-flex items-center justify-between gap-2 h-10 sm:h-11 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0',
                 isOpen && 'ring-2 ring-slate-100 border-slate-300',
                 !isAllCompanies && 'border-primary/40 bg-primary/5 text-primary'
               )}
@@ -193,7 +194,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               aria-haspopup="listbox"
               aria-label="Filter dashboard by company"
             >
-              <span className="font-medium truncate max-w-[240px] sm:max-w-[360px]">
+              <span className="font-medium truncate flex-1 text-left">
                 {buttonLabel}
               </span>
               <ChevronDown

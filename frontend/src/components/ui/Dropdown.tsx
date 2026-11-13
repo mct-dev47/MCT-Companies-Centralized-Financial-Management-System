@@ -201,8 +201,8 @@ export function Dropdown<T extends string | number = string>({
   return (
     <div
       className={cn(
-        'relative inline-block text-left',
-        isCell ? 'w-full h-full' : 'w-full',
+        'relative text-left',
+        isCell ? 'inline-block w-full h-full' : 'block w-full',
         className
       )}
       onKeyDown={handleKeyDown}
@@ -226,8 +226,8 @@ export function Dropdown<T extends string | number = string>({
             ? 'h-full px-2 py-1 bg-transparent border-0 rounded-none text-xs hover:bg-black/5 focus:bg-white focus:ring-1 focus:ring-primary'
             : cn(
                 'bg-white border text-focus text-xs sm:text-sm font-normal shadow-2xs',
-                'rounded-[10px]',
-                size === 'sm' ? 'h-9 min-h-[36px] px-3' : 'h-11 min-h-[44px] px-3.5',
+                'rounded-full',
+                size === 'sm' ? 'h-9 min-h-[36px] px-3.5' : 'h-11 min-h-[44px] px-4',
                 hasError
                   ? 'border-rose-500 focus-visible:ring-2 focus-visible:ring-rose-500/30'
                   : 'border-stroke/40 hover:border-stroke/70 focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:border-focus'
@@ -238,12 +238,6 @@ export function Dropdown<T extends string | number = string>({
         <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
           {selectedOption?.icon && (
             <span className="shrink-0 text-muted-fg">{selectedOption.icon}</span>
-          )}
-          {selectedOption?.dotColor && (
-            <span
-              className={cn('w-2 h-2 rounded-full shrink-0', selectedOption.dotColor)}
-              aria-hidden="true"
-            />
           )}
           <span
             className={cn(
@@ -370,12 +364,6 @@ export function Dropdown<T extends string | number = string>({
                       )}
                     >
                       <div className="flex items-center gap-2.5 truncate">
-                        {opt.dotColor && (
-                          <span
-                            className={cn('w-2 h-2 rounded-full shrink-0', opt.dotColor)}
-                            aria-hidden="true"
-                          />
-                        )}
                         {opt.icon && <span className="shrink-0">{opt.icon}</span>}
                         <span className="truncate">{opt.label}</span>
                       </div>

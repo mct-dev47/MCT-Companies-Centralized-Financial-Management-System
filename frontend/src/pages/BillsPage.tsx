@@ -21,6 +21,7 @@ import {
   MoreVertical,
   FileText,
   ArrowLeft,
+  HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -603,13 +604,19 @@ export const BillsPage: React.FC = () => {
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
                 Company Bills
               </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Utility, rental, and recurring contractual obligations across companies"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Track recurring utility, rental, and scheduled bills for {displayedCompanyTitle} .
+              Track and manage scheduled bills for {displayedCompanyTitle}
             </p>
           </div>
 
@@ -682,9 +689,9 @@ export const BillsPage: React.FC = () => {
         </div>
 
         {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          {/* Extended Width Search Bar — Fills available space while keeping company name uncropped */}
-          <div className="relative flex-1 w-full">
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-2.5 w-full pt-1">
+          {/* Extended Width Search Bar */}
+          <div className="relative flex-1 min-w-[200px] w-full">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
             <Input
               type="search"
@@ -695,63 +702,10 @@ export const BillsPage: React.FC = () => {
             />
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Status Filter */}
-            <div ref={statusDropdownRef} className="relative inline-block shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsStatusDropdownOpen((prev) => !prev)
-                  setIsCompanyDropdownOpen(false)
-                  setIsExportDropdownOpen(false)
-                }}
-                className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
-                  isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-medium text-focus/90">
-                  {statusFilter === 'All' ? 'Status: All' : statusFilter}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-              </button>
-
-              {isStatusDropdownOpen && (
-                <div
-                  style={statusPos.isMobile ? statusPos.style : undefined}
-                  className={cn(
-                    'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                    statusPos.isMobile
-                      ? 'w-[min(calc(100vw-32px),240px)]'
-                      : 'absolute right-0 top-full mt-2 w-48'
-                  )}
-                >
-                  {(['All', 'Due Soon', 'Overdue', 'Unpaid', 'Partially Paid', 'Paid'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => {
-                        setStatusFilter(st)
-                        setIsStatusDropdownOpen(false)
-                      }}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        statusFilter === st
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{st === 'All' ? 'All Status' : st}</span>
-                      {statusFilter === st && <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             {/* Company Filter: ONLY Finance and Audit have the dropdown filter */}
             {!isCompanyScoped && (
-              <div ref={companyDropdownRef} className="relative inline-block shrink-0">
+              <div ref={companyDropdownRef} className="relative inline-block shrink-0 min-w-[240px] sm:min-w-[280px]">
                 <button
                   type="button"
                   onClick={() => {
@@ -760,27 +714,29 @@ export const BillsPage: React.FC = () => {
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
-                  <span className="font-medium text-focus/90">
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
                     {selectedCompany}
                   </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                  {selectedCompany !== 'All Companies' && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedCompany('All Companies')
-                        setActiveCompany('All Companies')
-                      }}
-                      className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-                      title="Reset to All Companies"
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {selectedCompany !== 'All Companies' && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedCompany('All Companies')
+                          setActiveCompany('All Companies')
+                        }}
+                        className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
+                        title="Reset to All Companies"
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                  </div>
                 </button>
 
                 {isCompanyDropdownOpen && (
@@ -841,6 +797,59 @@ export const BillsPage: React.FC = () => {
                 )}
               </div>
             )}
+
+            {/* Status Filter (Last in the row) */}
+            <div ref={statusDropdownRef} className="relative inline-block shrink-0 min-w-[130px]">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsStatusDropdownOpen((prev) => !prev)
+                  setIsCompanyDropdownOpen(false)
+                  setIsExportDropdownOpen(false)
+                }}
+                className={cn(
+                  'inline-flex items-center justify-between gap-2 h-11 min-w-[130px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                  isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                )}
+              >
+                <span className="font-medium text-focus/90 truncate">
+                  {statusFilter === 'All' ? 'Status: All' : statusFilter}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+              </button>
+
+              {isStatusDropdownOpen && (
+                <div
+                  style={statusPos.isMobile ? statusPos.style : undefined}
+                  className={cn(
+                    'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                    statusPos.isMobile
+                      ? 'w-[min(calc(100vw-32px),240px)]'
+                      : 'absolute right-0 top-full mt-2 w-48'
+                  )}
+                >
+                  {(['All', 'Due Soon', 'Overdue', 'Unpaid', 'Partially Paid', 'Paid'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => {
+                        setStatusFilter(st)
+                        setIsStatusDropdownOpen(false)
+                      }}
+                      className={cn(
+                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                        statusFilter === st
+                          ? 'bg-primary/10 text-primary font-semibold'
+                          : 'text-focus/80 hover:bg-slate-50'
+                      )}
+                    >
+                      <span>{st === 'All' ? 'All Status' : st}</span>
+                      {statusFilter === st && <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

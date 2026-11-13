@@ -24,6 +24,7 @@ import {
   Eye,
   Lock,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
@@ -54,9 +55,9 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
@@ -1520,11 +1521,19 @@ export const LendingPage: React.FC = () => {
             {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>
-                <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                  Lending
-                </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                    Lending
+                  </h1>
+                  <span
+                    className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                    title="Loan accounts, principal balances, interest terms, and payment schedules"
+                  >
+                    <HelpCircle className="h-5 w-5" />
+                  </span>
+                </div>
                 <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-                  Here's the summary of lending facilities in {displayedCompanyTitle}
+                  Credit facilities, loan portfolios, and repayment schedules for {displayedCompanyTitle}
                 </p>
               </div>
 
@@ -1710,10 +1719,10 @@ export const LendingPage: React.FC = () => {
             </div>
 
             {/* Date Range Picker */}
-            <DateRangePicker
+            <TransactionDateRangeControl
               value={dateRange}
               onChange={(newRange) => setDateRange(newRange)}
-              hidePresets
+              className="shrink-0"
             />
           </div>
         </div>
@@ -1725,7 +1734,7 @@ export const LendingPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Table with Requirement 3 columns and Action Buttons */}
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[1020px]">
             <colgroup>
               <col style={{ width: '22%' }} />

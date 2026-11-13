@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Landmark } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import {
   bankService,
   isAccountOwnedBy,
@@ -144,7 +145,7 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({
   ]
 
   return (
-    <div className={className}>
+    <div className={cn('relative min-w-0 w-full block', className)}>
       <Dropdown<string>
         value={value}
         onChange={(val) => onChange(val || '')}
@@ -153,7 +154,8 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({
         aria-label="Filter by bank"
         searchable={accounts.length > 5}
         searchPlaceholder="Search banks..."
-        triggerClassName="min-w-[180px] max-w-[260px] rounded-[10px]"
+        className="w-full"
+        triggerClassName="w-full rounded-full px-4 min-h-[44px] h-11 justify-between"
       />
     </div>
   )

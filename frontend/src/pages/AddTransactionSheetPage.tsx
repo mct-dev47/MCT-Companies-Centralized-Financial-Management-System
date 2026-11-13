@@ -2961,7 +2961,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   setCurrentStep('encode')
                 }}
                 disabled={isSubmitting}
-                className="h-11 px-5 rounded-xl border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
+                className="h-11 px-5 rounded-full border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
               >
                 Back to Spreadsheet
               </Button>
@@ -4132,7 +4132,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               type="button"
               variant="outline"
               onClick={() => setIsDayRemarkOpen(false)}
-              className="h-9 px-4 text-xs font-medium rounded-xl border-stroke/50 cursor-pointer"
+              className="h-9 px-4 text-xs font-medium rounded-full border-stroke/50 cursor-pointer"
             >
               Back
             </Button>

@@ -27,6 +27,7 @@ import {
   Receipt,
   Wallet,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
@@ -58,9 +59,9 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
@@ -2253,11 +2254,19 @@ export const TenantPage: React.FC = () => {
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Tenants
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Tenants
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Commercial and residential lease agreements, rental schedules, and tenant ledger"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Here's the summary of tenant leases and collections in JK Property and Ventures
+              Tenant lease agreements, billing schedules, and rental collections
             </p>
           </div>
 
@@ -2424,10 +2433,10 @@ export const TenantPage: React.FC = () => {
             </div>
 
             {/* Unified Date Range Picker */}
-            <DateRangePicker
+            <TransactionDateRangeControl
               value={dateRange}
               onChange={(newRange) => setDateRange(newRange)}
-              hidePresets
+              className="shrink-0"
             />
           </div>
         </div>
@@ -2439,7 +2448,7 @@ export const TenantPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Table matching FilCap Lending layout: clean columns, no separate ID, dedicated Status, Audit & Actions */}
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[1000px]">
             <colgroup>
               <col style={{ width: '21%' }} />

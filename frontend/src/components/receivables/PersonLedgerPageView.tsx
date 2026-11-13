@@ -422,19 +422,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
               </Button>
             )}
 
-            {canMutate && isStaff && hasBalance && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={person.all_locked || unlockedBalance <= 0.005}
-                onClick={() => setShowPayrollConfirm(true)}
-                className="h-10 px-3.5 rounded-xl border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-40"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-purple-600" />
-                <span>Deduct from Payroll</span>
-              </Button>
-            )}
-
             {canMutate && onOpenEditProfile && (
               <Button
                 type="button"
@@ -450,42 +437,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Payroll Deduction Confirmation Banner */}
-      {showPayrollConfirm && canMutate && isStaff && hasBalance && (
-        <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs animate-in fade-in duration-150">
-          <div className="space-y-0.5">
-            <span className="font-bold text-purple-950 block">
-              Confirm Full Payroll Deduction ({formatPHP(unlockedBalance)})
-            </span>
-            <span className="text-purple-800 block">
-              This will settle all unlocked unpaid credit orders for <strong>{person.name}</strong> via Staff Payroll Deduction.
-            </span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setShowPayrollConfirm(false)}
-              className="h-8 px-3 text-xs rounded-xl bg-white"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                onSettlePayrollDeduction(person.name, person.company_id, person.company)
-                setShowPayrollConfirm(false)
-              }}
-              className="h-8 px-3.5 text-xs rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-semibold cursor-pointer"
-            >
-              Confirm Deduction
-            </Button>
-          </div>
-        </div>
-      )}
 
       {actionError && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center justify-between gap-2">

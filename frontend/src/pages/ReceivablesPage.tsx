@@ -37,6 +37,7 @@ import {
   Trash2,
   AlertTriangle,
   Lock,
+  HelpCircle,
 } from 'lucide-react'
 import {
   Dialog,
@@ -591,20 +592,19 @@ export const ReceivablesPage: React.FC = () => {
           <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center gap-2">
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
                 Receivables
               </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Customer and staff credit ledger, aging balances, and payment collections"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
             </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Summary of customer and staff food credit, aging balances, and remittances in{' '}
-              <strong className="font-semibold text-focus">
-                {isCompanyScoped
-                  ? assignedCompany
-                  : selectedCompany === 'All Companies'
-                    ? 'MCT Group of Companies'
-                    : selectedCompany}
-              </strong>
+              Customer and staff credit, aging balances, and collections for {isCompanyScoped ? assignedCompany : selectedCompany}
             </p>
           </div>
 
@@ -699,33 +699,35 @@ export const ReceivablesPage: React.FC = () => {
                 <span className="font-semibold text-focus/90">{assignedCompany}</span>
               </div>
             ) : (
-              <div ref={companyDropdownRef} className="relative inline-block">
+              <div ref={companyDropdownRef} className="relative inline-block shrink-0">
                 <button
                   type="button"
                   onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                   className={cn(
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-2 h-11 min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                   aria-label="Filter receivables by company"
                 >
-                  <span className="font-medium text-focus/90 truncate max-w-[150px]">
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
                     {selectedCompany}
                   </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                  {selectedCompany !== 'All Companies' && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedCompany('All Companies')
-                        setActiveCompany('All Companies')
-                      }}
-                      className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-                      title="Reset to All Companies"
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {selectedCompany !== 'All Companies' && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setSelectedCompany('All Companies')
+                          setActiveCompany('All Companies')
+                        }}
+                        className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
+                        title="Reset to All Companies"
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                  </div>
                 </button>
 
                 {isCompanyDropdownOpen && (
@@ -812,69 +814,6 @@ export const ReceivablesPage: React.FC = () => {
                 )}
               </div>
             )}
-
-            {/* Status Dropdown Filter */}
-            <div ref={statusDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsStatusDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  statusFilter === 'Unpaid'
-                    ? 'border-rose-300 bg-rose-50 text-rose-700'
-                    : statusFilter === 'Partial'
-                      ? 'border-amber-300 bg-amber-50 text-amber-700'
-                      : statusFilter === 'Paid'
-                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                        : 'border-stroke/60',
-                  isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-medium">
-                  {statusFilter === 'All' ? 'Status' : statusFilter}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isStatusDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isStatusDropdownOpen && (
-                <div
-                  style={statusPos.isMobile ? statusPos.style : undefined}
-                  className={cn(
-                    'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                    statusPos.isMobile
-                      ? 'w-[min(calc(100vw-32px),220px)]'
-                      : 'absolute right-0 top-full mt-2 w-44'
-                  )}
-                >
-                  {(['All', 'Unpaid', 'Partial', 'Paid'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => {
-                        setStatusFilter(st)
-                        setIsStatusDropdownOpen(false)
-                      }}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        statusFilter === st
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{st === 'All' ? 'All Status' : st}</span>
-                      {statusFilter === st && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
 
             {/* Dynamic Tab Switcher: All / External / Staff */}
             <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
@@ -975,19 +914,6 @@ export const ReceivablesPage: React.FC = () => {
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 mb-2 border-b border-slate-100">
           <div className="flex items-center gap-2.5 flex-wrap">
-            <span
-              className={cn(
-                'inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border',
-                activeTab === 'Staff'
-                  ? 'bg-purple-50 text-purple-700 border-purple-200'
-                  : activeTab === 'External'
-                    ? 'bg-sky-50 text-sky-700 border-sky-200'
-                    : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
-              )}
-            >
-              <span>{activeTab === 'All' ? 'All Receivables' : `${activeTab} Receivables`}</span>
-            </span>
-
             {statusFilter !== 'All' && (
               <span
                 className={cn(
@@ -1011,13 +937,9 @@ export const ReceivablesPage: React.FC = () => {
               </span>
             )}
           </div>
-
-          <span className="text-xs text-muted-fg font-medium">
-            {filteredPeople.length} {filteredPeople.length === 1 ? 'account' : 'accounts'} shown
-          </span>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[940px]">
             <colgroup>
               <col style={{ width: '22%' }} />

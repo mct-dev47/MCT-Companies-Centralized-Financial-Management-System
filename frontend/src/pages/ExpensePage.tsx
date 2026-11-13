@@ -26,6 +26,7 @@ import {
   Landmark,
   Lock,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -52,6 +53,7 @@ import {
 import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -182,6 +184,15 @@ export const ExpensePage: React.FC = () => {
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
   >('All')
+  const statusFilterOptions: DropdownFilterOption<string>[] = React.useMemo(
+    () => [
+      { value: 'All', label: 'All Statuses' },
+      { value: 'Paid', label: 'Paid' },
+      { value: 'Pending', label: 'Pending' },
+      { value: 'Unpaid', label: 'Unpaid' },
+    ],
+    []
+  )
   const [selectedPeriod, setSelectedPeriod] =
     React.useState<PeriodOption>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
@@ -857,11 +868,19 @@ export const ExpensePage: React.FC = () => {
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Expense
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Expense
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Operational and corporate expenditures across companies and payment methods"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Comprehensive breakdown of operational expenses.
+              Operational expenses and disbursements for {displayedCompanyTitle}
             </p>
           </div>
 
@@ -873,7 +892,7 @@ export const ExpensePage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-full font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -1005,22 +1024,22 @@ export const ExpensePage: React.FC = () => {
 
         {/* Controls Container / Shared Filters */}
         <div className="flex flex-col gap-3 pt-1">
-          {/* Row 1: Company + Bank + Date + All Records / By Day toggle */}
+          {/* Row 1: Company + Bank + Status + Date + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Company Scope */}
               {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-1 min-w-[170px]">
+                <div ref={companyDropdownRef} className="relative flex-1 min-w-[200px] sm:min-w-[240px]">
                   <button
                     type="button"
                     onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-3.5 rounded-[10px] border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
+                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                     aria-label="Filter expenses by company"
                   >
-                    <span className="font-semibold text-focus truncate max-w-[240px]">
+                    <span className="font-semibold text-focus truncate flex-1 text-left">
                       {selectedCompany}
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
@@ -1126,7 +1145,7 @@ export const ExpensePage: React.FC = () => {
                 </div>
               ) : (
                 <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                   title={selectedCompany}
                 >
                   <span className="truncate min-w-0">{selectedCompany}</span>
@@ -1134,20 +1153,40 @@ export const ExpensePage: React.FC = () => {
               )}
 
               {/* Bank Filter Select */}
-              <div className="flex-1 min-w-[170px]">
+              <div className="flex-1 min-w-[190px] sm:min-w-[220px]">
                 <BankFilterSelect
                   accounts={bankOptions}
                   value={selectedBankId}
                   onChange={setSelectedBankId}
-                  className="w-full min-h-[44px] h-11 text-xs sm:text-sm"
+                  className="w-full"
+                />
+              </div>
+
+              {/* Status Filter Dropdown beside the bank */}
+              <div className="w-full sm:w-auto min-w-[130px] shrink-0">
+                <DropdownFilter
+                  value={statusFilter}
+                  onChange={(val) => {
+                    setStatusFilter(val as any)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
+                  options={statusFilterOptions}
+                  defaultValue="All"
+                  placeholder="Status"
+                  fullWidth
                 />
               </div>
 
               {/* Date Range Control in Row 1 */}
-              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+              <div className="w-full sm:w-auto min-w-[180px] shrink-0">
                 <TransactionDateRangeControl
                   value={dateRange}
-                  onChange={(newRange) => setDateRange(newRange)}
+                  onChange={(newRange) => {
+                    setDateRange(newRange)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
                   fullWidth
                 />
               </div>
@@ -1306,7 +1345,7 @@ export const ExpensePage: React.FC = () => {
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailyExpenseGroups.length} days</span>
@@ -1321,7 +1360,7 @@ export const ExpensePage: React.FC = () => {
         </div>
 
         {subTab === 'Daily Summary' ? (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
             <Table className="w-full table-fixed min-w-[1000px]">
               <colgroup>
                 <col style={{ width: '16%' }} />
@@ -1653,7 +1692,7 @@ export const ExpensePage: React.FC = () => {
             </Table>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[860px] lg:min-w-0">
             <colgroup>
               <col style={{ width: '10%' }} />

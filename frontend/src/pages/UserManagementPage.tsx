@@ -7,6 +7,7 @@ import {
   Shield,
   User as UserIcon,
   ArrowUpDown,
+  HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -249,11 +250,19 @@ export const UserManagementPage: React.FC = () => {
       {/* Top Header Block */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-            User Management
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              User Management
+            </h1>
+            <span
+              className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+              title="System user accounts, role-based authorization, and company access controls"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </span>
+          </div>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {users.length} users registered in MCT Group
+            User accounts, roles, and company access permissions
           </p>
         </div>
 

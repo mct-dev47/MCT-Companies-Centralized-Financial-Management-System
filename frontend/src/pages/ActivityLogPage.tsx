@@ -11,6 +11,7 @@ import {
   Copy,
   Check,
   Eye,
+  HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,7 +30,8 @@ import {
   TablePagination,
   TableSkeleton,
 } from '@/components/common'
-import { DateRangeFilter, type DateRange } from '@/components/employee/DateRangeFilter'
+import { type DateRange } from '@/components/employee/DateRangeFilter'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { ActivityLogDetailDrawer } from '@/components/admin/ActivityLogDetailDrawer'
 import { activityLogService, type ActivityLogItem } from '@/services/activityLogService'
 import { formatRealName } from '@/utils/formatRealName'
@@ -350,11 +352,19 @@ export const ActivityLogPage: React.FC = () => {
       {/* 1. Header & Actions Block */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-            Activity Log
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Activity Log
+            </h1>
+            <span
+              className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+              title="Audit trail of authentication events, financial data mutations, and user activities"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </span>
+          </div>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {logs.length} system activity records tracked across all companies · 6-month retention policy
+            System events, audit records, and user activity history
           </p>
         </div>
 
@@ -442,12 +452,13 @@ export const ActivityLogPage: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
           {/* Date Range Filter */}
-          <DateRangeFilter
-            value={dateRange}
+          <TransactionDateRangeControl
+            value={dateRange as any}
             onChange={(newRange) => {
               setDateRange(newRange)
               setCurrentPage(1)
             }}
+            className="shrink-0"
           />
 
           {/* Clear Filters Button */}
@@ -468,7 +479,7 @@ export const ActivityLogPage: React.FC = () => {
 
       {/* Main Table Card */}
       <div className="bg-white rounded-[20px] border border-stroke/30 shadow-xs p-4 sm:p-6 lg:p-8">
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full min-w-[980px] text-left">
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">

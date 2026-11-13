@@ -37,6 +37,7 @@ import {
   History,
 
   Landmark,
+  HelpCircle,
 
   Wallet,
 
@@ -93,11 +94,9 @@ import {
 
 import {
 
-  DateRangePicker,
-
   type DateRange,
-
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 
 import { useSession } from '@/hooks/useSession'
 
@@ -151,6 +150,61 @@ export function getAccountCardLabel(acc: BankAccount): string {
 
   return bank || 'Corporate Bank Account'
 
+}
+
+/**
+ * Concise particulars summary for the bank ledger table.
+ * Extracts high-level transaction titles like "Expense Disbursement", "Sales Collection", "Loan", etc.
+ */
+export function getBankParticularsShortTitle(rawParticulars?: string | null, category?: string | null): string {
+  if (!rawParticulars || !rawParticulars.trim()) {
+    return category || 'Transaction'
+  }
+  const trimmed = rawParticulars.trim()
+  const lower = trimmed.toLowerCase()
+
+  if (lower.startsWith('expense disbursement') || (category && category.toLowerCase().includes('expense'))) {
+    return 'Expense Disbursement'
+  }
+  if (lower.startsWith('sales collection') || (category && category.toLowerCase().includes('sales'))) {
+    return 'Sales Collection'
+  }
+  if (lower.includes('loan') || (category && category.toLowerCase().includes('loan'))) {
+    return 'Loan'
+  }
+  if (lower.startsWith('petty cash')) {
+    return 'Petty Cash'
+  }
+  if (lower.startsWith('bills payment') || (category && category.toLowerCase().includes('bills'))) {
+    return 'Bills Payment'
+  }
+  if (lower.startsWith('payroll') || (category && category.toLowerCase().includes('payroll'))) {
+    return 'Payroll'
+  }
+  if (lower.startsWith('deposit remittance') || lower.startsWith('deposit')) {
+    return 'Deposit Remittance'
+  }
+  if (lower.startsWith('withdrawal settlement') || lower.startsWith('withdrawal')) {
+    return 'Withdrawal Settlement'
+  }
+
+  if (trimmed.includes(':')) {
+    const prefix = trimmed.split(':')[0].trim()
+    if (prefix.length > 0 && prefix.length <= 30) {
+      return prefix
+    }
+  }
+
+  if (trimmed.includes(' - ')) {
+    const prefix = trimmed.split(' - ')[0].trim()
+    if (prefix.length > 0 && prefix.length <= 30) {
+      return prefix
+    }
+  }
+
+  const firstLine = trimmed.split('\n')[0].trim()
+  const clean = firstLine.replace(/\s*\([^)]*\).*$/, '').replace(/\s*\[[^\]]*\].*$/, '').trim()
+  return clean || firstLine || 'Transaction'
 }
 
 /** Checklist to pick one or more owner companies for a bank account. */
@@ -482,11 +536,15 @@ export const BankManagementPage: React.FC = () => {
 
   const [isTxTypeDropdownOpen, setIsTxTypeDropdownOpen] = React.useState(false)
 
+  const [bankStatusFilter, setBankStatusFilter] = React.useState<string>('All')
+  const [isBankStatusDropdownOpen, setIsBankStatusDropdownOpen] = React.useState(false)
+
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
 
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
 
   const txTypeDropdownRef = React.useRef<HTMLDivElement>(null)
+  const bankStatusDropdownRef = React.useRef<HTMLDivElement>(null)
 
   // Modals state
 
@@ -605,6 +663,10 @@ export const BankManagementPage: React.FC = () => {
 
         setIsTxTypeDropdownOpen(false)
 
+      }
+
+      if (bankStatusDropdownRef.current && !bankStatusDropdownRef.current.contains(target)) {
+        setIsBankStatusDropdownOpen(false)
       }
 
     }
@@ -1025,6 +1087,16 @@ export const BankManagementPage: React.FC = () => {
 
     }
 
+    if (bankStatusFilter !== 'All') {
+      list = list.filter((t: any) => {
+        const st = t.auditStatus || 'Pending Audit'
+        if (bankStatusFilter === 'Audited') return st === 'Verified'
+        if (bankStatusFilter === 'Pending Audit') return st === 'Pending Audit'
+        if (bankStatusFilter === 'Flagged') return st === 'Flagged'
+        return true
+      })
+    }
+
     const q = tableSearchQuery.toLowerCase().trim()
 
     if (q) {
@@ -1051,7 +1123,7 @@ export const BankManagementPage: React.FC = () => {
 
     return list
 
-  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter])
+  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter, bankStatusFilter])
 
   // Pagination
 
@@ -1071,7 +1143,7 @@ export const BankManagementPage: React.FC = () => {
 
     setCurrentPage(1)
 
-  }, [selectedAccountId, tableSearchQuery, txTypeFilter])
+  }, [selectedAccountId, tableSearchQuery, txTypeFilter, bankStatusFilter])
 
   // Distinct company list from database and bank accounts for filter dropdown
 
@@ -1643,16 +1715,19 @@ export const BankManagementPage: React.FC = () => {
 
 
 
+            <div className="flex items-center gap-2">
               <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-
                 Bank Management
-
               </h1>
-
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Corporate bank accounts, running balances, and account statements"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-
-              Manage corporate bank accounts, monitor active balance.
-
+              Manage corporate bank accounts and monitor active balances
             </p>
 
           </div>
@@ -1780,265 +1855,224 @@ export const BankManagementPage: React.FC = () => {
 
         </div>
 
-        {/* Row 2: Search Bar & Filter Toolbar */}
-
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-
-          {/* Extended Width Search Bar */}
-
-          <div className="relative flex-1 w-full">
-
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-
-              <Input
-
-                type="search"
-
-                placeholder="Search by particulars, cheque no., or category..."
-
-                value={tableSearchQuery}
-
-                onChange={(e) => {
-
-                  setTableSearchQuery(e.target.value)
-
-                  setCurrentPage(1)
-
-                }}
-
-                className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-
-              />
-
-            </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-
-              {/* 1. Date Range Button / Display */}
-
-              <DateRangePicker
-
-                value={dateRange}
-
-                onChange={(newRange) => setDateRange(newRange)}
-
-                hidePresets
-
-              />
-
-              {/* 2. Deposit / Withdraw Dropdown Filter (Comes before Company) */}
-
-              <div ref={txTypeDropdownRef} className="relative inline-block">
-
-                <button
-
-                  type="button"
-
-                  onClick={() => {
-
-                    setIsTxTypeDropdownOpen((prev) => !prev)
-
-                    setIsCompanyDropdownOpen(false)
-
-                    setIsExportDropdownOpen(false)
-
-                  }}
-
-                  className={cn(
-
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-
-                    isTxTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-
-                  )}
-
-                >
-
-                  <span className="font-semibold text-focus/90 truncate max-w-[150px]">
-
-                    {txTypeFilter === 'All' ? 'Deposit / Withdraw' : txTypeFilter}
-
-                  </span>
-
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-
-                </button>
-
-                {isTxTypeDropdownOpen && (
-
-                  <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-
-                    <div className="space-y-1">
-
-                      {[
-
-                        { label: 'All Transactions', value: 'All' as const },
-
-                        { label: 'Deposit', value: 'Deposit' as const },
-
-                        { label: 'Withdrawal', value: 'Withdrawal' as const },
-
-                      ].map((opt) => (
-
-                        <button
-
-                          key={opt.value}
-
-                          type="button"
-
-                          onClick={() => {
-
-                            setTxTypeFilter(opt.value)
-
-                            setIsTxTypeDropdownOpen(false)
-
-                          }}
-
-                          className={cn(
-
-                            'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-
-                            txTypeFilter === opt.value
-
-                              ? 'bg-primary/10 text-primary font-semibold'
-
-                              : 'text-focus/80 hover:bg-slate-50'
-
-                          )}
-
-                        >
-
-                          <span>{opt.label}</span>
-
-                          {txTypeFilter === opt.value && (
-
-                            <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-
-                          )}
-
-                        </button>
-
-                      ))}
-
-                    </div>
-
-                  </div>
-
-                )}
-
+        {/* Controls Container */}
+        <div className="flex flex-col gap-3 pt-1">
+          {/* Row 1: Date Range + Status + Deposit/Withdraw Toggle + Finance Action Buttons */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+              {/* 1. Date Range Control (Month/Date) with increased width matching Row 2 */}
+              <div className="flex-1 min-w-[190px]">
+                <TransactionDateRangeControl
+                  value={dateRange}
+                  onChange={(newRange) => setDateRange(newRange)}
+                  fullWidth
+                  className="w-full"
+                />
               </div>
 
-              {/* 3. Company Dropdown (Finance/Admin only) */}
+              {/* 2. Status Dropdown Filter with increased width matching Row 2 */}
+              <div ref={bankStatusDropdownRef} className="relative inline-block flex-1 min-w-[150px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBankStatusDropdownOpen((prev) => !prev)
+                    setIsCompanyDropdownOpen(false)
+                    setIsTxTypeDropdownOpen(false)
+                    setIsExportDropdownOpen(false)
+                  }}
+                  className={cn(
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    isBankStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                  )}
+                >
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
+                    {bankStatusFilter === 'All' ? 'Status' : bankStatusFilter}
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                </button>
 
-              {!isCompanyScoped && (
+                {isBankStatusDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    {[
+                      { label: 'All Statuses', value: 'All' },
+                      { label: 'Audited', value: 'Audited' },
+                      { label: 'Pending Audit', value: 'Pending Audit' },
+                      { label: 'Flagged', value: 'Flagged' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          setBankStatusFilter(opt.value)
+                          setIsBankStatusDropdownOpen(false)
+                        }}
+                        className={cn(
+                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                          bankStatusFilter === opt.value
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-focus/80 hover:bg-slate-50'
+                        )}
+                      >
+                        <span>{opt.label}</span>
+                        {bankStatusFilter === opt.value && (
+                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-                <div ref={companyDropdownRef} className="relative inline-block">
+              {/* 3. Deposit / Withdrawal Toggle Button (Red active state for All) */}
+              <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setTxTypeFilter('All')}
+                  className={cn(
+                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    txTypeFilter === 'All'
+                      ? 'bg-[#960C01] text-white shadow-xs'
+                      : 'text-focus/70 hover:bg-white hover:text-focus'
+                  )}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTxTypeFilter('Deposit')}
+                  className={cn(
+                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    txTypeFilter === 'Deposit'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-focus/70 hover:bg-white hover:text-focus'
+                  )}
+                >
+                  Deposit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTxTypeFilter('Withdrawal')}
+                  className={cn(
+                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    txTypeFilter === 'Withdrawal'
+                      ? 'bg-[#960C01] text-white shadow-xs'
+                      : 'text-focus/70 hover:bg-white hover:text-focus'
+                  )}
+                >
+                  Withdrawal
+                </button>
+              </div>
+            </div>
 
+            {/* Action buttons (Deposit & Withdraw) moved to Row 1 beside the filters */}
+            {canManageBank && (
+              <div className="flex items-center gap-2 shrink-0 self-start lg:self-auto">
+                <Button
+                  type="button"
+                  disabled={!activeAccount}
+                  onClick={() => setIsDepositModalOpen(true)}
+                  className="h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <ArrowDownLeft className="h-4 w-4 shrink-0" />
+                  <span>Deposit</span>
+                </Button>
+                <Button
+                  type="button"
+                  disabled={!activeAccount}
+                  onClick={() => setIsWithdrawModalOpen(true)}
+                  className="h-11 px-4 rounded-full bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <ArrowUpRight className="h-4 w-4 shrink-0" />
+                  <span>Withdraw</span>
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Row 2: Search Bar + Company Dropdown */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+              {/* Extended Width Search Bar */}
+              <div className="relative flex-1 min-w-[200px] w-full">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                <Input
+                  type="search"
+                  placeholder="Search by particulars, cheque no., or category..."
+                  value={tableSearchQuery}
+                  onChange={(e) => {
+                    setTableSearchQuery(e.target.value)
+                    setCurrentPage(1)
+                  }}
+                  className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+                />
+              </div>
+
+              {/* Company Dropdown (Finance/Admin only) */}
+              {!isCompanyScoped ? (
+                <div ref={companyDropdownRef} className="relative inline-block shrink-0 min-w-[220px] sm:min-w-[260px]">
                   <button
-
                     type="button"
-
-                    onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-
+                    onClick={() => {
+                      setIsCompanyDropdownOpen((prev) => !prev)
+                      setIsBankStatusDropdownOpen(false)
+                      setIsTxTypeDropdownOpen(false)
+                      setIsExportDropdownOpen(false)
+                    }}
                     className={cn(
-
-                      'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-
+                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-
                     )}
-
                   >
-
-                    <Building2 className="h-4 w-4 text-muted-fg shrink-0" />
-
-                    <span className="font-semibold text-focus/90 truncate max-w-[140px]">
-
-                      {selectedCompany === 'All Companies' ? 'Company' : selectedCompany}
-
+                    <span className="font-semibold text-focus/90 truncate flex-1 text-left">
+                      {selectedCompany === 'All Companies' ? 'All Companies' : selectedCompany}
                     </span>
-
                     <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-
                   </button>
 
                   {isCompanyDropdownOpen && (
-
                     <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150 max-h-72 overflow-y-auto">
-
                       <div className="space-y-1">
-
                         {companyOptions.map((c) => (
-
                           <button
-
                             key={c}
-
                             type="button"
-
                             onClick={() => {
-
                               setSelectedCompany(c)
-
                               setIsCompanyDropdownOpen(false)
-
                               if (c === 'All Companies') {
-
                                 setSelectedAccountId('all')
-
                               } else {
-
                                 const matched = preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, c)), c)
-
                                 if (matched.length > 0) {
-
                                   setSelectedAccountId(matched[0].id)
-
                                 }
-
                               }
-
                             }}
-
                             className={cn(
-
                               'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-
                               selectedCompany === c
-
                                 ? 'bg-primary/10 text-primary font-semibold'
-
                                 : 'text-focus/80 hover:bg-slate-50'
-
                             )}
-
                           >
-
                             <span className="truncate">{c}</span>
-
                             {selectedCompany === c && (
-
                               <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-
                             )}
-
                           </button>
-
                         ))}
-
                       </div>
-
                     </div>
-
                   )}
-
                 </div>
-
+              ) : (
+                <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0">
+                  <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
+                </div>
               )}
-
             </div>
-
           </div>
+        </div>
 
         </div>
 
@@ -3159,392 +3193,131 @@ export const BankManagementPage: React.FC = () => {
 
       )}
 
-      {/* Petty Cash wallets: one per company, kept separate from bank balances and bank transactions */}
-      {visiblePettyCashWallets.length > 0 && (
-        <Card className="rounded-[24px] border border-stroke/20 bg-white shadow-xs overflow-hidden">
-          <div className="px-5 sm:px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-amber-600" />
-              <h3 className="font-bold text-sm sm:text-base text-slate-900 tracking-tight">Petty Cash</h3>
-              <span className="text-[11px] text-slate-500">
-                Expenses paid with petty cash are deducted here, not from any bank.
-              </span>
-            </div>
-            <Link to="/petty-cash" className="text-xs font-semibold text-[#960C01] hover:underline">
-              Open Petty Cash
-            </Link>
-          </div>
-          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {visiblePettyCashWallets.map((wallet) => (
-              <div
-                key={wallet.companyId}
-                className={cn(
-                  'rounded-2xl border p-4 flex flex-col gap-1',
-                  wallet.isLow ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/50'
-                )}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-semibold text-slate-700 truncate">{wallet.companyName}</span>
-                  {wallet.isLow && (
-                    <span className="text-[10px] font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded-full shrink-0">
-                      Low balance
-                    </span>
-                  )}
-                </div>
-                <span className={cn('text-xl font-bold', wallet.balance < 0 ? 'text-red-700' : 'text-slate-900')}>
-                  {showBalance ? formatPHP(wallet.balance) : '••••••'}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Topped up {formatPHP(wallet.totalTopUps)} • Spent {formatPHP(wallet.totalSpent)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
       {/* 3. Bottom Section: Bank Banner Bar & Transactions Table */}
 
-      <Card className="rounded-[24px] border border-stroke/20 bg-white shadow-xs overflow-hidden">
-
-        {/* Grey Header Banner */}
-
-        <div className="bg-[#E2E8F0] px-5 sm:px-6 py-3 border-b border-slate-300 flex items-center justify-between">
-
-          <div className="flex items-center gap-2.5">
-
-            <h3 className="font-bold text-base sm:text-lg text-slate-900 tracking-tight">
-
-              {isAggregatedView
-
-                ? 'All Companies • Unified Cash Ledger'
-
-                : activeAccount
-
-                ? `${activeAccount.bankName} • ${activeAccount.accountName} (${activeAccount.companyName})`
-
-                : 'Bank Account'}
-
-            </h3>
-
-            <span className="text-xs font-semibold text-slate-700 bg-white/70 px-3 py-1 rounded-full border border-slate-300">
-
-              {isAggregatedView ? 'All Accounts Aggregated' : 'Transactions'}
-
-            </span>
-
-            {selectedCompany === 'All Companies' && !isAggregatedView && (
-
-              <button
-
-                type="button"
-
-                onClick={() => setSelectedAccountId('all')}
-
-                className="text-xs font-semibold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-2.5 py-0.5 rounded-full border border-blue-200 transition-colors cursor-pointer"
-
-              >
-
-                ← View All Accounts
-
-              </button>
-
-            )}
-
-          </div>
-
-          {/* Action buttons (Deposit & Withdraw) aligned right on the banner */}
-
-          {canManageBank && (
-
-            <div className="flex items-center gap-2 shrink-0">
-
-              <Button
-
-                type="button"
-
-                disabled={!activeAccount}
-
-                onClick={() => setIsDepositModalOpen(true)}
-
-                className="h-8 sm:h-8.5 px-3.5 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
-
-              >
-
-                <ArrowDownLeft className="h-3.5 w-3.5 shrink-0" />
-
-                <span>Deposit</span>
-
-              </Button>
-
-              <Button
-
-                type="button"
-
-                disabled={!activeAccount}
-
-                onClick={() => setIsWithdrawModalOpen(true)}
-
-                className="h-8 sm:h-8.5 px-3.5 rounded-full bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] disabled:opacity-50 text-white font-semibold text-xs shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
-
-              >
-
-                <ArrowUpRight className="h-3.5 w-3.5 shrink-0" />
-
-                <span>Withdraw</span>
-
-              </Button>
-
-            </div>
-
-          )}
-
-        </div>
-
-        {/* Unified Table matching screenshot columns: DATE, CHEQUE NO., PARTICULARS, WITHDRAWAL, DEPOSIT, CATEGORY, CURRENT BALANCE */}
-
-        <div className="overflow-x-auto rounded-xl border border-slate-100 mx-5 sm:mx-6 my-4">
-
-          <Table className="w-full text-xs">
-
+      {/* 3. Bottom Section: Bank Transactions Table (No title, fits cleanly without horizontal scroll) */}
+      <Card className="rounded-[24px] bg-white border border-stroke/30 p-4 sm:p-6 shadow-xs">
+        <div className="overflow-x-auto">
+          <Table className="w-full text-xs table-fixed">
+            <colgroup>
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '28%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+            </colgroup>
             <TableHeader>
-
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[12%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   DATE
-
                 </TableHead>
-
-                {showCompanyColumn && (
-
-                  <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[14%]">
-
-                    COMPANY
-
-                  </TableHead>
-
-                )}
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[15%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
-
                 </TableHead>
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[28%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
-
                 </TableHead>
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[13%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   WITHDRAWAL
-
                 </TableHead>
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[13%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   DEPOSIT
-
                 </TableHead>
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left w-[14%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   CATEGORY
-
                 </TableHead>
-
-                <TableHead className="px-4 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right w-[15%]">
-
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   CURRENT BALANCE
-
                 </TableHead>
-
               </TableRow>
-
             </TableHeader>
-
             <TableBody>
-
               {isLoading ? (
-                <TableSkeleton rows={5} columns={showCompanyColumn ? 8 : 7} />
+                <TableSkeleton rows={5} columns={7} />
               ) : paginatedTransactions.length === 0 ? (
                 <TableEmptyState
-                  colSpan={showCompanyColumn ? 8 : 7}
+                  colSpan={7}
                   title="No bank transactions found"
                   description={tableSearchQuery ? 'Try clearing your search query' : 'Deposit or withdraw funds to record transactions'}
                 />
               ) : (
-
                 paginatedTransactions.map((tx) => (
-
                   <TableRow
-
                     key={tx.id}
-
                     onClick={() => {
-
                       setViewingBankTx({
-
                         id: tx.id,
-
                         refNo: tx.chequeNo || tx.id,
-
                         chequeNo: tx.chequeNo || '',
-
                         date: tx.date,
-
                         type: tx.withdrawal && tx.withdrawal > 0 ? 'Expense' : 'Sales',
-
                         company: (tx as any).companyName || activeAccount?.companyName || selectedCompany || 'MCT Group of Companies',
-
                         description: tx.particulars,
-
                         particulars: tx.particulars,
-
                         amount: tx.deposit || tx.withdrawal || 0,
-
                         withdrawal: tx.withdrawal || 0,
-
                         deposit: tx.deposit || 0,
-
                         category: tx.category as any,
-
                         paymentMethod: tx.chequeNo ? 'Cheque' : 'Bank Transfer',
-
                         status: 'Paid',
-
                         auditStatus: (tx as any).auditStatus || 'Pending Audit',
-
                         createdAt: tx.date,
-
                         attachments: [],
-
                       })
-
                       setIsViewTxModalOpen(true)
-
                     }}
-
                     title="Click to view complete particulars and transaction breakdown"
-
                     className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer text-xs"
-
                   >
-
                     {/* Date */}
-
-                    <TableCell className="px-4 py-3.5 font-mono text-xs text-muted-fg whitespace-nowrap">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 font-mono text-xs text-muted-fg whitespace-nowrap">
                       {tx.date}
-
                     </TableCell>
-
-                    {/* Company Name (Aggregated View) */}
-
-                    {showCompanyColumn && (
-
-                      <TableCell className="px-4 py-3.5 font-medium text-xs text-focus whitespace-nowrap">
-
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200" title={(tx as any).companyName}>
-
-                          {(tx as any).companyName || 'Corporate'}
-
-                        </span>
-
-                      </TableCell>
-
-                    )}
 
                     {/* Cheque No */}
-
-                    <TableCell className="px-4 py-3.5 font-mono text-xs font-semibold text-focus whitespace-nowrap">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 font-mono text-xs font-semibold text-focus truncate">
                       {tx.chequeNo || '—'}
-
                     </TableCell>
 
-                    {/* Particulars */}
-
-                    <TableCell className="px-4 py-3.5 font-medium text-xs text-focus max-w-xs" title={tx.particulars}>
-
-                      {(() => {
-
-                        const summary = getParticularsSummary(tx.particulars)
-
-                        if (summary.count > 1) {
-
-                          return (
-
-                            <div className="flex items-center gap-1.5 min-w-0">
-
-                              <span className="truncate block font-medium">{summary.firstItemName}</span>
-
-                              <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-
-                                +{summary.count - 1} more
-
-                              </span>
-
-                            </div>
-
-                          )
-
-                        }
-
-                        return <span className="truncate block font-medium">{summary.firstItemName}</span>
-
-                      })()}
-
+                    {/* Particulars with Company Name below */}
+                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars}>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-semibold text-focus truncate">
+                          {getBankParticularsShortTitle(tx.particulars, tx.category)}
+                        </span>
+                        <span className="text-[11px] text-muted-fg font-normal truncate mt-0.5">
+                          {(tx as any).companyName || activeAccount?.companyName || selectedCompany || 'Corporate'}
+                        </span>
+                      </div>
                     </TableCell>
 
                     {/* Withdrawal */}
-
-                    <TableCell className="px-4 py-3.5 font-semibold text-xs text-rose-600 text-right whitespace-nowrap">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 font-semibold text-xs text-rose-600 text-right whitespace-nowrap">
                       {tx.withdrawal ? `₱ ${tx.withdrawal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : ''}
-
                     </TableCell>
 
                     {/* Deposit */}
-
-                    <TableCell className="px-4 py-3.5 font-semibold text-xs text-emerald-600 text-right whitespace-nowrap">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 font-semibold text-xs text-emerald-600 text-right whitespace-nowrap">
                       {tx.deposit ? `₱ ${tx.deposit.toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : ''}
-
                     </TableCell>
 
                     {/* Category */}
-
-                    <TableCell className="px-4 py-3.5 text-xs text-muted-fg whitespace-nowrap">
-
-                      <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-focus/80">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-muted-fg truncate">
+                      <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-focus/80 truncate">
                         {tx.category}
-
                       </span>
-
                     </TableCell>
 
                     {/* Current Balance */}
-
-                    <TableCell className="px-4 py-3.5 font-bold text-xs text-focus text-right whitespace-nowrap tabular-nums">
-
+                    <TableCell className="px-2.5 sm:px-3 py-3 font-bold text-xs text-focus text-right whitespace-nowrap tabular-nums">
                       ₱ {tx.runningBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
-
                     </TableCell>
-
                   </TableRow>
-
                 ))
-
               )}
-
             </TableBody>
-
           </Table>
 
         </div>

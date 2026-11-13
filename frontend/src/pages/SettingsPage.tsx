@@ -11,6 +11,7 @@ import {
   Trash2,
   RotateCcw,
   Save,
+  HelpCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
@@ -244,11 +245,19 @@ export const SettingsPage: React.FC = () => {
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <BackButton className="mb-2" />
-          <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-            Settings
-          </h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Settings
+            </h1>
+            <span
+              className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+              title="Company organization details, notification settings, and system configurations"
+            >
+              <HelpCircle className="h-5 w-5" />
+            </span>
+          </div>
           <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            Manage company profile and notification preferences.
+            Manage company profile, notification preferences, and system options
           </p>
         </div>
 
