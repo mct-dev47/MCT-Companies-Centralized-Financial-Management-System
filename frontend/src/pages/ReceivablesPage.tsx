@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
-import { ConfirmModal, TablePagination, TableEmptyState } from '@/components/common'
+import { ConfirmModal, TablePagination, TableEmptyState, Dropdown } from '@/components/common'
 import { notifySuccess } from '@/utils/errorUtils'
 import {
   Table,
@@ -1387,16 +1387,17 @@ export const ReceivablesPage: React.FC = () => {
 
               <div>
                 <label className="font-semibold text-focus block mb-1">Customer Type</label>
-                <select
+                <Dropdown
                   value={editPersonType}
-                  onChange={(e) =>
-                    setEditPersonType(e.target.value === 'Staff' ? 'Staff' : 'External')
+                  onChange={(val) =>
+                    setEditPersonType(val === 'Staff' ? 'Staff' : 'External')
                   }
-                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                >
-                  <option value="External">External</option>
-                  <option value="Staff">Staff</option>
-                </select>
+                  options={[
+                    { value: 'External', label: 'External' },
+                    { value: 'Staff', label: 'Staff' },
+                  ]}
+                  aria-label="Customer Type"
+                />
               </div>
             </div>
 

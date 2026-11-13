@@ -33,6 +33,7 @@ import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -2002,20 +2003,17 @@ export const TenantPage: React.FC = () => {
               <label htmlFor="payment-period" className="text-xs font-semibold text-focus block mb-1">
                 {isMissedMark ? 'Day' : 'Pay Starting From'} <span className="text-red-500">*</span>
               </label>
-              <select
+              <Dropdown
                 id="payment-period"
                 value={selected ? selected.index : ''}
-                onChange={(e) => handlePeriodSelect(Number(e.target.value))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-              >
-                {selectablePeriods.length === 0 && <option value="">Every period is fully paid</option>}
-                {selectablePeriods.map((p) => (
-                  <option key={p.index} value={p.index}>
-                    {p.label} · due {p.dueDate} · {formatPHP(p.remaining)} left
-                    {p.isOverdue ? ' · overdue' : ''}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => handlePeriodSelect(Number(val))}
+                placeholder={selectablePeriods.length === 0 ? 'Every period is fully paid' : 'Select period...'}
+                aria-label="Payment Period"
+                options={selectablePeriods.map((p) => ({
+                  value: p.index,
+                  label: `${p.label} · due ${p.dueDate} · ${formatPHP(p.remaining)} left${p.isOverdue ? ' · overdue' : ''}`,
+                }))}
+              />
               <p className="text-[10.5px] text-muted-fg mt-1">
                 Fully paid periods are not listed. Any extra money flows forward into the next periods.
               </p>
@@ -2130,16 +2128,17 @@ export const TenantPage: React.FC = () => {
 
                 <div>
                   <label className="text-xs font-semibold text-focus block mb-1">Payment Method</label>
-                  <select
+                  <Dropdown
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="GCash">GCash</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
-                  </select>
+                    onChange={(val) => setPaymentMethod(String(val))}
+                    aria-label="Payment Method"
+                    options={[
+                      { value: 'Cash', label: 'Cash' },
+                      { value: 'GCash', label: 'GCash' },
+                      { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      { value: 'Cheque', label: 'Cheque' },
+                    ]}
+                  />
                 </div>
 
                 <div>
@@ -2987,16 +2986,17 @@ export const TenantPage: React.FC = () => {
 
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-focus block">Status</label>
-                <select
+                <Dropdown
                   value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Overdue">Overdue</option>
-                  <option value="Completed">Completed</option>
-                </select>
+                  onChange={(val) => setFormData({ ...formData, status: val as any })}
+                  options={[
+                    { value: 'Active', label: 'Active' },
+                    { value: 'Pending', label: 'Pending' },
+                    { value: 'Overdue', label: 'Overdue' },
+                    { value: 'Completed', label: 'Completed' },
+                  ]}
+                  aria-label="Status"
+                />
               </div>
             </div>
 
@@ -3228,16 +3228,17 @@ export const TenantPage: React.FC = () => {
 
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-focus block">Status</label>
-                  <select
+                  <Dropdown
                     value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Overdue">Overdue</option>
-                    <option value="Completed">Completed</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, status: val as any })}
+                    options={[
+                      { value: 'Active', label: 'Active' },
+                      { value: 'Pending', label: 'Pending' },
+                      { value: 'Overdue', label: 'Overdue' },
+                      { value: 'Completed', label: 'Completed' },
+                    ]}
+                    aria-label="Status"
+                  />
                 </div>
 
                 <div className="space-y-1">

@@ -14,6 +14,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -1051,18 +1052,17 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   <label className="text-xs font-semibold text-focus block mb-1">
                     Payment Method <span className="text-[#960C01]">*</span>
                   </label>
-                  <select
+                  <Dropdown
                     value={paymentForm.method}
-                    onChange={(e) =>
-                      setPaymentForm({ ...paymentForm, method: e.target.value })
-                    }
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="GCash">GCash</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
-                  </select>
+                    onChange={(val) => setPaymentForm({ ...paymentForm, method: String(val) })}
+                    options={[
+                      { value: 'Cash', label: 'Cash' },
+                      { value: 'GCash', label: 'GCash' },
+                      { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      { value: 'Cheque', label: 'Cheque' },
+                    ]}
+                    aria-label="Payment Method"
+                  />
                 </div>
 
                 {/* Receipt / Ref No. */}

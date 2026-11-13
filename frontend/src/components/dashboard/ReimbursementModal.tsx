@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1070,11 +1071,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 <Label htmlFor="reimbursement-company" className="text-xs font-semibold text-focus">
                   Company <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   id="reimbursement-company"
                   value={requestingCompany}
-                  onChange={(e) => {
-                    setRequestingCompany(e.target.value)
+                  onChange={(val) => {
+                    setRequestingCompany(String(val))
                     if (fieldErrors.company) {
                       setFieldErrors((prev) => {
                         const n = { ...prev }
@@ -1083,17 +1084,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       })
                     }
                   }}
-                  className={cn(
-                    'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
-                    fieldErrors.company ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                  )}
-                >
-                  {availableCompanies.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  options={availableCompanies.map((c) => ({ value: c, label: c }))}
+                  error={fieldErrors.company}
+                  aria-label="Requesting Company"
+                />
                 {fieldErrors.company && (
                   <p className="text-[11px] text-red-600 font-medium">{fieldErrors.company}</p>
                 )}
@@ -1249,11 +1243,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <select
+                  <Dropdown
                     id="reimbursement-category"
                     value={category}
-                    onChange={(e) => {
-                      setCategory(e.target.value)
+                    onChange={(val) => {
+                      setCategory(String(val))
                       if (fieldErrors.category) {
                         setFieldErrors((prev) => {
                           const n = { ...prev }
@@ -1262,18 +1256,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                         })
                       }
                     }}
-                    className={cn(
-                      'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
-                      fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                    )}
-                  >
-                    <option value="" disabled>Select a category…</option>
-                    {companyCategories.map((cat) => (
-                      <option key={cat.category_id} value={cat.name}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Select a category…"
+                    options={companyCategories.map((cat) => ({ value: cat.name, label: cat.name }))}
+                    error={fieldErrors.category}
+                    aria-label="Expense Category"
+                  />
                 )}
 
                 {fieldErrors.category && (
@@ -1573,11 +1560,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       </div>
                     ) : (
                       <div className="relative">
-                        <select
+                        <Dropdown
                           id="reimbursement-funding-bank"
                           value={fundingBankId}
-                          onChange={(e) => {
-                            setFundingBankId(e.target.value)
+                          onChange={(val) => {
+                            setFundingBankId(String(val))
                             if (fieldErrors.fundingBank) {
                               setFieldErrors((prev) => {
                                 const next = { ...prev }
@@ -1586,23 +1573,17 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                               })
                             }
                           }}
-                          className={cn(
-                            'w-full h-10 pl-3 pr-9 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none appearance-none cursor-pointer',
-                            fieldErrors.fundingBank ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                          )}
-                        >
-                          <option value="" disabled={!(employeeOutOfPocket === 0 && grandTotal > 0)}>
-                            Choose the bank that funds this reimbursement...
-                          </option>
-                          {(requestingCompany
+                          placeholder="Choose the bank that funds this reimbursement..."
+                          options={(requestingCompany
                             ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
                             : effectiveBankAccounts
-                          ).map((acc) => (
-                            <option key={acc.id} value={acc.id}>
-                              {acc.bankName} ({acc.accountName}) [{acc.companyName}]
-                            </option>
-                          ))}
-                        </select>
+                          ).map((acc) => ({
+                            value: acc.id,
+                            label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                          }))}
+                          error={fieldErrors.fundingBank}
+                          aria-label="Funding Bank"
+                        />
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
                       </div>
                     )}

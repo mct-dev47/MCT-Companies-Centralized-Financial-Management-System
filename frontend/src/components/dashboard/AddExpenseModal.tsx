@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -506,23 +507,18 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   <Label className="text-xs font-semibold text-focus block">
                     Petty Cash Category <span className="text-red-500">*</span>
                   </Label>
-                  <select
+                  <Dropdown
                     value={pettyCashCategory}
-                    onChange={(e) => {
-                      setPettyCashCategory(e.target.value)
+                    onChange={(val) => {
+                      setPettyCashCategory(String(val))
                       if (fieldErrors.particulars) {
                         setFieldErrors((prev) => ({ ...prev, particulars: undefined }))
                       }
                     }}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                  >
-                    <option value="">-- Select Pre-defined Category --</option>
-                    {PREDEFINED_PETTY_CASH_CATEGORIES.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="-- Select Pre-defined Category --"
+                    options={PREDEFINED_PETTY_CASH_CATEGORIES.map((cat) => ({ value: cat, label: cat }))}
+                    aria-label="Pre-defined Category"
+                  />
                 </div>
               </div>
             ) : (
@@ -602,10 +598,10 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                 <Label className="text-xs font-semibold text-focus block">
                   Payment Method <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={paymentMethod}
-                  onChange={(e) => {
-                    const newPm = e.target.value
+                  onChange={(val) => {
+                    const newPm = String(val)
                     setPaymentMethod(newPm)
                     if (newPm.trim().toLowerCase() === 'petty cash') {
                       setCategory('Petty Cash')
@@ -613,14 +609,9 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                       setCategory(DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
                     }
                   }}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {PAYMENT_METHOD_OPTIONS.map((pm) => (
-                    <option key={pm} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                </select>
+                  options={PAYMENT_METHOD_OPTIONS.map((pm) => ({ value: pm, label: pm }))}
+                  aria-label="Payment Method"
+                />
                 {isPettyCash && pettyBalance !== null && (
                   <p
                     className={cn(

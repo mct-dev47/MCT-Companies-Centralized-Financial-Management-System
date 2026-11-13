@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -321,20 +322,13 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                 </Label>
                 {isFinanceUser ? (
                   <div className="relative">
-                    <select
+                    <Dropdown
                       value={borrowerCompany}
-                      onChange={(e) => handleBorrowerChange(e.target.value)}
-                      className={cn(
-                        'w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer',
-                        fieldErrors.borrower && 'border-red-500'
-                      )}
-                    >
-                      {allCompanyNames.map((name) => (
-                        <option key={name} value={name}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => handleBorrowerChange(String(val))}
+                      options={allCompanyNames.map((name) => ({ value: name, label: name }))}
+                      error={fieldErrors.borrower}
+                      aria-label="Borrower Company"
+                    />
                   </div>
                 ) : (
                   <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-focus/90 text-xs sm:text-sm font-medium flex items-center justify-between shadow-2xs select-none">

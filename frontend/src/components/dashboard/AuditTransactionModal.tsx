@@ -28,6 +28,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1226,17 +1227,16 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 <Label className="text-xs font-semibold text-focus block">
                   Payment Method
                 </Label>
-                <select
+                <Dropdown
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="h-9 w-full rounded-xl border border-stroke/50 text-xs px-2.5 font-medium bg-white focus:outline-none focus:ring-1 focus:ring-focus text-focus cursor-pointer"
-                >
-                  {(isExpense ? EXPENSE_PAYMENT_METHODS : SALES_PAYMENT_METHODS).map((pm) => (
-                    <option key={pm} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                </select>
+                  size="sm"
+                  onChange={(val) => setPaymentMethod(String(val))}
+                  options={(isExpense ? EXPENSE_PAYMENT_METHODS : SALES_PAYMENT_METHODS).map((pm) => ({
+                    value: pm,
+                    label: pm,
+                  }))}
+                  aria-label="Payment Method"
+                />
               </div>
             </div>
 

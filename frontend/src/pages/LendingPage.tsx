@@ -30,6 +30,7 @@ import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -2197,10 +2198,10 @@ export const LendingPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Payment Schedule <span className="text-[#960C01]">*</span>
                 </label>
-                <select
+                <Dropdown
                   value={formData.paymentFrequency}
-                  onChange={(e) => {
-                    const freq = e.target.value as 'Daily' | 'Monthly'
+                  onChange={(val) => {
+                    const freq = val as 'Daily' | 'Monthly'
                     let newTerm = formData.termDays
                     if (freq === 'Daily' && formData.paymentFrequency !== 'Daily') {
                       newTerm = '40'
@@ -2215,11 +2216,12 @@ export const LendingPage: React.FC = () => {
                       dueDate: newDue || formData.dueDate,
                     })
                   }}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 font-semibold"
-                >
-                  <option value="Daily">Daily</option>
-                  <option value="Monthly">Monthly</option>
-                </select>
+                  options={[
+                    { value: 'Daily', label: 'Daily' },
+                    { value: 'Monthly', label: 'Monthly' },
+                  ]}
+                  aria-label="Payment Schedule"
+                />
               </div>
 
               <div>
@@ -2645,11 +2647,11 @@ export const LendingPage: React.FC = () => {
                   <label className="text-xs font-semibold text-focus block mb-1">
                     Payment Schedule
                   </label>
-                  <select
+                  <Dropdown
                     value={editFormData.paymentFrequency}
                     disabled={isTermsLocked}
-                    onChange={(e) => {
-                      const freq = e.target.value as 'Daily' | 'Monthly'
+                    onChange={(val) => {
+                      const freq = val as 'Daily' | 'Monthly'
                       let newTerm = editFormData.termDays
                       if (freq === 'Daily' && editFormData.paymentFrequency !== 'Daily') {
                         newTerm = '40'
@@ -2664,14 +2666,12 @@ export const LendingPage: React.FC = () => {
                         dueDate: newDue || editFormData.dueDate,
                       })
                     }}
-                    className={cn(
-                      'w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20',
-                      isTermsLocked && 'bg-slate-100 text-muted-fg cursor-not-allowed select-none'
-                    )}
-                  >
-                    <option value="Daily">Daily</option>
-                    <option value="Monthly">Monthly</option>
-                  </select>
+                    options={[
+                      { value: 'Daily', label: 'Daily' },
+                      { value: 'Monthly', label: 'Monthly' },
+                    ]}
+                    aria-label="Payment Schedule"
+                  />
                 </div>
 
                 <div>
@@ -2749,21 +2749,22 @@ export const LendingPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Status
                 </label>
-                <select
+                <Dropdown
                   value={editFormData.status}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setEditFormData({
                       ...editFormData,
-                      status: e.target.value as LendingFacility['status'],
+                      status: val as LendingFacility['status'],
                     })
                   }
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Overdue">Overdue</option>
-                  <option value="Pending">Pending</option>
-                </select>
+                  options={[
+                    { value: 'Active', label: 'Active' },
+                    { value: 'Completed', label: 'Completed' },
+                    { value: 'Overdue', label: 'Overdue' },
+                    { value: 'Pending', label: 'Pending' },
+                  ]}
+                  aria-label="Status"
+                />
               </div>
 
               <div>

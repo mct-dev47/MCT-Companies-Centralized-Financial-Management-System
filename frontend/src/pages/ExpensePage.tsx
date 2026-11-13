@@ -893,7 +893,7 @@ export const ExpensePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportCsv}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Download as CSV</span>
@@ -901,7 +901,7 @@ export const ExpensePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportPdf}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileText className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>Download as PDF</span>
@@ -936,7 +936,7 @@ export const ExpensePage: React.FC = () => {
             aria-selected={tableTab === 'Withdraw'}
             onClick={() => setTableTab('Withdraw')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Withdraw'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -969,7 +969,7 @@ export const ExpensePage: React.FC = () => {
             aria-selected={tableTab === 'Expense Record'}
             onClick={() => setTableTab('Expense Record')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Expense Record'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -1009,7 +1009,7 @@ export const ExpensePage: React.FC = () => {
                     type="button"
                     onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer select-none box-border',
+                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-3.5 rounded-[10px] border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                     aria-label="Filter expenses by company"
@@ -1039,7 +1039,7 @@ export const ExpensePage: React.FC = () => {
                     <div
                       style={companyPos.isMobile ? companyPos.style : undefined}
                       className={cn(
-                        'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                        'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
                         companyPos.isMobile
                           ? 'w-[min(calc(100vw-32px),320px)]'
                           : 'absolute left-0 top-full mt-2 w-72'

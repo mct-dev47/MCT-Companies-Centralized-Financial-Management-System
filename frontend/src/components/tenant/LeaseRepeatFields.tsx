@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Repeat } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -30,22 +31,18 @@ export const RepeatSelect: React.FC<RepeatSelectProps> = ({ value, onChange, dis
       <Repeat className="h-3.5 w-3.5 text-muted-fg" aria-hidden="true" />
       <span>Payment Schedule <span className="text-red-500">*</span></span>
     </label>
-    <select
+    <Dropdown
       id="lease-repeat"
       value={value}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value as LeaseRepeat)}
-      className={cn(
-        'w-full h-10 px-3 rounded-xl border bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus disabled:opacity-60 disabled:cursor-not-allowed',
-        error ? 'border-red-500' : 'border-stroke/50'
-      )}
-    >
-      {REPEAT_OPTIONS.map((opt) => (
-        <option key={opt} value={opt}>
-          {REPEAT_LABELS[opt]}
-        </option>
-      ))}
-    </select>
+      onChange={(val) => onChange(val as LeaseRepeat)}
+      error={error}
+      options={REPEAT_OPTIONS.map((opt) => ({
+        value: opt,
+        label: REPEAT_LABELS[opt],
+      }))}
+      aria-label="Repeat Interval"
+    />
     {error && <p className="text-[10px] text-red-600 font-medium">{error}</p>}
     {!error && disabled && lockedReason && <p className="text-[10px] text-muted-fg">{lockedReason}</p>}
   </div>

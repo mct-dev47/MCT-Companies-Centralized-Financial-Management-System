@@ -7,6 +7,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -487,17 +488,12 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 <Label className="text-xs font-semibold text-focus block">
                   Payment Method <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {PAYMENT_METHOD_OPTIONS.map((pm) => (
-                    <option key={pm} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setPaymentMethod(String(val))}
+                  options={PAYMENT_METHOD_OPTIONS.map((pm) => ({ value: pm, label: pm }))}
+                  aria-label="Payment Method"
+                />
               </div>
             </div>
 
@@ -549,14 +545,16 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                       <Label className="text-[11px] font-semibold text-slate-700 block">
                         Customer Type <span className="text-red-500">*</span>
                       </Label>
-                      <select
+                      <Dropdown
                         value={customerType}
-                        onChange={(e) => setCustomerType(e.target.value as 'External' | 'Staff')}
-                        className="w-full h-9 px-2.5 rounded-lg border border-stroke/50 bg-white text-xs font-medium text-focus cursor-pointer"
-                      >
-                        <option value="External">External Customer</option>
-                        <option value="Staff">Internal Staff</option>
-                      </select>
+                        size="sm"
+                        onChange={(val) => setCustomerType(val as 'External' | 'Staff')}
+                        options={[
+                          { value: 'External', label: 'External Customer' },
+                          { value: 'Staff', label: 'Internal Staff' },
+                        ]}
+                        aria-label="Customer Type"
+                      />
                     </div>
 
                     <div className="space-y-1">

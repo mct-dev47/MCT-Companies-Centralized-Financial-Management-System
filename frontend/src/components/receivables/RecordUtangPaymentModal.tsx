@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -493,22 +494,23 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
               {person && unlockedPersonSales.length > 1 && !sale && (
                 <div className="space-y-1">
                   <Label className="text-xs font-semibold text-focus">Apply Payment To</Label>
-                  <select
+                  <Dropdown
                     value={selectedSaleId}
-                    onChange={(e) => {
-                      setSelectedSaleId(e.target.value)
+                    onChange={(val) => {
+                      setSelectedSaleId(String(val))
                       setAmountInput('')
                       setPaymentMode('partial')
                     }}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs text-focus font-medium focus:outline-none focus:ring-2 focus:ring-focus/20"
-                  >
-                    <option value="">Apply to oldest unpaid orders first (FIFO)</option>
-                    {unlockedPersonSales.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        #{s.id} ({s.date}) — {formatPHP(s.balance)} due ({s.items_summary.slice(0, 30)})
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Apply to oldest unpaid orders first (FIFO)"
+                    options={[
+                      { value: '', label: 'Apply to oldest unpaid orders first (FIFO)' },
+                      ...unlockedPersonSales.map((s) => ({
+                        value: s.id,
+                        label: `#${s.id} (${s.date}) — ${formatPHP(s.balance)} due (${s.items_summary.slice(0, 30)})`,
+                      })),
+                    ]}
+                    aria-label="Select Sale Order"
+                  />
                 </div>
               )}
 
@@ -674,18 +676,16 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                   <Label className="text-xs font-semibold text-focus">
                     Deposit Bank (Optional)
                   </Label>
-                  <select
+                  <Dropdown
                     value={selectedBankAccountId}
-                    onChange={(e) => setSelectedBankAccountId(e.target.value)}
-                    className="w-full h-10 px-3 text-xs rounded-xl border border-stroke/60 bg-white focus:outline-none focus:ring-1 focus:ring-focus font-medium"
-                  >
-                    <option value="">Do not post bank deposit</option>
-                    {bankAccounts.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.bankName}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setSelectedBankAccountId(String(val))}
+                    placeholder="Do not post bank deposit"
+                    options={[
+                      { value: '', label: 'Do not post bank deposit' },
+                      ...bankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
+                    ]}
+                    aria-label="Bank Deposit Account"
+                  />
                 </div>
               )}
 

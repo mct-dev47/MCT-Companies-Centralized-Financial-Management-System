@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -945,15 +946,15 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   </span>
                   {isLoadingFunds && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-fg" />}
                 </label>
-                <select
+                <Dropdown
                   value={fundingSource === 'bank' ? `bank:${bankAccountId}` : fundingSource}
-                  onChange={(e) => {
+                  onChange={(val) => {
                     setError('')
-                    const val = e.target.value
-                    if (val.startsWith('bank:')) {
+                    const sVal = String(val)
+                    if (sVal.startsWith('bank:')) {
                       setFundingSource('bank')
-                      setBankAccountId(val.slice(5))
-                    } else if (val === 'petty_cash') {
+                      setBankAccountId(sVal.slice(5))
+                    } else if (sVal === 'petty_cash') {
                       setFundingSource('petty_cash')
                       setBankAccountId('')
                     } else {
@@ -961,26 +962,19 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                       setBankAccountId('')
                     }
                   }}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
-                >
-                  <option value="">Select bank or petty cash...</option>
-                  {bankAccounts.length > 0 && (
-                    <optgroup label="Bank Accounts">
-                      {bankAccounts.map((acc) => (
-                        <option key={acc.id} value={`bank:${acc.id}`}>
-                          {acc.bankName}
-                          {acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} —{' '}
-                          {formatPHP(Number(acc.currentBalance) || 0)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="Petty Cash">
-                    <option value="petty_cash">
-                      Petty Cash{pettyCashBalance !== null ? ` — ${formatPHP(pettyCashBalance)}` : ''}
-                    </option>
-                  </optgroup>
-                </select>
+                  placeholder="Select bank or petty cash..."
+                  options={[
+                    ...bankAccounts.map((acc) => ({
+                      value: `bank:${acc.id}`,
+                      label: `${acc.bankName}${acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} — ${formatPHP(Number(acc.currentBalance) || 0)}`,
+                    })),
+                    {
+                      value: 'petty_cash',
+                      label: `Petty Cash${pettyCashBalance !== null ? ` — ${formatPHP(pettyCashBalance)}` : ''}`,
+                    },
+                  ]}
+                  aria-label="Funding Source"
+                />
                 {!isLoadingFunds && bankAccounts.length === 0 && (
                   <p className="text-[11px] text-muted-fg">No bank account is registered for {bill.company}.</p>
                 )}
@@ -997,16 +991,17 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   <label className="text-xs font-semibold text-focus block">
                     Payment Method
                   </label>
-                  <select
+                  <Dropdown
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
-                  >
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
-                    <option value="Online Banking">Online Banking</option>
-                    <option value="Debit Card">Debit Card</option>
-                  </select>
+                    onChange={(val) => setPaymentMethod(String(val))}
+                    options={[
+                      { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      { value: 'Cheque', label: 'Cheque' },
+                      { value: 'Online Banking', label: 'Online Banking' },
+                      { value: 'Debit Card', label: 'Debit Card' },
+                    ]}
+                    aria-label="Payment Method"
+                  />
                 </div>
               )}
 

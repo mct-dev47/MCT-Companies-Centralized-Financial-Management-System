@@ -19,6 +19,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -586,27 +587,17 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     </Label>
                     <FormControl>
                       <div className="relative">
-                        <select
+                        <Dropdown
                           id="create-user-role"
                           value={field.value}
-                          onChange={(e) => {
-                            handleRoleChange(e.target.value)
+                          onChange={(val) => {
+                            handleRoleChange(String(val))
                             setValidationWarning(null)
                           }}
-                          className={cn(
-                            'flex h-11 w-full rounded-xl border-[0.5px] bg-background px-3.5 py-2.5 text-sm text-focus shadow-none transition-colors appearance-none focus-visible:outline-none focus-visible:ring-1 cursor-pointer',
-                            fieldState.error
-                              ? 'border-red-500 ring-1 ring-red-500 focus-visible:border-red-500 focus-visible:ring-red-500 bg-red-50/10'
-                              : 'border-stroke/60 focus-visible:border-focus focus-visible:ring-focus'
-                          )}
-                          aria-invalid={!!fieldState.error}
-                        >
-                          {ROLES.map((role) => (
-                            <option key={role} value={role}>
-                              {role}
-                            </option>
-                          ))}
-                        </select>
+                          options={ROLES.map((role) => ({ value: role, label: role }))}
+                          aria-label="User Role"
+                          error={fieldState.error?.message}
+                        />
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-fg">
                           <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20">
                             <path

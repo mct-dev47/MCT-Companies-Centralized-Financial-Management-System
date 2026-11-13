@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -329,17 +330,13 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                   <span className="truncate font-semibold">{requestingCompany}</span>
                 </div>
               ) : (
-                <select
+                <Dropdown
                   value={requestingCompany}
-                  onChange={(e) => setRequestingCompany(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
-                >
-                  {availableCompanies.map((comp) => (
-                    <option key={comp} value={comp}>
-                      {comp}
-                    </option>
-                  ))}
-                </select>
+                  size="sm"
+                  onChange={(val) => setRequestingCompany(String(val))}
+                  options={availableCompanies.map((comp) => ({ value: comp, label: comp }))}
+                  aria-label="Requesting Company"
+                />
               )}
             </div>
           </div>
@@ -430,22 +427,20 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                     </div>
                   ) : (
                     <div className="relative">
-                      <select
+                      <Dropdown
                         value={fundingBankId}
-                        onChange={(e) => setFundingBankId(e.target.value)}
-                        className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
-                        required
-                      >
-                        <option value="">Select funding bank account...</option>
-                        {(requestingCompany
+                        size="sm"
+                        onChange={(val) => setFundingBankId(String(val))}
+                        placeholder="Select funding bank account..."
+                        options={(requestingCompany
                           ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
                           : bankAccountsList
-                        ).map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.bankName} ({acc.accountName}) [{acc.companyName || 'Corporate'}]
-                          </option>
-                        ))}
-                      </select>
+                        ).map((acc) => ({
+                          value: acc.id,
+                          label: `${acc.bankName} (${acc.accountName}) [${acc.companyName || 'Corporate'}]`,
+                        }))}
+                        aria-label="Funding Bank"
+                      />
                     </div>
                   )}
                   {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : bankAccountsList.length === 0) && (

@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Landmark, ChevronDown } from 'lucide-react'
+import { Landmark } from 'lucide-react'
 import {
   bankService,
   isAccountOwnedBy,
@@ -8,7 +8,7 @@ import {
 } from '@/services/bankService'
 import { useSession } from '@/hooks/useSession'
 import { websocketService } from '@/services/websocketService'
-import { cn } from '@/lib/utils'
+import { Dropdown, type DropdownOption } from '@/components/ui/Dropdown'
 
 const norm = (s?: string) => (s || '').trim().toLowerCase()
 
@@ -105,33 +105,58 @@ interface BankFilterSelectProps {
   includePettyCash?: boolean
 }
 
-/** Compact "All Banks / <bank>" pill, styled like the other toolbar filters. */
-export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, value, onChange, className, includePettyCash }) => {
+/**
+ * Standard BankFilterSelect conforming to Phase 2 Dropdown Standards:
+ * - 10px control radius
+ * - 44px min height
+ * - 16px surface radius menu with soft shadow
+ * - Full keyboard navigation and accessible combobox role
+ */
+export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({
+  accounts,
+  value,
+  onChange,
+  className,
+  includePettyCash,
+}) => {
   if (accounts.length === 0 && !includePettyCash) return null
+
+  const options: DropdownOption<string>[] = [
+    {
+      value: '',
+      label: 'All Banks',
+      icon: <Landmark className="h-3.5 w-3.5 text-muted-fg" />,
+    },
+    ...accounts.map((a) => ({
+      value: String(a.id),
+      label: `${a.bankName}${a.accountName ? ` - ${a.accountName}` : ''}`,
+      icon: <Landmark className="h-3.5 w-3.5 text-muted-fg" />,
+    })),
+    ...(includePettyCash
+      ? [
+          {
+            value: PETTY_CASH_BANK_ID,
+            label: 'Petty Cash',
+            icon: <Landmark className="h-3.5 w-3.5 text-muted-fg" />,
+          },
+        ]
+      : []),
+  ]
+
   return (
-    <label
-      className={cn(
-        'relative inline-flex items-center gap-2 h-10 pl-3.5 pr-8 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs cursor-pointer select-none box-border',
-        className
-      )}
-    >
-      <Landmark className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-      <select
+    <div className={className}>
+      <Dropdown<string>
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(val) => onChange(val || '')}
+        options={options}
+        placeholder="All Banks"
         aria-label="Filter by bank"
-        className="appearance-none bg-transparent font-semibold text-focus/90 focus:outline-none cursor-pointer flex-1 min-w-0 truncate pr-2"
-      >
-        <option value="">All Banks</option>
-        {accounts.map((a) => (
-          <option key={a.id} value={String(a.id)}>
-            {a.bankName}
-            {a.accountName ? ` - ${a.accountName}` : ''}
-          </option>
-        ))}
-        {includePettyCash && <option value={PETTY_CASH_BANK_ID}>Petty Cash</option>}
-      </select>
-      <ChevronDown className="h-3.5 w-3.5 text-muted-fg absolute right-3 pointer-events-none" />
-    </label>
+        searchable={accounts.length > 5}
+        searchPlaceholder="Search banks..."
+        triggerClassName="min-w-[180px] max-w-[260px] rounded-[10px]"
+      />
+    </div>
   )
 }
+
+export default BankFilterSelect

@@ -6,6 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -219,19 +220,19 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                   {customerType === 'Staff' ? 'Staff Member' : 'Customer Name'}{' '}
                   <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={selectedPersonName}
-                  onChange={(e) => setSelectedPersonName(e.target.value)}
-                  className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  <option value="">Select from existing {customerType.toLowerCase()} list...</option>
-                  {filteredPeople.map((p) => (
-                    <option key={p.key} value={p.name}>
-                      {p.name} {p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}
-                    </option>
-                  ))}
-                  <option value="__NEW__">+ Enter new {customerType.toLowerCase()} name...</option>
-                </select>
+                  onChange={(val) => setSelectedPersonName(String(val))}
+                  placeholder={`Select from existing ${customerType.toLowerCase()} list...`}
+                  options={[
+                    ...filteredPeople.map((p) => ({
+                      value: p.name,
+                      label: `${p.name} ${p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}`,
+                    })),
+                    { value: '__NEW__', label: `+ Enter new ${customerType.toLowerCase()} name...` },
+                  ]}
+                  aria-label="Customer"
+                />
               </div>
 
               {(selectedPersonName === '__NEW__' || !selectedPersonName) && (
@@ -360,15 +361,17 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
 
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold text-amber-900">Payment Method</Label>
-                    <select
+                    <Dropdown
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                      className="w-full h-9 px-3 rounded-xl border border-amber-300 bg-white text-xs sm:text-sm text-focus"
-                    >
-                      <option value="Cash">Cash</option>
-                      <option value="GCash">GCash</option>
-                      <option value="Bank Transfer">Bank Transfer</option>
-                    </select>
+                      size="sm"
+                      onChange={(val) => setPaymentMethod(val as PaymentMethod)}
+                      options={[
+                        { value: 'Cash', label: 'Cash' },
+                        { value: 'GCash', label: 'GCash' },
+                        { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      ]}
+                      aria-label="Payment Method"
+                    />
                   </div>
                 </div>
 

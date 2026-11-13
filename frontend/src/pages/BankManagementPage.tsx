@@ -48,6 +48,7 @@ import {
 } from 'lucide-react'
 
 import { Card } from '@/components/ui/card'
+import { Dropdown } from '@/components/ui/Dropdown'
 
 import { Button } from '@/components/ui/button'
 
@@ -3714,39 +3715,24 @@ export const BankManagementPage: React.FC = () => {
 
                 </label>
 
-                <select
-
+                <Dropdown
                   value={addBankForm.bankName}
-
-                  onChange={(e) => setAddBankForm({ ...addBankForm, bankName: e.target.value })}
-
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-
-                >
-
-                  <option value="CHINABANK">CHINABANK</option>
-
-                  <option value="BDO UNIBANK">BDO UNIBANK</option>
-
-                  <option value="BPI">BPI</option>
-
-                  <option value="METROBANK">METROBANK</option>
-
-                  <option value="UNIONBANK">UNIONBANK</option>
-
-                  <option value="SECURITY BANK">SECURITY BANK</option>
-
-                  <option value="RCBC">RCBC</option>
-
-                  <option value="LANDBANK">LANDBANK</option>
-
-                  <option value="PNB">PNB</option>
-
-                  <option value="EASTWEST">EASTWEST</option>
-
-                  <option value="Others">Others (Specify)</option>
-
-                </select>
+                  onChange={(val) => setAddBankForm({ ...addBankForm, bankName: String(val) })}
+                  options={[
+                    { value: 'CHINABANK', label: 'CHINABANK' },
+                    { value: 'BDO UNIBANK', label: 'BDO UNIBANK' },
+                    { value: 'BPI', label: 'BPI' },
+                    { value: 'METROBANK', label: 'METROBANK' },
+                    { value: 'UNIONBANK', label: 'UNIONBANK' },
+                    { value: 'SECURITY BANK', label: 'SECURITY BANK' },
+                    { value: 'RCBC', label: 'RCBC' },
+                    { value: 'LANDBANK', label: 'LANDBANK' },
+                    { value: 'PNB', label: 'PNB' },
+                    { value: 'EASTWEST', label: 'EASTWEST' },
+                    { value: 'Others', label: 'Others (Specify)' },
+                  ]}
+                  aria-label="Bank Name"
+                />
 
                 {addBankForm.bankName === 'Others' && (
 
@@ -3786,35 +3772,22 @@ export const BankManagementPage: React.FC = () => {
 
                 </label>
 
-                <select
-
+                <Dropdown
                   value={addBankForm.accountType}
-
-                  onChange={(e) =>
-
+                  onChange={(val) =>
                     setAddBankForm({
-
                       ...addBankForm,
-
-                      accountType: e.target.value as BankAccount['accountType'],
-
+                      accountType: val as BankAccount['accountType'],
                     })
-
                   }
-
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-
-                >
-
-                  <option value="Checking">Checking Account</option>
-
-                  <option value="Savings">Savings Account</option>
-
-                  <option value="Payroll">Payroll Account</option>
-
-                  <option value="Time Deposit">Time Deposit</option>
-
-                </select>
+                  options={[
+                    { value: 'Checking', label: 'Checking' },
+                    { value: 'Savings', label: 'Savings' },
+                    { value: 'Payroll', label: 'Payroll' },
+                    { value: 'Current', label: 'Current' },
+                  ]}
+                  aria-label="Account Type"
+                />
 
               </div>
 
@@ -3929,21 +3902,15 @@ export const BankManagementPage: React.FC = () => {
 
                 </label>
 
-                <select
-
+                <Dropdown
                   value={addBankForm.colorTheme}
-
-                  onChange={(e) => setAddBankForm({ ...addBankForm, colorTheme: e.target.value as 'red' | 'grey' })}
-
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-
-                >
-
-                  <option value="red">Crimson Red (Commercial)</option>
-
-                  <option value="grey">Slate Metallic (Holdings/Tech)</option>
-
-                </select>
+                  onChange={(val) => setAddBankForm({ ...addBankForm, colorTheme: val as 'red' | 'grey' })}
+                  options={[
+                    { value: 'red', label: 'Crimson Red (Commercial)' },
+                    { value: 'grey', label: 'Graphite (Holding / Corp)' },
+                  ]}
+                  aria-label="Card Theme"
+                />
 
               </div>
 
@@ -4082,16 +4049,12 @@ export const BankManagementPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Company <span className="text-red-500">*</span>
                 </label>
-                <select
-                  required
+                <Dropdown
                   value={txCompany || activeAccount?.companyName || ''}
-                  onChange={(e) => setTxCompany(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  {activeAccount?.companyNames.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setTxCompany(String(val))}
+                  options={(activeAccount?.companyNames || []).map((c) => ({ value: c, label: c }))}
+                  aria-label="Company"
+                />
               </div>
             )}
 
@@ -4159,25 +4122,18 @@ export const BankManagementPage: React.FC = () => {
 
                 </label>
 
-                <select
-
+                <Dropdown
                   value={depositForm.category}
-
-                  onChange={(e) => setDepositForm({ ...depositForm, category: e.target.value })}
-
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus"
-
-                >
-
-                  <option value="Bank Transfer">Bank Transfer</option>
-
-                  <option value="Cheque">Cheque Deposit</option>
-
-                  <option value="Cash">Cash Deposit</option>
-
-                  <option value="Online Payment">Online Payment</option>
-
-                </select>
+                  onChange={(val) => setDepositForm({ ...depositForm, category: String(val) })}
+                  options={[
+                    { value: 'Bank Transfer', label: 'Bank Transfer' },
+                    { value: 'Cash Deposit', label: 'Cash Deposit' },
+                    { value: 'Loan Proceeds', label: 'Loan Proceeds' },
+                    { value: 'Sales Collection', label: 'Sales Collection' },
+                    { value: 'Others', label: 'Others' },
+                  ]}
+                  aria-label="Deposit Category"
+                />
 
               </div>
 
@@ -4316,16 +4272,12 @@ export const BankManagementPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Company <span className="text-red-500">*</span>
                 </label>
-                <select
-                  required
+                <Dropdown
                   value={txCompany || activeAccount?.companyName || ''}
-                  onChange={(e) => setTxCompany(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  {activeAccount?.companyNames.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
+                  onChange={(val) => setTxCompany(String(val))}
+                  options={(activeAccount?.companyNames || []).map((c) => ({ value: c, label: c }))}
+                  aria-label="Company"
+                />
               </div>
             )}
 
@@ -4393,25 +4345,19 @@ export const BankManagementPage: React.FC = () => {
 
                 </label>
 
-                <select
-
+                <Dropdown
                   value={withdrawForm.category}
-
-                  onChange={(e) => setWithdrawForm({ ...withdrawForm, category: e.target.value })}
-
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus"
-
-                >
-
-                  <option value="Cheque">Cheque</option>
-
-                  <option value="Bank Transfer">Bank Transfer</option>
-
-                  <option value="Cash">Cash</option>
-
-                  <option value="Online Payment">Online Payment</option>
-
-                </select>
+                  onChange={(val) => setWithdrawForm({ ...withdrawForm, category: String(val) })}
+                  options={[
+                    { value: 'Cheque', label: 'Cheque' },
+                    { value: 'Bank Transfer', label: 'Bank Transfer' },
+                    { value: 'Cash Withdrawal', label: 'Cash Withdrawal' },
+                    { value: 'Bills Payment', label: 'Bills Payment' },
+                    { value: 'Payroll', label: 'Payroll' },
+                    { value: 'Others', label: 'Others' },
+                  ]}
+                  aria-label="Withdraw Category"
+                />
 
               </div>
 

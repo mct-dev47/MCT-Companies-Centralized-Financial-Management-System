@@ -20,6 +20,7 @@ import {
 import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
 import { receivablesService } from '@/services/receivablesService'
 import { Button } from '@/components/ui/button'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Card } from '@/components/ui/card'
 import { BackButton, ErrorBanner } from '@/components/common'
 import {
@@ -3045,17 +3046,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         : selectedCompany}
                   </div>
                 ) : (
-                  <select
+                  <Dropdown
                     value={selectedCompany}
-                    onChange={(e) => setSelectedCompany(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                  >
-                    {dbCompanies.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setSelectedCompany(String(val))}
+                    options={dbCompanies.map((c) => ({ value: c, label: c }))}
+                    aria-label="Company"
+                  />
                 )}
               </div>
 
@@ -3067,32 +3063,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     {isSales ? 'Deposit Bank' : 'Deposit Bank / Withdraw Bank'}
                   </span>
                 </label>
-                <select
+                <Dropdown
                   value={selectedBankAccountId}
-                  onChange={(e) => setSelectedBankAccountId(e.target.value)}
+                  onChange={(val) => setSelectedBankAccountId(String(val))}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer disabled:opacity-70"
-                >
-                  {availableBankAccounts.length === 0 ? (
-                    <option value="">
-                      {isLoadingBanks
+                  placeholder={
+                    availableBankAccounts.length === 0
+                      ? isLoadingBanks
                         ? 'Loading bank accounts...'
-                        : 'No Bank Registered'}
-                    </option>
-                  ) : (
-                    <>
-                      <option value="" disabled>
-                        Select a bank account
-                      </option>
-                      {availableBankAccounts.map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} - {acc.accountName || acc.accountNumber}{' '}
-                          ({formatPHP(acc.currentBalance)})
-                        </option>
-                      ))}
-                    </>
-                  )}
-                </select>
+                        : 'No Bank Registered'
+                      : 'Select a bank account'
+                  }
+                  options={availableBankAccounts.map((acc) => ({
+                    value: acc.id,
+                    label: `${acc.bankName} - ${acc.accountName || acc.accountNumber} (${formatPHP(acc.currentBalance)})`,
+                  }))}
+                  aria-label="Deposit Bank"
+                />
                 {!isLoadingBanks && availableBankAccounts.length === 0 && (
                   <p className="text-[11px] font-medium text-amber-700 flex items-center gap-1 mt-1">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />

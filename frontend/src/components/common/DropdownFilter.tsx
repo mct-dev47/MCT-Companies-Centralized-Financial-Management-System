@@ -220,12 +220,12 @@ export function DropdownFilter<T extends string = string>({
         aria-label={ariaLabel || effectivePlaceholder || effectiveMenuTitle}
         aria-expanded={open}
         className={cn(
-          'inline-flex items-center gap-2 h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center gap-2 h-11 px-3.5 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
           fullWidth && 'w-full justify-between',
           !isDefault && selectedOption?.activePillClassName
             ? selectedOption.activePillClassName
-            : 'border-stroke/60',
-          open && 'ring-2 ring-slate-100 border-slate-300',
+            : 'border-stroke/40 hover:border-stroke/70',
+          open && 'ring-2 ring-focus/20 border-focus',
           className
         )}
       >
@@ -263,12 +263,12 @@ export function DropdownFilter<T extends string = string>({
         <div
           style={pos.isMobile ? pos.style : undefined}
           className={cn(
-            'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
             pos.isMobile
               ? 'w-[min(calc(100vw-32px),320px)] overflow-y-auto'
               : cn(
                   'absolute top-full mt-2 min-w-[12rem]',
-                  searchable ? 'w-68 p-2.5 shadow-2xl' : 'w-48',
+                  searchable ? 'w-68 p-2.5 shadow-soft' : 'w-48',
                   menuWidthClassName,
                   align === 'left' ? 'left-0' : 'right-0'
                 ),
@@ -299,7 +299,7 @@ export function DropdownFilter<T extends string = string>({
                 placeholder={searchPlaceholder}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-8 text-xs rounded-lg"
+                className="h-9 text-xs rounded-[8px]"
                 autoFocus
               />
             </div>
@@ -323,11 +323,11 @@ export function DropdownFilter<T extends string = string>({
                       setSearch('')
                     }}
                     className={cn(
-                      'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                      'w-full flex items-center justify-between px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium transition-colors text-left cursor-pointer min-h-[44px]',
                       isSelected
                         ? opt.activeItemClassName ||
                             'bg-primary/10 text-primary font-semibold'
-                        : 'text-focus/80 hover:bg-surface'
+                        : 'text-focus hover:bg-surface'
                     )}
                   >
                     <span className="flex items-center gap-2 truncate">

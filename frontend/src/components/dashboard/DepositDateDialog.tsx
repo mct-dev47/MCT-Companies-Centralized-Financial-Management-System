@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { formatDisplayDate } from '@/utils/dateUtils'
@@ -97,19 +98,16 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
         <div className="space-y-4 pt-4">
           <div className="space-y-1.5">
             <Label className="text-xs font-semibold text-focus block">Bank account</Label>
-            <select
+            <Dropdown
               value={bankId}
-              onChange={(e) => setBankId(e.target.value)}
-              className="w-full h-10 px-3 rounded-xl border border-stroke/50 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-            >
-              <option value="">{companyAccounts.length === 0 ? 'No bank account for this company' : 'Default account'}</option>
-              {companyAccounts.map((a) => (
-                <option key={a.id} value={String(a.id)}>
-                  {a.bankName}
-                  {a.accountName ? ` - ${a.accountName}` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setBankId(String(val))}
+              placeholder={companyAccounts.length === 0 ? 'No bank account for this company' : 'Default account'}
+              options={companyAccounts.map((a) => ({
+                value: String(a.id),
+                label: `${a.bankName}${a.accountName ? ` - ${a.accountName}` : ''}`,
+              }))}
+              aria-label="Bank Account"
+            />
           </div>
 
           <div className="space-y-1.5">

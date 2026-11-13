@@ -35,6 +35,7 @@ import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1813,19 +1814,18 @@ export const PettyCashPage: React.FC = () => {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-5 mt-2 border-t border-slate-100 text-xs text-muted-fg">
           <div className="flex items-center gap-2">
             <span>Rows per page:</span>
-            <select
-              value={itemsPerPage}
-              onChange={(e) => {
-                setItemsPerPage(Number(e.target.value))
-                setCurrentPage(1)
-              }}
-              className="h-7 px-2 rounded-lg border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none"
-            >
-              <option value={5}>5</option>
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
+            <div className="w-20">
+              <Dropdown
+                value={itemsPerPage}
+                size="sm"
+                onChange={(val) => {
+                  setItemsPerPage(Number(val))
+                  setCurrentPage(1)
+                }}
+                options={[5, 10, 20, 50]}
+                aria-label="Rows per page"
+              />
+            </div>
             <span className="ml-2">
               Showing {filteredLedger.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to{' '}
               {Math.min(currentPage * itemsPerPage, filteredLedger.length)} of {filteredLedger.length} records
@@ -2779,28 +2779,22 @@ export const PettyCashPage: React.FC = () => {
                     </div>
                   ) : (
                   <div className="relative">
-                    <select
+                    <Dropdown
                       value={selectedFundingBankId}
-                      onChange={(e) => {
-                        setSelectedFundingBankId(e.target.value)
+                      onChange={(val) => {
+                        setSelectedFundingBankId(String(val))
                         if (reviewError) setReviewError('')
                       }}
-                      className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                      required={!isZeroExcessReview}
-                    >
-                      <option value="" disabled={!isZeroExcessReview}>
-                        Choose the bank that funds this request...
-                      </option>
-                      {(targetEntry?.companyName
+                      placeholder="Choose the bank that funds this request..."
+                      aria-label="Funding Bank"
+                      options={(targetEntry?.companyName
                         ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || ''))
                         : bankAccounts
-                      ).map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} ({acc.accountName}) [{acc.companyName}]
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                      ).map((acc) => ({
+                        value: String(acc.id),
+                        label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                      }))}
+                    />
                   </div>
                   )}
                   {!banksLoading && !banksError && (targetEntry?.companyName ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || '')).length === 0 : bankAccounts.length === 0) && (

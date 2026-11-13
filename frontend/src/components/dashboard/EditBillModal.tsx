@@ -1,3 +1,4 @@
+import { Dropdown } from '@/components/ui/Dropdown'
 import * as React from 'react'
 import {
   Dialog,
@@ -279,17 +280,12 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span className="text-red-500">*</span>
               </Label>
               {canChooseCompany ? (
-                <select
+                <Dropdown
                   value={company}
-                  onChange={(e) => setCompany(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {dbCompanies.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setCompany(String(val))}
+                  options={companyOptions.map((c) => ({ value: c, label: c }))}
+                  aria-label="Company"
+                />
               ) : (
                 <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs text-focus font-semibold flex items-center truncate">
                   {company}
@@ -304,15 +300,16 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Recurring Schedule</span>
                 <span className="text-red-500">*</span>
               </Label>
-              <select
-                value={billingCycle}
-                onChange={(e) => handleBillingCycleChange(e.target.value as 'Daily' | 'Monthly' | 'Yearly')}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value="Daily">Daily (Every Day)</option>
-                <option value="Monthly">Monthly (Day of Month)</option>
-                <option value="Yearly">Yearly (Annual Renewal)</option>
-              </select>
+              <Dropdown
+                  value={billingCycle}
+                  onChange={(val) => handleBillingCycleChange(val as 'Daily' | 'Monthly' | 'Yearly')}
+                  options={[
+                    { value: 'Monthly', label: 'Monthly' },
+                    { value: 'Daily', label: 'Daily' },
+                    { value: 'Yearly', label: 'Yearly' },
+                  ]}
+                  aria-label="Billing Cycle"
+                />
             </div>
           </div>
 
@@ -324,18 +321,15 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Due Day of the Month</span>
                 <span className="text-red-500">*</span>
               </Label>
-              <select
-                value={dueDayOfMonth}
-                onChange={(e) => setDueDayOfMonth(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                {Array.from({ length: 30 }, (_, i) => i + 1).map((d) => (
-                  <option key={d} value={d}>
-                    Due every {d}{getOrdinalSuffix(d)} of the month
-                  </option>
-                ))}
-                <option value={31}>Due every 31st (or last day of month)</option>
-              </select>
+              <Dropdown
+                      value={dueDayOfMonth}
+                      onChange={(val) => setDueDayOfMonth(Number(val))}
+                      options={Array.from({ length: 31 }, (_, i) => ({
+                        value: i + 1,
+                        label: `Day ${i + 1}`,
+                      }))}
+                      aria-label="Due Day"
+                    />
             </div>
           )}
 
@@ -347,28 +341,24 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span className="text-red-500">*</span>
               </Label>
               <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={yearlyMonth}
-                  onChange={(e) => setYearlyMonth(parseInt(e.target.value, 10))}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {MONTH_NAMES.map((m, idx) => (
-                    <option key={m} value={idx + 1}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={yearlyDay}
-                  onChange={(e) => setYearlyDay(parseInt(e.target.value, 10))}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={d}>
-                      Day {d} ({d}{getOrdinalSuffix(d)})
-                    </option>
-                  ))}
-                </select>
+                <Dropdown
+                        value={yearlyMonth}
+                        onChange={(val) => setYearlyMonth(Number(val))}
+                        options={[
+                          'January', 'February', 'March', 'April', 'May', 'June',
+                          'July', 'August', 'September', 'October', 'November', 'December'
+                        ].map((m, idx) => ({ value: idx, label: m }))}
+                        aria-label="Month"
+                      />
+                <Dropdown
+                        value={yearlyDay}
+                        onChange={(val) => setYearlyDay(Number(val))}
+                        options={Array.from({ length: 31 }, (_, i) => ({
+                          value: i + 1,
+                          label: `Day ${i + 1}`,
+                        }))}
+                        aria-label="Day"
+                      />
               </div>
             </div>
           )}
@@ -384,29 +374,25 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Automatic daily alerts: Notifies on <strong>Due Today</strong> and <strong>Overdue</strong></span>
               </div>
             ) : billingCycle === 'Yearly' ? (
-              <select
+              <Dropdown
                 value={reminderDaysBefore}
-                onChange={(e) => setReminderDaysBefore(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value={7}>7 days before annual renewal</option>
-                <option value={14}>14 days before annual renewal</option>
-                <option value={30}>30 days before annual renewal</option>
-                <option value={60}>60 days before annual renewal</option>
-              </select>
+                onChange={(val) => setReminderDaysBefore(Number(val))}
+                options={[7, 14, 30, 60].map((d) => ({
+                  value: d,
+                  label: `${d} days before annual renewal`,
+                }))}
+                aria-label="Reminder"
+              />
             ) : (
-              <select
-                value={reminderDaysBefore}
-                onChange={(e) => setReminderDaysBefore(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value={1}>1 day before due date</option>
-                <option value={3}>3 days before due date</option>
-                <option value={5}>5 days before due date</option>
-                <option value={7}>7 days before due date</option>
-                <option value={10}>10 days before due date</option>
-                <option value={14}>14 days before due date</option>
-              </select>
+              <Dropdown
+                    value={reminderDaysBefore}
+                    onChange={(val) => setReminderDaysBefore(Number(val))}
+                    options={[1, 2, 3, 5, 7, 10].map((d) => ({
+                      value: d,
+                      label: `${d} day${d > 1 ? 's' : ''} before`,
+                    }))}
+                    aria-label="Reminder"
+                  />
             )}
           </div>
 
