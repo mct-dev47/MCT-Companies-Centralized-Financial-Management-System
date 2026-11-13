@@ -514,6 +514,30 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0061_loan_disbursement_step failed and was skipped: %s", exc)
 
+    # 28. 0062: petty cash topup extended columns (spec 0012)
+    result_0062 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0062_petty_cash_topup_fields'")
+    ).first()
+
+    if not result_0062:
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for col_name, col_def in (
+                    ("request_type", "VARCHAR(50) DEFAULT 'topup'"),
+                    ("paid_by", "VARCHAR(150) NULL"),
+                    ("receipt_url", "TEXT NULL"),
+                    ("attachments", "TEXT NULL"),
+                    ("items", "TEXT NULL"),
+                    ("category", "VARCHAR(100) NULL"),
+                ):
+                    conn.execute(text(f"ALTER TABLE petty_cash_topups ADD COLUMN IF NOT EXISTS {col_name} {col_def}"))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0062_petty_cash_topup_fields')"))
+            applied.append("0062_petty_cash_topup_fields")
+            logger.info("Migration 0062_petty_cash_topup_fields applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0062_petty_cash_topup_fields failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1237,13 +1261,34 @@ def _run_sqlite_migrations(conn) -> list[str]:
         exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='loan'")).first()
         if exists:
             cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loan)")).fetchall()}
-            for col_name, col_def in (("disbursed_by", "VARCHAR(100) NULL"), ("disbursed_at", "TIMESTAMP NULL")):
+            for col_name, col_def in (("status", "VARCHAR(50) DEFAULT 'Draft'"), ("disbursed_by", "VARCHAR(100) NULL"), ("disbursed_at", "TIMESTAMP NULL")):
                 if col_name not in cols:
                     conn.execute(text(f"ALTER TABLE loan ADD COLUMN {col_name} {col_def}"))
             # Before this step, Audit approval moved the money, so every Approved loan is already disbursed
             conn.execute(text("UPDATE loan SET status = 'Disbursed' WHERE status = 'Approved'"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0061_loan_disbursement_step')"))
         applied.append("0061_loan_disbursement_step")
+
+    # 27. 0062: petty cash topup extended columns (spec 0012)
+    result_0062 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0062_petty_cash_topup_fields'")
+    ).first()
+    if not result_0062:
+        exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='petty_cash_topups'")).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(petty_cash_topups)")).fetchall()}
+            for col_name, col_def in (
+                ("request_type", "VARCHAR(50) DEFAULT 'topup'"),
+                ("paid_by", "VARCHAR(150) NULL"),
+                ("receipt_url", "TEXT NULL"),
+                ("attachments", "TEXT NULL"),
+                ("items", "TEXT NULL"),
+                ("category", "VARCHAR(100) NULL"),
+            ):
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE petty_cash_topups ADD COLUMN {col_name} {col_def}"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0062_petty_cash_topup_fields')"))
+        applied.append("0062_petty_cash_topup_fields")
 
     conn.commit()
     return applied

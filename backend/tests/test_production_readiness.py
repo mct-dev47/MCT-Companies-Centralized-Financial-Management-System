@@ -70,6 +70,27 @@ class TestProductionReadiness(unittest.TestCase):
         )
         self.assertTrue(prod_settings.OTP_COOKIE_SECURE)
 
+    def test_production_settings_auto_derives_frontend_url_from_cors_origins(self):
+        """In production, if FRONTEND_URL is default localhost, auto-adopt the primary HTTPS CORS origin."""
+        prod_settings = Settings(
+            ENVIRONMENT="production",
+            CORS_ORIGINS=["https://financial-mct.vercel.app", "https://admin.mct.com"],
+            SUPABASE_JWT_SECRET="prod-jwt-secret-key-at-least-32-characters-long",
+        )
+        self.assertEqual(prod_settings.FRONTEND_URL, "https://financial-mct.vercel.app")
+        self.assertIn("https://financial-mct.vercel.app", prod_settings.CORS_ORIGINS)
+
+    def test_production_settings_custom_frontend_url_normalized_and_added_to_cors(self):
+        """Custom FRONTEND_URL has trailing slashes stripped and is added to CORS_ORIGINS."""
+        prod_settings = Settings(
+            ENVIRONMENT="production",
+            FRONTEND_URL="https://portal.mctcompanies.com/   ",
+            CORS_ORIGINS=["https://financial-mct.vercel.app"],
+            SUPABASE_JWT_SECRET="prod-jwt-secret-key-at-least-32-characters-long",
+        )
+        self.assertEqual(prod_settings.FRONTEND_URL, "https://portal.mctcompanies.com")
+        self.assertIn("https://portal.mctcompanies.com", prod_settings.CORS_ORIGINS)
+
     def test_migration_0052_has_no_hardcoded_email_and_syncs_is_admin(self):
         """Migration 0052 files must not contain hardcoded personal emails and must sync is_admin."""
         pg_sql = (MIGRATIONS_DIR / "0052_update_admin_email.postgres.sql").read_text(encoding="utf-8")

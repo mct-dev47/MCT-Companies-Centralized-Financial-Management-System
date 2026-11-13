@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user, require_reauthentication
+from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.company import Company
 from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLookupOut, CompanyOut, CompanyUpdate
@@ -328,7 +328,6 @@ def delete_company(
     company_id: int,
     request: Request,
     admin: AdminUser,
-    _reauth: AuthenticatedUser = Depends(require_reauthentication),
     db: Session = Depends(get_db),
 ):
     try:

@@ -219,16 +219,21 @@ class ActivityLogService:
         db: Optional[Session] = None,
     ) -> Tuple[List[ActivityLogOut], int]:
         """
-        Query activity logs strictly from Supabase audit_logs table,
-        falling back to local DB if Supabase client is unreachable.
+        Query activity logs from Supabase audit_logs table,
+        falling back seamlessly to local DB if Supabase is unreachable or blocked.
         Returns a tuple of (enriched_logs, total_count).
         """
         raw_rows: List[dict] = []
         total_count: int = 0
+        supabase_available = True
+        close_session = False
+        active_db = db
 
         # Try Supabase first
         try:
             client = get_supabase_admin_client()
+            if not client:
+                raise ValueError("Supabase client is not configured")
             q = client.table("audit_logs").select(
                 "audit_log_id,user_id,company_id,action,action_category,ip_address,details,created_at",
                 count="exact",
@@ -255,14 +260,14 @@ class ActivityLogService:
             total_count = res.count if res.count is not None else len(raw_rows)
 
         except Exception as exc:
+            supabase_available = False
             logger.warning("Failed to fetch audit_logs from Supabase, attempting local fallback: %s", exc)
             # Local DB Fallback
-            close_session = False
-            if db is None:
-                db = SessionLocal()
+            if active_db is None:
+                active_db = SessionLocal()
                 close_session = True
             try:
-                local_q = db.query(AuditLog)
+                local_q = active_db.query(AuditLog)
                 if user_id is not None:
                     local_q = local_q.filter(AuditLog.user_id == user_id)
                 if company_id is not None:
@@ -294,12 +299,15 @@ class ActivityLogService:
                     }
                     for r in db_rows
                 ]
-            finally:
-                if close_session:
-                    db.close()
+            except Exception as db_exc:
+                logger.error("Local DB fallback query also failed: %s", db_exc)
 
-        # Transform and enrich with names and descriptions
-        enriched = self._enrich_logs(raw_rows, db=db)
+        try:
+            # Transform and enrich with names and descriptions
+            enriched = self._enrich_logs(raw_rows, db=active_db, supabase_available=supabase_available)
+        finally:
+            if close_session and active_db is not None:
+                active_db.close()
 
         # Apply client-side module or search filters if supplied
         if module:
@@ -346,7 +354,7 @@ class ActivityLogService:
                 "ip_address": entry.ip_address,
                 "details": entry.details,
                 "created_at": str(entry.created_at) if entry.created_at else None,
-            }], db=session)
+            }], db=session, supabase_available=False)
             return enriched[0] if enriched else None
         finally:
             session.close()
@@ -426,7 +434,12 @@ class ActivityLogService:
             logger.warning("Batched local audit_logs retention purge failed: %s", exc)
         return total_deleted
 
-    def _enrich_logs(self, rows: List[dict], db: Optional[Session] = None) -> List[ActivityLogOut]:
+    def _enrich_logs(
+        self,
+        rows: List[dict],
+        db: Optional[Session] = None,
+        supabase_available: bool = True,
+    ) -> List[ActivityLogOut]:
         """
         Enrich raw audit rows with readable user names, company names,
         descriptions, module categories, and target references.
@@ -437,23 +450,25 @@ class ActivityLogService:
         users: Dict[int, str] = {}
         companies: Dict[int, str] = {}
 
-        # Look up names via Supabase
-        try:
-            client = get_supabase_admin_client()
-            if user_ids:
-                u_res = client.table("users").select("user_id,name").in_("user_id", user_ids).execute()
-                if u_res.data:
-                    for u in u_res.data:
-                        users[u["user_id"]] = u.get("name") or "User"
-            if company_ids:
-                c_res = client.table("company").select("company_id,company_name").in_("company_id", company_ids).execute()
-                if c_res.data:
-                    for c in c_res.data:
-                        companies[c["company_id"]] = c.get("company_name") or "Company"
-        except Exception:
-            pass
+        # Look up names via Supabase only if Supabase was available
+        if supabase_available:
+            try:
+                client = get_supabase_admin_client()
+                if client:
+                    if user_ids:
+                        u_res = client.table("users").select("user_id,name").in_("user_id", user_ids).execute()
+                        if u_res.data:
+                            for u in u_res.data:
+                                users[u["user_id"]] = u.get("name") or "User"
+                    if company_ids:
+                        c_res = client.table("company").select("company_id,company_name").in_("company_id", company_ids).execute()
+                        if c_res.data:
+                            for c in c_res.data:
+                                companies[c["company_id"]] = c.get("company_name") or "Company"
+            except Exception:
+                pass
 
-        # If any remain missing, look up from DB session if available
+        # If any remain missing or if Supabase is bypassed, look up from DB session if available
         if (len(users) < len(user_ids) or len(companies) < len(company_ids)) and db is not None:
             try:
                 missing_u = [uid for uid in user_ids if uid not in users]

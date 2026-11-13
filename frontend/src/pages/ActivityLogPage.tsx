@@ -516,7 +516,11 @@ export const ActivityLogPage: React.FC = () => {
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={fetchLogs}
+                        onClick={() => {
+                          setLoading(true)
+                          setLoadError('')
+                          void fetchLogs()
+                        }}
                         className="text-xs font-semibold rounded-lg"
                       >
                         Try again
