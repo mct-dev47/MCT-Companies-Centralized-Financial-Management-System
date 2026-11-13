@@ -1391,7 +1391,7 @@ export const TenantPage: React.FC = () => {
     )
 
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <BackButton onClick={() => setViewMode('list')} label="Back to Tenants" />
@@ -2199,7 +2199,7 @@ export const TenantPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-10 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-10 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Server problems (spec 0017): the page never saves anything only in this browser */}
       {loadError && (
         <div

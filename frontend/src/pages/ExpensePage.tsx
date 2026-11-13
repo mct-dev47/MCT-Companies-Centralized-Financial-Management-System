@@ -851,7 +851,7 @@ export const ExpensePage: React.FC = () => {
       : selectedCompany
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12">
       {/* 1. Header & Controls */}
       <div className="space-y-4">
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}

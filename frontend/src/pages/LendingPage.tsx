@@ -968,7 +968,7 @@ export const LendingPage: React.FC = () => {
       : 'Months'
 
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <BackButton onClick={() => setViewMode('list')} label="Back to Borrowers" />
@@ -1510,7 +1510,7 @@ export const LendingPage: React.FC = () => {
   const displayedCompanyTitle = COMPANY_NAME
 
   return (
-    <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-12 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {viewMode === 'details' && activeFacility ? (
         renderDetailsPage()
       ) : (

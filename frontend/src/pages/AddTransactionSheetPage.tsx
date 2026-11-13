@@ -2742,7 +2742,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   return (
     <div
       className={cn(
-        'space-y-6 pb-16 animate-in fade-in duration-300',
+        'w-full space-y-6 pb-16 animate-in fade-in duration-300',
         // Sales: trim outer gutter to ~20px (offsets the shared AppShell padding locally)
         isSales
           ? 'sm:-mx-1 lg:-mx-3'
@@ -4168,7 +4168,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       {/* Modal: Add Custom Payment Method */}
       {isAddPaymentMethodModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in-50 duration-150">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+          <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-focus">
                 Add Custom Payment Method

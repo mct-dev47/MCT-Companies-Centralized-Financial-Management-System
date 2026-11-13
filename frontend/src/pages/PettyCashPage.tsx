@@ -1009,7 +1009,7 @@ export const PettyCashPage: React.FC = () => {
   const pendingCount = ledger.filter((l) => l.status === 'Pending Finance Approval').length
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       {/* Feedback Banner */}
       {approvalFeedback && (
         <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-sm font-semibold text-emerald-800 flex items-center justify-between shadow-xs animate-in slide-in-from-top-2">

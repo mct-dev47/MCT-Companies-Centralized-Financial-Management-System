@@ -172,7 +172,7 @@ export const CompanyLoansPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-focus">Company Loans</h1>

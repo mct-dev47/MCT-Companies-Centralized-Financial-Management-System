@@ -506,7 +506,7 @@ export const BillsPage: React.FC = () => {
 
   if (loading && billId) {
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         <div className="flex items-center gap-3">
           <Skeleton className="h-9 w-28 rounded-xl" />
         </div>
@@ -536,7 +536,7 @@ export const BillsPage: React.FC = () => {
 
   if (!loading && billId && !selectedDetailBill) {
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         <div className="py-16 text-center space-y-4 bg-white rounded-[24px] border border-stroke/30 p-8 shadow-xs">
           <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto text-slate-400">
             <Receipt className="w-8 h-8" />
@@ -597,7 +597,7 @@ export const BillsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       {/* 1. Header & Controls */}
       <div className="space-y-4">
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}

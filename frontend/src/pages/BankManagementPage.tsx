@@ -1631,7 +1631,7 @@ export const BankManagementPage: React.FC = () => {
 
   return (
 
-    <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300 select-none">
+    <div className="space-y-6 pb-12 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300 select-none">
 
       {/* 1. Header & Controls (Matching Reference Screenshot) */}
 

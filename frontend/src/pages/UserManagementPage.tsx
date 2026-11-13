@@ -245,7 +245,7 @@ export const UserManagementPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       {/* Top Header Block */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -258,7 +258,7 @@ export const UserManagementPage: React.FC = () => {
         </div>
 
         {/* Top Right Action Button: Create User */}
-        <div className="flex items-center gap-3 self-start sm:self-auto">
+        <div className="flex flex-wrap items-center gap-3 self-start sm:self-auto">
           <Button
             type="button"
             onClick={() => setIsCreateUserOpen(true)}

@@ -2408,7 +2408,7 @@ export const TransactionPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-5 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300 select-none">
+    <div className="space-y-5 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300 select-none">
       {/* 1. Header & Actions Block */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div className="min-w-0">

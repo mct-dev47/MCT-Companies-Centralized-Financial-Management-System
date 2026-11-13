@@ -695,7 +695,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   }
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12">
       {viewLoanItem ? (
         <LoanDetailPageView
           loan={viewLoanItem}

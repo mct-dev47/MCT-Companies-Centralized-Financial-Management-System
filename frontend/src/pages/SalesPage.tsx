@@ -1171,7 +1171,7 @@ export const SalesPage: React.FC = () => {
       : selectedCompany
 
   return (
-    <div className="space-y-6 pb-10 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-10 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* 1. Header & Controls */}
       <div className="space-y-4">
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}

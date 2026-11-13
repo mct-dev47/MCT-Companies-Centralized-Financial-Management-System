@@ -199,7 +199,7 @@ export const CentralizedAuthPage: React.FC = () => {
     <div className="min-h-screen w-full bg-[#FAFAFA] text-focus flex flex-col font-sans select-none">
       {/* Top Header: Company logo on left, User profile dropdown on right */}
       <header className="sticky top-0 z-30 w-full bg-white/95 backdrop-blur-md border-b border-stroke/20 px-4 sm:px-8 py-3 transition-all select-none">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="w-full max-w-7xl mx-auto flex items-center justify-between">
           {/* Company Logo on Left Side */}
           <div className="flex items-center gap-2.5">
             <img
