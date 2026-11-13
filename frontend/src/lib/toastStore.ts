@@ -16,6 +16,9 @@ export interface ToastItem {
   duration: number
   onUndo?: () => void
   undoLabel?: string
+  onRetry?: () => void
+  retryLabel?: string
+  createdAt: number
 }
 
 type Listener = (toasts: ToastItem[]) => void
@@ -27,7 +30,7 @@ const DEFAULT_DURATION: Record<ToastVariant, number> = {
   info: 4000,
 }
 
-const MAX_VISIBLE = 4
+const MAX_VISIBLE = 3
 
 let toasts: ToastItem[] = []
 let nextId = 1
@@ -55,6 +58,8 @@ export function pushToast(input: {
   duration?: number
   onUndo?: () => void
   undoLabel?: string
+  onRetry?: () => void
+  retryLabel?: string
 }): number {
   const message = input.message.trim()
   if (!message) return -1
@@ -71,6 +76,9 @@ export function pushToast(input: {
     duration: input.duration ?? DEFAULT_DURATION[input.variant],
     onUndo: input.onUndo,
     undoLabel: input.undoLabel,
+    onRetry: input.onRetry,
+    retryLabel: input.retryLabel,
+    createdAt: Date.now(),
   }
 
   toasts = [...toasts, item].slice(-MAX_VISIBLE)

@@ -22,6 +22,7 @@ import { type AuthorizedCompany, getCompanyInitials } from '@/config/centralized
 import { employeeService } from '@/services/employeeService'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { isCompanyMatch } from '@/utils/companyUtils'
+import { ErrorBanner } from '@/components/common/ErrorBanner'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
 import logo2Url from '@/assets/LOGO2.png'
@@ -415,16 +416,13 @@ export const CentralizedAuthPage: React.FC = () => {
 
         {/* Error State */}
         {!isLoading && error && (
-          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-6 text-center space-y-3">
-            <p className="text-sm font-semibold text-rose-800">{error}</p>
-            <button
-              type="button"
-              onClick={loadAuthorizedCompanies}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 text-white hover:bg-rose-700 transition-colors shadow-xs"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              <span>Retry</span>
-            </button>
+          <div className="py-2">
+            <ErrorBanner
+              message={error}
+              onRetry={loadAuthorizedCompanies}
+              retryLabel="Try Again"
+              className="p-4 rounded-2xl"
+            />
           </div>
         )}
 

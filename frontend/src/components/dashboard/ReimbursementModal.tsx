@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1068,9 +1069,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     )}
                   />
                 </div>
-                {fieldErrors.date && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                )}
+                <FormFieldError error={fieldErrors.date} />
               </div>
 
               {/* Row 1, Right: Company */}
@@ -1095,9 +1094,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   error={fieldErrors.company}
                   aria-label="Requesting Company"
                 />
-                {fieldErrors.company && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.company}</p>
-                )}
+                <FormFieldError error={fieldErrors.company} />
               </div>
 
               {/* Row 2, Left: Paid by */}
@@ -1133,9 +1130,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     fieldErrors.paidBy ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                   )}
                 />
-                {fieldErrors.paidBy && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.paidBy}</p>
-                )}
+                <FormFieldError error={fieldErrors.paidBy} />
               </div>
 
               {/* Row 2, Right: Category (Configurable per company) */}
@@ -1202,9 +1197,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                         {isSubmittingCategory ? 'Saving...' : 'Save'}
                       </Button>
                     </div>
-                    {categoryError && (
-                      <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
-                    )}
+                    <FormFieldError error={categoryError} />
                   </div>
                 )}
 
@@ -1270,9 +1263,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   />
                 )}
 
-                {fieldErrors.category && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.category}</p>
-                )}
+                <FormFieldError error={fieldErrors.category} />
               </div>
             </div>
 
@@ -1423,9 +1414,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 </div>
               </div>
 
-              {fieldErrors.lines && (
-                <p className="text-[11px] text-red-600 font-medium px-1">{fieldErrors.lines}</p>
-              )}
+              <FormFieldError error={fieldErrors.lines} className="px-1" />
             </div>
 
             <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
@@ -1477,9 +1466,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                     )}
                   />
-                  {fieldErrors.companyFunded && (
-                    <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
-                  )}
+                  <FormFieldError error={fieldErrors.companyFunded} />
                   <p className="text-[10.5px] text-muted-fg">
                     {isPreRecorded
                       ? 'Matched to your selected pre-recorded expense.'
@@ -1594,9 +1581,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
                       </div>
                     )}
-                    {fieldErrors.fundingBank && (
-                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.fundingBank}</p>
-                    )}
+                    <FormFieldError error={fieldErrors.fundingBank} />
                     {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : effectiveBankAccounts.length === 0) && (
                       <p className="text-[11px] text-amber-700 font-medium">
                         {requestingCompany
@@ -1763,9 +1748,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       </div>
                     )}
 
-                    {fieldErrors.existingExpenseId && (
-                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.existingExpenseId}</p>
-                    )}
+                    <FormFieldError error={fieldErrors.existingExpenseId} />
                   </div>
                 )}
               </div>

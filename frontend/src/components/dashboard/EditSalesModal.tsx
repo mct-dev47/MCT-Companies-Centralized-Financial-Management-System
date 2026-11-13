@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -248,9 +249,8 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                 )}
                 title="Transaction date (cannot be in the future)"
               />
-              {fieldErrors.date ? (
-                <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-              ) : (
+              <FormFieldError error={fieldErrors.date} />
+              {!fieldErrors.date && (
                 <p className="text-[11px] text-muted-fg font-normal">
                   Max: today
                 </p>
@@ -296,9 +296,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                 <option key={opt.id} value={opt.name} />
               ))}
             </datalist>
-            {fieldErrors.particulars && (
-              <p className="text-[11px] text-red-600 font-medium">{fieldErrors.particulars}</p>
-            )}
+            <FormFieldError error={fieldErrors.particulars} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -322,9 +320,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                   fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                 )}
               />
-              {fieldErrors.amount && (
-                <p className="text-[11px] text-red-600 font-medium">{fieldErrors.amount}</p>
-              )}
+              <FormFieldError error={fieldErrors.amount} />
             </div>
 
             {/* Category */}

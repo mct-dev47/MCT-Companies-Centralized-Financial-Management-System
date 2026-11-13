@@ -9,6 +9,7 @@ import {
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -426,9 +427,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   )}
                   title="Transaction date (cannot be in the future)"
                 />
-                {fieldErrors.date ? (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                ) : (
+                <FormFieldError error={fieldErrors.date} />
+                {!fieldErrors.date && (
                   <p className="text-[11px] text-muted-fg font-normal">
                     Defaults to today (Max: today)
                   </p>
@@ -478,11 +478,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   <option key={opt.id} value={opt.name} />
                 ))}
               </datalist>
-              {fieldErrors.particulars && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.particulars}
-                </p>
-              )}
+              <FormFieldError error={fieldErrors.particulars} />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -508,11 +504,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                     fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.amount && (
-                  <p className="text-[11px] text-red-600 font-medium">
-                    {fieldErrors.amount}
-                  </p>
-                )}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 5. Payment Method */}
@@ -606,9 +598,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                         }}
                         className={cn('h-9 rounded-lg border-stroke/50 text-xs', fieldErrors.customerName && 'border-red-500')}
                       />
-                      {fieldErrors.customerName && (
-                        <p className="text-[10px] text-red-600 font-medium">{fieldErrors.customerName}</p>
-                      )}
+                      <FormFieldError error={fieldErrors.customerName} />
                     </div>
                   </div>
 
@@ -633,9 +623,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                           }}
                           className={cn('h-9 rounded-lg border-stroke/50 text-xs font-semibold tabular-nums', fieldErrors.amountPaid && 'border-red-500')}
                         />
-                        {fieldErrors.amountPaid && (
-                          <p className="text-[10px] text-red-600 font-medium">{fieldErrors.amountPaid}</p>
-                        )}
+                        <FormFieldError error={fieldErrors.amountPaid} />
                       </div>
 
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
@@ -764,11 +752,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   </div>
                 )}
               </div>
-              {fieldErrors.category && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.category}
-                </p>
-              )}
+              <FormFieldError error={fieldErrors.category} />
             </div>
 
             {/* Day remarks */}

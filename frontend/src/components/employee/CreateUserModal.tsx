@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -740,11 +741,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     })
                   )}
                 </div>
-                {companyError && (
-                  <p className="text-xs text-red-600 font-medium pt-1 animate-in fade-in-50">
-                    {companyError}
-                  </p>
-                )}
+                <FormFieldError error={companyError} />
               </div>
 
                 </>

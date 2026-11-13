@@ -55,6 +55,15 @@
     }
   }
 
+  @keyframes toast-progress {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+
   .animate-marquee {
     display: flex;
     width: max-content;

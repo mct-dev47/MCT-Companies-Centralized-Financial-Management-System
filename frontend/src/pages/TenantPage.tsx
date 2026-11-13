@@ -34,7 +34,7 @@ import { TableEmptyState } from '@/components/common/TableEmptyState'
 import { TableErrorState } from '@/components/common/TableErrorState'
 import { TablePagination } from '@/components/common/TablePagination'
 import { StatusPill } from '@/components/common/StatusPill'
-import { BackButton, ConfirmModal } from '@/components/common'
+import { BackButton, ConfirmModal, FormFieldError } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { Dropdown } from '@/components/ui/Dropdown'
@@ -2838,7 +2838,7 @@ export const TenantPage: React.FC = () => {
                 className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
               />
               {formErrors.tenantName && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.tenantName}</p>
+                <FormFieldError error={formErrors.tenantName} />
               )}
             </div>
 
@@ -2854,7 +2854,7 @@ export const TenantPage: React.FC = () => {
                 className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
               />
               {formErrors.unitName && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.unitName}</p>
+                <FormFieldError error={formErrors.unitName} />
               )}
             </div>
 
@@ -2879,7 +2879,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.rentAmount && 'border-red-500')}
                 />
                 {formErrors.rentAmount && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.rentAmount}</p>
+                  <FormFieldError error={formErrors.rentAmount} />
                 )}
               </div>
 
@@ -2911,7 +2911,7 @@ export const TenantPage: React.FC = () => {
                   <p className="text-[10px] text-muted-fg">Calculated: rent × number of payments.</p>
                 )}
                 {formErrors.totalAmountPayable && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
+                  <FormFieldError error={formErrors.totalAmountPayable} />
                 )}
               </div>
             </div>
@@ -2944,7 +2944,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.contractDate && 'border-red-500')}
                 />
                 {formErrors.contractDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                  <FormFieldError error={formErrors.contractDate} />
                 )}
               </div>
 
@@ -2959,7 +2959,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.leaseEndDate && 'border-red-500')}
                 />
                 {formErrors.leaseEndDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.leaseEndDate}</p>
+                  <FormFieldError error={formErrors.leaseEndDate} />
                 )}
               </div>
             </div>
@@ -2977,7 +2977,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.dueDate && 'border-red-500')}
                 />
                 {formErrors.dueDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
+                  <FormFieldError error={formErrors.dueDate} />
                 )}
               </div>
 
@@ -3010,7 +3010,7 @@ export const TenantPage: React.FC = () => {
                 className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
               />
               {formErrors.notes && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+                <FormFieldError error={formErrors.notes} />
               )}
             </div>
 
@@ -3089,7 +3089,7 @@ export const TenantPage: React.FC = () => {
                     className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
                   />
                   {formErrors.tenantName && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.tenantName}</p>
+                    <FormFieldError error={formErrors.tenantName} />
                   )}
                 </div>
 
@@ -3104,7 +3104,7 @@ export const TenantPage: React.FC = () => {
                     className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
                   />
                   {formErrors.unitName && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.unitName}</p>
+                    <FormFieldError error={formErrors.unitName} />
                   )}
                 </div>
 
@@ -3134,7 +3134,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.rentAmount && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.rentAmount}</p>
+                      <FormFieldError error={formErrors.rentAmount} />
                     )}
                   </div>
 
@@ -3162,7 +3162,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.totalAmountPayable && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
+                      <FormFieldError error={formErrors.totalAmountPayable} />
                     )}
                   </div>
                 </div>
@@ -3199,7 +3199,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.contractDate && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                      <FormFieldError error={formErrors.contractDate} />
                     )}
                   </div>
 
@@ -3220,7 +3220,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.dueDate && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
+                      <FormFieldError error={formErrors.dueDate} />
                     )}
                   </div>
                 </div>
@@ -3261,7 +3261,7 @@ export const TenantPage: React.FC = () => {
                     className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
                   />
                   {formErrors.notes && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+                    <FormFieldError error={formErrors.notes} />
                   )}
                 </div>
 

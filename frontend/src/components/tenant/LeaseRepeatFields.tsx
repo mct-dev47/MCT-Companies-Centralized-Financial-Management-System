@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Repeat } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
@@ -43,7 +44,7 @@ export const RepeatSelect: React.FC<RepeatSelectProps> = ({ value, onChange, dis
       }))}
       aria-label="Repeat Interval"
     />
-    {error && <p className="text-[10px] text-red-600 font-medium">{error}</p>}
+    <FormFieldError error={error} />
     {!error && disabled && lockedReason && <p className="text-[10px] text-muted-fg">{lockedReason}</p>}
   </div>
 )
@@ -86,7 +87,7 @@ export const RepeatDetails: React.FC<RepeatDetailsProps> = ({
           errors.leaseEndDate && 'border-red-500'
         )}
       />
-      {errors.leaseEndDate && <p className="text-[10px] text-red-600 font-medium">{errors.leaseEndDate}</p>}
+      <FormFieldError error={errors.leaseEndDate} />
     </div>
   )
 }

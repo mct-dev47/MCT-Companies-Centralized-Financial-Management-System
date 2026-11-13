@@ -1,5 +1,6 @@
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import * as React from 'react'
 import {
   Dialog,
@@ -284,9 +285,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 fieldErrors.billerName && 'border-red-500 focus-visible:ring-red-200'
               )}
             />
-            {fieldErrors.billerName && (
-              <p className="text-[11px] text-red-600 font-medium">{fieldErrors.billerName}</p>
-            )}
+            <FormFieldError error={fieldErrors.billerName} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">

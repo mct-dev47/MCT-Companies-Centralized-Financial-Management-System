@@ -29,6 +29,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -1141,9 +1142,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     fieldErrors.date && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.date && (
-                  <p className="text-[10px] text-red-600 font-medium leading-tight">{fieldErrors.date}</p>
-                )}
+                <FormFieldError error={fieldErrors.date} />
               </div>
 
               <div className="flex-1 space-y-1 min-w-0">
@@ -1182,9 +1181,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
                 )}
               />
-              {fieldErrors.particulars && (
-                <p className="text-[10px] text-red-600 font-medium">{fieldErrors.particulars}</p>
-              )}
+              <FormFieldError error={fieldErrors.particulars} />
             </div>
 
             {/* Amount & Payment Method */}
@@ -1218,9 +1215,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.amount && (
-                  <p className="text-[10px] text-red-600 font-medium">{fieldErrors.amount}</p>
-                )}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               <div className="space-y-1">

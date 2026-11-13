@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -472,9 +473,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                   )}
                   title="Transaction date (cannot be in the future)"
                 />
-                {fieldErrors.date ? (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                ) : (
+                <FormFieldError error={fieldErrors.date} />
+                {!fieldErrors.date && (
                   <p className="text-[11px] text-muted-fg font-normal">
                     Defaults to today (Max: today)
                   </p>
@@ -521,11 +521,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                       fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
                     )}
                   />
-                  {fieldErrors.particulars && (
-                    <p className="text-[11px] text-red-600 font-medium">
-                      {fieldErrors.particulars}
-                    </p>
-                  )}
+                  <FormFieldError error={fieldErrors.particulars} />
                 </div>
 
                 {/* Pre-defined Petty Cash Category dropdown: placed next to particulars, not on top */}
@@ -569,11 +565,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     fieldErrors.particulars && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.particulars && (
-                  <p className="text-[11px] text-red-600 font-medium">
-                    {fieldErrors.particulars}
-                  </p>
-                )}
+                <FormFieldError error={fieldErrors.particulars} />
               </div>
             )}
 
@@ -614,9 +606,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.amount && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.amount}</p>
-                )}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 5. Payment Method */}
@@ -763,11 +753,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     </div>
                   )}
                 </div>
-                {fieldErrors.category && (
-                  <p className="text-[11px] text-red-600 font-medium">
-                    {fieldErrors.category}
-                  </p>
-                )}
+                <FormFieldError error={fieldErrors.category} />
               </div>
             )}
 

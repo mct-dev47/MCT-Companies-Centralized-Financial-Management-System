@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -232,7 +233,7 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
                 className={cn('h-10 text-xs sm:text-sm rounded-xl', fieldErrors.date && 'border-red-500')}
                 required
               />
-              {fieldErrors.date && <p className="text-2xs text-red-500">{fieldErrors.date}</p>}
+              <FormFieldError error={fieldErrors.date} />
             </div>
 
             {/* 2. Due Date */}
@@ -290,7 +291,7 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
                   ))}
                 </div>
               )}
-              {fieldErrors.lender && <p className="text-2xs text-red-500">{fieldErrors.lender}</p>}
+              <FormFieldError error={fieldErrors.lender} />
             </div>
 
             {/* 4. Amount */}
@@ -321,7 +322,7 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
                   required
                 />
               </div>
-              {fieldErrors.amount && <p className="text-2xs text-red-500">{fieldErrors.amount}</p>}
+              <FormFieldError error={fieldErrors.amount} />
             </div>
 
             {/* 5. Interest Rate (Finance only) */}
@@ -363,7 +364,7 @@ export const EditLoanModal: React.FC<EditLoanModalProps> = ({
                 className={cn('h-10 text-xs sm:text-sm rounded-xl', fieldErrors.particulars && 'border-red-500')}
                 required
               />
-              {fieldErrors.particulars && <p className="text-2xs text-red-500">{fieldErrors.particulars}</p>}
+              <FormFieldError error={fieldErrors.particulars} />
             </div>
           </div>
 

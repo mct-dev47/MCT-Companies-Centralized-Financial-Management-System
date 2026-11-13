@@ -8,6 +8,7 @@ import {
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -329,7 +330,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     required
                   />
                 </div>
-                {fieldErrors.date && <p className="text-2xs text-red-500">{fieldErrors.date}</p>}
+                <FormFieldError error={fieldErrors.date} />
               </div>
 
               {/* 2. Borrower Company */}
@@ -358,9 +359,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     </span>
                   </div>
                 )}
-                {fieldErrors.borrower && (
-                  <p className="text-2xs text-red-500">{fieldErrors.borrower}</p>
-                )}
+                <FormFieldError error={fieldErrors.borrower} />
               </div>
 
               {/* 4. Lender Company */}
@@ -448,7 +447,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     required
                   />
                 </div>
-                {fieldErrors.amount && <p className="text-2xs text-red-500">{fieldErrors.amount}</p>}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 6. Interest Rate (Admin/Finance only) */}
@@ -490,7 +489,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                   className={cn('h-10 text-xs sm:text-sm rounded-xl', fieldErrors.particulars && 'border-red-500')}
                   required
                 />
-                {fieldErrors.particulars && <p className="text-2xs text-red-500">{fieldErrors.particulars}</p>}
+                <FormFieldError error={fieldErrors.particulars} />
               </div>
             </div>
 
