@@ -120,7 +120,7 @@ def _company_loan_query(
         query = query.filter(Loan.lender == lender_id)
     if company_id:
         query = query.filter(or_(Loan.borrower == company_id, Loan.lender == company_id))
-    query = query.filter(func.lower(Loan.status).in_(["approved", "paid", "overdue"]))
+    query = query.filter(func.lower(Loan.status).in_(DISBURSED_LOAN_STATUSES))
     if reference:
         query = query.filter(Loan.loan_ref_no.ilike(f"%{reference.strip()}%"))
     if particulars:
@@ -512,6 +512,8 @@ def get_loans(
                     audit_reviewed_by=r.get("audit_reviewed_by"),
                     audit_reviewed_at=r.get("audit_reviewed_at"),
                     audit_remark=r.get("audit_remark"),
+                    disbursed_by=r.get("disbursed_by"),
+                    disbursed_at=r.get("disbursed_at"),
                     bank_account_id=r.get("bank_account_id"),
                     created_at=r.get("created_at"),
                     updated_at=r.get("updated_at"),
@@ -596,6 +598,8 @@ def get_loans(
                 audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
                 audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
                 audit_remark=getattr(l, "audit_remark", None),
+                disbursed_by=getattr(l, "disbursed_by", None),
+                disbursed_at=getattr(l, "disbursed_at", None),
                 bank_account_id=getattr(l, "bank_account_id", None),
                 created_at=l.created_at,
                 updated_at=l.updated_at,
@@ -907,7 +911,13 @@ def endorse_loan(
     if not remark_text:
         raise HTTPException(status_code=400, detail="Finance endorsement or rejection remark is required.")
 
-    endorser_name = request.headers.get("X-User-Name") or "Finance Officer"
+    endorser_name = (
+        current_user.get("full_name")
+        or current_user.get("name")
+        or current_user.get("email")
+        or request.headers.get("X-User-Name")
+        or "Finance Officer"
+    )
     now_ts = datetime.now()
 
     if action_norm == "endorse":
@@ -1035,6 +1045,77 @@ def endorse_loan(
     )
 
 
+# Loans whose money has been released to the borrower (spec 0046). "Approved" alone means Audit approved
+# and the loan is waiting for Finance to disburse it, so no money has moved yet.
+DISBURSED_LOAN_STATUSES = ["disbursed", "paid", "partially paid", "overdue"]
+
+
+def _move_loan_funds(db: Session, *, loan_id: int, sql_loan, final_source: dict, borrower_id, lender_id,
+                     id_to_name: dict, p_amt: Decimal) -> None:
+    """Take the principal from the funding (lender) bank and deposit it to the borrower's bank."""
+    loan_ref = final_source.get("loan_ref_no") or (sql_loan.loan_ref_no if sql_loan else str(loan_id))
+    funding_bank_id = (sql_loan.bank_account_id if sql_loan else None) or final_source.get("bank_account_id")
+
+    bank_svc = BankService(db)
+    funding_acc = None
+    if funding_bank_id:
+        funding_acc = db.query(BankAccount).filter(BankAccount.id == funding_bank_id).first()
+    if not funding_acc and lender_id:
+        funding_acc = bank_svc.find_account_for_company(id_to_name.get(lender_id) or "")
+    if not funding_acc:
+        raise HTTPException(status_code=400, detail="No funding bank account is set on this loan. Finance must choose one before disbursing.")
+    available = Decimal(str(funding_acc.current_balance or 0))
+    if p_amt > available:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Loan amount (₱{p_amt:,.2f}) is more than the balance of {funding_acc.bank_name} (₱{available:,.2f}).",
+        )
+
+    b_name_disp = id_to_name.get(borrower_id) or f"Company #{borrower_id}"
+    l_name_disp = id_to_name.get(lender_id) or "Corporate Treasury"
+
+    supervisor_particular = (
+        str(final_source.get("particulars") or final_source.get("description") or (sql_loan.description if sql_loan else "") or "").strip()
+    )
+    if supervisor_particular.lower().startswith("loan:"):
+        clean_particular = supervisor_particular[5:].strip()
+    elif supervisor_particular:
+        clean_particular = supervisor_particular
+    else:
+        clean_particular = "Disbursement"
+
+    try:
+        bank_svc.withdraw(funding_acc.id, BankDepositWithdrawRequest(
+            amount=p_amt,
+            date=datetime.now().strftime("%m/%d/%y"),
+            particulars=f"Loan: {clean_particular} (to {b_name_disp})",
+            category="Bank Transfer",
+            reference_no=loan_ref,
+        ))
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"Loan disbursement bank deduction error: {exc}")
+        raise HTTPException(status_code=400, detail="Bank deduction failed. Please try again.")
+
+    borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == borrower_id).first()
+    if not borrower_acc:
+        borrower_acc = bank_svc.find_account_for_company(b_name_disp)
+    if borrower_acc:
+        try:
+            bank_svc.deposit(borrower_acc.id, BankDepositWithdrawRequest(
+                amount=p_amt,
+                date=datetime.now().strftime("%m/%d/%y"),
+                particulars=f"Loan: {clean_particular} (from {l_name_disp})",
+                category="Bank Transfer",
+                reference_no=loan_ref,
+            ))
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
+        except Exception as exc:
+            print(f"Loan disbursement borrower bank deposit error: {exc}")
+
+
 @router.post("/{loan_id}/audit-review", response_model=LoanOut, summary="Audit approves or disapproves a finance endorsed loan")
 def audit_review_loan(
     loan_id: int,
@@ -1073,7 +1154,13 @@ def audit_review_loan(
     if not remark_text:
         raise HTTPException(status_code=400, detail="Audit remark is required.")
 
-    reviewer_name = request.headers.get("X-User-Name") or "Internal Auditor"
+    reviewer_name = (
+        current_user.get("full_name")
+        or current_user.get("name")
+        or current_user.get("email")
+        or request.headers.get("X-User-Name")
+        or "Internal Auditor"
+    )
     now_ts = datetime.now()
 
     if action_norm == "approve":
@@ -1117,66 +1204,7 @@ def audit_review_loan(
     final_source = updated_row or (existing_row or {})
     p_amt = Decimal(str(final_source.get("principal_amount") or (sql_loan.principal_amount if sql_loan else 0.0)))
 
-    if action_norm == "approve" and p_amt > Decimal("0.00"):
-        loan_ref = final_source.get("loan_ref_no") or (sql_loan.loan_ref_no if sql_loan else str(loan_id))
-        funding_bank_id = (sql_loan.bank_account_id if sql_loan else None) or final_source.get("bank_account_id")
-        
-        bank_svc = BankService(db)
-        funding_acc = None
-        if funding_bank_id:
-            funding_acc = db.query(BankAccount).filter(BankAccount.id == funding_bank_id).first()
-        if not funding_acc and lender_id:
-            l_name_lookup = id_to_name.get(lender_id) or ""
-            funding_acc = bank_svc.find_account_for_company(l_name_lookup)
-
-        b_name_disp = id_to_name.get(borrower_id) or f"Company #{borrower_id}"
-        l_name_disp = id_to_name.get(lender_id) or "Corporate Treasury"
-
-        supervisor_particular = (
-            str(final_source.get("particulars") or final_source.get("description") or (sql_loan.description if sql_loan else "") or "").strip()
-        )
-        if supervisor_particular.lower().startswith("loan:"):
-            clean_particular = supervisor_particular[5:].strip()
-        elif supervisor_particular:
-            clean_particular = supervisor_particular
-        else:
-            clean_particular = "Disbursement"
-
-        lender_particular = f"Loan: {clean_particular} (to {b_name_disp})"
-        borrower_particular = f"Loan: {clean_particular} (from {l_name_disp})"
-
-        if funding_acc:
-            try:
-                w_req = BankDepositWithdrawRequest(
-                    amount=p_amt,
-                    date=datetime.now().strftime("%m/%d/%y"),
-                    particulars=lender_particular,
-                    category="Bank Transfer",
-                    reference_no=loan_ref,
-                )
-                bank_svc.withdraw(funding_acc.id, w_req)
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
-            except Exception as exc:
-                print(f"Audit approval bank deduction error: {exc}")
-                raise HTTPException(status_code=400, detail=f"Bank deduction failed: {exc}")
-
-        # Deposit to supervisor/borrower account
-        borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == borrower_id).first()
-        if not borrower_acc:
-            borrower_acc = bank_svc.find_account_for_company(b_name_disp)
-        if borrower_acc:
-            try:
-                d_req = BankDepositWithdrawRequest(
-                    amount=p_amt,
-                    date=datetime.now().strftime("%m/%d/%y"),
-                    particulars=borrower_particular,
-                    category="Bank Transfer",
-                    reference_no=loan_ref,
-                )
-                bank_svc.deposit(borrower_acc.id, d_req)
-                ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
-            except Exception as exc:
-                print(f"Audit approval borrower bank deposit error: {exc}")
+    # Audit approval no longer moves money: the loan waits for Finance to disburse it (spec 0046)
 
     try:
         log_transaction(
@@ -1217,6 +1245,133 @@ def audit_review_loan(
         audit_remark=remark_text,
         bank_account_id=final_source.get("bank_account_id") or (sql_loan.bank_account_id if sql_loan else None),
         created_at=final_source.get("created_at") or datetime.now(),
+        updated_at=now_ts,
+    )
+
+
+@router.post("/{loan_id}/disburse", response_model=LoanOut, summary="Finance releases the money of an Audit-approved loan")
+def disburse_loan(
+    loan_id: int,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_finance_user),
+    db: Session = Depends(get_db)
+):
+    client = None
+    id_to_name = {}
+    try:
+        client = get_supabase_admin_client()
+        id_to_name, _ = get_supabase_company_mapping(client, db)
+    except Exception:
+        pass
+
+    sql_loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    existing_row = None
+    if client:
+        try:
+            res = client.table("loan").select("*").eq("loan_id", loan_id).execute()
+            if res.data and len(res.data) > 0:
+                existing_row = res.data[0]
+        except Exception:
+            pass
+
+    if not existing_row and not sql_loan:
+        raise HTTPException(status_code=404, detail="Loan not found.")
+
+    source = existing_row or {}
+    current_status = (source.get("status") or (sql_loan.status if sql_loan else "") or "").strip()
+    if current_status.lower() != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only loans approved by Audit can be disbursed. This loan is '{current_status or 'unknown'}'.",
+        )
+
+    borrower_id = source.get("borrower") or (sql_loan.borrower if sql_loan else None)
+    lender_id = source.get("lender") or (sql_loan.lender if sql_loan else None)
+
+    if not id_to_name:
+        id_to_name = {c.company_id: c.company_name for c in db.query(Company).all()}
+
+    p_amt = Decimal(str(source.get("principal_amount") or (sql_loan.principal_amount if sql_loan else 0) or 0))
+    if p_amt > Decimal("0.00"):
+        _move_loan_funds(
+            db, loan_id=loan_id, sql_loan=sql_loan, final_source=source, borrower_id=borrower_id,
+            lender_id=lender_id, id_to_name=id_to_name, p_amt=p_amt,
+        )
+
+    disburser = (
+        current_user.get("full_name") or current_user.get("name") or current_user.get("email")
+        or request.headers.get("X-User-Name") or "Finance"
+    )
+    now_ts = datetime.now()
+    update_payload = {
+        "status": "Disbursed",
+        "disbursed_by": disburser,
+        "disbursed_at": now_ts.isoformat(),
+        "updated_at": now_ts.isoformat(),
+    }
+    updated_row = None
+    if client:
+        try:
+            sb_res = client.table("loan").update(update_payload).eq("loan_id", loan_id).execute()
+            if sb_res.data and len(sb_res.data) > 0:
+                updated_row = sb_res.data[0]
+        except Exception as e:
+            print(f"Supabase loan disburse error: {e}")
+    if sql_loan:
+        sql_loan.status = "Disbursed"
+        sql_loan.disbursed_by = disburser
+        sql_loan.disbursed_at = now_ts
+        db.commit()
+        db.refresh(sql_loan)
+
+    try:
+        log_transaction(
+            db, AuditAction.LOAN_UPDATED,
+            user_id=current_user.get("user_id"), company_id=borrower_id,
+            ip_address=request.client.host if request.client else "unknown",
+            record_id=loan_id, record_type="loan_disbursement",
+            extra={"status": "Disbursed", "amount": str(p_amt)},
+        )
+    except Exception:
+        pass
+
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
+
+    final = updated_row or source
+
+    def pick(key):
+        if final.get(key) is not None:
+            return final.get(key)
+        return getattr(sql_loan, key, None) if sql_loan else None
+
+    return LoanOut(
+        loan_id=loan_id,
+        borrower=borrower_id,
+        lender=lender_id,
+        borrower_name=id_to_name.get(borrower_id) or f"Company #{borrower_id}",
+        lender_name=id_to_name.get(lender_id) if lender_id else "Pending Finance Assignment",
+        loan_ref_no=pick("loan_ref_no"),
+        principal_amount=p_amt,
+        amount=p_amt,
+        interest_rate=Decimal(str(pick("interest_rate") or 0)),
+        interest_type=pick("interest_type") or "simple",
+        loan_date=pick("loan_date"),
+        due_date=pick("due_date"),
+        description=pick("description"),
+        particulars=pick("description"),
+        status="Disbursed",
+        endorsed_by=pick("endorsed_by"),
+        endorsed_at=pick("endorsed_at"),
+        finance_remark=pick("finance_remark"),
+        audit_reviewed_by=pick("audit_reviewed_by"),
+        audit_reviewed_at=pick("audit_reviewed_at"),
+        audit_remark=pick("audit_remark"),
+        disbursed_by=disburser,
+        disbursed_at=now_ts,
+        bank_account_id=pick("bank_account_id"),
+        created_at=pick("created_at") or now_ts,
         updated_at=now_ts,
     )
 
@@ -1458,6 +1613,12 @@ def create_loan_repayment(
         raise HTTPException(status_code=404, detail="Loan not found")
 
     check_company_access(current_user, loan.borrower)
+
+    if (loan.status or "").strip().lower() not in DISBURSED_LOAN_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail="Payments can only be recorded after Finance has disbursed the loan.",
+        )
 
     service = FinanceService(db)
     statement = service.get_loan_statement(loan_id)

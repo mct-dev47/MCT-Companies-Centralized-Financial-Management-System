@@ -35,6 +35,27 @@ from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.pagination import PaginationParams
 from app.core.cache import get_cached, set_cached, system_cache
 
+PETTY_CASH_CATEGORY = "Petty Cash"
+
+
+def _is_petty_cash_payment(payment_method: Optional[str]) -> bool:
+    """Same rule the petty cash wallet uses to count an expense as spent from petty cash."""
+    return "petty cash" in (payment_method or "").strip().lower()
+
+
+def _local_category_id(db: Session, name: str) -> Optional[int]:
+    """Local category id for a name (created when missing), for the local-database paths."""
+    cleaned = (name or "").strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    cat = db.query(Category).filter(func.lower(Category.name) == cleaned.lower()).first()
+    if cat is None:
+        cat = Category(name=cleaned)
+        db.add(cat)
+        db.flush()
+    return cat.category_id
+
+
 def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
     has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
@@ -46,7 +67,8 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
         expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
         if expense is None:
             return
-        is_petty = (expense.payment_method or "").strip().lower() == "petty cash"
+        # Same rule the petty cash wallet uses to count an expense as spent from petty cash
+        is_petty = "petty cash" in (expense.payment_method or "").strip().lower()
         target = (
             Decimal("0.00")
             if force_zero or is_petty
@@ -519,6 +541,11 @@ def create_expense(
     if not parts:
         raise HTTPException(status_code=422, detail="Particulars is required and cannot be blank.")
 
+    # Paid with petty cash: the category is always Petty Cash, whatever was sent
+    if _is_petty_cash_payment(expense_in.payment_method):
+        expense_in.category = PETTY_CASH_CATEGORY
+        expense_in.category_id = None
+
     cat_str = (expense_in.category or "").strip()
     if not expense_in.category_id and not cat_str:
         raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
@@ -712,7 +739,7 @@ def create_expense(
 
         expense = Expense(
             company_id=target_company.company_id,
-            category_id=expense_in.category_id,
+            category_id=expense_in.category_id or _local_category_id(db, expense_in.category or ""),
             payment_method=(expense_in.payment_method or "").strip() or None,
             created_by=expense_in.created_by,
             expense_date=expense_in.expense_date,
@@ -889,6 +916,15 @@ def update_expense(
     if current and current.get("company_id"):
         check_company_access(current_user, current.get("company_id"))
 
+    # Paid with petty cash (newly chosen, or already petty cash): the category is always Petty Cash
+    effective_payment_method = (
+        expense_in.payment_method if expense_in.payment_method is not None else (current or {}).get("payment_method")
+    )
+    force_petty_category = _is_petty_cash_payment(effective_payment_method)
+    if force_petty_category:
+        expense_in.category = PETTY_CASH_CATEGORY
+        expense_in.category_id = None
+
     # Re-check the petty cash wallet with this expense's old amount added back
     if current:
         PettyCashService(db).ensure_sufficient_balance(
@@ -957,6 +993,9 @@ def update_expense(
 
     # Also update in local SQLite
     expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    if expense and force_petty_category and "category_id" not in update_payload:
+        # Supabase step did not run: still file the expense under Petty Cash locally
+        update_payload["category_id"] = _local_category_id(db, PETTY_CASH_CATEGORY)
     if expense:
         if "expense_date" in update_payload:
             expense.expense_date = expense_in.expense_date

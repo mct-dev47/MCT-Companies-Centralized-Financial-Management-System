@@ -1,0 +1,6 @@
+-- 0061_loan_disbursement_step.sqlite.sql
+-- Handled programmatically via PRAGMA table_info in migrations.py
+-- Fallback statements:
+-- ALTER TABLE loan ADD COLUMN disbursed_by VARCHAR(100) NULL;
+-- ALTER TABLE loan ADD COLUMN disbursed_at TIMESTAMP NULL;
+-- UPDATE loan SET status = 'Disbursed' WHERE status = 'Approved';

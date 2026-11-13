@@ -5,26 +5,25 @@ import {
   Search,
   RotateCw,
   ArrowUpDown,
-  FilterX,
   ChevronDown,
   ChevronRight,
   FileSpreadsheet,
   FileText,
   CheckCircle2,
-  TrendingUp,
-  ArrowDownLeft,
   Check,
   AlertCircle,
   Eye,
   Pencil,
   MoreVertical,
-  Info,
-  AlertTriangle,
+  HelpCircle,
   Loader2,
   Landmark,
+  Trash2,
+  ArrowLeft,
   X,
+  MessageSquare,
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -38,6 +37,7 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TablePagination } from '@/components/common/TablePagination'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
   Table,
   TableHeader,
@@ -46,24 +46,34 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import { DateRangePicker, type DateRange } from '@/components/ui/DateRangePicker'
+import type { DateRange } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
+import { DropdownFilter } from '@/components/common/DropdownFilter'
+import {
+  deriveTransactionLifecycle,
+  getRowSaleDateIso,
+  getCleanParticularsTitle,
+  getTransactionTypeMeta,
+  formatSignedTransactionAmount,
+  getDepositedAmountForRow,
+} from '@/utils/transactionLifecycle'
+import { TransactionStatusBadge } from '@/components/transactions/TransactionProgress'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { salesService } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
 import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
-import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatPHP } from '@/lib/format'
 import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { getParticularsSummary } from '@/utils/particularsUtils'
 import { getPaidDepositForSale, getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
-import { notifyError, notifyWarning } from '@/utils/errorUtils'
+import { notifyError, notifyWarning, notifySuccess } from '@/utils/errorUtils'
 import { websocketService } from '@/services/websocketService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -94,53 +104,13 @@ const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
   return y && m && d ? `${m}/${d}/${y.slice(2)}` : null
 }
 
-/** Deposited / Not Deposited for a sale; null for records that are not sales (no deposit step). */
-const getDepositStatusLabel = (tx: DashboardTransactionItem): 'Deposited' | 'Not Deposited' | null => {
-  if (tx.type !== 'Sales') return null
-  return (tx.depositStatus || tx.deposit_status) === 'Deposited' ? 'Deposited' : 'Not Deposited'
-}
-
-const DepositStatusBadge: React.FC<{ tx: DashboardTransactionItem }> = ({ tx }) => {
-  const label = getDepositStatusLabel(tx)
-  if (!label) return <span className="text-muted-fg/50">—</span>
-  return (
-    <div className="flex flex-col items-center gap-0.5">
-      <span
-        className={
-          label === 'Deposited'
-            ? 'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200'
-            : 'inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300'
-        }
-      >
-        {label}
-      </span>
-    </div>
-  )
-}
-
 const isAwaitingAudit = (status?: string | null): boolean =>
   (status || '').trim().toLowerCase() === 'pending audit approval'
-
-/** A timestamp -> MM/DD/YY in the viewer's local time (matches the bank entry written on that day). */
-const toLocalLedgerDate = (stamp: string): string => {
-  const d = new Date(stamp)
-  if (Number.isNaN(d.getTime())) return toLedgerDate(stamp)
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${mm}/${dd}/${String(d.getFullYear()).slice(2)}`
-}
 
 /** YYYY-MM-DD -> MM/DD/YY, the same display format the other ledger rows use. */
 const toLedgerDate = (iso: string): string => {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
   return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : iso
-}
-
-/** True when a row is money in (Deposit). Used by the cash ledger direction filter. */
-const isDepositRow = (t: DashboardTransactionItem): boolean => {
-  if ((t.deposit || 0) > 0) return true
-  if ((t.withdrawal || 0) > 0) return false
-  return t.type === 'Sales' || t.type === 'Income'
 }
 
 /** The company has a real lender (not "Pending Finance Assignment" or an external lender). */
@@ -232,29 +202,19 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   const reqType = (m.requestType || '').trim().toLowerCase()
   const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
   const statusLower = (m.status || '').trim().toLowerCase()
-  const pendingWorkflow = isAwaitingAudit(m.status) || statusLower.includes('pending')
-  // A reimbursement only moves money when Finance runs the Reimburse step (bank payout). Until then
-  // (including after Audit approval) it stays off the cash ledger, marked as awaiting reimbursement.
-  const isPaidOut = statusLower === 'reimbursed'
-  const awaitingReimbursement = isReimbursement && !pendingWorkflow && !isPaidOut
-  const awaitingAudit = pendingWorkflow || awaitingReimbursement
+  const awaitingAudit = isAwaitingAudit(m.status) || statusLower.includes('pending')
   const isDisapproved = statusLower.includes('disapproved') || statusLower.includes('rejected')
-  const auditStatus: DashboardTransactionItem['auditStatus'] = pendingWorkflow ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
+  const auditStatus: DashboardTransactionItem['auditStatus'] = awaitingAudit ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
   const txStatus: DashboardTransactionItem['status'] = awaitingAudit ? 'Pending' : 'Paid'
-  // A paid-out reimbursement sits on the day the bank paid it, like the bank entry.
-  const rowDate = isReimbursement && isPaidOut && m.reimbursedAt ? toLocalLedgerDate(m.reimbursedAt) : toLedgerDate(m.date)
 
   const base = {
     refNo: m.refNo,
     chequeNo: '',
-    date: rowDate,
-    pendingLabel: awaitingReimbursement ? 'Awaiting Reimbursement' : undefined,
+    date: toLedgerDate(m.date),
     type: 'Petty Cash' as const,
     amount: m.amount,
     category: (m.category || 'Petty Cash') as any,
-    paymentMethod: isReimbursement
-      ? 'Bank Reimbursement'
-      : m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
+    paymentMethod: m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
     status: txStatus,
     awaitingAudit,
     auditStatus,
@@ -354,16 +314,16 @@ interface CompanyFilterDropdownProps {
   selectedCompany: string
   companyList: string[]
   onSelectCompany: (company: string) => void
-  onResetCompany: () => void
-  canClearFilter?: boolean
+  fullWidth?: boolean
+  className?: string
 }
 
 const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
   selectedCompany,
   companyList,
   onSelectCompany,
-  onResetCompany,
-  canClearFilter = true,
+  fullWidth = false,
+  className,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -376,8 +336,15 @@ const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
         setIsOpen(false)
       }
     }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false)
+    }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEsc)
+    }
   }, [])
 
   const filteredList = React.useMemo(() => {
@@ -387,17 +354,19 @@ const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
   }, [search, companyList])
 
   return (
-    <div ref={dropdownRef} className="relative inline-block">
+    <div ref={dropdownRef} className={cn('relative', fullWidth ? 'block w-full' : 'inline-block', className)}>
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-          isOpen && 'ring-2 ring-slate-100 border-slate-300'
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 min-w-[200px] sm:min-w-[220px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          fullWidth && 'w-full',
+          isOpen && 'ring-2 ring-focus/20 border-focus/50'
         )}
         aria-label="Filter transactions by company"
+        aria-expanded={isOpen}
       >
-        <span className="font-semibold text-focus/90 truncate max-w-[150px]">
+        <span className="font-semibold text-focus truncate min-w-0 flex-1 text-left">
           {selectedCompany}
         </span>
         <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
@@ -409,8 +378,8 @@ const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
           className={cn(
             'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
             pos.isMobile
-              ? 'w-[min(calc(100vw-32px),320px)]'
-              : 'absolute right-0 top-full mt-2 w-68'
+              ? 'w-[min(calc(100vw-32px),340px)]'
+              : 'absolute right-0 top-full mt-2 w-80'
           )}
         >
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
@@ -528,12 +497,16 @@ interface BankAccountFilterDropdownProps {
   selectedAccountId: string
   bankAccounts: BankAccount[]
   onSelectAccount: (accountId: string) => void
+  fullWidth?: boolean
+  className?: string
 }
 
 const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
   selectedAccountId,
   bankAccounts,
   onSelectAccount,
+  fullWidth = false,
+  className,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -546,12 +519,19 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
         setIsOpen(false)
       }
     }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false)
+    }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEsc)
+    }
   }, [])
 
   const selectedAcc = React.useMemo(
-    () => bankAccounts.find((a) => String(a.id) === String(selectedAccountId)) || bankAccounts[0],
+    () => (selectedAccountId ? bankAccounts.find((a) => String(a.id) === String(selectedAccountId)) : undefined),
     [bankAccounts, selectedAccountId]
   )
 
@@ -569,23 +549,28 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
   }, [search, bankAccounts])
 
   const triggerLabel = selectedAcc
-    ? `${selectedAcc.bankName}${selectedAcc.accountName ? ` - ${selectedAcc.accountName}` : ''}`
-    : 'Select Bank Account'
+    ? `Bank: ${selectedAcc.bankName}${selectedAcc.accountName ? ` – ${selectedAcc.accountName}` : ''}`
+    : 'Bank: All'
 
   return (
-    <div ref={dropdownRef} className="relative inline-block">
+    <div ref={dropdownRef} className={cn('relative', fullWidth ? 'block w-full' : 'inline-block', className)}>
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-          isOpen && 'ring-2 ring-slate-100 border-slate-300'
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          fullWidth && 'w-full',
+          selectedAcc ? 'border-primary/50 bg-primary/5' : 'border-stroke/60',
+          isOpen && 'ring-2 ring-focus/20 border-focus/50'
         )}
-        aria-label="Select bank account"
+        aria-label={`Filter by bank account: ${triggerLabel}`}
+        aria-expanded={isOpen}
       >
-        <Landmark className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-        <span className="font-semibold text-focus/90 truncate max-w-[180px]">
-          {triggerLabel}
+        <span className="inline-flex items-center gap-2 min-w-0 flex-1">
+          <Landmark className={cn('h-4 w-4 shrink-0', selectedAcc ? 'text-primary' : 'text-muted-fg')} />
+          <span className="font-semibold text-focus truncate text-left">
+            {triggerLabel}
+          </span>
         </span>
         <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
       </button>
@@ -602,7 +587,7 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
         >
           <div className="pb-2 mb-2 border-b border-stroke/20 px-1">
             <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-              Select Bank Account
+              Filter By Bank Account
             </span>
           </div>
 
@@ -611,31 +596,52 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
               <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
+                aria-label="Search bank accounts"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search bank or account..."
-                className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
+                className="w-full min-h-[44px] pl-8 pr-8 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/70 focus:outline-none focus:ring-2 focus:ring-focus focus:bg-white"
               />
               {search && (
                 <button
                   type="button"
+                  aria-label="Clear bank search"
                   onClick={() => setSearch('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-1 rounded"
                 >
-                  <X className="w-3 h-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               )}
             </div>
           )}
 
           <div className="space-y-1 max-h-64 overflow-y-auto pr-0.5">
+            {!search.trim() && (
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectAccount('')
+                  setIsOpen(false)
+                  setSearch('')
+                }}
+                className={cn(
+                  'w-full min-h-[44px] flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  !selectedAccountId
+                    ? 'bg-primary/10 text-primary font-semibold'
+                    : 'text-focus/85 hover:bg-surface'
+                )}
+              >
+                <span>All Banks</span>
+                {!selectedAccountId && <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />}
+              </button>
+            )}
             {filteredAccounts.length === 0 ? (
               <div className="py-4 text-center text-xs text-muted-fg">
                 No matching bank accounts
               </div>
             ) : (
               filteredAccounts.map((acc) => {
-                const isSelected = selectedAcc ? String(selectedAcc.id) === String(acc.id) : false
+                const isSelected = Boolean(selectedAccountId) && String(selectedAccountId) === String(acc.id)
                 return (
                   <button
                     key={acc.id}
@@ -646,27 +652,27 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
                       setSearch('')
                     }}
                     className={cn(
-                      'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                      'w-full min-h-[44px] flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                       isSelected
                         ? 'bg-primary/10 text-primary font-semibold'
-                        : 'text-focus/80 hover:bg-slate-50'
+                        : 'text-focus/85 hover:bg-surface'
                     )}
                   >
                     <div className="flex flex-col min-w-0 pr-2">
                       <div className="flex items-center gap-1.5 truncate">
                         <span className="font-semibold truncate">
                           {acc.bankName}
-                          {acc.accountName ? ` - ${acc.accountName}` : ''}
+                          {acc.accountName ? ` – ${acc.accountName}` : ''}
                         </span>
                       </div>
-                      <span className="text-[10px] text-muted-fg truncate">{acc.companyName}</span>
+                      <span className="text-[11px] text-muted-fg truncate">{acc.companyName}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0 text-right">
                       <div className="flex flex-col text-right">
                         <span className="text-[11px] font-semibold text-focus">
                           {formatPHP(acc.startingBalance)}
                         </span>
-                        <span className="text-[9px] text-muted-fg">start bal</span>
+                        <span className="text-[10px] text-muted-fg">start bal</span>
                       </div>
                       {isSelected && (
                         <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1" />
@@ -686,12 +692,12 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
 export const TransactionPage: React.FC = () => {
   const { user } = useSession()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { activeCompany, setActiveCompany, allCompanies } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole.includes('audit')
   const isFinance = userRole.includes('finance')
   const isAdmin = userRole === 'admin' || userRole === 'owner'
-  const isSupervisor = userRole.includes('supervisor') || userRole === 'company'
 
   // Crucial requirement: Only Audit and Finance (and Admin) can choose "All Companies", not the supervisor!
   const canSelectAllCompanies = isAudit || isFinance || isAdmin
@@ -700,7 +706,12 @@ export const TransactionPage: React.FC = () => {
   const supervisorCompanies = React.useMemo(() => {
     const list: string[] = []
     if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
-      list.push(user.assignedCompany)
+      const parts = user.assignedCompany.includes(',')
+        ? user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean)
+        : [user.assignedCompany.trim()]
+      parts.forEach((c) => {
+        if (c && c !== 'All Companies' && !list.includes(c)) list.push(c)
+      })
     }
     if (Array.isArray(user?.companyNames)) {
       user.companyNames.forEach((c) => {
@@ -719,8 +730,6 @@ export const TransactionPage: React.FC = () => {
   }, [user, activeCompany])
 
   const defaultSupervisorCompany = supervisorCompanies[0] || ''
-
-  const isCompanyScoped = !canSelectAllCompanies && supervisorCompanies.length <= 1
 
   // Dynamic company list loaded from CompanyContext
   const [companyList, setCompanyList] = React.useState<string[]>(() => {
@@ -789,6 +798,8 @@ export const TransactionPage: React.FC = () => {
   }, [canSelectAllCompanies, selectedCompany, defaultSupervisorCompany])
 
   const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
+  const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
+  const [salesCurrentPage, setSalesCurrentPage] = React.useState(1)
 
   const handleSelectCompany = (c: string) => {
     if (!canSelectAllCompanies && c === 'All Companies') return
@@ -799,7 +810,7 @@ export const TransactionPage: React.FC = () => {
     setSalesCurrentPage(1)
   }
 
-  const handleResetCompany = () => {
+  const handleResetCompany = React.useCallback(() => {
     if (!canSelectAllCompanies) {
       setSelectedCompany(defaultSupervisorCompany)
       setActiveCompany(defaultSupervisorCompany)
@@ -810,7 +821,7 @@ export const TransactionPage: React.FC = () => {
     setSelectedBankAccountId('')
     setDepositCurrentPage(1)
     setSalesCurrentPage(1)
-  }
+  }, [canSelectAllCompanies, defaultSupervisorCompany, setActiveCompany])
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
@@ -820,28 +831,27 @@ export const TransactionPage: React.FC = () => {
   // Bank accounts filtered by company scope
   const availableBankAccounts = React.useMemo(() => {
     if (effectiveTargetCompany) {
-      return preferSoleOwnedBanks(
-        bankAccounts.filter((a) => isAccountOwnedBy(a, effectiveTargetCompany)),
-        effectiveTargetCompany
-      )
+      return bankAccounts.filter((a) => isAccountOwnedBy(a, effectiveTargetCompany))
     }
     return bankAccounts
   }, [bankAccounts, effectiveTargetCompany])
 
-  // The page always shows one bank. Pick the first bank in scope when none (or an out of scope one) is chosen.
+  // Clear selectedBankAccountId only if it no longer belongs to the scoped company's banks
   React.useEffect(() => {
-    if (availableBankAccounts.length > 0) {
-      const exists = availableBankAccounts.some((a) => String(a.id) === String(selectedBankAccountId))
-      if (!exists) setSelectedBankAccountId(String(availableBankAccounts[0].id))
-    } else if (selectedBankAccountId) {
+    if (!selectedBankAccountId) return
+    if (
+      availableBankAccounts.length > 0 &&
+      !availableBankAccounts.some((a) => String(a.id) === String(selectedBankAccountId))
+    ) {
       setSelectedBankAccountId('')
     }
   }, [availableBankAccounts, selectedBankAccountId])
 
   const selectedBankAccount = React.useMemo(
     () =>
-      availableBankAccounts.find((a) => String(a.id) === String(selectedBankAccountId)) ||
-      availableBankAccounts[0],
+      selectedBankAccountId
+        ? availableBankAccounts.find((a) => String(a.id) === String(selectedBankAccountId))
+        : undefined,
     [availableBankAccounts, selectedBankAccountId]
   )
 
@@ -878,7 +888,28 @@ export const TransactionPage: React.FC = () => {
   )
 
   const isOwner = userRole === 'owner'
+  const isFinanceOnly = isFinance && !isAudit && !isAdmin && !isOwner
+  const isViewOnlyUser = isOwner
+  const showActionColumn = !isOwner
   const canAudit = (isAdmin || isAudit) && !isOwner
+  const isBusinessWriter =
+    (userRole === 'supervisor' || userRole === 'company') &&
+    !isAudit &&
+    !isAdmin &&
+    !isOwner
+
+  // Row delete confirmation state
+  const [deleteConfirmTx, setDeleteConfirmTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [isDeletingTx, setIsDeletingTx] = React.useState(false)
+
+  // Day level audit (By Day focus): Mark as Audited / Flag Discrepancy with optional remarks
+  const [dayAudit, setDayAudit] = React.useState<{
+    action: 'Verified' | 'Flagged'
+    date: string
+    targets: DashboardTransactionItem[]
+  } | null>(null)
+  const [dayAuditRemarks, setDayAuditRemarks] = React.useState('')
+  const [isSubmittingDayAudit, setIsSubmittingDayAudit] = React.useState(false)
 
   // 3-Dots Action Menu state
   const [openMenuTxId, setOpenMenuTxId] = React.useState<string | null>(null)
@@ -889,10 +920,17 @@ export const TransactionPage: React.FC = () => {
   } | null>(null)
   const [activeMenuTx, setActiveMenuTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
+  const [markAuditTargetTx, setMarkAuditTargetTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
   // 3 dots menu on a By Day row (acts on the whole day)
   const [dayMenu, setDayMenu] = React.useState<{ date: string; top: number; right: number; openUpward: boolean } | null>(null)
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
+  const [remarksTargetTx, setRemarksTargetTx] = React.useState<DashboardTransactionItem | null>(null)
+  const [remarksInput, setRemarksInput] = React.useState('')
+  const [isRemarksDialogOpen, setIsRemarksDialogOpen] = React.useState(false)
+  const [isSavingRemarks, setIsSavingRemarks] = React.useState(false)
 
   // Close floating 3-dots action menu on click outside, scroll or resize
   React.useEffect(() => {
@@ -911,40 +949,56 @@ export const TransactionPage: React.FC = () => {
     }
   }, [])
 
-  // Switch bar tab: 'deposit' (cash/bank ledger) | 'all' (full accrual ledger)
-  const [activeTab, setActiveTab] = React.useState<'deposit' | 'all'>('deposit')
+  // Switch bar tab: 'deposit' (Bank Ledger) | 'all' (All Transactions), preserved via ?tab= query param
+  const [activeTab, setActiveTabState] = React.useState<'deposit' | 'all'>(() => {
+    const param = searchParams.get('tab')
+    return param === 'deposit' ? 'deposit' : 'all'
+  })
 
-  // Independent Filters & Pagination for DEPOSIT (cash ledger) Tab
-  const [depositSearchQuery, setDepositSearchQuery] = React.useState('')
-  // Direction filter for the cash ledger: All | Deposits (money in) | Withdrawals (money out)
-  const [depositDirectionFilter, setDepositDirectionFilter] = React.useState<'All' | 'Deposits' | 'Withdrawals'>('All')
-  const [depositDateRange, setDepositDateRange] = React.useState<DateRange>({
+  const setActiveTab = React.useCallback(
+    (tab: 'deposit' | 'all') => {
+      setActiveTabState(tab)
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.set('tab', tab)
+          return next
+        },
+        { replace: true }
+      )
+    },
+    [setSearchParams]
+  )
+
+  // Shared filters & group-by choice persisted across tab switches
+  const [searchQuery, setSearchQuery] = React.useState('')
+  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Sales' | 'Expenses'>('All')
+  const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
     endDate: null,
     label: 'All Dates',
+    preset: 'All Dates',
   })
-  const [depositSortOrder, setDepositSortOrder] = React.useState<'desc' | 'asc'>('desc')
-  const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
-
-
-  // Independent Filters & Pagination for ALL TRANSACTIONS (accrual) Tab
-  const [salesSearchQuery, setSalesSearchQuery] = React.useState('')
-  const [salesStatusFilter, setSalesStatusFilter] = React.useState<'All' | 'Paid' | 'Unpaid' | 'Pending' | 'On hold'>('All')
-  // Record-type filter for the accrual ledger: All | Sales | Expense | Loan | Petty Cash
-  const [salesTypeFilter, setSalesTypeFilter] = React.useState<
-    'All' | 'Sales' | 'Expense' | 'Loan' | 'Petty Cash' | 'Income'
+  const [statusFilter, setStatusFilter] = React.useState<
+    | 'All'
+    | 'Deposited'
+    | 'Awaiting'
+    | 'Unpaid Sales'
+    | 'Paid'
+    | 'Pending'
+    | 'Unpaid'
+    | 'On hold'
+    | 'Pending Audit'
+    | 'Audited'
+    | 'Flagged'
   >('All')
-  const [salesDateRange, setSalesDateRange] = React.useState<DateRange>({
-    startDate: null,
-    endDate: null,
-    label: 'All Dates',
-  })
-  const [salesSortOrder, setSalesSortOrder] = React.useState<'desc' | 'asc'>('desc')
-  const [salesCurrentPage, setSalesCurrentPage] = React.useState(1)
-  const [isSalesStatusDropdownOpen, setIsSalesStatusDropdownOpen] = React.useState(false)
-  const salesStatusDropdownRef = React.useRef<HTMLDivElement>(null)
-  const [isSalesTypeDropdownOpen, setIsSalesTypeDropdownOpen] = React.useState(false)
-  const salesTypeDropdownRef = React.useRef<HTMLDivElement>(null)
+  const [categoryFilter, setCategoryFilter] = React.useState<string>('All')
+  const [paymentMethodFilter, setPaymentMethodFilter] = React.useState<string>('All')
+  const [sortOrder, setSortOrder] = React.useState<'desc' | 'asc'>('desc')
+
+  // Help popover state
+  const [isHelpOpen, setIsHelpOpen] = React.useState(false)
+  const helpPopoverRef = React.useRef<HTMLDivElement>(null)
 
   // Export dropdown state
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
@@ -952,38 +1006,39 @@ export const TransactionPage: React.FC = () => {
 
   const itemsPerPage = 12
 
-  // View mode for All Transactions tab: 'all' (records table) vs 'daily_summary' (grouped by date per bank)
-  const [salesViewMode, setSalesViewMode] = React.useState<'all' | 'daily_summary'>('daily_summary')
+  // View mode / group-by choice persisted across tabs (Step 4 expands with Transaction grouping)
+  const [salesViewMode, setSalesViewMode] = React.useState<'all' | 'daily_summary'>('all')
   const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
   const toggleDateExpansion = (date: string) =>
-    setExpandedDates((prev) => {
-      const next = new Set(prev)
-      if (next.has(date)) next.delete(date)
-      else next.add(date)
-      return next
-    })
+    setExpandedDates((prev) => (prev.has(date) ? new Set() : new Set([date])))
 
   // Modal inspection
   const [selectedTx, setSelectedTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isModalOpen, setIsModalOpen] = React.useState(false)
 
-  // Close dropdowns on click outside
+  // Close dropdowns / popovers on click outside or Escape
   React.useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as Node
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
       }
-      if (salesStatusDropdownRef.current && !salesStatusDropdownRef.current.contains(target)) {
-        setIsSalesStatusDropdownOpen(false)
+      if (helpPopoverRef.current && !helpPopoverRef.current.contains(target)) {
+        setIsHelpOpen(false)
       }
-      if (salesTypeDropdownRef.current && !salesTypeDropdownRef.current.contains(target)) {
-        setIsSalesTypeDropdownOpen(false)
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsExportDropdownOpen(false)
+        setIsHelpOpen(false)
       }
-
     }
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEsc)
+    }
   }, [])
 
   // Fetch all transactions across Sales, Expenses, and Loans
@@ -1040,13 +1095,7 @@ export const TransactionPage: React.FC = () => {
         depositDate: s.deposit_date ?? s.depositDate ?? null,
       }))
 
-      // A REIMB-<id> expense is the bookkeeping record of a petty cash reimbursement payout. The payout
-      // itself is already shown as the petty cash row (with its bank), so listing it again would double it.
-      const isReimbursementPayoutExpense = (e: { refNo?: string; paymentMethod?: string }) =>
-        (e.refNo || '').toUpperCase().startsWith('REIMB-') ||
-        (e.paymentMethod || '').trim().toLowerCase() === 'bank reimbursement'
-
-      const unifiedExpenses: DashboardTransactionItem[] = expenseData.filter((e) => !isReimbursementPayoutExpense(e)).map((e) => ({
+      const unifiedExpenses: DashboardTransactionItem[] = expenseData.map((e) => ({
         id: e.id,
         refNo: e.refNo,
         chequeNo: e.chequeNo || '',
@@ -1071,8 +1120,6 @@ export const TransactionPage: React.FC = () => {
         attachments: [],
         items: e.items,
         paidAmount: getPaidDisbursementForExpense(e),
-        depositStatus: 'Deposited',
-        deposit_status: 'Deposited',
         remarks: e.remarks || '',
         bankAccountId: (e as any).bankAccountId || (e as any).bank_account_id,
         bankName: (e as any).bankName || (e as any).bank_name,
@@ -1141,40 +1188,7 @@ export const TransactionPage: React.FC = () => {
         }
       })
 
-      // Deposits / withdrawals typed directly in Bank Management have no sale or expense record, but they
-      // move the bank balance, so they are listed here too (otherwise this ledger can't match the bank).
-      const unifiedManualBank: DashboardTransactionItem[] = []
-      bankAccountsData.forEach((acc) => {
-        ;(acc.transactions || []).forEach((bt) => {
-          if (bt.entrySource !== 'manual') return
-          const company = bt.companyName || acc.companyName || ''
-          if (targetCompany && !isCompanyMatch(company, targetCompany)) return
-          const amount = (bt.deposit || 0) > 0 ? bt.deposit || 0 : bt.withdrawal || 0
-          unifiedManualBank.push({
-            id: `bank_${bt.id}`,
-            refNo: bt.chequeNo || bt.id,
-            chequeNo: bt.chequeNo || '',
-            date: bt.date,
-            type: 'Bank',
-            company,
-            description: bt.particulars,
-            particulars: bt.particulars,
-            amount,
-            withdrawal: bt.withdrawal || 0,
-            deposit: bt.deposit || 0,
-            category: bt.category as any,
-            paymentMethod: 'Manual Bank Entry',
-            status: 'Paid',
-            auditStatus: 'Pending Audit',
-            createdAt: bt.createdAt || bt.date,
-            bankAccountId: acc.id,
-            bankName: acc.bankName,
-            paidAmount: amount,
-          })
-        })
-      })
-
-      const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants, ...unifiedManualBank]
+      const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants]
       setTransactions(combined)
       setBankAccounts(bankAccountsData)
     } finally {
@@ -1246,8 +1260,6 @@ export const TransactionPage: React.FC = () => {
         }
         // All tenant rental collections / income are deposits
         if (t.type === 'Income') return true
-        // Manual Bank Management deposits and withdrawals always moved the bank
-        if (t.type === 'Bank') return true
         // Only PAID expenses are cash ledger withdrawals. Pending and Unpaid expenses have a withdrawal
         // amount but no money has left yet, so they stay in All Transactions only.
         if (t.type === 'Expense') return (t.paidAmount || 0) > 0
@@ -1261,11 +1273,11 @@ export const TransactionPage: React.FC = () => {
         if (t.type === 'Sales') {
           const depositVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.deposit || t.amount || 0)
           // Deposit tab = cash ledger: the row sits on the day the money was DEPOSITED (By Day groups on it too).
-          // The sale date stays on `saleDate`; a deposited sale with no deposit date keeps its sale date.
+          // Keep original gross t.amount intact for Amount vs Deposit Amount columns.
           const depDay = String(t.deposit_date || t.depositDate || '').slice(0, 10)
           const [y, m, d] = depDay.split('-')
           const depositDisplayDate = y && m && d ? `${m}/${d}/${y.slice(2)}` : t.date
-          return { ...t, date: depositDisplayDate, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+          return { ...t, date: depositDisplayDate, paidAmount: depositVal, deposit: depositVal, withdrawal: 0 }
         }
         if (t.type === 'Income') {
           const depositVal = (t.deposit || 0) > 0 ? t.deposit : (t.amount || t.paidAmount || 0)
@@ -1353,18 +1365,102 @@ export const TransactionPage: React.FC = () => {
     [closingBalanceDates]
   )
 
+  const matchesTypeFilter = React.useCallback(
+    (t: DashboardTransactionItem): boolean => {
+      if (typeFilter === 'All') return true
+      if (typeFilter === 'Sales') return t.type === 'Sales'
+      if (typeFilter === 'Expenses') return t.type === 'Expense'
+      return true
+    },
+    [typeFilter]
+  )
+
+  const matchesSharedStatus = React.useCallback(
+    (t: DashboardTransactionItem): boolean => {
+      if (statusFilter === 'All') return true
+      const lc = deriveTransactionLifecycle(t)
+      if (statusFilter === 'Deposited') return t.type === 'Sales' && lc.bucket === 'deposited'
+      if (statusFilter === 'Awaiting') return t.type === 'Sales' && lc.bucket === 'awaiting'
+      if (statusFilter === 'Unpaid Sales') return t.type === 'Sales' && lc.bucket === 'unpaid'
+      if (statusFilter === 'Paid') return lc.paymentStatus === 'Paid'
+      if (statusFilter === 'Pending') {
+        return lc.paymentStatus === 'Pending' || lc.paymentStatus === 'Partially Paid'
+      }
+      if (statusFilter === 'Unpaid') {
+        return lc.paymentStatus === 'Unpaid' || lc.paymentStatus === 'Overdue'
+      }
+      if (statusFilter === 'On hold') return lc.paymentStatus === 'On hold'
+      if (statusFilter === 'Pending Audit') return lc.isAuditPending
+      if (statusFilter === 'Audited') return t.auditStatus === 'Verified'
+      if (statusFilter === 'Flagged') return t.auditStatus === 'Flagged'
+      return true
+    },
+    [statusFilter]
+  )
+
+  const matchesPaymentMethod = React.useCallback(
+    (t: DashboardTransactionItem): boolean => {
+      if (paymentMethodFilter === 'All') return true
+      const pm = (t.paymentMethod || 'Cash').trim().toLowerCase()
+      return pm === paymentMethodFilter.trim().toLowerCase()
+    },
+    [paymentMethodFilter]
+  )
+
+  const paymentMethodOptions = React.useMemo(() => {
+    const set = new Set<string>(['Cash', 'GCash', 'Cheque'])
+    transactions.forEach((t) => {
+      if (t.paymentMethod && t.paymentMethod.trim()) {
+        set.add(t.paymentMethod.trim())
+      }
+    })
+    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))]
+  }, [transactions])
+
+  const matchesCategoryFilter = React.useCallback(
+    (t: DashboardTransactionItem): boolean => {
+      if (categoryFilter === 'All') return true
+      const cat = (t.category || 'Uncategorized').trim().toLowerCase()
+      return cat === categoryFilter.trim().toLowerCase()
+    },
+    [categoryFilter]
+  )
+
+  const categoryOptions = React.useMemo(() => {
+    const set = new Set<string>()
+    transactions.forEach((t) => {
+      if (t.category && String(t.category).trim()) {
+        set.add(String(t.category).trim())
+      }
+    })
+    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))]
+  }, [transactions])
+
   const filteredDepositTransactions = React.useMemo(() => {
     let list = depositBaseList
 
-    // Direction filter: All | Deposits (money in) | Withdrawals (money out)
-    if (depositDirectionFilter === 'Deposits') {
-      list = list.filter(isDepositRow)
-    } else if (depositDirectionFilter === 'Withdrawals') {
-      list = list.filter((t) => !isDepositRow(t))
+    // Type filter (All | Sales | Expenses)
+    if (typeFilter !== 'All') {
+      list = list.filter(matchesTypeFilter)
+    }
+
+    // Category filter
+    if (categoryFilter !== 'All') {
+      list = list.filter(matchesCategoryFilter)
+    }
+
+    // Status filter
+    if (statusFilter !== 'All') {
+      list = list.filter(matchesSharedStatus)
+    }
+
+    // Payment method filter
+    if (paymentMethodFilter !== 'All') {
+      list = list.filter(matchesPaymentMethod)
     }
 
     // Search query
-    const q = depositSearchQuery.toLowerCase().trim()
+    const q = searchQuery.toLowerCase().trim()
     if (q) {
       list = list.filter(
         (t) =>
@@ -1373,14 +1469,15 @@ export const TransactionPage: React.FC = () => {
           t.description.toLowerCase().includes(q) ||
           (t.particulars && t.particulars.toLowerCase().includes(q)) ||
           t.company.toLowerCase().includes(q) ||
-          t.category.toLowerCase().includes(q)
+          t.category.toLowerCase().includes(q) ||
+          (t.paymentMethod && t.paymentMethod.toLowerCase().includes(q))
       )
     }
 
-    // Date range
-    if (depositDateRange.startDate && depositDateRange.endDate) {
+    // Date range (Bank Ledger filters by deposit / ledger date)
+    if (dateRange.startDate && dateRange.endDate) {
       list = list.filter((t) =>
-        isDateInRange(t.date, depositDateRange.startDate, depositDateRange.endDate)
+        isDateInRange(t.date, dateRange.startDate, dateRange.endDate)
       )
     }
 
@@ -1390,19 +1487,26 @@ export const TransactionPage: React.FC = () => {
       const dateB = normalizeDateToYYYYMMDD(b.date)
       const cmp = dateB.localeCompare(dateA)
       if (cmp !== 0) {
-        return depositSortOrder === 'desc' ? cmp : -cmp
+        return sortOrder === 'desc' ? cmp : -cmp
       }
       const timeCmp = (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      return depositSortOrder === 'desc' ? timeCmp : -timeCmp
+      return sortOrder === 'desc' ? timeCmp : -timeCmp
     })
 
     return list
   }, [
     depositBaseList,
-    depositDirectionFilter,
-    depositSearchQuery,
-    depositDateRange,
-    depositSortOrder,
+    typeFilter,
+    matchesTypeFilter,
+    categoryFilter,
+    matchesCategoryFilter,
+    statusFilter,
+    matchesSharedStatus,
+    paymentMethodFilter,
+    matchesPaymentMethod,
+    searchQuery,
+    dateRange,
+    sortOrder,
   ])
 
   const depositTotalPages = Math.max(1, Math.ceil(filteredDepositTransactions.length / itemsPerPage))
@@ -1411,7 +1515,7 @@ export const TransactionPage: React.FC = () => {
     return filteredDepositTransactions.slice(start, start + itemsPerPage)
   }, [filteredDepositTransactions, depositCurrentPage, itemsPerPage])
 
-  // 2. FILTERED ALL TRANSACTIONS (full accrual ledger: sales + expenses + loans, every status)
+  // 2. FILTERED ALL TRANSACTIONS (Sales + Expenses/Withdrawals + all company ledger entries)
   const filteredSalesTransactions = React.useMemo(() => {
     let list = transactions.slice()
 
@@ -1425,22 +1529,28 @@ export const TransactionPage: React.FC = () => {
       list = list.filter((t) => resolveTxBank(t)?.id === selectedBankAccount.id)
     }
 
-    // Record-type filter: All | Sales | Expense | Loan | Petty Cash
-    if (salesTypeFilter !== 'All') {
-      list = list.filter((t) => t.type === salesTypeFilter)
+    // Type filter (All | Sales | Expenses)
+    if (typeFilter !== 'All') {
+      list = list.filter(matchesTypeFilter)
     }
 
-    // Status filter: All | Paid | Unpaid | Pending | On hold
-    if (salesStatusFilter !== 'All') {
-      if (salesStatusFilter === 'Unpaid') {
-        list = list.filter((t) => t.status !== 'Paid')
-      } else {
-        list = list.filter((t) => t.status === salesStatusFilter)
-      }
+    // Category filter
+    if (categoryFilter !== 'All') {
+      list = list.filter(matchesCategoryFilter)
+    }
+
+    // Status filter
+    if (statusFilter !== 'All') {
+      list = list.filter(matchesSharedStatus)
+    }
+
+    // Payment method filter
+    if (paymentMethodFilter !== 'All') {
+      list = list.filter(matchesPaymentMethod)
     }
 
     // Search query
-    const q = salesSearchQuery.toLowerCase().trim()
+    const q = searchQuery.toLowerCase().trim()
     if (q) {
       list = list.filter(
         (t) =>
@@ -1449,27 +1559,28 @@ export const TransactionPage: React.FC = () => {
           t.description.toLowerCase().includes(q) ||
           (t.particulars && t.particulars.toLowerCase().includes(q)) ||
           t.company.toLowerCase().includes(q) ||
+          (t.category && String(t.category).toLowerCase().includes(q)) ||
           (t.paymentMethod && t.paymentMethod.toLowerCase().includes(q))
       )
     }
 
-    // Date range
-    if (salesDateRange.startDate && salesDateRange.endDate) {
+    // Date range (All Transactions filters by sale/expense transaction date)
+    if (dateRange.startDate && dateRange.endDate) {
       list = list.filter((t) =>
-        isDateInRange(t.date, salesDateRange.startDate, salesDateRange.endDate)
+        isDateInRange(getRowSaleDateIso(t) || t.date, dateRange.startDate, dateRange.endDate)
       )
     }
 
-    // Sort
+    // Sort by transaction date (sales date for Sales, expense date for Expenses)
     list = [...list].sort((a, b) => {
-      const dateA = normalizeDateToYYYYMMDD(a.date)
-      const dateB = normalizeDateToYYYYMMDD(b.date)
+      const dateA = getRowSaleDateIso(a) || normalizeDateToYYYYMMDD(a.date)
+      const dateB = getRowSaleDateIso(b) || normalizeDateToYYYYMMDD(b.date)
       const cmp = dateB.localeCompare(dateA)
       if (cmp !== 0) {
-        return salesSortOrder === 'desc' ? cmp : -cmp
+        return sortOrder === 'desc' ? cmp : -cmp
       }
       const timeCmp = (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      return salesSortOrder === 'desc' ? timeCmp : -timeCmp
+      return sortOrder === 'desc' ? timeCmp : -timeCmp
     })
 
     return list
@@ -1478,11 +1589,17 @@ export const TransactionPage: React.FC = () => {
     effectiveTargetCompany,
     selectedBankAccount,
     resolveTxBank,
-    salesTypeFilter,
-    salesStatusFilter,
-    salesSearchQuery,
-    salesDateRange,
-    salesSortOrder,
+    typeFilter,
+    matchesTypeFilter,
+    categoryFilter,
+    matchesCategoryFilter,
+    statusFilter,
+    matchesSharedStatus,
+    paymentMethodFilter,
+    matchesPaymentMethod,
+    searchQuery,
+    dateRange,
+    sortOrder,
   ])
 
   const salesTotalPages = Math.max(1, Math.ceil(filteredSalesTransactions.length / itemsPerPage))
@@ -1603,21 +1720,38 @@ export const TransactionPage: React.FC = () => {
         dayTransactionCount,
       }
     })
-  }, [activeTab, filteredDepositTransactions, filteredSalesTransactions, resolveTxBank])
+  }, [activeTab, filteredDepositTransactions, filteredSalesTransactions, resolveTxBank, getRowAmounts])
 
   // The By Day table gets a Company column only when a shared (multi-company) bank is in view
   const showDayCompanyColumn = dailySummaryGroups.some((g) => !!g.company)
-  const dayColCount = showDayCompanyColumn ? 9 : 8
+  const showDayBalanceColumn = activeTab === 'deposit'
+  const dayColCount = activeTab === 'deposit'
+    ? 6
+    : (showDayCompanyColumn ? 7 : 6) +
+      (showDayBalanceColumn ? 1 : 0) +
+      (showActionColumn ? 1 : 0)
+  const hasFocusedDay = React.useMemo(
+    () => dailySummaryGroups.some((g) => expandedDates.has(g.id)),
+    [dailySummaryGroups, expandedDates]
+  )
+  const visibleDayGroups = React.useMemo(
+    () =>
+      hasFocusedDay
+        ? dailySummaryGroups.filter((g) => expandedDates.has(g.id))
+        : dailySummaryGroups,
+    [dailySummaryGroups, hasFocusedDay, expandedDates]
+  )
 
-  // Active dataset & clear filters check
+  // Active dataset & shared filter chips
   const activeDataset = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
-  // Non-narrowed copy for use inside the per-tab toolbar branches, where TypeScript
-  // otherwise narrows `activeTab` to a single literal and flags the switcher comparisons.
-  const currentTab: 'deposit' | 'all' = activeTab
 
-  // View mode toggle (By Day vs All records), shared by the Deposit and All Transactions toolbars
+  // View mode toggle (All Records | By Day), updated in Step 4 to None | Day | Transaction
   const viewModeToggle = (
-    <div className="flex items-center bg-slate-100/90 rounded-full border border-stroke/40 p-1 gap-1">
+    <div
+      role="group"
+      aria-label="Group transactions"
+      className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+    >
       {(
         [
           { value: 'all', label: 'All Records' },
@@ -1627,11 +1761,12 @@ export const TransactionPage: React.FC = () => {
         <button
           key={opt.value}
           type="button"
+          aria-pressed={salesViewMode === opt.value}
           onClick={() => setSalesViewMode(opt.value)}
           className={cn(
-            'px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer select-none',
+            'min-h-[44px] px-3.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
             salesViewMode === opt.value
-              ? 'bg-[#960C01] text-white shadow-2xs'
+              ? 'bg-[#960C01] text-white shadow-xs'
               : 'text-focus/70 hover:text-focus hover:bg-white/60'
           )}
         >
@@ -1640,36 +1775,138 @@ export const TransactionPage: React.FC = () => {
       ))}
     </div>
   )
-  const hasDepositActiveFilters =
-    depositSearchQuery.trim().length > 0 ||
-    (canSelectAllCompanies && selectedCompany !== 'All Companies') ||
-    (!canSelectAllCompanies && supervisorCompanies.length > 1 && selectedCompany !== defaultSupervisorCompany) ||
-    depositDirectionFilter !== 'All' ||
-    (depositDateRange.startDate !== null && depositDateRange.endDate !== null)
 
-  const hasSalesActiveFilters =
-    salesSearchQuery.trim().length > 0 ||
-    (canSelectAllCompanies && selectedCompany !== 'All Companies') ||
-    (!canSelectAllCompanies && supervisorCompanies.length > 1 && selectedCompany !== defaultSupervisorCompany) ||
-    salesStatusFilter !== 'All' ||
-    salesTypeFilter !== 'All' ||
-    (salesDateRange.startDate !== null && salesDateRange.endDate !== null)
+  const activeFilterChips = React.useMemo(() => {
+    const chips: { key: string; label: string; onClear: () => void }[] = []
 
-  const handleClearDepositFilters = () => {
-    setDepositSearchQuery('')
-    setDepositDirectionFilter('All')
-    setDepositDateRange({ startDate: null, endDate: null, label: 'All Dates' })
+    if (typeFilter !== 'All') {
+      chips.push({
+        key: 'type',
+        label: `Type: ${typeFilter}`,
+        onClear: () => {
+          setTypeFilter('All')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (searchQuery.trim()) {
+      chips.push({
+        key: 'search',
+        label: `Search: "${searchQuery.trim()}"`,
+        onClear: () => {
+          setSearchQuery('')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (canSelectAllCompanies && selectedCompany !== 'All Companies') {
+      chips.push({
+        key: 'company',
+        label: `Company: ${selectedCompany}`,
+        onClear: handleResetCompany,
+      })
+    } else if (
+      !canSelectAllCompanies &&
+      supervisorCompanies.length > 1 &&
+      selectedCompany !== defaultSupervisorCompany
+    ) {
+      chips.push({
+        key: 'company',
+        label: `Company: ${selectedCompany}`,
+        onClear: handleResetCompany,
+      })
+    }
+
+    if (selectedBankAccount) {
+      chips.push({
+        key: 'bank',
+        label: `Bank: ${selectedBankAccount.bankName}${selectedBankAccount.accountName ? ` – ${selectedBankAccount.accountName}` : ''}`,
+        onClear: () => {
+          setSelectedBankAccountId('')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (dateRange.startDate || dateRange.endDate) {
+      chips.push({
+        key: 'date',
+        label: dateRange.label || `${dateRange.startDate} – ${dateRange.endDate}`,
+        onClear: () => {
+          setDateRange({ startDate: null, endDate: null, label: 'All Dates', preset: 'All Dates' })
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (statusFilter !== 'All') {
+      const statusDisplay =
+        statusFilter === 'Awaiting' ? 'Awaiting Deposit / Transfer' : statusFilter
+      chips.push({
+        key: 'status',
+        label: `Status: ${statusDisplay}`,
+        onClear: () => {
+          setStatusFilter('All')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (categoryFilter !== 'All') {
+      chips.push({
+        key: 'category',
+        label: `Category: ${categoryFilter}`,
+        onClear: () => {
+          setCategoryFilter('All')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    if (paymentMethodFilter !== 'All') {
+      chips.push({
+        key: 'method',
+        label: `Method: ${paymentMethodFilter}`,
+        onClear: () => {
+          setPaymentMethodFilter('All')
+          setDepositCurrentPage(1)
+          setSalesCurrentPage(1)
+        },
+      })
+    }
+
+    return chips
+  }, [
+    typeFilter,
+    searchQuery,
+    canSelectAllCompanies,
+    selectedCompany,
+    supervisorCompanies.length,
+    defaultSupervisorCompany,
+    selectedBankAccount,
+    dateRange,
+    categoryFilter,
+    statusFilter,
+    paymentMethodFilter,
+    handleResetCompany,
+  ])
+
+  const handleClearAllFilters = () => {
+    setTypeFilter('All')
+    setSearchQuery('')
+    setDateRange({ startDate: null, endDate: null, label: 'All Dates', preset: 'All Dates' })
+    setCategoryFilter('All')
+    setStatusFilter('All')
+    setPaymentMethodFilter('All')
     handleResetCompany()
-    setDepositCurrentPage(1)
-  }
-
-  const handleClearSalesFilters = () => {
-    setSalesSearchQuery('')
-    setSalesStatusFilter('All')
-    setSalesTypeFilter('All')
-    setSalesDateRange({ startDate: null, endDate: null, label: 'All Dates' })
-    handleResetCompany()
-    setSalesCurrentPage(1)
   }
 
   // Totals of the rows that match the current filters on the active tab (spec 0016)
@@ -1704,41 +1941,7 @@ export const TransactionPage: React.FC = () => {
     return Math.round((activeStartingBalance + activeTotals.deposits - activeTotals.withdrawals) * 100) / 100
   }, [activeStartingBalance, activeTotals.deposits, activeTotals.withdrawals])
 
-  // Does this ledger agree with the bank? Starting balance + every deposit and withdrawal here must equal the
-  // balance Bank Management shows. Checked for the selected bank, on the whole ledger (no search / date filters).
-  const bankBalanceCheck = React.useMemo(() => {
-    if (!selectedBankAccount) return null
-    let net = 0
-    depositBaseList.forEach((t) => {
-      const { deposit, withdrawal } = getRowAmounts(t)
-      net += (deposit || 0) - (withdrawal || 0)
-    })
-    const ledger = Math.round(((Number(selectedBankAccount.startingBalance) || 0) + net) * 100) / 100
-    const bank = Math.round((Number(selectedBankAccount.currentBalance) || 0) * 100) / 100
-    return { ledger, bank, diff: Math.round((bank - ledger) * 100) / 100 }
-  }, [selectedBankAccount, depositBaseList, getRowAmounts])
-
-  // Re-sync every bank with this ledger (server posts only the differences, then re-derives balances)
-  const [isReconciling, setIsReconciling] = React.useState(false)
-  const handleReconcileBanks = async () => {
-    setIsReconciling(true)
-    try {
-      const result = await bankService.reconcileAll(userRole)
-      const stillOff = Object.keys(result.accounts_still_off || {})
-      if (stillOff.length > 0) {
-        notifyWarning(`Reconciled, but these banks still differ from their entries: ${stillOff.join(', ')}`)
-      }
-      await fetchAllTransactions(true)
-    } catch (err) {
-      notifyError(err)
-    } finally {
-      setIsReconciling(false)
-    }
-  }
-
   const handleRowClick = (tx: DashboardTransactionItem) => {
-    // A manual bank entry has no sale/expense record to open; it is managed in Bank Management
-    if (tx.type === 'Bank') return
     // The cash ledger tab shows only the paid part of a record. The detail window needs the full record.
     const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
     setSelectedTx(fullRecord)
@@ -1752,13 +1955,33 @@ export const TransactionPage: React.FC = () => {
     handleRowClick(tx)
   }
 
-  // Supervisor and Finance can edit an unaudited sale or expense in the spreadsheet editor
+  // Supervisors can edit an unaudited sale or expense in the spreadsheet editor.
+  // Finance is view only here (it can only add remarks on unaudited records).
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
+    !isFinanceOnly &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     tx.auditStatus !== 'Verified'
+
+  // Unaudited Sales/Expenses can be deleted by Finance/Supervisors (never audited/verified or deposited sales)
+  const canShowDeleteOption = (tx: DashboardTransactionItem) =>
+    isBusinessWriter &&
+    (tx.type === 'Sales' || tx.type === 'Expense') &&
+    !tx.isMirrorRow &&
+    tx.auditStatus !== 'Verified'
+
+  const getDeleteBlockedReason = (tx: DashboardTransactionItem): string | null => {
+    if (tx.auditStatus === 'Verified') return 'Audited records cannot be deleted'
+    if (tx.type === 'Sales' && (tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited')) {
+      return 'Deposited sales cannot be deleted'
+    }
+    if (tx.type === 'Sales' && String(tx.id).startsWith('utang-')) {
+      return 'Manage standalone receivables from the Receivables page'
+    }
+    return null
+  }
 
   const handleMenuEdit = (tx: DashboardTransactionItem) => {
     setOpenMenuTxId(null)
@@ -1772,85 +1995,151 @@ export const TransactionPage: React.FC = () => {
     }
   }
 
-  const handleMenuMarkAudit = async (tx: DashboardTransactionItem) => {
+  const handleMenuDelete = (tx: DashboardTransactionItem) => {
+    if (getDeleteBlockedReason(tx)) return
     setOpenMenuTxId(null)
     setMenuPosition(null)
     setActiveMenuTx(null)
+    const fullRecord = transactions.find((t) => t.id === tx.id && t.type === tx.type) || tx
+    setDeleteConfirmTx(fullRecord)
+  }
+
+  const handleConfirmDeleteTx = async () => {
+    if (!deleteConfirmTx || !isBusinessWriter) return
+    const target = deleteConfirmTx
+    if (getDeleteBlockedReason(target)) return
+    setIsDeletingTx(true)
+    try {
+      if (target.type === 'Expense') {
+        await expenseService.deleteExpense(target.id)
+      } else {
+        await salesService.deleteSale(target.id)
+      }
+      setTransactions((prev) =>
+        prev.filter((t) => !(t.id === target.id && t.type === target.type))
+      )
+      setDeleteConfirmTx(null)
+      notifySuccess(`${target.type === 'Expense' ? 'Expense' : 'Sale'} record deleted.`)
+    } catch (err) {
+      notifyError(err, 'Failed to delete transaction. Please try again.')
+    } finally {
+      setIsDeletingTx(false)
+    }
+  }
+
+  const handleMenuMarkAudit = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    setMarkAuditTargetTx(tx)
+    setMarkAuditRemarks(tx.auditNotes || '')
+    setIsMarkAuditModalOpen(true)
+  }
+
+  const handleConfirmQuickMarkAudit = async () => {
+    if (!markAuditTargetTx) return
+    setIsSubmittingAudit(true)
+    const tx = markAuditTargetTx
+    const trimmedNotes = markAuditRemarks.trim() || undefined
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
       ...tx,
       auditStatus: 'Verified',
       auditedBy: auditorName,
       auditDate: today,
-      auditNotes: undefined,
+      auditNotes: trimmedNotes,
     }
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
       if (tx.type === 'Sales') {
-        await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName)
+        await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Expense') {
-        await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
+        await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Loan') {
         const loanId = tx.id.replace(/:lender$/, '')
-        await loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+        await loanService.updateLoan(loanId, {
+          auditStatus: 'Verified',
+          auditedBy: auditorName,
+          auditDate: today,
+          auditNotes: trimmedNotes,
+        })
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-        await tenantService.saveAuditReview(leaseId, 'Verified')
+        await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
       }
+      setIsMarkAuditModalOpen(false)
+      setMarkAuditRemarks('')
+      setMarkAuditTargetTx(null)
     } catch (err) {
       reportAuditSaveFailure(err)
       fetchAllTransactions(true)
+    } finally {
+      setIsSubmittingAudit(false)
     }
   }
 
   // Sales and Expense rows the auditor can review here (petty cash is a read only mirror,
   // loans awaiting audit are handled on their own page)
   const isRowAuditable = (tx: DashboardTransactionItem) =>
-    tx.type !== 'Petty Cash' && tx.type !== 'Bank' && !tx.awaitingAudit
+    tx.type !== 'Petty Cash' && !tx.awaitingAudit
 
   // Audit a whole day in one go: every auditable row that is not already audited or flagged.
   // Flagged rows keep their discrepancy and must be re-audited by hand.
-  const handleAuditWholeDay = async (date: string, dayTxs: DashboardTransactionItem[]) => {
-    const targets = dayTxs.filter(
-      (t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged'
-    )
+  const getDayAuditTargets = (dayTxs: DashboardTransactionItem[]) =>
+    dayTxs.filter((t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged')
+
+  // Opens the day level audit dialog (Mark as Audited or Flag Discrepancy, remarks optional)
+  const openDayAudit = (action: 'Verified' | 'Flagged', date: string, dayTxs: DashboardTransactionItem[]) => {
+    const targets = getDayAuditTargets(dayTxs)
     if (targets.length === 0) return
-    if (!window.confirm(`Mark ${targets.length} ${targets.length === 1 ? 'record' : 'records'} on ${date} as audited?`)) return
+    setDayMenu(null)
+    setDayAuditRemarks('')
+    setDayAudit({ action, date, targets })
+  }
+
+  const handleConfirmDayAudit = async () => {
+    if (!dayAudit) return
+    const { action, targets } = dayAudit
+    const notes = dayAuditRemarks.trim() || undefined
+    setIsSubmittingDayAudit(true)
 
     const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const keys = new Set(targets.map((t) => `${t.type}:${t.id}`))
 
     setTransactions((prev) =>
       prev.map((t) =>
         keys.has(`${t.type}:${t.id}`)
-          ? { ...t, auditStatus: 'Verified', auditedBy: auditorName, auditDate: today, auditNotes: undefined }
+          ? { ...t, auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes }
           : t
       )
     )
 
     const results = await Promise.allSettled(
       targets.map((tx) => {
-        if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName)
-        if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName)
+        if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
+        if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Loan') {
           const loanId = tx.id.replace(/:lender$/, '')
-          return loanService.updateLoan(loanId, { auditStatus: 'Verified', auditedBy: auditorName, auditDate: today })
+          return loanService.updateLoan(loanId, { auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes })
         }
         if (tx.type === 'Income') {
           const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          return tenantService.saveAuditReview(leaseId, 'Verified')
+          return tenantService.saveAuditReview(leaseId, action, notes)
         }
         return Promise.resolve()
       })
     )
+    setIsSubmittingDayAudit(false)
+    setDayAudit(null)
+    setDayAuditRemarks('')
     const failed = results.find((r) => r.status === 'rejected') as PromiseRejectedResult | undefined
     if (failed) {
       reportAuditSaveFailure(failed.reason)
@@ -1876,7 +2165,7 @@ export const TransactionPage: React.FC = () => {
       day: '2-digit',
       year: '2-digit',
     })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
       ...tx,
@@ -1916,12 +2205,37 @@ export const TransactionPage: React.FC = () => {
     setSelectedTx(updatedItem)
   }
 
+  const handleSaveRemarks = async () => {
+    if (!remarksTargetTx) return
+    setIsSavingRemarks(true)
+    try {
+      const trimmed = remarksInput.trim()
+      const isExp = remarksTargetTx.type === 'Expense' || remarksTargetTx.type === 'Bill'
+      if (isExp) {
+        const updatedExpense = await expenseService.updateExpenseRemarks(remarksTargetTx.id, trimmed)
+        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        handleTransactionUpdated(tx)
+      } else {
+        const updatedSale = await salesService.updateSaleRemarks(remarksTargetTx.id, trimmed)
+        const tx = salesService.toDashboardTransaction(updatedSale)
+        handleTransactionUpdated(tx)
+      }
+      notifySuccess(trimmed ? 'Remarks updated successfully' : 'Remarks removed successfully')
+      setIsRemarksDialogOpen(false)
+      setRemarksTargetTx(null)
+    } catch (err: any) {
+      notifyError(err, 'Failed to update remarks')
+    } finally {
+      setIsSavingRemarks(false)
+    }
+  }
+
   // Export CSV handler
   const handleExportCsv = () => {
     const isDeposit = activeTab === 'deposit'
     const headers = isDeposit
-      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BANK BALANCE', 'AUDIT STATUS']
-      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'BANK BALANCE', 'STATUS', 'AUDIT STATUS']
+      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
+      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
 
     const rows = (isDeposit ? filteredDepositTransactions : filteredSalesTransactions).map((t) => {
       const { deposit, withdrawal } = getRowAmounts(t)
@@ -1949,7 +2263,7 @@ export const TransactionPage: React.FC = () => {
         csvCell(t.paymentMethod || 'Cash'),
         deposit || 0,
         withdrawal || 0,
-        depositBalanceByKey.get(`${t.type}:${t.id}`) ?? '',
+        Math.round(((deposit || 0) - (withdrawal || 0)) * 100) / 100,
         csvCell(t.status || 'Paid'),
         csvCell(t.auditStatus || 'Pending Audit'),
       ]
@@ -2018,7 +2332,7 @@ export const TransactionPage: React.FC = () => {
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.paymentMethod || 'Cash')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #16a34a; font-weight: 700;">${fmtAmt(deposit)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #dc2626; font-weight: 700;">${fmtAmt(withdrawal)}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${depositBalanceByKey.has(`${tx.type}:${tx.id}`) ? fmtSigned(depositBalanceByKey.get(`${tx.type}:${tx.id}`) as number) : '—'}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${fmtSigned(Math.round((deposit - withdrawal) * 100) / 100)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.status || 'Paid')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${tx.auditStatus === 'Verified' ? 'Audited' : 'Pending Audit'}</td>
         </tr>
@@ -2036,7 +2350,7 @@ export const TransactionPage: React.FC = () => {
       <!DOCTYPE html>
       <html>
         <head>
-          <title>${isDeposit ? 'Bank Cash Ledger' : 'All Transactions'} Report - ${displayedTitle}</title>
+          <title>${isDeposit ? 'Bank Ledger' : 'All Transactions'} Report - ${displayedTitle}</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #0F172A; padding: 24px; }
             h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px 0; color: #960C01; }
@@ -2052,7 +2366,7 @@ export const TransactionPage: React.FC = () => {
         </head>
         <body>
           <h1>MCT Group of Companies</h1>
-          <p>Consolidated <strong>${isDeposit ? 'Bank Cash Ledger' : 'All Transactions'}</strong> for <strong>${displayedTitle}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
+          <p>Consolidated <strong>${isDeposit ? 'Bank Ledger' : 'All Transactions'}</strong> for <strong>${displayedTitle}</strong> · Generated on ${new Date().toLocaleDateString('en-PH', { dateStyle: 'full' })}</p>
           <table>
             <thead>
               <tr>
@@ -2065,7 +2379,7 @@ export const TransactionPage: React.FC = () => {
                 <th>${isDeposit ? 'Category' : 'Payment Method'}</th>
                 <th style="text-align: right;">Deposit</th>
                 <th style="text-align: right;">Withdrawal</th>
-                <th style="text-align: right;">Bank Balance</th>
+                <th style="text-align: right;">${isDeposit ? 'Balance' : 'Net Amount'}</th>
                 ${!isDeposit ? '<th>Status</th>' : ''}
                 <th>Audit Status</th>
               </tr>
@@ -2092,52 +2406,94 @@ export const TransactionPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300 select-none">
+    <div className="space-y-5 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300 select-none">
       {/* 1. Header & Actions Block */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-            Transactions
-          </h1>
-          {selectedBankAccount && (
-            <div className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-              <Landmark className="h-4 w-4 shrink-0" />
-              <span className="text-sm font-bold">
-                {selectedBankAccount.bankName}
-                {selectedBankAccount.accountName ? ` - ${selectedBankAccount.accountName}` : ''}
-              </span>
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+              Transactions
+            </h1>
+
+            {/* Dismissible "?" Help Popover beside title (no background box) */}
+            <div ref={helpPopoverRef} className="relative inline-flex items-center">
+              <button
+                type="button"
+                onClick={() => setIsHelpOpen((prev) => !prev)}
+                aria-label="Help: How Bank Ledger and All Transactions work"
+                aria-expanded={isHelpOpen}
+                aria-haspopup="dialog"
+                className={cn(
+                  'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-full text-muted-fg hover:text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  isHelpOpen && 'text-focus'
+                )}
+                title="About these tabs"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </button>
+
+              {isHelpOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Tab guide"
+                  className="absolute left-0 top-full mt-1.5 w-[min(calc(100vw-2rem),380px)] rounded-2xl border border-stroke/40 bg-white p-4 shadow-2xl z-50 animate-in fade-in-50 zoom-in-95 duration-150 text-left"
+                >
+                  <div className="flex items-start justify-between gap-2 pb-2 mb-2.5 border-b border-stroke/20">
+                    <h2 className="text-xs font-bold uppercase tracking-wider text-focus">
+                      How these views work
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setIsHelpOpen(false)}
+                      aria-label="Dismiss help popover"
+                      className="p-1.5 -m-1 rounded-lg text-muted-fg hover:text-focus hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-2.5 text-xs text-slate-700 leading-relaxed">
+                    <p>
+                      <strong className="text-focus">Bank Ledger:</strong> Uses the{' '}
+                      <strong className="text-focus">deposit / ledger date</strong>. Shows money in and out of the company bank (deposited sales, paid expenses/withdrawals, and approved movements), with a running bank balance. Unpaid or not-yet-deposited sales stay in All Transactions until banked.
+                    </p>
+                    <p>
+                      <strong className="text-focus">All Transactions:</strong> Uses each entry&apos;s{' '}
+                      <strong className="text-focus">transaction date</strong>. Lists every sale (Sold → Paid → Deposited → Audited) and expense/withdrawal (stored payment status → Audited), including unpaid and awaiting deposit/transfer items.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-            {!canSelectAllCompanies
-              ? `Financial transaction ledger for ${effectiveTargetCompany}`
-              : selectedCompany !== 'All Companies'
-              ? `Financial transaction ledger for ${selectedCompany}`
-              : 'Bank cash ledger and the full record of sales, expenses, and loans'}
+          </div>
+
+          <p className="text-sm sm:text-base text-muted-fg font-normal mt-1 truncate">
+            {(() => {
+              const specificCompanies = availableCompanyOptions.filter((c) => c !== 'All Companies')
+              const scopedCompany = !canSelectAllCompanies
+                ? effectiveTargetCompany
+                : selectedCompany !== 'All Companies'
+                ? selectedCompany
+                : specificCompanies.length === 1
+                ? specificCompanies[0]
+                : ''
+              return scopedCompany
+                ? `Financial ledger for ${scopedCompany}`
+                : 'Bank ledger and all sales and withdrawals across companies'
+            })()}
           </p>
         </div>
 
-        {/* Top Right Action Buttons: Sort, Refresh, Live Date & Red Export Dropdown */}
-        <div className="flex flex-wrap items-center gap-3 self-start lg:self-auto">
+        {/* Top Right Action Buttons: Sort, Refresh, and Red Export Dropdown (kept on one row) */}
+        <div className="flex flex-nowrap items-center gap-2 shrink-0 whitespace-nowrap self-start md:self-auto">
           <Button
             type="button"
             variant="outline"
-            onClick={() => {
-              if (activeTab === 'deposit') {
-                setDepositSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
-              } else {
-                setSalesSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
-              }
-            }}
-            className="h-10 sm:h-11 px-3.5 rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer"
+            onClick={() => setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+            className="min-h-[44px] h-11 px-3.5 rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
             title="Toggle chronological sorting order"
           >
             <ArrowUpDown className="h-4 w-4 text-focus/70 shrink-0" />
-            <span className="hidden sm:inline">
-              {(activeTab === 'deposit' ? depositSortOrder : salesSortOrder) === 'desc'
-                ? 'Latest First'
-                : 'Oldest First'}
-            </span>
+            <span>{sortOrder === 'desc' ? 'Latest first' : 'Oldest first'}</span>
           </Button>
 
           <Button
@@ -2145,28 +2501,28 @@ export const TransactionPage: React.FC = () => {
             variant="outline"
             onClick={handleRefresh}
             disabled={isRefreshing}
-            className="h-10 sm:h-11 px-3.5 sm:px-4 rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer"
+            className="min-h-[44px] h-11 px-3.5 sm:px-4 rounded-xl border border-stroke/50 bg-white text-focus hover:bg-surface font-semibold text-xs sm:text-sm shadow-xs inline-flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
             aria-label="Refresh transaction records"
           >
             <RotateCw
               className={`h-4 w-4 text-focus/70 shrink-0 ${isRefreshing ? 'animate-spin' : ''}`}
             />
-            <span className="hidden sm:inline">Refresh</span>
+            <span>Refresh</span>
           </Button>
 
-          {/* Export Button with CSV & PDF options (Red across all accounts) */}
-          <div ref={exportDropdownRef} className="relative inline-block">
+          {/* Export Button with CSV & PDF options */}
+          <div ref={exportDropdownRef} className="relative inline-block shrink-0">
             <Button
               type="button"
               disabled={activeDataset.length === 0}
               onClick={() => setIsExportDropdownOpen((prev) => !prev)}
-              className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-50"
+              className="min-h-[44px] h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs inline-flex items-center gap-2 cursor-pointer transition-all box-border bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-50 whitespace-nowrap shrink-0"
               aria-haspopup="true"
               aria-expanded={isExportDropdownOpen}
               aria-label="Export transaction records"
             >
               <span>Export</span>
-              <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90" />
+              <ChevronDown className="h-3.5 w-3.5 ml-0.5 text-white/90 shrink-0" />
             </Button>
 
             {isExportDropdownOpen && (
@@ -2174,7 +2530,7 @@ export const TransactionPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExportCsv}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  className="w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-surface transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                 >
                   <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>Download as CSV</span>
@@ -2182,7 +2538,7 @@ export const TransactionPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleExportPdf}
-                  className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                  className="w-full min-h-[44px] flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-surface transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                 >
                   <FileText className="w-4 h-4 text-rose-600 shrink-0" />
                   <span>Download as PDF</span>
@@ -2193,385 +2549,310 @@ export const TransactionPage: React.FC = () => {
         </div>
       </div>
 
-
-      {/* 3. Independent Filters Toolbar per Active Tab */}
-      {activeTab === 'deposit' ? (
-        /* DEPOSIT FILTERS TOOLBAR */
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          {/* Extended Width Search Bar */}
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg" />
-            <Input
-              type="search"
-              placeholder="Search deposited transactions by Cheque No., particulars, category..."
-              value={depositSearchQuery}
-              onChange={(e) => {
-                setDepositSearchQuery(e.target.value)
-                setDepositCurrentPage(1)
-              }}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
-          </div>
-
-          {/* Right Controls: Date Range Picker, Clear Button, and Tab Switcher */}
-          <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
-              <CompanyFilterDropdown
-                selectedCompany={selectedCompany}
-                companyList={availableCompanyOptions}
-                onSelectCompany={handleSelectCompany}
-                onResetCompany={handleResetCompany}
-                canClearFilter={canSelectAllCompanies}
-              />
-            ) : (
-              <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
-                <span className="truncate max-w-[180px]">{effectiveTargetCompany}</span>
-              </div>
-            )}
-
-            {availableBankAccounts.length > 0 && (
-              <BankAccountFilterDropdown
-                selectedAccountId={selectedBankAccountId}
-                bankAccounts={availableBankAccounts}
-                onSelectAccount={(id) => {
-                  setSelectedBankAccountId(id)
-                  setDepositCurrentPage(1)
-                  setSalesCurrentPage(1)
-                }}
-              />
-            )}
-
-            <DateRangePicker
-              value={depositDateRange}
-              onChange={(newRange) => {
-                setDepositDateRange(newRange)
-                setDepositCurrentPage(1)
-              }}
-            />
-
-            {/* Tab Switcher: Deposit / All Transactions (Right Side, matching Sales & Expense page) */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => setActiveTab('deposit')}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  currentTab === 'deposit'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <ArrowDownLeft className="h-4 w-4 shrink-0" />
-                <span>Deposit</span>
-                <span
-                  className={cn(
-                    'text-xs px-2 py-0.5 rounded-full font-bold ml-1',
-                    currentTab === 'deposit' ? 'bg-white/20 text-white' : 'bg-slate-200 text-focus/70'
-                  )}
-                >
-                  {filteredDepositTransactions.length}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('all')}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  currentTab === 'all'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <TrendingUp className="h-4 w-4 shrink-0" />
-                <span>All Transactions</span>
-                <span
-                  className={cn(
-                    'text-xs px-2 py-0.5 rounded-full font-bold ml-1',
-                    currentTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-focus/70'
-                  )}
-                >
-                  {filteredSalesTransactions.length}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* ALL TRANSACTIONS FILTERS TOOLBAR (type + status filters over sales, expenses and loans) */
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          {/* Extended Width Search Bar */}
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg" />
-            <Input
-              type="search"
-              placeholder="Search all transactions by particulars, Ref No., company, payment method..."
-              value={salesSearchQuery}
-              onChange={(e) => {
-                setSalesSearchQuery(e.target.value)
-                setSalesCurrentPage(1)
-              }}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
-          </div>
-
-          {/* Right Controls: Company Filter Dropdown, Type Filter, Status Filter (Paid/Unpaid/Pending), Date Range Picker & Clear Button */}
-          <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
-            {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
-              <CompanyFilterDropdown
-                selectedCompany={selectedCompany}
-                companyList={availableCompanyOptions}
-                onSelectCompany={handleSelectCompany}
-                onResetCompany={handleResetCompany}
-                canClearFilter={canSelectAllCompanies}
-              />
-            ) : (
-              <div className="inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
-                <span className="truncate max-w-[180px]">{effectiveTargetCompany}</span>
-              </div>
-            )}
-
-            {/* Type Filter Dropdown (All / Sales / Expense / Loan) */}
-            <div ref={salesTypeDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsSalesTypeDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  isSalesTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-semibold text-focus/90">
-                  {salesTypeFilter === 'All' ? 'Type: All' : `Type: ${salesTypeFilter}`}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-              </button>
-
-              {isSalesTypeDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  <div className="space-y-1">
-                    {[
-                      { label: 'All Types', value: 'All' as const, dot: 'bg-slate-400' },
-                      { label: 'Sales', value: 'Sales' as const, dot: 'bg-emerald-500' },
-                      { label: 'Expense', value: 'Expense' as const, dot: 'bg-rose-500' },
-                      { label: 'Loan', value: 'Loan' as const, dot: 'bg-sky-500' },
-                      { label: 'Petty Cash', value: 'Petty Cash' as const, dot: 'bg-amber-500' },
-                    ].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => {
-                          setSalesTypeFilter(opt.value)
-                          setIsSalesTypeDropdownOpen(false)
-                          setSalesCurrentPage(1)
-                        }}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          salesTypeFilter === opt.value
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={cn('w-2 h-2 rounded-full shrink-0', opt.dot)} />
-                          <span>{opt.label}</span>
-                        </div>
-                        {salesTypeFilter === opt.value && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+      {/* 2. Primary Tab Switcher: Bank Ledger | All Transactions */}
+      <div
+        role="tablist"
+        aria-label="Transactions views"
+        className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'deposit'}
+          onClick={() => setActiveTab('deposit')}
+          className={cn(
+            'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+            activeTab === 'deposit'
+              ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
+              : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
+          )}
+        >
+          <div className="min-w-0">
+            <div className="text-sm sm:text-base font-bold leading-tight">Bank Ledger</div>
+            <div
+              className={cn(
+                'text-xs mt-0.5 leading-snug',
+                activeTab === 'deposit' ? 'text-white/85' : 'text-muted-fg'
               )}
-            </div>
-
-            {/* Status Filter Dropdown */}
-            <div ref={salesStatusDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsSalesStatusDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                  isSalesStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-semibold text-focus/90">
-                  {salesStatusFilter === 'All' ? 'Status: All' : `Status: ${salesStatusFilter}`}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-              </button>
-
-              {isSalesStatusDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  <div className="space-y-1">
-                    {[
-                      { label: 'All Statuses', value: 'All' as const, dot: 'bg-slate-400' },
-                      { label: 'Paid', value: 'Paid' as const, dot: 'bg-emerald-500' },
-                      { label: 'Unpaid', value: 'Unpaid' as const, dot: 'bg-rose-500' },
-                      { label: 'Pending', value: 'Pending' as const, dot: 'bg-amber-500' },
-                      { label: 'On hold', value: 'On hold' as const, dot: 'bg-stone-500' },
-                    ].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => {
-                          setSalesStatusFilter(opt.value)
-                          setIsSalesStatusDropdownOpen(false)
-                          setSalesCurrentPage(1)
-                        }}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          salesStatusFilter === opt.value
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className={cn('w-2 h-2 rounded-full shrink-0', opt.dot)} />
-                          <span>{opt.label}</span>
-                        </div>
-                        {salesStatusFilter === opt.value && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Date Range Picker */}
-            <DateRangePicker
-              value={salesDateRange}
-              onChange={(newRange) => {
-                setSalesDateRange(newRange)
-                setSalesCurrentPage(1)
-              }}
-            />
-
-            {/* Tab Switcher: Deposit / All Transactions (Right Side) */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => setActiveTab('deposit')}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  currentTab === 'deposit'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <ArrowDownLeft className="h-4 w-4 shrink-0" />
-                <span>Deposit</span>
-                <span
-                  className={cn(
-                    'text-xs px-2 py-0.5 rounded-full font-bold ml-1',
-                    currentTab === 'deposit' ? 'bg-white/20 text-white' : 'bg-slate-200 text-focus/70'
-                  )}
-                >
-                  {filteredDepositTransactions.length}
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('all')}
-                className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  currentTab === 'all'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
-                )}
-              >
-                <TrendingUp className="h-4 w-4 shrink-0" />
-                <span>All Transactions</span>
-                <span
-                  className={cn(
-                    'text-xs px-2 py-0.5 rounded-full font-bold ml-1',
-                    currentTab === 'all' ? 'bg-white/20 text-white' : 'bg-slate-200 text-focus/70'
-                  )}
-                >
-                  {filteredSalesTransactions.length}
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {bankBalanceCheck && Math.abs(bankBalanceCheck.diff) >= 0.01 && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900" role="alert">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <p>
-            <strong>Bank balance does not match.</strong> This ledger adds up to{' '}
-            <strong>{formatPHP(bankBalanceCheck.ledger)}</strong> but Bank Management shows{' '}
-            <strong>{formatPHP(bankBalanceCheck.bank)}</strong> for {selectedBankAccount?.bankName}
-            {selectedBankAccount?.accountName ? ` - ${selectedBankAccount.accountName}` : ''} (difference{' '}
-            <strong>{formatPHP(Math.abs(bankBalanceCheck.diff))}</strong>
-            {bankBalanceCheck.diff > 0 ? ', the bank is higher' : ', the bank is lower'}). First check each sale's Deposited /
-            Not Deposited status is right, then reconcile to bring the bank in line with this ledger.
-          </p>
-          {(isFinance || isSupervisor) && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="ml-auto shrink-0"
-              disabled={isReconciling}
-              onClick={handleReconcileBanks}
             >
-              {isReconciling ? 'Reconciling...' : 'Reconcile now'}
-            </Button>
+              Money in and out of the bank
+            </div>
+          </div>
+          <span
+            className={cn(
+              'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full tabular-nums',
+              activeTab === 'deposit' ? 'bg-white/20 text-white' : 'bg-surface text-focus/80'
+            )}
+          >
+            {filteredDepositTransactions.length}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'all'}
+          onClick={() => setActiveTab('all')}
+          className={cn(
+            'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+            activeTab === 'all'
+              ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
+              : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
+          )}
+        >
+          <div className="min-w-0">
+            <div className="text-sm sm:text-base font-bold leading-tight">All Transactions</div>
+            <div
+              className={cn(
+                'text-xs mt-0.5 leading-snug',
+                activeTab === 'all' ? 'text-white/85' : 'text-muted-fg'
+              )}
+            >
+              Every sale and withdrawal, paid or unpaid
+            </div>
+          </div>
+          <span
+            className={cn(
+              'shrink-0 text-xs font-bold px-2.5 py-1 rounded-full tabular-nums',
+              activeTab === 'all' ? 'bg-white/20 text-white' : 'bg-surface text-focus/80'
+            )}
+          >
+            {filteredSalesTransactions.length}
+          </span>
+        </button>
+      </div>
+
+      {/* 3. Main Workspace Card: Shared Filter Bar + Active Filter Chips + Table */}
+      <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs space-y-4">
+        {/* Shared Filter Bar (persists across tab switches) */}
+        <div className="space-y-3">
+          {/* Row 1: Company + Bank + Date Range + All Records / By Day toggle */}
+          <div className="flex flex-col lg:flex-row lg:flex-wrap items-stretch lg:items-center justify-between gap-2.5 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+              {/* Company */}
+              {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
+                <CompanyFilterDropdown
+                  selectedCompany={selectedCompany}
+                  companyList={availableCompanyOptions}
+                  onSelectCompany={handleSelectCompany}
+                  fullWidth
+                  className="flex-1 min-w-[170px]"
+                />
+              ) : (
+                <div
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  title={effectiveTargetCompany}
+                >
+                  <span className="truncate min-w-0">{effectiveTargetCompany}</span>
+                </div>
+              )}
+
+              {/* Bank */}
+              {availableBankAccounts.length > 0 && (
+                <BankAccountFilterDropdown
+                  selectedAccountId={selectedBankAccountId}
+                  bankAccounts={availableBankAccounts}
+                  fullWidth
+                  className="flex-1 min-w-[170px]"
+                  onSelectAccount={(id) => {
+                    setSelectedBankAccountId(id)
+                    setDepositCurrentPage(1)
+                    setSalesCurrentPage(1)
+                  }}
+                />
+              )}
+
+              {/* Date Range Control in Row 1 */}
+              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+                <TransactionDateRangeControl
+                  value={dateRange}
+                  onChange={(newRange) => {
+                    setDateRange(newRange)
+                    setDepositCurrentPage(1)
+                    setSalesCurrentPage(1)
+                  }}
+                  fullWidth
+                />
+              </div>
+            </div>
+
+            {/* Day audit actions (Audit, By Day with a focused day) + All Records / By Day toggle */}
+            <div className="shrink-0 flex flex-wrap items-center gap-2">
+              {canAudit && salesViewMode === 'daily_summary' && hasFocusedDay && (() => {
+                const focusedTxs = visibleDayGroups.flatMap((g) => g.banks.flatMap((b) => b.transactions))
+                const focusedDate = visibleDayGroups.map((g) => g.date).join(', ')
+                const pendingCount = getDayAuditTargets(focusedTxs).length
+                const disabledTitle = 'Every transaction on this day is already audited or flagged'
+                return (
+                  <>
+                    <Button
+                      type="button"
+                      disabled={pendingCount === 0}
+                      onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
+                      title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
+                      className="min-h-[44px] h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                      <span>Mark as Audited{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={pendingCount === 0}
+                      onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
+                      title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
+                      className="min-h-[44px] h-11 px-4 rounded-full border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Flag Discrepancy</span>
+                    </Button>
+                  </>
+                )
+              })()}
+              {viewModeToggle}
+            </div>
+          </div>
+
+          {/* Row 2: Full-width Search Bar using all available space */}
+          <div className="relative w-full">
+            <label htmlFor="transactions-search-input" className="sr-only">
+              Search transactions
+            </label>
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+            <Input
+              id="transactions-search-input"
+              type="search"
+              placeholder="Search particulars, Ref No., Cheque No., company, method…"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
+                setDepositCurrentPage(1)
+                setSalesCurrentPage(1)
+              }}
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+            />
+          </div>
+
+          {/* Active Filter Chips Row */}
+          {activeFilterChips.length > 0 && (
+            <div
+              className="flex flex-wrap items-center gap-2 pt-0.5"
+              aria-label="Active filters"
+            >
+              <span className="text-xs font-medium text-muted-fg">Active filters:</span>
+              {activeFilterChips.map((chip) => (
+                <span
+                  key={chip.key}
+                  className="inline-flex items-center gap-1 min-h-[36px] pl-3 pr-1 rounded-full bg-surface border border-stroke/30 text-xs font-medium text-focus"
+                >
+                  <span className="truncate max-w-[220px]">{chip.label}</span>
+                  <button
+                    type="button"
+                    onClick={chip.onClear}
+                    aria-label={`Remove ${chip.label} filter`}
+                    className="inline-flex items-center justify-center h-8 w-8 rounded-full text-muted-fg hover:text-focus hover:bg-slate-200/70 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={handleClearAllFilters}
+                className="min-h-[44px] px-2 text-xs font-semibold text-primary underline underline-offset-4 hover:text-primary-hover cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus rounded-lg"
+              >
+                Clear all
+              </button>
+            </div>
           )}
         </div>
-      )}
 
-      {/* 4. Table / Daily Summary Card Rendering Based on Active Tab & View Mode */}
-      <div className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 mb-4 border-b border-slate-100">
-          {viewModeToggle}
-          <span className="text-xs text-muted-fg font-medium">
-            {salesViewMode === 'daily_summary'
-              ? `${dailySummaryGroups.length} ${dailySummaryGroups.length === 1 ? 'day' : 'days'} (${activeDataset.length} total records)`
-              : `${activeDataset.length} ${activeDataset.length === 1 ? 'record' : 'records'} shown`}
-          </span>
-        </div>
-        <div className="mb-4 flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs text-slate-600">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-          {activeTab === 'deposit' ? (
-            <p>
-              <strong className="text-focus">Deposit tab uses the deposit date.</strong> A sale appears on the day its money was
-              deposited, and By Day totals are grouped by that deposit day. Sales that are Pending, Unpaid or not yet
-              deposited do not appear here until they are deposited; find them in All Transactions.
-            </p>
+        {/* Summary meta bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          {salesViewMode === 'daily_summary' && hasFocusedDay ? (
+            <button
+              type="button"
+              onClick={() => setExpandedDates(new Set())}
+              className="min-h-[44px] inline-flex items-center gap-1.5 px-3 rounded-xl border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back to all {dailySummaryGroups.length} days</span>
+            </button>
           ) : (
-            <p>
-              <strong className="text-focus">All Transactions uses the sales date.</strong> Every record is listed and grouped
-              By Day on the day it was made, including Pending and Unpaid sales that have not been deposited yet. The
-              Deposit Day column shows when each sale's money was deposited, and stays empty until it is.
-            </p>
+            <span className="text-xs text-muted-fg font-medium">
+              Sorted by {activeTab === 'deposit' ? 'Deposit / ledger date' : typeFilter === 'Sales' ? 'Sales date' : typeFilter === 'Expenses' ? 'Expense date' : 'Transaction date'}, {sortOrder === 'desc' ? 'latest first' : 'oldest first'}
+            </span>
           )}
         </div>
         {salesViewMode === 'daily_summary' ? (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
-            <Table className="w-full table-fixed min-w-[900px]">
+            <Table className="w-full min-w-[760px] lg:min-w-0 table-fixed">
               <colgroup>
-                {(showDayCompanyColumn ? [11, 13, 10, 13, 13, 13, 11, 8, 8] : [14, 12, 15, 15, 15, 12, 9, 8]).map((w, i) => (
+                {(activeTab === 'deposit'
+                  ? [14, 18, 17, 17, 18, 16]
+                  : (showActionColumn
+                    ? showDayBalanceColumn
+                      ? showDayCompanyColumn
+                        ? [12, 12, 10, 12, 12, 12, 13, 11, 6]
+                        : [15, 12, 14, 14, 14, 14, 11, 6]
+                      : showDayCompanyColumn
+                      ? [14, 14, 11, 14, 14, 14, 13, 6]
+                      : [17, 13, 16, 16, 16, 15, 7]
+                    : showDayBalanceColumn
+                    ? showDayCompanyColumn
+                      ? [13, 13, 11, 13, 13, 13, 13, 11]
+                      : [16, 13, 15, 15, 15, 14, 12]
+                    : showDayCompanyColumn
+                    ? [15, 15, 12, 15, 15, 15, 13]
+                    : [19, 14, 17, 17, 17, 16])
+                ).map((w, i) => (
                   <col key={i} style={{ width: `${w}%` }} />
                 ))}
               </colgroup>
               <TableHeader>
-                <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">{activeTab === 'deposit' ? 'DEPOSIT DAY' : 'SALES DATE'}</TableHead>
-                  {showDayCompanyColumn && (
-                    <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
-                  )}
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">TOTAL DEPOSITS</TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">TOTAL WITHDRAWALS</TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">BANK BALANCE</TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
-                  <TableHead className="px-3.5 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">DRILLDOWN</TableHead>
-                  <TableHead className="px-2 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
-                </TableRow>
+                {activeTab === 'deposit' ? (
+                  <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      DATE
+                    </TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      CHECK NO
+                    </TableHead>
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                      WITHDRAWAL
+                    </TableHead>
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                      DEPOSIT
+                    </TableHead>
+                    <TableHead
+                      className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
+                      title="Balance of the bank"
+                    >
+                      BALANCE
+                    </TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                      TRAN-CODE
+                    </TableHead>
+                  </TableRow>
+                ) : (
+                  <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">DATE</TableHead>
+                    {showDayCompanyColumn && (
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">COMPANY</TableHead>
+                    )}
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">TRANSACTIONS</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY IN</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">MONEY OUT</TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">NET</TableHead>
+                    {showDayBalanceColumn && (
+                      <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right" title="End-of-day balance">BANK BALANCE</TableHead>
+                    )}
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">AUDIT STATUS</TableHead>
+                    {showActionColumn && (
+                      <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">ACTION</TableHead>
+                    )}
+                  </TableRow>
+                )}
               </TableHeader>
               <TableBody>
                 {loading ? (
@@ -2580,30 +2861,102 @@ export const TransactionPage: React.FC = () => {
                       <Loader2 className="w-6 h-6 animate-spin text-primary inline-block" />
                     </TableCell>
                   </TableRow>
-                ) : dailySummaryGroups.length === 0 ? (
+                ) : visibleDayGroups.length === 0 ? (
                   <TableEmptyState
                     colSpan={dayColCount}
                     title="No daily records found"
                     message="No transactions match the selected company and filters."
                   />
                 ) : (
-                  dailySummaryGroups.map((group) => {
+                  visibleDayGroups.map((group) => {
                     const isExpanded = expandedDates.has(group.id)
                     const parsed = new Date(`${group.date}T00:00:00`)
                     const validDate = !isNaN(parsed.getTime())
                     const dayTxs = group.banks.flatMap((b) => b.transactions)
+
+                    if (activeTab === 'deposit') {
+                      return (
+                        <TableRow
+                          key={group.id}
+                          className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors"
+                        >
+                          {/* 1. DATE - NO CHEVRON */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                            {validDate
+                              ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              : group.date}
+                          </TableCell>
+
+                          {/* 2. CHECK NO */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                            {Array.from(new Set(dayTxs.map((t) => t.chequeNo).filter(Boolean))).join(', ') || '—'}
+                          </TableCell>
+
+                          {/* 3. WITHDRAWAL */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                            {group.dayTotalWithdrawal > 0 ? (
+                              `−${formatPHP(group.dayTotalWithdrawal)}`
+                            ) : (
+                              <span className="text-muted-fg/40 font-normal">—</span>
+                            )}
+                          </TableCell>
+
+                          {/* 4. DEPOSIT */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                            {group.dayTotalDeposit > 0 ? (
+                              `+${formatPHP(group.dayTotalDeposit)}`
+                            ) : (
+                              <span className="text-muted-fg/40 font-normal">—</span>
+                            )}
+                          </TableCell>
+
+                          {/* 5. BALANCE */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap">
+                            {(() => {
+                              const bal = getClosingBalance(group.date)
+                              if (bal === null) return <span className="text-muted-fg">—</span>
+                              return (
+                                <span className={bal < 0 ? 'text-rose-600' : 'text-focus'}>
+                                  {bal < 0 ? `−${formatPHP(Math.abs(bal))}` : formatPHP(bal)}
+                                </span>
+                              )
+                            })()}
+                          </TableCell>
+
+                          {/* 6. TRAN-CODE */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                            {Array.from(new Set(dayTxs.map((t) => t.refNo || (t as any).reference_no).filter(Boolean))).join(', ') || '—'}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    }
+
                     return (
                       <React.Fragment key={group.id}>
                         <TableRow
+                          tabIndex={0}
+                          aria-expanded={isExpanded}
                           onClick={() => toggleDateExpansion(group.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              toggleDateExpansion(group.id)
+                            }
+                          }}
+                          title={isExpanded ? 'Click to return to all days' : 'Click row to focus and view all transactions for this day'}
                           className={cn(
-                            'border-b border-slate-100 transition-colors cursor-pointer select-none',
+                            'border-b border-slate-100 transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-inset',
                             isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
                           )}
                         >
-                          <TableCell className="px-3.5 py-3.5 text-left">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-focus">
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-left">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {isExpanded ? (
+                                <ChevronDown className="w-4 h-4 text-primary shrink-0" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                              )}
+                              <span className="text-xs font-bold text-focus truncate">
                                 {validDate
                                   ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                                   : group.date}
@@ -2611,42 +2964,54 @@ export const TransactionPage: React.FC = () => {
                             </div>
                           </TableCell>
                           {showDayCompanyColumn && (
-                            <TableCell className="px-3.5 py-3.5 text-left">
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-left text-xs">
                               {group.company ? (
                                 <span
-                                  className="inline-flex max-w-full items-center px-2 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-slate-800 border border-slate-200"
+                                  className="inline-flex max-w-full items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-800 border border-slate-200"
                                   title={group.company}
                                 >
                                   <span className="truncate">{group.company}</span>
                                 </span>
                               ) : (
-                                <span className="text-muted-fg">—</span>
+                                <span className="text-xs text-muted-fg">—</span>
                               )}
                             </TableCell>
                           )}
-                          <TableCell className="px-3.5 py-3.5 text-center">
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-focus border border-slate-200">
-                              {group.dayTransactionCount} {group.dayTransactionCount === 1 ? 'record' : 'records'}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                              {group.dayTransactionCount} {group.dayTransactionCount === 1 ? 'item' : 'items'}
                             </span>
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-emerald-600 text-xs sm:text-sm">
-                            {group.dayTotalDeposit > 0 ? formatPHP(group.dayTotalDeposit) : '—'}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-right font-bold tabular-nums text-emerald-700 text-xs whitespace-nowrap">
+                            {group.dayTotalDeposit > 0 ? `+${formatPHP(group.dayTotalDeposit)}` : '—'}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-rose-600 text-xs sm:text-sm">
-                            {group.dayTotalWithdrawal > 0 ? formatPHP(group.dayTotalWithdrawal) : '—'}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-right font-bold tabular-nums text-rose-700 text-xs whitespace-nowrap">
+                            {group.dayTotalWithdrawal > 0 ? `−${formatPHP(group.dayTotalWithdrawal)}` : '—'}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-right font-bold tabular-nums text-xs sm:text-sm">
-                            {(() => {
-                              const bal = getClosingBalance(group.date)
-                              if (bal === null) return <span className="text-muted-fg">—</span>
-                              return (
-                                <span className={bal < 0 ? 'text-rose-600' : 'text-focus'}>
-                                  {bal < 0 ? `-${formatPHP(Math.abs(bal))}` : formatPHP(bal)}
-                                </span>
-                              )
-                            })()}
+                          <TableCell
+                            className={cn(
+                              'px-2.5 sm:px-3 py-3 text-right font-bold tabular-nums text-xs whitespace-nowrap',
+                              group.dayNetMovement < 0 ? 'text-rose-700' : 'text-focus'
+                            )}
+                          >
+                            {group.dayNetMovement < 0
+                              ? `−${formatPHP(Math.abs(group.dayNetMovement))}`
+                              : `+${formatPHP(group.dayNetMovement)}`}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-center">
+                          {showDayBalanceColumn && (
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-right font-bold tabular-nums text-xs whitespace-nowrap">
+                              {(() => {
+                                const bal = getClosingBalance(group.date)
+                                if (bal === null) return <span className="text-muted-fg">—</span>
+                                return (
+                                  <span className={bal < 0 ? 'text-rose-600' : 'text-focus'}>
+                                    {bal < 0 ? `−${formatPHP(Math.abs(bal))}` : formatPHP(bal)}
+                                  </span>
+                                )
+                              })()}
+                            </TableCell>
+                          )}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs">
                             {(() => {
                               const flagged = dayTxs.some((t) => t.auditStatus === 'Flagged')
                               const pending = dayTxs.filter((t) => t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged').length
@@ -2654,7 +3019,7 @@ export const TransactionPage: React.FC = () => {
                               return (
                                 <span
                                   className={cn(
-                                    'inline-flex items-center px-2.5 py-0.5 rounded-full text-2xs font-bold border',
+                                    'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold border',
                                     flagged
                                       ? 'bg-rose-50 text-rose-700 border-rose-200'
                                       : pending > 0
@@ -2667,132 +3032,234 @@ export const TransactionPage: React.FC = () => {
                               )
                             })()}
                           </TableCell>
-                          <TableCell className="px-3.5 py-3.5 text-center">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                toggleDateExpansion(group.id)
-                              }}
-                              className="h-8 px-2.5 text-xs font-semibold text-focus/80 hover:bg-slate-200/60 rounded-lg inline-flex items-center gap-1"
-                            >
-                              <span>{isExpanded ? 'Hide' : 'Show'}</span>
-                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                            </Button>
-                          </TableCell>
-                          <TableCell className="px-2 py-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (dayMenu?.date === group.id) {
-                                  setDayMenu(null)
-                                } else {
-                                  const rect = e.currentTarget.getBoundingClientRect()
-                                  const openUpward = rect.bottom + 120 > window.innerHeight
-                                  setDayMenu({
-                                    date: group.id,
-                                    top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                    right: Math.max(12, window.innerWidth - rect.right),
-                                    openUpward,
-                                  })
-                                }
-                              }}
-                              className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
-                              title="Day actions"
-                              aria-label="Open day action menu"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </TableCell>
+                          {showActionColumn && (
+                            <TableCell className="px-2 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (dayMenu?.date === group.id) {
+                                    setDayMenu(null)
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect()
+                                    const openUpward = rect.bottom + 120 > window.innerHeight
+                                    setDayMenu({
+                                      date: group.id,
+                                      top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                      right: Math.max(12, window.innerWidth - rect.right),
+                                      openUpward,
+                                    })
+                                  }
+                                }}
+                                className="h-9 w-9 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
+                                title={canAudit ? 'Audit & day actions' : 'Day actions'}
+                                aria-label="Open day action menu"
+                              >
+                                <MoreVertical className="w-4 h-4" />
+                              </Button>
+                            </TableCell>
+                          )}
                         </TableRow>
 
                         {isExpanded && (
-                          <TableRow className="bg-slate-50/40 border-b border-slate-200">
-                            <TableCell colSpan={dayColCount} className="p-3 sm:p-4">
-                              <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
-                                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 text-xs font-bold text-focus">
-                                  Transactions on {group.date}{group.company ? ` · ${group.company}` : ''}{' '}
-                                  <span className="text-2xs text-muted-fg font-medium">({dayTxs.length} total)</span>
-                                  {canAudit && dayTxs.some((t) => isRowAuditable(t) && t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged') && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleAuditWholeDay(group.date, dayTxs)}
-                                      className="ml-3 px-2.5 py-1 rounded-lg text-2xs font-semibold border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer"
-                                    >
-                                      Audit whole day
-                                    </button>
-                                  )}
+                          <TableRow className="bg-slate-50/40 border-b border-slate-200 hover:bg-slate-50/40">
+                            <TableCell colSpan={dayColCount} className="p-2.5 sm:p-3.5">
+                              <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-x-auto">
+                                <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-focus">
+                                  <span>
+                                    Transactions on {group.date}{group.company ? ` · ${group.company}` : ''}
+                                  </span>
                                 </div>
-                                <div className="overflow-x-auto">
-                                  <table className="w-full text-left text-xs">
-                                    <thead className="bg-slate-100/60 text-muted-fg text-2xs uppercase tracking-wider border-b border-slate-100">
+                                <table className="w-full min-w-[820px] lg:min-w-0 table-fixed text-left text-xs">
+                                  <colgroup>
+                                    {(activeTab === 'deposit'
+                                      ? [14, 18, 17, 17, 18, 16]
+                                      : showActionColumn
+                                      ? [9, 23, 8, 11, 9, 9, 11, 14, 6]
+                                      : [9, 25, 9, 12, 9, 9, 12, 15]
+                                    ).map((w, i) => (
+                                      <col key={i} style={{ width: `${w}%` }} />
+                                    ))}
+                                  </colgroup>
+                                  <thead className="bg-slate-100/60 text-muted-fg text-xs font-bold uppercase tracking-wider border-b border-slate-100">
+                                    {activeTab === 'deposit' ? (
                                       <tr>
-                                        <th className="px-3 py-2 font-bold">Type</th>
-                                        <th className="px-3 py-2 font-bold">Bank / Method</th>
-                                        <th className="px-3 py-2 font-bold">Particulars</th>
-                                        <th className="px-3 py-2 font-bold text-right">Deposit</th>
-                                        <th className="px-3 py-2 font-bold text-right">Withdrawal</th>
-                                        {activeTab !== 'deposit' && <th className="px-3 py-2 font-bold text-center">Status</th>}
-                                        {activeTab !== 'deposit' && <th className="px-3 py-2 font-bold text-center">Deposit Status</th>}
-                                        <th className="px-3 py-2 font-bold text-center">Audit Status</th>
-                                        <th className="w-12 px-3 py-2 font-bold text-center">Action</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">DATE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">CHECK NO</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">WITHDRAWAL</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">DEPOSIT</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right" title="Balance of the bank">BALANCE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">TRAN-CODE</th>
                                       </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                      {dayTxs.map((tx) => {
-                                        const { deposit, withdrawal } = getRowAmounts(tx)
+                                    ) : (
+                                      <tr>
+                                        <th className="px-2 py-2.5 font-bold text-left">DATE</th>
+                                        <th className="px-2.5 sm:px-3 py-2.5 font-bold text-left">PARTICULARS</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">METHOD</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">AMOUNT</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">CHEQUE NO.</th>
+                                        <th className="px-2 py-2.5 font-bold text-left">DEPOSIT DATE</th>
+                                        <th className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right">AMOUNT DEPOSIT</th>
+                                        <th className="pl-3 pr-2 py-2.5 font-bold text-center">STATUS</th>
+                                        {showActionColumn && (
+                                          <th className="px-1.5 py-2.5 font-bold text-center">ACTION</th>
+                                        )}
+                                      </tr>
+                                    )}
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100 text-xs">
+                                    {dayTxs.map((tx) => {
+                                      const { deposit, withdrawal } = getRowAmounts(tx)
+                                      const rowAmt = tx.amount || (deposit > 0 ? deposit : withdrawal)
+                                      const depositedAmt = getDepositedAmountForRow(tx)
+                                      const lifecycle = deriveTransactionLifecycle(tx)
+                                      const typeMeta = getTransactionTypeMeta(tx)
+                                      const { title, itemCount } = getCleanParticularsTitle(
+                                        tx.particulars || tx.description,
+                                        tx.items,
+                                        rowAmt
+                                      )
+                                      const saleDateShort = toLedgerDate(getRowSaleDateIso(tx)) || tx.date
+                                      const depDateShort = lifecycle.effectiveDepositDate
+                                        ? toLedgerDate(lifecycle.effectiveDepositDate)
+                                        : getDepositDayShort(tx)
+                                      const rowBal =
+                                        activeTab === 'deposit'
+                                          ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? 0
+                                          : null
+                                      const txKey = `${tx.type}:${tx.id}`
+
+                                      if (activeTab === 'deposit') {
                                         return (
-                                          <tr key={`${tx.type}-${tx.id}`} className="hover:bg-slate-50/60 transition-colors">
-                                            <td className="px-3 py-2 font-medium text-focus">{tx.type}</td>
-                                            <td className="px-3 py-2 text-muted-fg">{tx.bankName || tx.paymentMethod || '—'}</td>
-                                            <td className="px-3 py-2 text-focus max-w-[260px]">
-                                              <p className="truncate font-medium">{tx.particulars}</p>
+                                          <tr
+                                            key={txKey}
+                                            onClick={() => handleRowClick(tx)}
+                                            title="Click to view transaction details and audit history"
+                                            className="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                                          >
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-medium text-focus whitespace-nowrap">
+                                              {saleDateShort}
                                             </td>
-                                            <td className="px-3 py-2 text-right font-bold tabular-nums text-emerald-600">
-                                              {deposit > 0 ? formatPHP(deposit) : '—'}
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-mono text-focus/80 truncate">
+                                              {tx.chequeNo || '—'}
                                             </td>
-                                            <td className="px-3 py-2 text-right font-bold tabular-nums text-rose-600">
-                                              {withdrawal > 0 ? formatPHP(withdrawal) : '—'}
+                                            <td className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                                              {withdrawal > 0 ? formatPHP(withdrawal) : <span className="text-muted-fg/40 font-normal">—</span>}
                                             </td>
-                                            {activeTab !== 'deposit' && (
-                                              <td className="px-3 py-2 text-center">
-                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border bg-slate-100 text-slate-700 border-slate-300 uppercase">
-                                                  {tx.status}
-                                                </span>
-                                              </td>
-                                            )}
-                                            {activeTab !== 'deposit' && (
-                                              <td className="px-3 py-2 text-center">
-                                                <DepositStatusBadge tx={tx} />
-                                              </td>
-                                            )}
-                                            <td className="px-3 py-2 text-center">
-                                              <span
-                                                className={cn(
-                                                  'inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-bold border',
-                                                  tx.auditStatus === 'Verified'
-                                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                                    : tx.auditStatus === 'Flagged'
-                                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                                    : 'bg-amber-50 text-amber-700 border-amber-200'
-                                                )}
-                                              >
-                                                {tx.auditStatus === 'Verified' ? 'Audited' : tx.auditStatus === 'Flagged' ? 'Discrepancy' : 'Pending'}
+                                            <td className="pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                                              {deposit > 0 ? formatPHP(deposit) : <span className="text-muted-fg/40 font-normal">—</span>}
+                                            </td>
+                                            <td
+                                              className={cn(
+                                                'pl-2 pr-3 sm:pr-4 py-2.5 font-bold text-right tabular-nums whitespace-nowrap',
+                                                (rowBal ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
+                                              )}
+                                              title="Balance of the bank"
+                                            >
+                                              {(rowBal ?? 0) < 0
+                                                ? `−${formatPHP(Math.abs(rowBal ?? 0))}`
+                                                : formatPHP(rowBal ?? 0)}
+                                            </td>
+                                            <td className="px-2.5 sm:px-3 py-2.5 font-mono text-focus/80 truncate">
+                                              {tx.refNo || '—'}
+                                            </td>
+                                          </tr>
+                                        )
+                                      }
+
+                                      return (
+                                        <tr
+                                          key={txKey}
+                                          onClick={() => handleRowClick(tx)}
+                                          title="Click to view transaction details and audit history"
+                                          className="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                                        >
+                                          {/* 1. Date */}
+                                          <td className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                                            {saleDateShort}
+                                          </td>
+
+                                          {/* 2. Particulars: Title, Company, Ref (No Cheque) */}
+                                          <td className="px-2.5 py-3 text-xs align-top">
+                                            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                              <span className="font-semibold text-focus break-words leading-snug">
+                                                {title}
                                               </span>
-                                            </td>
-                                            {/* Same 3 dots menu as All Records: View Details for everyone, audit actions for auditors */}
-                                            <td className="px-3 py-2 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                              {itemCount > 1 && (
+                                                <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                                  +{itemCount - 1} more
+                                                </span>
+                                              )}
+                                              {lifecycle.overdueLabel && (
+                                                <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-300">
+                                                  {lifecycle.overdueLabel}
+                                                </span>
+                                              )}
+                                            </div>
+                                            {tx.company && (
+                                              <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                                                {tx.company}
+                                              </div>
+                                            )}
+                                            <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                                              {tx.refNo || '—'}
+                                            </div>
+                                          </td>
+
+                                          {/* 3. Method */}
+                                          <td className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
+                                            {tx.paymentMethod || 'Cash'}
+                                          </td>
+
+                                          {/* 4. Amount */}
+                                          <td
+                                            className={cn(
+                                              'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
+                                              typeMeta.isOutflow ? 'text-rose-700' : 'text-emerald-700'
+                                            )}
+                                          >
+                                            {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
+                                          </td>
+
+                                          {/* 5. Cheque No. */}
+                                          <td className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
+                                            {tx.chequeNo || '—'}
+                                          </td>
+
+                                          {/* 6. Deposit Date */}
+                                          <td className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                                            {depDateShort ? (
+                                              <span className="text-emerald-700">{depDateShort}</span>
+                                            ) : (
+                                              <span className="text-muted-fg/50">—</span>
+                                            )}
+                                          </td>
+
+                                          {/* 7. Deposit Amount */}
+                                          <td className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
+                                            {depositedAmt > 0 ? (
+                                              <span className="text-emerald-700">{formatPHP(depositedAmt)}</span>
+                                            ) : (
+                                              <span className="text-muted-fg/50 font-normal">—</span>
+                                            )}
+                                          </td>
+
+                                          {/* 8. Status */}
+                                          <td className="pl-3 pr-2 py-3 text-center align-top">
+                                            <TransactionStatusBadge lifecycle={lifecycle} />
+                                          </td>
+
+                                          {/* 9. Action */}
+                                          {showActionColumn && (
+                                            <td className="px-1.5 py-2.5 text-center whitespace-nowrap align-top" onClick={(e) => e.stopPropagation()}>
                                               <Button
                                                 type="button"
                                                 variant="ghost"
                                                 size="sm"
                                                 onClick={(e) => {
                                                   e.stopPropagation()
-                                                  const txKey = `${tx.type}:${tx.id}`
                                                   if (openMenuTxId === txKey) {
                                                     setOpenMenuTxId(null)
                                                     setMenuPosition(null)
@@ -2809,19 +3276,33 @@ export const TransactionPage: React.FC = () => {
                                                     setOpenMenuTxId(txKey)
                                                   }
                                                 }}
-                                                className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
-                                                title="Actions"
-                                                aria-label="Open action menu"
+                                                className="h-9 w-9 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors"
+                                                title={canAudit ? 'Audit & transaction actions' : 'Actions'}
+                                                aria-label={canAudit ? 'Open audit action menu' : 'Open action menu'}
                                               >
                                                 <MoreVertical className="w-4 h-4" />
                                               </Button>
                                             </td>
-                                          </tr>
-                                        )
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
+                                          )}
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                  <tfoot className="bg-slate-50/90 border-t border-slate-200 text-xs font-semibold">
+                                    <tr>
+                                      <td colSpan={2} className="px-2.5 py-2.5 text-muted-fg">
+                                        Day totals
+                                      </td>
+                                      <td colSpan={activeTab === 'deposit' ? 4 : (showActionColumn ? 7 : 6)} className="px-2.5 py-2.5 text-right tabular-nums">
+                                        <span className="text-emerald-700 mr-3">Money In: +{formatPHP(group.dayTotalDeposit)}</span>
+                                        <span className="text-rose-700 mr-3">Money Out: −{formatPHP(group.dayTotalWithdrawal)}</span>
+                                        <span className={group.dayNetMovement < 0 ? 'text-rose-700' : 'text-focus'}>
+                                          Net: {group.dayNetMovement < 0 ? `−${formatPHP(Math.abs(group.dayNetMovement))}` : `+${formatPHP(group.dayNetMovement)}`}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
                               </div>
                             </TableCell>
                           </TableRow>
@@ -2835,110 +3316,193 @@ export const TransactionPage: React.FC = () => {
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table>
+          <Table className="w-full min-w-[860px] lg:min-w-0 table-fixed">
+            <colgroup>
+              {(activeTab === 'deposit'
+                ? [14, 18, 17, 17, 18, 16]
+                : showActionColumn
+                ? [9, 23, 8, 11, 9, 9, 11, 14, 6]
+                : [9, 25, 9, 12, 9, 9, 12, 15]
+              ).map((w, i) => (
+                <col key={i} style={{ width: `${w}%` }} />
+              ))}
+            </colgroup>
             <TableHeader>
-              <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  {activeTab === 'deposit' ? 'DEPOSIT DATE' : 'SALES DATE'}
-                </TableHead>
-                {activeTab !== 'deposit' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg" title="Day the sale's money was deposited; empty until it is deposited">
-                    DEPOSIT DAY
+              {activeTab === 'deposit' ? (
+                <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE
                   </TableHead>
-                )}
-                {activeTab === 'deposit' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                    COMPANY
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    CHECK NO
                   </TableHead>
-                )}
-                {/* Type shows on deposit tab */}
-                {activeTab === 'deposit' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                    TYPE
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    WITHDRAWAL
                   </TableHead>
-                )}
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  CHEQUE NO.
-                </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  PARTICULARS
-                </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                  {activeTab === 'deposit' ? 'CATEGORY' : 'PAYMENT METHOD'}
-                </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  DEPOSIT
-                </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  WITHDRAWAL
-                </TableHead>
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  BANK BALANCE
-                </TableHead>
-                {/* Deposit tab rows are paid by definition, so no payment Status column there */}
-                {activeTab !== 'deposit' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    DEPOSIT
+                  </TableHead>
+                  <TableHead
+                    className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
+                    title="Balance of the bank"
+                  >
+                    BALANCE
+                  </TableHead>
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    TRAN-CODE
+                  </TableHead>
+                </TableRow>
+              ) : (
+                <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    DATE
+                  </TableHead>
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    PARTICULARS
+                  </TableHead>
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    METHOD
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    AMOUNT
+                  </TableHead>
+                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    CHEQUE NO.
+                  </TableHead>
+                  <TableHead
+                    className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left"
+                    title="Day the sale's money was deposited or transferred; empty until deposited"
+                  >
+                    DEPOSIT DATE
+                  </TableHead>
+                  <TableHead
+                    className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
+                    title="Amount actually deposited to the bank; empty until deposited"
+                  >
+                    AMOUNT DEPOSIT
+                  </TableHead>
+                  <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
                     STATUS
                   </TableHead>
-                )}
-                {activeTab !== 'deposit' && (
-                  <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                    DEPOSIT STATUS
-                  </TableHead>
-                )}
-                <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  AUDIT STATUS
-                </TableHead>
-                <TableHead className="w-12 px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  ACTION
-                </TableHead>
-              </TableRow>
+                  {showActionColumn && (
+                    <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                      ACTION
+                    </TableHead>
+                  )}
+                </TableRow>
+              )}
             </TableHeader>
 
             <TableBody>
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <TableRow key={i} className="border-b border-slate-100">
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
-                    {activeTab !== 'deposit' && (
-                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
+                    {activeTab === 'deposit' ? (
+                      <>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-24 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
+                      </>
+                    ) : (
+                      <>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2.5 sm:px-3 py-3"><Skeleton className="h-4 w-44 rounded-md" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-14 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="px-2 py-3"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
+                        <TableCell className="pl-3 pr-2 py-3 text-center"><Skeleton className="h-5 w-24 rounded-full mx-auto" /></TableCell>
+                        {showActionColumn && (
+                          <TableCell className="px-1.5 py-3 text-center">
+                            <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
+                          </TableCell>
+                        )}
+                      </>
                     )}
-                    {activeTab === 'deposit' && (
-                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-28 rounded-md" /></TableCell>
-                    )}
-                    {activeTab === 'deposit' && (
-                      <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-16 rounded-md" /></TableCell>
-                    )}
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-48 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-20 rounded-md" /></TableCell>
-                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5 text-right"><Skeleton className="h-4 w-20 rounded-md ml-auto" /></TableCell>
-                    {activeTab !== 'deposit' && (
-                      <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    )}
-                    {activeTab !== 'deposit' && (
-                      <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    )}
-                    <TableCell className="px-4 py-3.5 text-center"><Skeleton className="h-5 w-16 rounded-full mx-auto" /></TableCell>
-                    <TableCell className="px-4 py-3.5"><Skeleton className="h-4 w-24 rounded-md" /></TableCell>
-                    <TableCell className="px-3 py-3.5 text-center">
-                      <Skeleton className="h-7 w-7 rounded-lg mx-auto" />
-                    </TableCell>
                   </TableRow>
                 ))
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={activeTab === 'deposit' ? 11 : 12}
-                  title={`No ${activeTab === 'deposit' ? 'deposit records' : 'transaction records'} found`}
+                  colSpan={activeTab === 'deposit' ? 6 : (8 + (showActionColumn ? 1 : 0))}
+                  title={`No ${activeTab === 'deposit' ? 'bank ledger' : 'transaction'} records found`}
                   message="No records match your active company, date range, or search criteria."
                 />
               ) : (
                 (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).map((tx) => {
                   const { deposit: depositAmt, withdrawal: withdrawalAmt } = getRowAmounts(tx)
+                  const rowAmt = tx.amount || (depositAmt > 0 ? depositAmt : withdrawalAmt)
+                  const depositedAmt = getDepositedAmountForRow(tx)
+                  const lifecycle = deriveTransactionLifecycle(tx)
+                  const typeMeta = getTransactionTypeMeta(tx)
+                  const { title, itemCount } = getCleanParticularsTitle(
+                    tx.particulars || tx.description,
+                    tx.items,
+                    rowAmt
+                  )
+                  const saleDateShort = toLedgerDate(getRowSaleDateIso(tx)) || tx.date
+                  const depDateShort = lifecycle.effectiveDepositDate
+                    ? toLedgerDate(lifecycle.effectiveDepositDate)
+                    : getDepositDayShort(tx)
+                  const rowBalance =
+                    activeTab === 'deposit'
+                      ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? 0
+                      : null
 
                   const txKey = `${tx.type}:${tx.id}`
+
+                  if (activeTab === 'deposit') {
+                    return (
+                      <TableRow
+                        key={txKey}
+                        onClick={() => handleRowClick(tx)}
+                        title="Click to view transaction details and audit history"
+                        className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
+                      >
+                        {/* 1. DATE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                          {saleDateShort}
+                        </TableCell>
+
+                        {/* 2. CHECK NO */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                          {tx.chequeNo || '—'}
+                        </TableCell>
+
+                        {/* 3. WITHDRAWAL */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                          {withdrawalAmt > 0 ? formatPHP(withdrawalAmt) : <span className="text-muted-fg/40 font-normal">—</span>}
+                        </TableCell>
+
+                        {/* 4. DEPOSIT */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                          {depositAmt > 0 ? formatPHP(depositAmt) : <span className="text-muted-fg/40 font-normal">—</span>}
+                        </TableCell>
+
+                        {/* 5. BALANCE */}
+                        <TableCell
+                          className={cn(
+                            'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
+                            (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
+                          )}
+                          title="Balance of the bank"
+                        >
+                          {(rowBalance ?? 0) < 0
+                            ? `−${formatPHP(Math.abs(rowBalance ?? 0))}`
+                            : formatPHP(rowBalance ?? 0)}
+                        </TableCell>
+
+                        {/* 6. TRAN-CODE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                          {tx.refNo || '—'}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  }
+
                   return (
                     <TableRow
                       key={txKey}
@@ -2946,227 +3510,119 @@ export const TransactionPage: React.FC = () => {
                       title="Click to view transaction details and audit history"
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
-                      {/* 1. Date: deposit day on the Deposit tab, sales date on All Transactions */}
-                      <TableCell className="px-4 py-3.5 text-xs font-medium text-focus whitespace-nowrap">
-                        {tx.date}
+                      {/* 1. Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                        {saleDateShort}
                       </TableCell>
 
-                      {/* 1b. Deposit day (All Transactions only): empty until the sale is deposited */}
-                      {activeTab !== 'deposit' && (
-                        <TableCell className="px-4 py-3.5 text-xs font-medium whitespace-nowrap">
-                          {getDepositDayShort(tx) ? (
-                            <span className="text-emerald-700">{getDepositDayShort(tx)}</span>
-                          ) : (
-                            <span className="text-muted-fg/50">—</span>
+                      {/* 2. Particulars: Title on Line 1, Company on Line 2, Ref on Line 3 (No cheque, no badge) */}
+                      <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-focus/90 align-top" title={tx.particulars || tx.description}>
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <span className="font-semibold text-focus break-words leading-snug">
+                            {title}
+                          </span>
+                          {itemCount > 1 && (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                              +{itemCount - 1} more
+                            </span>
                           )}
-                        </TableCell>
-                      )}
+                          {lifecycle.overdueLabel && (
+                            <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-300">
+                              {lifecycle.overdueLabel}
+                            </span>
+                          )}
+                        </div>
+                        {tx.company && (
+                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                            {tx.company}
+                          </div>
+                        )}
+                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                          {tx.refNo || '—'}
+                        </div>
+                      </TableCell>
 
-                      {/* 2. Company (Deposit tab only) */}
-                      {activeTab === 'deposit' && (
-                        <TableCell className="px-4 py-3.5 text-xs font-medium text-focus/90 truncate max-w-[160px]" title={tx.company}>
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200/60 max-w-full truncate">
-                            {tx.company || '—'}
-                          </span>
-                        </TableCell>
-                      )}
+                      {/* 3. Method */}
+                      <TableCell className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
+                        {tx.paymentMethod || 'Cash'}
+                      </TableCell>
 
-                      {/* 2b. Type (Deposit tab only): Sales, Expense, Loan or Petty Cash */}
-                      {activeTab === 'deposit' && (
-                        <TableCell className="px-4 py-3.5 whitespace-nowrap">
-                          <span
-                            className={cn(
-                              'inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border',
-                              tx.type === 'Sales'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : tx.type === 'Expense'
-                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                : tx.type === 'Loan'
-                                ? 'bg-sky-50 text-sky-700 border-sky-200'
-                                : tx.type === 'Petty Cash'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : tx.type === 'Bank'
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-slate-100 text-slate-700 border-slate-200'
-                            )}
-                          >
-                            {tx.type}
-                          </span>
-                        </TableCell>
-                      )}
+                      {/* 4. Signed Gross Amount */}
+                      <TableCell
+                        className={cn(
+                          'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
+                          typeMeta.isOutflow ? 'text-rose-700' : 'text-emerald-700'
+                        )}
+                      >
+                        {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
+                      </TableCell>
 
-                      {/* 3. Cheque No */}
-                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
+                      {/* 5. Cheque No. */}
+                      <TableCell className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
                         {tx.chequeNo || '—'}
                       </TableCell>
 
-                      {/* 4. Particulars */}
-                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-normal max-w-xs" title={tx.particulars || tx.description}>
-                        {(() => {
-                          const summary = getParticularsSummary(tx.particulars || tx.description, tx.items)
-                          if (summary.count > 1) {
-                            return (
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="truncate block font-medium">{summary.firstItemName}</span>
-                                <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                  +{summary.count - 1} more
-                                </span>
-                              </div>
-                            )
-                          }
-                          if (tx.awaitingAudit) {
-                            // Only reachable on the All tab: Finance endorsed it, Audit has not approved yet
-                            return (
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="truncate block font-medium">{summary.firstItemName}</span>
-                                <span
-                                  className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200"
-                                  title={
-                                    tx.pendingLabel
-                                      ? 'Approved. Waiting for Finance to pay it out from the bank (Reimburse).'
-                                      : 'Endorsed by Finance. Waiting for Internal Audit approval.'
-                                  }
-                                >
-                                  {tx.pendingLabel || 'Pending Audit'}
-                                </span>
-                              </div>
-                            )
-                          }
-                          return <span className="truncate block font-medium">{summary.firstItemName}</span>
-                        })()}
-                      </TableCell>
-
-                      {/* 5. Category or Payment Method */}
-                      <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-medium whitespace-nowrap">
-                        {activeTab === 'deposit' ? tx.category : (tx.paymentMethod || 'Cash')}
-                      </TableCell>
-
-                      {/* 6. Deposit (money in) */}
-                      <TableCell className="px-4 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-600">
-                        {depositAmt > 0 ? formatPHP(depositAmt) : <span className="text-muted-fg/50 font-normal">—</span>}
-                      </TableCell>
-
-                      {/* 7. Withdrawal (money out) */}
-                      <TableCell className="px-4 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-600">
-                        {withdrawalAmt > 0 ? formatPHP(withdrawalAmt) : <span className="text-muted-fg/50 font-normal">—</span>}
-                      </TableCell>
-
-                      {/* 7b. Bank balance: starting balance + every deposit and withdrawal up to this row.
-                          Same figure on both tabs. Rows that never touched the bank (Pending / Unpaid / not deposited) show a dash. */}
-                      {(() => {
-                        const shown = depositBalanceByKey.get(`${tx.type}:${tx.id}`)
-                        if (shown === undefined) {
-                          return (
-                            <TableCell
-                              className="px-4 py-3.5 text-xs text-right text-muted-fg/50 whitespace-nowrap"
-                              title="This record has not moved money in the bank yet"
-                            >
-                              —
-                            </TableCell>
-                          )
-                        }
-                        return (
-                          <TableCell
-                            className={cn(
-                              'px-4 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap',
-                              shown < 0 ? 'text-rose-600' : 'text-focus'
-                            )}
-                          >
-                            {shown < 0 ? `-${formatPHP(Math.abs(shown))}` : formatPHP(shown)}
-                          </TableCell>
-                        )
-                      })()}
-
-                      {/* 8. Status (hidden on the Deposit tab: deposited means paid) */}
-                      {activeTab !== 'deposit' && (
-                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
-                        {tx.status === 'Paid' ? (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Paid
-                          </span>
-                        ) : tx.status === 'Pending' ? (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
-                            Pending
-                          </span>
-                        ) : tx.status === 'On hold' ? (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-stone-100 text-stone-700 border border-stone-200">
-                            On hold
-                          </span>
+                      {/* 6. Deposit Date */}
+                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                        {depDateShort ? (
+                          <span className="text-emerald-700">{depDateShort}</span>
                         ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                            {tx.status || 'Unpaid'}
-                          </span>
+                          <span className="text-muted-fg/50">—</span>
                         )}
                       </TableCell>
-                      )}
 
-                      {/* 8b. Deposit Status (sales only) */}
-                      {activeTab !== 'deposit' && (
-                        <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
-                          <DepositStatusBadge tx={tx} />
+                      {/* 7. Deposit Amount */}
+                      <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
+                        {depositedAmt > 0 ? (
+                          <span className="text-emerald-700">{formatPHP(depositedAmt)}</span>
+                        ) : (
+                          <span className="text-muted-fg/50 font-normal">—</span>
+                        )}
+                      </TableCell>
+
+                      {/* 8. Status Badge */}
+                      <TableCell className="pl-3 pr-2 py-3 text-center align-top">
+                        <TransactionStatusBadge lifecycle={lifecycle} />
+                      </TableCell>
+
+                      {/* 9. Action: 3 dots action button */}
+                      {showActionColumn && (
+                        <TableCell
+                          className="px-1.5 py-2.5 text-center whitespace-nowrap align-top"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center justify-center">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (openMenuTxId === txKey) {
+                                  setOpenMenuTxId(null)
+                                  setMenuPosition(null)
+                                  setActiveMenuTx(null)
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  const openUpward = rect.bottom + 160 > window.innerHeight
+                                  setMenuPosition({
+                                    top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                    right: Math.max(12, window.innerWidth - rect.right),
+                                    openUpward,
+                                  })
+                                  setActiveMenuTx(tx)
+                                  setOpenMenuTxId(txKey)
+                                }
+                              }}
+                              className="h-9 w-9 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
+                              title={canAudit ? 'Audit & transaction actions' : 'Actions'}
+                              aria-label={canAudit ? 'Open audit action menu' : 'Open action menu'}
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       )}
-
-                      {/* 8. Audit Status Badge (Visible for all roles) */}
-                      <TableCell className="px-4 py-3.5 text-center whitespace-nowrap">
-                        {tx.type === 'Bank' ? (
-                          <span className="text-[11px] text-muted-fg" title="Manual bank entry: managed in Bank Management, not audited here">
-                            Bank entry
-                          </span>
-                        ) : tx.auditStatus === 'Verified' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Audited</span>
-                          </span>
-                        ) : tx.auditStatus === 'Flagged' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs">
-                            <AlertCircle className="w-3 h-3 text-rose-600" />
-                            <span>Discrepancy</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80 shadow-2xs">
-                            <AlertCircle className="w-3 h-3 text-amber-600" />
-                            <span>Pending</span>
-                          </span>
-                        )}
-                      </TableCell>
-
-                      {/* 9. Actions: 3 dots action button */}
-                      <TableCell
-                        className="px-3 py-3.5 text-center whitespace-nowrap"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-center">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              if (openMenuTxId === txKey) {
-                                setOpenMenuTxId(null)
-                                setMenuPosition(null)
-                                setActiveMenuTx(null)
-                              } else {
-                                const rect = e.currentTarget.getBoundingClientRect()
-                                const openUpward = rect.bottom + 160 > window.innerHeight
-                                setMenuPosition({
-                                  top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                  right: Math.max(12, window.innerWidth - rect.right),
-                                  openUpward,
-                                })
-                                setActiveMenuTx(tx)
-                                setOpenMenuTxId(txKey)
-                              }
-                            }}
-                            className="h-8 w-8 p-0 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors"
-                            title="Actions"
-                            aria-label="Open action menu"
-                          >
-                            <MoreVertical className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
                     </TableRow>
                   )
                 })
@@ -3176,92 +3632,7 @@ export const TransactionPage: React.FC = () => {
         </div>
       )}
 
-        {/* 4b. Totals for the rows that match the current filters (spec 0016) */}
-        {salesViewMode === 'daily_summary' ? null : activeTab === 'deposit' ? (
-          <div
-            className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs"
-            aria-label="Totals for the filtered deposit rows"
-            data-testid="ledger-totals"
-          >
-            <div
-              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-sky-200/70 bg-sky-50/60"
-              title={
-                selectedBankAccount
-                  ? `${selectedBankAccount.bankName} (${selectedBankAccount.accountType}) starting balance`
-                  : `Consolidated starting balance (${availableBankAccounts.length} bank account${availableBankAccounts.length === 1 ? '' : 's'})`
-              }
-            >
-              <div className="flex flex-col min-w-0 pr-1">
-                <span className="font-semibold text-sky-800 truncate">Starting Balance</span>
-                {selectedBankAccount && (
-                  <span className="text-[10px] text-sky-600 truncate font-normal">
-                    {selectedBankAccount.bankName}
-                  </span>
-                )}
-              </div>
-              <span className="font-bold tabular-nums text-sky-700 shrink-0">{formatPHP(activeStartingBalance)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
-              <span className="font-semibold text-emerald-800">Total Deposits</span>
-              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
-              <span className="font-semibold text-rose-800">Total Withdrawals</span>
-              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
-            </div>
-            <div
-              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50"
-              title={
-                selectedBankAccount
-                  ? `${selectedBankAccount.bankName} ending balance`
-                  : 'Starting balance + net deposits'
-              }
-            >
-              <div className="flex flex-col min-w-0 pr-1">
-                <span className="font-semibold text-focus truncate">Ending Balance</span>
-                {selectedBankAccount && (
-                  <span className="text-[10px] text-muted-fg truncate font-normal">
-                    {selectedBankAccount.bankName}
-                  </span>
-                )}
-              </div>
-              <span
-                className={cn(
-                  'font-bold tabular-nums shrink-0',
-                  activeEndingBalance < 0 ? 'text-rose-600' : 'text-focus'
-                )}
-              >
-                {activeEndingBalance < 0 ? `-${formatPHP(Math.abs(activeEndingBalance))}` : formatPHP(activeEndingBalance)}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div
-            className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs"
-            aria-label="Totals for the filtered rows"
-            data-testid="ledger-totals"
-          >
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-emerald-200/70 bg-emerald-50/60">
-              <span className="font-semibold text-emerald-800">Total Deposits</span>
-              <span className="font-bold tabular-nums text-emerald-700">{formatPHP(activeTotals.deposits)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rose-200/70 bg-rose-50/60">
-              <span className="font-semibold text-rose-800">Total Withdrawals</span>
-              <span className="font-bold tabular-nums text-rose-700">{formatPHP(activeTotals.withdrawals)}</span>
-            </div>
-            <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50">
-              <span className="font-semibold text-focus">Net Amount</span>
-              <span
-                className={cn(
-                  'font-bold tabular-nums',
-                  activeTotals.net < 0 ? 'text-rose-600' : 'text-focus'
-                )}
-              >
-                {activeTotals.net < 0 ? `-${formatPHP(Math.abs(activeTotals.net))}` : formatPHP(activeTotals.net)}
-              </span>
-            </div>
-          </div>
-        )}
+
 
         {/* 5. Pagination Footer */}
         {salesViewMode === 'all' && (
@@ -3286,17 +3657,18 @@ export const TransactionPage: React.FC = () => {
         )}
       </div>
 
-      {/* 6. Transaction Details Modal (If audited, editing is locked; if not audited, provides edit in Excel sheet) */}
+      {/* 6. Transaction Details Modal (Finance can add/update remarks on unaudited; Supervisor: edit unaudited; Audit: audit review; Owner: read-only) */}
       <AuditTransactionModal
         open={isModalOpen}
         onOpenChange={setIsModalOpen}
         transaction={selectedTx}
         onTransactionUpdated={handleTransactionUpdated}
-        editable={!isAdmin}
+        editable={!isAdmin && !isOwner && !isFinanceOnly}
+        viewOnly={isOwner}
       />
 
       {/* 6b. By Day row menu (acts on the whole day) */}
-      {dayMenu && typeof document !== 'undefined' && (() => {
+      {showActionColumn && dayMenu && typeof document !== 'undefined' && (() => {
         const dayGroup = dailySummaryGroups.find((g) => g.id === dayMenu.date)
         const dayTxs = dayGroup ? dayGroup.banks.flatMap((b) => b.transactions) : []
         const auditable = dayTxs.filter(
@@ -3316,18 +3688,26 @@ export const TransactionPage: React.FC = () => {
               onClick={(e) => e.stopPropagation()}
             >
               {canAudit && (
-                <button
-                  type="button"
-                  disabled={auditable.length === 0}
-                  onClick={() => {
-                    close()
-                    handleAuditWholeDay(dayGroup?.date ?? dayMenu.date, dayTxs)
-                  }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Audit whole day{auditable.length > 0 ? ` (${auditable.length})` : ''}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    disabled={auditable.length === 0}
+                    onClick={() => openDayAudit('Verified', dayGroup?.date ?? dayMenu.date, dayTxs)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Mark day as Audited{auditable.length > 0 ? ` (${auditable.length})` : ''}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={auditable.length === 0}
+                    onClick={() => openDayAudit('Flagged', dayGroup?.date ?? dayMenu.date, dayTxs)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag day Discrepancy</span>
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -3350,10 +3730,10 @@ export const TransactionPage: React.FC = () => {
       })()}
 
       {/* 7. Floating 3-Dots Action Portal Menu */}
-      {openMenuTxId && activeMenuTx && menuPosition && typeof document !== 'undefined' &&
+      {showActionColumn && openMenuTxId && activeMenuTx && menuPosition && typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-52 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -3362,54 +3742,132 @@ export const TransactionPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
-            {canAudit && activeMenuTx.type !== 'Bank' && (
+            {canAudit && isRowAuditable(activeMenuTx) && (
               <>
                 <button
                   type="button"
                   onClick={() => handleMenuMarkAudit(activeMenuTx)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                  className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => handleMenuOpenDiscrepancy(activeMenuTx)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-                >
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Flag Discrepancy</span>
-                </button>
+                {activeMenuTx.auditStatus !== 'Verified' && (
+                  <button
+                    type="button"
+                    onClick={() => handleMenuOpenDiscrepancy(activeMenuTx)}
+                    className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag Discrepancy</span>
+                  </button>
+                )}
               </>
-            )}
-
-            {canEditTx(activeMenuTx) && (
-              <button
-                type="button"
-                onClick={() => handleMenuEdit(activeMenuTx)}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
-              >
-                <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                <span>Edit</span>
-              </button>
             )}
 
             <button
               type="button"
               onClick={() => handleMenuViewDetails(activeMenuTx)}
               className={cn(
-                "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer",
-                canAudit && "border-t border-slate-100 mt-1 pt-1.5"
+                'w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer',
+                canAudit && isRowAuditable(activeMenuTx) && 'border-t border-slate-100 mt-1 pt-1.5'
               )}
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>View Details</span>
             </button>
 
+            {isFinance && activeMenuTx.auditStatus !== 'Verified' && (
+              <button
+                type="button"
+                onClick={() => {
+                  const tx = activeMenuTx
+                  setOpenMenuTxId(null)
+                  setMenuPosition(null)
+                  setRemarksTargetTx(tx)
+                  setRemarksInput(tx.remarks || '')
+                  setIsRemarksDialogOpen(true)
+                }}
+                className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 transition-colors text-left cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>{activeMenuTx.remarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+              </button>
+            )}
+
+            {canEditTx(activeMenuTx) && (
+              <button
+                type="button"
+                onClick={() => handleMenuEdit(activeMenuTx)}
+                className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                <span>Edit</span>
+              </button>
+            )}
+
+            {canShowDeleteOption(activeMenuTx) && (() => {
+              const blockedReason = getDeleteBlockedReason(activeMenuTx)
+              return (
+                <div className="border-t border-slate-100 mt-1 pt-1">
+                  <button
+                    type="button"
+                    disabled={!!blockedReason}
+                    onClick={() => handleMenuDelete(activeMenuTx)}
+                    title={blockedReason || 'Delete this unaudited record'}
+                    className={cn(
+                      'w-full min-h-[40px] flex flex-col items-start justify-center px-3 py-2 rounded-xl text-xs font-semibold text-left transition-colors',
+                      blockedReason
+                        ? 'text-rose-400 opacity-60 cursor-not-allowed'
+                        : 'text-rose-600 hover:bg-rose-50 cursor-pointer'
+                    )}
+                  >
+                    <span className="inline-flex items-center gap-2.5">
+                      <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                      <span>Delete…</span>
+                    </span>
+                    {blockedReason && (
+                      <span className="text-[10px] font-normal text-muted-fg pl-6 leading-tight">
+                        {blockedReason}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )
+            })()}
           </div>,
           document.body
         )}
+
+      {/* 7b. Delete Unaudited Transaction Confirmation Modal */}
+      <ConfirmModal
+        open={!!deleteConfirmTx}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingTx) setDeleteConfirmTx(null)
+        }}
+        title={`Delete ${deleteConfirmTx?.type === 'Expense' ? 'Expense' : 'Sale'} Record`}
+        description={
+          deleteConfirmTx ? (
+            <span>
+              Are you sure you want to delete 1 item (Ref:{' '}
+              <strong className="font-mono">{deleteConfirmTx.refNo}</strong>) totaling{' '}
+              <strong>
+                {formatPHP(
+                  Math.abs(deleteConfirmTx.amount || deleteConfirmTx.withdrawal || deleteConfirmTx.deposit || 0)
+                )}
+              </strong>
+              ? This action cannot be undone.
+            </span>
+          ) : undefined
+        }
+        confirmLabel="Delete record"
+        variant="destructive"
+        actionType="delete"
+        isLoading={isDeletingTx}
+        loadingLabel="Deleting…"
+        onConfirm={handleConfirmDeleteTx}
+      />
 
       {/* 8. Quick Discrepancy Modal from Action Menu */}
       <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
@@ -3479,6 +3937,270 @@ export const TransactionPage: React.FC = () => {
                     <AlertCircle className="w-3.5 h-3.5 text-white" />
                     <span>Flag Discrepancy</span>
                   </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 8b. Quick Mark as Audited Modal from Action Menu (with optional remarks) */}
+      <Dialog
+        open={isMarkAuditModalOpen}
+        onOpenChange={(nextOpen) => {
+          if (!isSubmittingAudit) {
+            setIsMarkAuditModalOpen(nextOpen)
+            if (!nextOpen) {
+              setMarkAuditRemarks('')
+              setMarkAuditTargetTx(null)
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  {markAuditTargetTx?.auditStatus === 'Verified' ? 'Re-Audit Transaction' : 'Mark as Audited'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Confirm audit verification. Adding remarks is optional.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Audit Remarks <span className="text-muted-fg font-normal">(Optional)</span>
+              </Label>
+              <textarea
+                rows={3}
+                value={markAuditRemarks}
+                onChange={(e) => setMarkAuditRemarks(e.target.value)}
+                placeholder="Optional audit remarks or verification notes (leave blank if none)..."
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 font-normal leading-relaxed resize-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSubmittingAudit}
+                onClick={() => {
+                  setIsMarkAuditModalOpen(false)
+                  setMarkAuditRemarks('')
+                  setMarkAuditTargetTx(null)
+                }}
+                className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSubmittingAudit}
+                onClick={handleConfirmQuickMarkAudit}
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSubmittingAudit ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                    <span>{markAuditTargetTx?.auditStatus === 'Verified' ? 'Confirm Re-Audit' : 'Confirm & Mark Audited'}</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 8d. Day level audit dialog (Mark as Audited / Flag Discrepancy, remarks optional) */}
+      <Dialog
+        open={!!dayAudit}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !isSubmittingDayAudit) {
+            setDayAudit(null)
+            setDayAuditRemarks('')
+          }
+        }}
+      >
+        <DialogContent className="max-w-[460px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          {dayAudit && (() => {
+            const isFlag = dayAudit.action === 'Flagged'
+            const count = dayAudit.targets.length
+            return (
+              <>
+                <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        'w-10 h-10 rounded-xl border flex items-center justify-center shrink-0',
+                        isFlag ? 'bg-rose-50 border-rose-200' : 'bg-emerald-50 border-emerald-200'
+                      )}
+                    >
+                      {isFlag ? (
+                        <AlertCircle className="w-5 h-5 text-rose-600" />
+                      ) : (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      )}
+                    </div>
+                    <div>
+                      <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                        {isFlag ? 'Flag Day Discrepancy' : 'Mark Day as Audited'}
+                      </DialogTitle>
+                      <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                        Applies to {count} pending {count === 1 ? 'record' : 'records'} on {dayAudit.date}. Already audited or flagged records are not changed.
+                      </DialogDescription>
+                    </div>
+                  </div>
+                </DialogHeader>
+
+                <div className="space-y-3 pt-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-semibold text-focus block">
+                      Remarks <span className="text-muted-fg font-normal">(Optional)</span>
+                    </Label>
+                    <textarea
+                      rows={3}
+                      value={dayAuditRemarks}
+                      onChange={(e) => setDayAuditRemarks(e.target.value)}
+                      placeholder={isFlag ? 'Describe the discrepancy for this day (optional)…' : 'Optional audit remarks (leave blank if none)…'}
+                      className={cn(
+                        'w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 font-normal leading-relaxed resize-none',
+                        isFlag ? 'focus:ring-rose-500/20 focus:border-rose-500' : 'focus:ring-emerald-500/20 focus:border-emerald-500'
+                      )}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isSubmittingDayAudit}
+                      onClick={() => {
+                        setDayAudit(null)
+                        setDayAuditRemarks('')
+                      }}
+                      className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={isSubmittingDayAudit}
+                      onClick={handleConfirmDayAudit}
+                      className={cn(
+                        'h-10 px-5 text-xs font-semibold rounded-xl text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50',
+                        isFlag ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600 hover:bg-emerald-700'
+                      )}
+                    >
+                      {isSubmittingDayAudit ? (
+                        <>
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          <span>Saving…</span>
+                        </>
+                      ) : isFlag ? (
+                        <>
+                          <AlertCircle className="w-3.5 h-3.5 text-white" />
+                          <span>Flag {count} {count === 1 ? 'record' : 'records'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5 text-white" />
+                          <span>Mark {count} as Audited</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* 8c. Standalone Add/Edit Remarks Dialog from Action Menu */}
+      <Dialog
+        open={isRemarksDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!isSavingRemarks) {
+            setIsRemarksDialogOpen(nextOpen)
+            if (!nextOpen) {
+              setRemarksInput('')
+              setRemarksTargetTx(null)
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  {remarksTargetTx?.remarks ? 'Edit Remarks' : 'Add Remarks'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter operational remarks for {remarksTargetTx?.particulars || remarksTargetTx?.description || 'transaction'}.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="space-y-3 pt-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-focus block">
+                Remarks
+              </Label>
+              <textarea
+                rows={4}
+                value={remarksInput}
+                onChange={(e) => setRemarksInput(e.target.value)}
+                placeholder="Enter remarks or notes here…"
+                className="w-full text-xs p-3 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-[#960C01]/20 focus:border-[#960C01] font-normal leading-relaxed resize-y bg-white"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isSavingRemarks}
+                onClick={() => {
+                  setIsRemarksDialogOpen(false)
+                  setRemarksInput('')
+                  setRemarksTargetTx(null)
+                }}
+                className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isSavingRemarks}
+                onClick={handleSaveRemarks}
+                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#960C01]/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isSavingRemarks ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <span>Save Remarks</span>
                 )}
               </Button>
             </div>

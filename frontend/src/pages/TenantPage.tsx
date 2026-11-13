@@ -32,6 +32,7 @@ import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
+import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
@@ -86,6 +87,7 @@ import {
 import {
   tenantService,
   removeLegacyTenantStorage,
+  TENANT_COMPANY_NAME,
   type DailyRentRecord,
   type PaymentInput,
   type TenantLease,
@@ -141,6 +143,7 @@ type LeaseFormData = {
   repeat: LeaseRepeat
   leaseEndDate: string
   penaltyRate: string
+  bankAccountId: string
 }
 
 const EMPTY_FORM: LeaseFormData = {
@@ -155,6 +158,7 @@ const EMPTY_FORM: LeaseFormData = {
   repeat: 'Daily',
   leaseEndDate: '',
   penaltyRate: '',
+  bankAccountId: '',
 }
 
 export const TenantPage: React.FC = () => {
@@ -564,6 +568,7 @@ export const TenantPage: React.FC = () => {
       repeat: effectiveRepeat,
       leaseEndDate: tenant.leaseEndDate || '',
       penaltyRate: typeof tenant.penaltyRate === 'number' ? String(tenant.penaltyRate) : '',
+      bankAccountId: tenant.bankAccountId || '',
     })
     setFormErrors({})
     setMenuOpenTenantId(null)
@@ -701,6 +706,11 @@ export const TenantPage: React.FC = () => {
       errors.notes = 'Notes cannot exceed 255 characters.'
     }
 
+    // Every rent payment is recorded as a Sale on this bank (spec 0045). Older leases may still have none.
+    if (!formData.bankAccountId && (!existing || existing.bankAccountId)) {
+      errors.bankAccountId = 'Please choose the bank account that receives the rent.'
+    }
+
     // Edit locks that depend on payments already recorded (AC-6)
     if (existing && hasPayments) {
       if (rent !== existing.rentAmount) {
@@ -768,6 +778,7 @@ export const TenantPage: React.FC = () => {
         totalAmountPayable: repeating ? undefined : payable,
         status: formData.status,
         notes: formData.notes.trim(),
+        bankAccountId: formData.bankAccountId,
       })
     } catch (err) {
       setFormErrors({ form: messageOf(err) })
@@ -819,6 +830,7 @@ export const TenantPage: React.FC = () => {
         totalAmountPayable: repeating ? undefined : payable,
         status: formData.status,
         notes: formData.notes.trim(),
+        bankAccountId: formData.bankAccountId,
       })
       updatedTenant = await syncStatus(updatedTenant)
     } catch (err) {
@@ -3000,6 +3012,16 @@ export const TenantPage: React.FC = () => {
               </div>
             </div>
 
+            <CompanyBankSelect
+              company={TENANT_COMPANY_NAME}
+              value={formData.bankAccountId}
+              onChange={(id) => setFormData({ ...formData, bankAccountId: id })}
+              label="Bank Account (Rent Deposits)"
+              hint="Every payment from this tenant is added to Sales and deposited to this bank."
+              required
+              error={formErrors.bankAccountId}
+            />
+
             <div className="space-y-1">
               <label className="text-xs font-semibold text-focus block">
                 Notes / Remarks <span className="text-muted-fg font-normal">(Optional, up to 255 chars)</span>
@@ -3239,6 +3261,16 @@ export const TenantPage: React.FC = () => {
                     <option value="Completed">Completed</option>
                   </select>
                 </div>
+
+                <CompanyBankSelect
+                  company={activeTenant?.companyName || TENANT_COMPANY_NAME}
+                  value={formData.bankAccountId}
+                  onChange={(id) => setFormData({ ...formData, bankAccountId: id })}
+                  label="Bank Account (Rent Deposits)"
+                  hint="New payments go to this bank. Payments already recorded keep their bank."
+                  required={Boolean(activeTenant?.bankAccountId)}
+                  error={formErrors.bankAccountId}
+                />
 
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-focus block">

@@ -39,6 +39,8 @@ class BorrowerCreateRequest(StrictBaseModel):
     date_borrowed: Optional[str] = Field(None, max_length=50)
     due_date: Optional[str] = Field("", max_length=50)
     notes: Optional[str] = Field("", max_length=1000)
+    # Bank the loan is released from (Expense) and repayments go to (Sales) - spec 0045
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
 
 class BorrowerUpdateRequest(StrictBaseModel):
@@ -53,6 +55,7 @@ class BorrowerUpdateRequest(StrictBaseModel):
     due_date: Optional[str] = Field(None, max_length=50)
     status: Optional[str] = Field(None, max_length=50)
     notes: Optional[str] = Field(None, max_length=1000)
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
 
 class BorrowerDeleteResponse(BaseModel):
@@ -175,6 +178,8 @@ class BorrowerOut(BaseModel):
     complianceStatus: str = "Compliant"
     missedCyclesCount: int = 0
     notes: Optional[str] = ""
+    bankAccountId: Optional[str] = None
+    releaseExpenseId: Optional[int] = None
     audit_status: Optional[str] = "Pending Audit"
     auditStatus: Optional[str] = None
     audited_by: Optional[str] = None

@@ -12,11 +12,21 @@ import { cn } from '@/lib/utils'
 
 const norm = (s?: string) => (s || '').trim().toLowerCase()
 
+/** Filter value for the company's petty cash wallet. Petty cash is not a bank account, but expenses
+ * paid with it are listed under it so they can be found next to the banks. */
+export const PETTY_CASH_BANK_ID = 'petty-cash'
+
+/** True when an expense was paid from petty cash (same rule the petty cash wallet uses). */
+export const isPettyCashPayment = (paymentMethod?: string | null): boolean =>
+  norm(paymentMethod || '').includes('petty cash')
+
 /**
  * Bank accounts in scope for a company (all companies when "All Companies" or empty) plus the
- * selected bank. An empty selectedId means "All Banks".
+ * selected bank. An empty selectedId means "All Banks". With `includePettyCash`, "Petty Cash" is
+ * also a valid selection (PETTY_CASH_BANK_ID).
  */
-export function useBankFilter(company: string) {
+export function useBankFilter(company: string, options?: { includePettyCash?: boolean }) {
+  const includePettyCash = !!options?.includePettyCash
   const { user } = useSession()
   const userId = user?.id
   const userScopeKey = `${userId || ''}:${user?.role || ''}:${user?.assignedCompany || ''}`
@@ -63,12 +73,14 @@ export function useBankFilter(company: string) {
 
   const activeSelectedId = React.useMemo(() => {
     if (!selectedId) return ''
+    if (includePettyCash && selectedId === PETTY_CASH_BANK_ID) return selectedId
     return available.some((a) => String(a.id) === selectedId) ? selectedId : ''
-  }, [available, selectedId])
+  }, [available, selectedId, includePettyCash])
 
   const bankLabel = React.useCallback(
     (id?: string) => {
       if (!id) return 'No bank'
+      if (id === PETTY_CASH_BANK_ID) return 'Petty Cash'
       const acc = scopedAccounts.find((a) => String(a.id) === String(id))
       return acc ? `${acc.bankName}${acc.accountName ? ` - ${acc.accountName}` : ''}` : 'Unknown bank'
     },
@@ -89,11 +101,13 @@ interface BankFilterSelectProps {
   value: string
   onChange: (id: string) => void
   className?: string
+  /** Also offer "Petty Cash" (value PETTY_CASH_BANK_ID) after the banks. */
+  includePettyCash?: boolean
 }
 
 /** Compact "All Banks / <bank>" pill, styled like the other toolbar filters. */
-export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, value, onChange, className }) => {
-  if (accounts.length === 0) return null
+export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, value, onChange, className, includePettyCash }) => {
+  if (accounts.length === 0 && !includePettyCash) return null
   return (
     <label
       className={cn(
@@ -106,7 +120,7 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, va
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label="Filter by bank"
-        className="appearance-none bg-transparent font-semibold text-focus/90 focus:outline-none cursor-pointer max-w-[190px] truncate"
+        className="appearance-none bg-transparent font-semibold text-focus/90 focus:outline-none cursor-pointer flex-1 min-w-0 truncate pr-2"
       >
         <option value="">All Banks</option>
         {accounts.map((a) => (
@@ -115,6 +129,7 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({ accounts, va
             {a.accountName ? ` - ${a.accountName}` : ''}
           </option>
         ))}
+        {includePettyCash && <option value={PETTY_CASH_BANK_ID}>Petty Cash</option>}
       </select>
       <ChevronDown className="h-3.5 w-3.5 text-muted-fg absolute right-3 pointer-events-none" />
     </label>

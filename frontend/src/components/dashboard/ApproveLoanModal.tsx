@@ -254,7 +254,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
                   Choose Bank <span className="text-red-500">*</span>
                 </span>
                 <span className="text-[11px] text-muted-fg font-normal">
-                  (Bank account to deduct upon audit approval)
+                  (Bank account Finance will disburse from after audit approval)
                 </span>
               </Label>
 
@@ -417,7 +417,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
           </div>
 
           <p className="text-2xs sm:text-xs text-slate-500 leading-relaxed pt-1">
-            Endorsing forward will transmit this loan request to the Internal Audit team for final compliance review. Upon audit approval, the loan amount will be deducted from the chosen bank and credited to the borrower.
+            Endorsing forward will transmit this loan request to the Internal Audit team for final compliance review. After Audit approves, Finance disburses the loan: the amount is then deducted from the chosen bank and credited to the borrower.
           </p>
 
           <div className="pt-3 flex items-center justify-between gap-2.5 border-t border-stroke/20">

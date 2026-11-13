@@ -10,7 +10,9 @@ import {
   Receipt,
   Pencil,
   Plus,
+  HandCoins,
 } from 'lucide-react'
+import { getLoanStatusDisplay, isLoanDisbursed } from '@/components/dashboard/loanStatusStyle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { BackButton } from '@/components/common'
@@ -34,6 +36,7 @@ export interface LoanDetailPageViewProps {
   onOpenEdit: (loan: LoanItem) => void
   onOpenEndorse: (loan: LoanItem) => void
   onOpenAuditReview: (loan: LoanItem) => void
+  onOpenDisburse?: (loan: LoanItem) => void
   onMarkAudit: (loan: LoanItem, status: 'Verified' | 'Flagged') => void
 }
 
@@ -51,6 +54,7 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
   onOpenEdit,
   onOpenEndorse,
   onOpenAuditReview,
+  onOpenDisburse,
   onMarkAudit,
 }) => {
   const [detailSearchQuery, setDetailSearchQuery] = React.useState<string>('')
@@ -150,7 +154,7 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
     !isAuditor &&
     !isOwner &&
     loanType === 'Borrower' &&
-    (loan.status === 'Approved' || loan.status === 'Partially Paid') &&
+    isLoanDisbursed(loan.status) &&
     remainingBalance > 0.005
 
   const counterpartyName = loanType === 'Borrower' ? loan.lender || 'Pending Assignment' : loan.borrower
@@ -173,14 +177,10 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
               <span
                 className={cn(
                   'inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider',
-                  loan.status === 'Paid' || loan.status === 'Approved'
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : loan.status === 'Partially Paid'
-                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                    : 'bg-[#960C01]/10 text-[#960C01] border-[#960C01]/20'
+                  getLoanStatusDisplay(loan.status).badgeClass
                 )}
               >
-                {loan.status}
+                {getLoanStatusDisplay(loan.status).label}
               </span>
               {loan.auditStatus && loan.auditStatus !== 'Pending Audit' && (
                 <span
@@ -220,6 +220,17 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
               >
                 <Coins className="h-4 w-4" />
                 <span>Record Payment</span>
+              </Button>
+            )}
+
+            {!isAuditor && !isOwner && canApprove && loan.status === 'Approved' && onOpenDisburse && (
+              <Button
+                type="button"
+                onClick={() => onOpenDisburse(loan)}
+                className="h-10 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <HandCoins className="h-4 w-4" />
+                <span>Disburse Loan</span>
               </Button>
             )}
 

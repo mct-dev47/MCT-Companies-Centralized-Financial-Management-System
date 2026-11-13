@@ -460,6 +460,60 @@ def _run_postgresql_migrations(conn) -> list[str]:
             except Exception as exc:
                 logger.error("Migration 0058_compound_performance_indexes failed and was skipped: %s", exc)
 
+    # 25. 0059: bill payments record their funding source (bank / petty cash) and the expense that moves the money
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+
+    if not result_0059:
+        script_0059 = MIGRATIONS_DIR / "0059_bill_payment_funding.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0059.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+            applied.append("0059_bill_payment_funding")
+            logger.info("Migration 0059_bill_payment_funding applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0059_bill_payment_funding failed and was skipped: %s", exc)
+
+    # 26. 0060: tenant / lending money linked to a bank through sales (payments) and an expense (loan release)
+    result_0060 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0060_income_bank_links'")
+    ).first()
+
+    if not result_0060:
+        script_0060 = MIGRATIONS_DIR / "0060_income_bank_links.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0060.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0060_income_bank_links')"))
+            applied.append("0060_income_bank_links")
+            logger.info("Migration 0060_income_bank_links applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0060_income_bank_links failed and was skipped: %s", exc)
+
+    # 27. 0061: loans are disbursed by Finance after Audit approval (spec 0046)
+    result_0061 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0061_loan_disbursement_step'")
+    ).first()
+
+    if not result_0061:
+        script_0061 = MIGRATIONS_DIR / "0061_loan_disbursement_step.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0061.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0061_loan_disbursement_step')"))
+            applied.append("0061_loan_disbursement_step")
+            logger.info("Migration 0061_loan_disbursement_step applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0061_loan_disbursement_step failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1131,6 +1185,65 @@ def _run_sqlite_migrations(conn) -> list[str]:
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0058_compound_performance_indexes')"))
         applied.append("0058_compound_performance_indexes")
         logger.info("SQLite migration 0058_compound_performance_indexes applied successfully.")
+
+    # 24. 0059: bill payment funding source, bank account and linked expense
+    result_0059 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0059_bill_payment_funding'")
+    ).first()
+    if not result_0059:
+        exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bill_payments'")
+        ).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bill_payments)")).fetchall()}
+            for col_name, col_def in (
+                ("funding_source", "VARCHAR(20) NULL"),
+                ("bank_account_id", "VARCHAR(100) NULL"),
+                ("expense_id", "INTEGER NULL"),
+            ):
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE bill_payments ADD COLUMN {col_name} {col_def}"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0059_bill_payment_funding')"))
+        applied.append("0059_bill_payment_funding")
+
+    # 25. 0060: tenant / lending bank links
+    result_0060 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0060_income_bank_links'")
+    ).first()
+    if not result_0060:
+        for table, columns in (
+            ("tenant_leases", (("bank_account_id", "VARCHAR(100) NULL"),)),
+            ("tenant_lease_payments", (("sale_id", "INTEGER NULL"),)),
+            ("borrowers", (("bank_account_id", "VARCHAR(100) NULL"), ("release_expense_id", "INTEGER NULL"))),
+            ("lending_transactions", (("sale_id", "INTEGER NULL"),)),
+        ):
+            exists = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name=:t"), {"t": table}
+            ).first()
+            if not exists:
+                continue
+            cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+            for col_name, col_def in columns:
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0060_income_bank_links')"))
+        applied.append("0060_income_bank_links")
+
+    # 26. 0061: loan disbursement step
+    result_0061 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0061_loan_disbursement_step'")
+    ).first()
+    if not result_0061:
+        exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='loan'")).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loan)")).fetchall()}
+            for col_name, col_def in (("disbursed_by", "VARCHAR(100) NULL"), ("disbursed_at", "TIMESTAMP NULL")):
+                if col_name not in cols:
+                    conn.execute(text(f"ALTER TABLE loan ADD COLUMN {col_name} {col_def}"))
+            # Before this step, Audit approval moved the money, so every Approved loan is already disbursed
+            conn.execute(text("UPDATE loan SET status = 'Disbursed' WHERE status = 'Approved'"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0061_loan_disbursement_step')"))
+        applied.append("0061_loan_disbursement_step")
 
     conn.commit()
     return applied

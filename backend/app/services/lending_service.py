@@ -11,6 +11,8 @@ from app.core.cache import system_cache
 from app.models.loan import Loan, LoanRepayment
 from app.models.company import Company
 from app.models.lending import Borrower, LendingTransaction
+from app.core.company_features import FILCAP_COMPANY_ID
+from app.services import income_bank_links as links
 
 MANILA_TZ = timezone(timedelta(hours=8))
 
@@ -811,6 +813,8 @@ class LendingService:
                     "complianceStatus": compliance_status,
                     "missedCyclesCount": missed_cycles_count,
                     "notes": b.notes or "",
+                    "bankAccountId": getattr(b, "bank_account_id", None),
+                    "releaseExpenseId": getattr(b, "release_expense_id", None),
                     "audit_status": audit_st,
                     "auditStatus": audit_status_disp,
                     "audited_by": audited_by_val,
@@ -1207,6 +1211,7 @@ class LendingService:
         borrower_contact = kwargs.pop("borrower_contact", None)
         borrower_address = kwargs.pop("borrower_address", None)
         notes = kwargs.pop("notes", None)
+        bank_account_id = kwargs.pop("bank_account_id", None)
 
         if hasattr(borrower_name, "borrower_name"):
             data = borrower_name
@@ -1220,10 +1225,17 @@ class LendingService:
             borrower_contact = getattr(data, "borrower_contact", borrower_contact)
             borrower_address = getattr(data, "borrower_address", borrower_address)
             notes = getattr(data, "notes", notes)
+            bank_account_id = getattr(data, "bank_account_id", bank_account_id)
 
         p = quantize(principal_amount)
         if p < Decimal("1.00"):
             raise HTTPException(status_code=400, detail="Principal amount must be at least 1.00.")
+
+        # The loan is released from this bank (an Expense), so the bank must hold the principal
+        release_account = None
+        if (bank_account_id or "").strip():
+            release_account = links.validate_company_bank(db, FILCAP_COMPANY_ID, bank_account_id)
+            links.check_bank_balance(release_account, p)
 
         start = parse_date(date_borrowed_val) or date.today()
         freq = (frequency or "Daily").strip().capitalize()
@@ -1250,10 +1262,24 @@ class LendingService:
             due_date=due,
             status="Active",
             notes=(notes or "").strip(),
+            bank_account_id=release_account.id if release_account else None,
         )
         db.add(new_borrower)
+        if release_account is not None:
+            db.flush()
+            new_borrower.release_expense_id = links.save_release_expense(
+                db,
+                expense_id=None,
+                company_id=FILCAP_COMPANY_ID,
+                bank_account_id=release_account.id,
+                amount=p,
+                tx_date=start,
+                description=f"Loan Release: {new_borrower.borrower_name} - {ref_no}",
+                reference_no=ref_no,
+            )
         db.commit()
         db.refresh(new_borrower)
+        links.reconcile_expense(db, new_borrower.release_expense_id)
         system_cache.invalidate_tag("notifications")
 
         return LendingServiceResult({
@@ -1285,6 +1311,8 @@ class LendingService:
             "complianceStatus": "Compliant",
             "missedCyclesCount": 0,
             "notes": notes or "",
+            "bankAccountId": new_borrower.bank_account_id,
+            "releaseExpenseId": new_borrower.release_expense_id,
             "audit_status": "Pending Audit",
             "auditStatus": None,
             "audited_by": None,
@@ -1327,6 +1355,11 @@ class LendingService:
             db.refresh(loan)
             system_cache.invalidate_tag("notifications")
             return cls.get_borrower(db=db, borrower_id=borrower_id)
+
+        old_release = (quantize(b.principal_amount), b.date_borrowed, b.bank_account_id, b.borrower_name)
+        if "bank_account_id" in payload:
+            raw_bank = (payload["bank_account_id"] or "").strip()
+            b.bank_account_id = links.validate_company_bank(db, FILCAP_COMPANY_ID, raw_bank).id if raw_bank else None
 
         if "borrower_name" in payload and payload["borrower_name"] is not None:
             name_val = str(payload["borrower_name"]).strip()
@@ -1394,8 +1427,43 @@ class LendingService:
             b.date_borrowed = start
             b.due_date = due
 
+        # Keep the loan-release expense in step with the loan (amount, date, bank). Borrowers created before
+        # bank linking have no release expense, and adding a bank to them only sets where repayments go.
+        release_changed = bool(b.release_expense_id) and (
+            (quantize(b.principal_amount), b.date_borrowed, b.bank_account_id, b.borrower_name) != old_release
+        )
+        if release_changed:
+            try:
+                links.assert_expense_editable(db, b.release_expense_id)
+                if b.bank_account_id:
+                    account = links.validate_company_bank(db, FILCAP_COMPANY_ID, b.bank_account_id)
+                    already_out = old_release[0] if old_release[2] == b.bank_account_id else Decimal("0.00")
+                    links.check_bank_balance(account, b.principal_amount, exclude=already_out)
+                    links.save_release_expense(
+                        db,
+                        expense_id=b.release_expense_id,
+                        company_id=FILCAP_COMPANY_ID,
+                        bank_account_id=b.bank_account_id,
+                        amount=b.principal_amount,
+                        tx_date=b.date_borrowed,
+                        description=f"Loan Release: {b.borrower_name} - {b.borrower_ref_no}",
+                        reference_no=b.borrower_ref_no,
+                    )
+            except HTTPException:
+                db.rollback()
+                raise
+
         db.commit()
         db.refresh(b)
+        if release_changed:
+            if b.bank_account_id:
+                links.reconcile_expense(db, b.release_expense_id)
+            else:
+                # Bank removed: the release no longer comes out of any bank
+                links.remove_release_expense(db, b.release_expense_id)
+                b.release_expense_id = None
+                db.commit()
+                db.refresh(b)
 
         # Also update remote Supabase table if Supabase client is configured
         try:
@@ -1422,8 +1490,20 @@ class LendingService:
             b_query = b_query.with_for_update()
         b = b_query.first()
         if b:
-            db.delete(b)
-            db.commit()
+            # Nothing is removed if any linked sale/expense is already Verified
+            links.assert_expense_editable(db, b.release_expense_id)
+            txs = db.query(LendingTransaction).filter(LendingTransaction.borrower_id == borrower_id).all()
+            for t in txs:
+                links.assert_sale_editable(db, t.sale_id, "borrower's repayment")
+            sale_ids = [t.sale_id for t in txs if t.sale_id]
+            release_expense_id = b.release_expense_id
+            for sale_id in sale_ids:
+                links.remove_income_sale(db, sale_id)
+            links.remove_release_expense(db, release_expense_id)
+            b = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
+            if b is not None:
+                db.delete(b)
+                db.commit()
             system_cache.invalidate_tag("notifications")
             return {"success": True, "message": "Borrower deleted successfully."}
 
@@ -1709,9 +1789,26 @@ class LendingService:
             elif is_late:
                 b.status = "Overdue"
 
+            # Money received on the loan becomes a Sale on the borrower's bank (spec 0045)
+            if b.bank_account_id and (new_tx.transaction_type or "Repayment") == "Repayment":
+                db.flush()
+                new_tx.sale_id = links.save_income_sale(
+                    db,
+                    sale_id=None,
+                    company_id=FILCAP_COMPANY_ID,
+                    bank_account_id=b.bank_account_id,
+                    amount=quantize(payment_amount) + quantize(penalty_portion or 0),
+                    tx_date=pay_date,
+                    particulars=f"Loan Repayment: {b.borrower_name} - {b.borrower_ref_no} - {tx_ref}",
+                    category=links.REPAYMENT_CATEGORY,
+                    payment_method=new_tx.payment_method,
+                    reference_no=ref_clean,
+                )
+
             db.commit()
             db.refresh(new_tx)
             db.refresh(b)
+            links.reconcile_sale(db, new_tx.sale_id)
             system_cache.invalidate_tag("notifications")
 
             return LendingServiceResult({
@@ -1875,6 +1972,7 @@ class LendingService:
         borrower = db.query(Borrower).filter(Borrower.borrower_id == tx.borrower_id).first()
         if not borrower:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+        links.assert_sale_editable(db, tx.sale_id, "repayment")
 
         # Update transaction fields
         if "payment_date" in payload and payload["payment_date"]:
@@ -1958,8 +2056,31 @@ class LendingService:
             is_settled = (paid_by_cycle.get(cycle_key, Decimal("0.00")) >= installment_target) or (remaining_balance <= Decimal("0.00"))
             t.status = "Completed" if is_settled else "Partially Paid"
 
+        # Keep the linked sale equal to the payment (the sale keeps its own bank)
+        sale_bank = borrower.bank_account_id
+        if tx.sale_id:
+            from app.models.finance import Sale
+            linked_sale = db.query(Sale).filter(Sale.sales_id == tx.sale_id).first()
+            if linked_sale is not None and linked_sale.bank_account_id:
+                sale_bank = linked_sale.bank_account_id
+        if sale_bank and (tx.transaction_type or "Repayment") == "Repayment":
+            tx.sale_id = links.save_income_sale(
+                db,
+                sale_id=tx.sale_id,
+                company_id=FILCAP_COMPANY_ID,
+                bank_account_id=sale_bank,
+                amount=quantize(tx.amount) + quantize(tx.penalty_portion or 0),
+                tx_date=tx.payment_date,
+                particulars=f"Loan Repayment: {borrower.borrower_name} - {borrower.borrower_ref_no} - {tx.transaction_ref_no or tx.transaction_id}",
+                category=links.REPAYMENT_CATEGORY,
+                payment_method=tx.payment_method,
+                reference_no=None if tx.reference_no in (None, "-") else tx.reference_no,
+            )
+        updated_sale_id = tx.sale_id
+
         db.commit()
         db.expire_all()
+        links.reconcile_sale(db, updated_sale_id)
         system_cache.invalidate_tag("notifications")
         return cls.get_borrower(db=db, borrower_id=borrower.borrower_id)
 
@@ -1990,6 +2111,12 @@ class LendingService:
         borrower = b_query.first()
         if not borrower:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Borrower not found.")
+
+        # Take the repayment's money back out of the bank first (blocked once the sale is Verified)
+        if tx.sale_id:
+            links.remove_income_sale(db, tx.sale_id)
+            tx = db.query(LendingTransaction).filter(LendingTransaction.transaction_id == transaction_id).first()
+            borrower = db.query(Borrower).filter(Borrower.borrower_id == borrower_id).first()
 
         db.delete(tx)
         db.flush()

@@ -1,6 +1,7 @@
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
+import { getLoanStatusDisplay, isLoanDisbursed } from '@/components/dashboard/loanStatusStyle'
 import {
   Landmark,
   Building2,
@@ -187,6 +188,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const [auditReviewLoanItem, setAuditReviewLoanItem] = React.useState<LoanItem | null>(null)
   const [deleteConfirmLoan, setDeleteConfirmLoan] = React.useState<LoanItem | null>(null)
   const [isDeleting, setIsDeleting] = React.useState(false)
+
+  // Finance disburses an Audit-approved loan (spec 0046)
+  const [disburseLoanItem, setDisburseLoanItem] = React.useState<LoanItem | null>(null)
+  const [isDisbursing, setIsDisbursing] = React.useState(false)
 
   // Payment modal state for borrower loans (supervisor)
   const [paymentLoan, setPaymentLoan] = React.useState<LoanItem | null>(null)
@@ -424,12 +429,12 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   // Status options tailored by user role
   const statusOptions = React.useMemo(() => {
     if (isAuditor) {
-      return ['All', 'Pending Audit Approval', 'Approved', 'Paid', 'Partially Paid', 'Disapproved by Audit']
+      return ['All', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Disapproved by Audit']
     }
     if (canApprove) {
-      return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Paid', 'Partially Paid', 'Rejected by Finance']
+      return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Rejected by Finance']
     }
-    return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Paid', 'Partially Paid']
+    return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid']
   }, [isAuditor, canApprove])
 
   // Client-side filtering and sorting
@@ -542,9 +547,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
         l.status === 'Pending Finance Endorsement' ||
         l.status === 'Pending Audit Approval'
     ).length
-    const approved = filteredLoans.filter(
-      (l) => l.status === 'Approved' || l.status === 'Paid' || l.status === 'Partially Paid'
-    ).length
+    const approved = filteredLoans.filter((l) => l.status === 'Approved' || isLoanDisbursed(l.status)).length
     return { totalLoans: total, pendingCount: pending, approvedCount: approved }
   }, [filteredLoans])
 
@@ -642,6 +645,20 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     setViewLoanItem(loan)
   }
 
+  const handleConfirmDisburse = async () => {
+    if (!disburseLoanItem) return
+    try {
+      setIsDisbursing(true)
+      const updated = await loanService.disburseLoan(disburseLoanItem.id)
+      handleLoanApproved(updated)
+      setDisburseLoanItem(null)
+    } catch (err: any) {
+      notifyError(err, 'Failed to disburse loan.')
+    } finally {
+      setIsDisbursing(false)
+    }
+  }
+
   const handleConfirmDelete = async () => {
     if (!deleteConfirmLoan) return
     try {
@@ -709,6 +726,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           onOpenEdit={(target) => setEditLoan(target)}
           onOpenEndorse={(target) => setApproveLoanItem(target)}
           onOpenAuditReview={(target) => setAuditReviewLoanItem(target)}
+          onOpenDisburse={(target) => setDisburseLoanItem(target)}
           onMarkAudit={(target, status) => handleMarkLoanAudit(target, status)}
         />
       ) : (
@@ -1186,11 +1204,9 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 </TableRow>
               ) : (
                 paginatedLoans.map((loan) => {
-                  const isPendingFinance =
-                    loan.status === 'Pending Finance Endorsement' || loan.status === 'Pending Approval'
-                  const isPendingAudit = loan.status === 'Pending Audit Approval'
                   const isRejectedFinance = loan.status === 'Rejected by Finance'
                   const isDisapprovedAudit = loan.status === 'Disapproved by Audit'
+                  const statusDisplay = getLoanStatusDisplay(loan.status)
 
                   return (
                     <TableRow
@@ -1199,15 +1215,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                       onClick={() => handleRowClick(loan)}
                       className={cn(
                         'border-b transition-colors cursor-pointer',
-                        isPendingFinance && 'bg-amber-50/70 hover:bg-amber-100/60 border-amber-200/50',
-                        isPendingAudit && 'bg-indigo-50/60 hover:bg-indigo-100/50 border-indigo-200/50',
-                        (isRejectedFinance || isDisapprovedAudit) &&
-                          'bg-rose-50/50 hover:bg-rose-100/50 border-rose-200/50',
-                        !isPendingFinance &&
-                          !isPendingAudit &&
-                          !isRejectedFinance &&
-                          !isDisapprovedAudit &&
-                          'border-slate-100 hover:bg-slate-50/80',
+                        statusDisplay.rowClass || 'border-slate-100 hover:bg-slate-50/80',
                         highlightedLoanId === loan.id &&
                           'bg-amber-100/90 ring-2 ring-amber-400 font-semibold'
                       )}
@@ -1298,48 +1306,30 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 8. Status */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                        {isPendingFinance ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Pending Finance</span>
-                          </span>
-                        ) : isPendingAudit ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-indigo-600 shrink-0" />
-                            <span>Pending Audit</span>
-                          </span>
-                        ) : isRejectedFinance ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 text-[11px] font-semibold shadow-2xs"
-                            title={loan.financeRemark || 'Rejected by finance'}
-                          >
-                            <X className="w-3 h-3 text-rose-600 shrink-0" />
-                            <span>Rejected</span>
-                          </span>
-                        ) : isDisapprovedAudit ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200/80 text-[11px] font-semibold shadow-2xs"
-                            title={loan.auditRemark || 'Disapproved by audit'}
-                          >
-                            <X className="w-3 h-3 text-rose-600 shrink-0" />
-                            <span>Disapproved</span>
-                          </span>
-                        ) : loan.status === 'Paid' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span>Paid</span>
-                          </span>
-                        ) : loan.status === 'Partially Paid' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Clock className="w-3 h-3 text-blue-600 shrink-0" />
-                            <span>Partially Paid</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold shadow-2xs">
-                            <Check className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span>Approved</span>
-                          </span>
-                        )}
+                        <span
+                          className={cn(
+                            'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold shadow-2xs',
+                            statusDisplay.badgeClass
+                          )}
+                          title={
+                            isRejectedFinance
+                              ? loan.financeRemark || 'Rejected by finance'
+                              : isDisapprovedAudit
+                              ? loan.auditRemark || 'Disapproved by audit'
+                              : loan.status === 'Approved'
+                              ? 'Approved by Audit. Waiting for Finance to disburse the money.'
+                              : loan.status
+                          }
+                        >
+                          {statusDisplay.tone === 'red' ? (
+                            <X className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
+                          ) : statusDisplay.tone === 'green' ? (
+                            <Check className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
+                          ) : (
+                            <Clock className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
+                          )}
+                          <span>{statusDisplay.label}</span>
+                        </span>
                       </TableCell>
 
                       {/* 9. Actions (3 Dots Menu) */}
@@ -1471,6 +1461,41 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
         )}
       </ConfirmModal>
 
+      {/* Disburse Confirmation Modal (spec 0046) */}
+      <ConfirmModal
+        open={Boolean(disburseLoanItem)}
+        onOpenChange={(open) => !open && setDisburseLoanItem(null)}
+        title="Disburse Loan"
+        description="Release the loan money now? The amount is taken from the funding bank and deposited to the borrower. This cannot be undone."
+        confirmLabel="Disburse"
+        loadingLabel="Disbursing…"
+        variant="primary"
+        actionType="submit"
+        isLoading={isDisbursing}
+        onConfirm={handleConfirmDisburse}
+      >
+        {disburseLoanItem && (
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1.5 my-2">
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Ref No:</span>
+              <span className="font-mono font-medium text-focus">{disburseLoanItem.refNo}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">From (Lender):</span>
+              <span className="font-medium text-focus">{disburseLoanItem.lender}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">To (Borrower):</span>
+              <span className="font-medium text-focus">{disburseLoanItem.borrower}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-fg">Amount:</span>
+              <span className="font-bold text-emerald-700">{formatPHP(disburseLoanItem.amount)}</span>
+            </div>
+          </div>
+        )}
+      </ConfirmModal>
+
       {/* Record / Update Payment Modal */}
       <RecordPaymentModal
         open={isPaymentModalOpen}
@@ -1564,6 +1589,26 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               </>
             ) : (
               <>
+                {canApprove && activeMenuLoan.status === 'Approved' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        const target = activeMenuLoan
+                        setOpenMenuLoanId(null)
+                        setMenuPosition(null)
+                        setActiveMenuLoan(null)
+                        setDisburseLoanItem(target)
+                      }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                    >
+                      <HandCoins className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Disburse</span>
+                    </button>
+                    <div className="h-px bg-slate-100 my-1" />
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={(e) => {

@@ -38,6 +38,8 @@ import {
 
   Landmark,
 
+  Wallet,
+
   Loader2,
 
   Plus,
@@ -101,6 +103,10 @@ import { cn } from '@/lib/utils'
 import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction, preferSoleOwnedBanks } from '@/services/bankService'
 
 import { websocketService, type ConnectionStatus } from '@/services/websocketService'
+
+import { pettyCashService, type PettyCashSummary } from '@/services/pettyCashService'
+
+import { Link } from 'react-router-dom'
 
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
@@ -375,6 +381,43 @@ export const BankManagementPage: React.FC = () => {
       unsubs.forEach((unsub) => unsub())
     }
   }, [fetchAccounts])
+
+  // Each company's petty cash wallet, shown beside its banks. The balance is worked out on the server
+  // from approved top-ups minus petty-cash expenses, so it always matches the Petty Cash page.
+  // Petty cash is not a bank: it is never added to bank totals or listed in bank transactions.
+  const [pettyCashWallets, setPettyCashWallets] = React.useState<PettyCashSummary[]>([])
+
+  const fetchPettyCashWallets = React.useCallback(async (forceRefresh = false) => {
+    try {
+      if (forceRefresh) pettyCashService.invalidateCache({ notifyBell: false })
+      const summaries = await pettyCashService.getAllSummaries()
+      setPettyCashWallets(summaries || [])
+    } catch (err) {
+      console.warn('Petty cash wallets fetch warning:', err)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void fetchPettyCashWallets()
+    const refresh = () => void fetchPettyCashWallets(true)
+    const unsubs = [
+      websocketService.subscribe('PETTY_CASH_UPDATED', refresh),
+      websocketService.subscribe('EXPENSE_CREATED', refresh),
+      websocketService.subscribe('EXPENSE_UPDATED', refresh),
+      websocketService.subscribe('EXPENSE_DELETED', refresh),
+      websocketService.subscribe('AUDIT_UPDATED', refresh),
+    ]
+    return () => {
+      unsubs.forEach((unsub) => unsub())
+    }
+  }, [fetchPettyCashWallets])
+
+  const visiblePettyCashWallets = React.useMemo(() => {
+    const scope = isCompanyScoped && assignedCompany ? assignedCompany : selectedCompany
+    if (!scope || scope === 'All Companies') return pettyCashWallets
+    const target = scope.trim().toLowerCase()
+    return pettyCashWallets.filter((w) => (w.companyName || '').trim().toLowerCase() === target)
+  }, [pettyCashWallets, isCompanyScoped, assignedCompany, selectedCompany])
 
   // Active selected bank account
 
@@ -3101,6 +3144,50 @@ export const BankManagementPage: React.FC = () => {
 
         </div>
 
+      )}
+
+      {/* Petty Cash wallets: one per company, kept separate from bank balances and bank transactions */}
+      {visiblePettyCashWallets.length > 0 && (
+        <Card className="rounded-[24px] border border-stroke/20 bg-white shadow-xs overflow-hidden">
+          <div className="px-5 sm:px-6 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-amber-600" />
+              <h3 className="font-bold text-sm sm:text-base text-slate-900 tracking-tight">Petty Cash</h3>
+              <span className="text-[11px] text-slate-500">
+                Expenses paid with petty cash are deducted here, not from any bank.
+              </span>
+            </div>
+            <Link to="/petty-cash" className="text-xs font-semibold text-[#960C01] hover:underline">
+              Open Petty Cash
+            </Link>
+          </div>
+          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {visiblePettyCashWallets.map((wallet) => (
+              <div
+                key={wallet.companyId}
+                className={cn(
+                  'rounded-2xl border p-4 flex flex-col gap-1',
+                  wallet.isLow ? 'border-red-200 bg-red-50/60' : 'border-amber-200 bg-amber-50/50'
+                )}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-700 truncate">{wallet.companyName}</span>
+                  {wallet.isLow && (
+                    <span className="text-[10px] font-bold text-red-700 bg-red-100 px-2 py-0.5 rounded-full shrink-0">
+                      Low balance
+                    </span>
+                  )}
+                </div>
+                <span className={cn('text-xl font-bold', wallet.balance < 0 ? 'text-red-700' : 'text-slate-900')}>
+                  {showBalance ? formatPHP(wallet.balance) : '••••••'}
+                </span>
+                <span className="text-[11px] text-slate-500">
+                  Topped up {formatPHP(wallet.totalTopUps)} • Spent {formatPHP(wallet.totalSpent)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
 
       {/* 3. Bottom Section: Bank Banner Bar & Transactions Table */}

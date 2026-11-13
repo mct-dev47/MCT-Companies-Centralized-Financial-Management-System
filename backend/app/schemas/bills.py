@@ -86,12 +86,28 @@ class BillPaymentCreate(StrictBaseModel):
     payment_method: str = Field(..., min_length=1, max_length=50)
     reference_no: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = Field(None, max_length=1000)
+    # Funding source: a company bank account or the company's petty cash. The amount is taken from it.
+    funding_source: Optional[Literal["bank", "petty_cash"]] = None
+    bank_account_id: Optional[str] = Field(None, max_length=100)
+
+    @model_validator(mode="after")
+    def _check_funding(self):
+        if self.funding_source == "bank" and not (self.bank_account_id or "").strip():
+            raise ValueError("Please choose the bank account that pays this bill.")
+        if self.funding_source != "bank":
+            self.bank_account_id = None
+        return self
 
 
 class BillPaymentOut(BillPaymentCreate):
     bill_payment_id: int
     bill_id: int
+    expense_id: Optional[int] = None
     created_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def _check_funding(self):  # stored rows are already valid; don't re-validate on output
+        return self
 
     @property
     def payment_id(self) -> int:
