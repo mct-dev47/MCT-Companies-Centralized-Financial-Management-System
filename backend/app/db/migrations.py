@@ -538,6 +538,24 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0062_petty_cash_topup_fields failed and was skipped: %s", exc)
 
+    # 29. 0063: company_notification_settings table (spec 0042)
+    result_0063 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0063_company_notification_settings'")
+    ).first()
+
+    if not result_0063:
+        script_0063 = MIGRATIONS_DIR / "0063_company_notification_settings.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0063.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0063_company_notification_settings')"))
+            applied.append("0063_company_notification_settings")
+            logger.info("Migration 0063_company_notification_settings applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0063_company_notification_settings failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1289,6 +1307,18 @@ def _run_sqlite_migrations(conn) -> list[str]:
                     conn.execute(text(f"ALTER TABLE petty_cash_topups ADD COLUMN {col_name} {col_def}"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0062_petty_cash_topup_fields')"))
         applied.append("0062_petty_cash_topup_fields")
+
+    # 28. 0063: company_notification_settings table (spec 0042)
+    result_0063 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0063_company_notification_settings'")
+    ).first()
+    if not result_0063:
+        script_0063 = MIGRATIONS_DIR / "0063_company_notification_settings.sqlite.sql"
+        if script_0063.exists():
+            for stmt in _sql_statements(script_0063.read_text(encoding="utf-8")):
+                conn.execute(text(stmt))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0063_company_notification_settings')"))
+        applied.append("0063_company_notification_settings")
 
     conn.commit()
     return applied

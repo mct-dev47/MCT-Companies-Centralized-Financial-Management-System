@@ -79,6 +79,15 @@ export interface UpdateUserPayload {
   status?: 'Active' | 'Inactive'
 }
 
+export interface CompanyNotificationSettings {
+  id?: number
+  companyId?: number
+  transactionAlerts: boolean
+  loanReminders: boolean
+  dailySummary: boolean
+  auditAlerts: boolean
+}
+
 
 
 
@@ -229,6 +238,43 @@ function resolveCompanyId(nameOrId: string | number, companies: Company[]): numb
   }
 
   return null
+}
+
+function mapNotificationSettings(value: unknown): CompanyNotificationSettings {
+  const raw = (value || {}) as Record<string, unknown>
+  return {
+    id: typeof raw.id === 'number' ? raw.id : undefined,
+    companyId:
+      typeof raw.companyId === 'number'
+        ? raw.companyId
+        : typeof raw.company_id === 'number'
+        ? raw.company_id
+        : undefined,
+    transactionAlerts:
+      raw.transactionAlerts !== undefined
+        ? Boolean(raw.transactionAlerts)
+        : raw.transaction_alerts !== undefined
+        ? Boolean(raw.transaction_alerts)
+        : true,
+    loanReminders:
+      raw.loanReminders !== undefined
+        ? Boolean(raw.loanReminders)
+        : raw.loan_reminders !== undefined
+        ? Boolean(raw.loan_reminders)
+        : true,
+    dailySummary:
+      raw.dailySummary !== undefined
+        ? Boolean(raw.dailySummary)
+        : raw.daily_summary !== undefined
+        ? Boolean(raw.daily_summary)
+        : false,
+    auditAlerts:
+      raw.auditAlerts !== undefined
+        ? Boolean(raw.auditAlerts)
+        : raw.audit_alerts !== undefined
+        ? Boolean(raw.audit_alerts)
+        : true,
+  }
 }
 
 export const employeeService = {
@@ -534,6 +580,30 @@ export const employeeService = {
     if (!response.ok) {
       throw new Error(await getApiError(response))
     }
+  },
+
+  async getCompanyNotificationSettings(id: string | number): Promise<CompanyNotificationSettings> {
+    const response = await fetch(`/api/v1/companies/${id}/notification-settings`, {
+      headers: getAuthHeaders(),
+    })
+    return await mapApiResponse(response, mapNotificationSettings)
+  },
+
+  async updateCompanyNotificationSettings(
+    id: string | number,
+    payload: Partial<CompanyNotificationSettings>
+  ): Promise<CompanyNotificationSettings> {
+    const response = await fetch(`/api/v1/companies/${id}/notification-settings`, {
+      method: 'PUT',
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transaction_alerts: payload.transactionAlerts,
+        loan_reminders: payload.loanReminders,
+        daily_summary: payload.dailySummary,
+        audit_alerts: payload.auditAlerts,
+      }),
+    })
+    return await mapApiResponse(response, mapNotificationSettings)
   },
 
   /**

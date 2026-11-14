@@ -61,6 +61,8 @@ class AuditLog(Base):
             kwargs["details"] = json.dumps(kwargs["details"])
         if ts is not None and kwargs.get("created_at") is None:
             kwargs["created_at"] = ts
+        if mod is not None and kwargs.get("action_category") is None:
+            kwargs["action_category"] = str(mod).upper()
         super().__init__(**kwargs)
         if uname is not None:
             self.user_name = uname

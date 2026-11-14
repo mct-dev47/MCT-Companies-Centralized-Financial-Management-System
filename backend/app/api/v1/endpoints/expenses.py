@@ -516,6 +516,60 @@ def _find_expense_by_client_ref(db: Session, client_ref: Optional[str]) -> Optio
     return find_by_client_ref_orm(db, Expense, "expense_id", client_ref)
 
 
+LARGE_EXPENSE_THRESHOLD = Decimal("50000.00")
+
+
+def _enqueue_large_expense_alert_if_enabled(
+    db: Session,
+    *,
+    company_id: int,
+    company_name: str,
+    expense_id: int,
+    amount: Decimal,
+    description: str,
+    reference_no: Optional[str],
+) -> None:
+    if amount < LARGE_EXPENSE_THRESHOLD:
+        return
+    try:
+        from app.services.notification_dispatcher import enqueue_notification_event
+        from app.services.notification_service import NotificationService, NotificationType
+
+        svc = NotificationService(db)
+        if not svc._is_notification_enabled_for_company(company_id, NotificationType.EXPENSE_LARGE_TRANSACTION):
+            return
+
+        ref_str = f" (Ref: {reference_no})" if reference_no else ""
+        with db.begin_nested():
+            enqueue_notification_event(
+                db=db,
+                event_type=NotificationType.EXPENSE_LARGE_TRANSACTION,
+                company_id=company_id,
+                target_roles=["supervisor", "finance"],
+                payload={
+                    "ref_type": "expense",
+                    "ref_id": expense_id,
+                    "amount": float(amount),
+                    "title": f"Large Transaction Alert: {company_name}",
+                    "message": (
+                        f"An expense of ₱{amount:,.2f} was recorded for {company_name}{ref_str} "
+                        f"— {description}."
+                    ),
+                    "extra_data": {
+                        "amount": float(amount),
+                        "company_id": company_id,
+                        "company_name": company_name,
+                        "reference_no": reference_no,
+                    },
+                },
+                idempotency_key=f"{NotificationType.EXPENSE_LARGE_TRANSACTION}:{company_id}:expense:{expense_id}",
+            )
+        db.commit()
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Large expense alert enqueue skipped for expense %s: %s", expense_id, exc)
+
+
 @router.post("", response_model=ExpenseOut, status_code=status.HTTP_201_CREATED, summary="Record a new expense")
 def create_expense(
     expense_in: ExpenseCreate,
@@ -668,6 +722,15 @@ def create_expense(
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=sb_expense_id)
         system_cache.invalidate_tag("petty_cash")
+        _enqueue_large_expense_alert_if_enabled(
+            db,
+            company_id=target_company_id,
+            company_name=target_company_name,
+            expense_id=sb_expense_id,
+            amount=expense_in.amount,
+            description=parts,
+            reference_no=ref,
+        )
 
         # Particulars library + audit log don't change the response: do them after it is sent
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
@@ -762,6 +825,15 @@ def create_expense(
         # Debit the bank only for the PAID part (matches the Transactions ledger)
         reconcile_expense_bank(db, expense_id=expense.expense_id)
         system_cache.invalidate_tag("petty_cash")
+        _enqueue_large_expense_alert_if_enabled(
+            db,
+            company_id=target_company.company_id,
+            company_name=target_company.company_name,
+            expense_id=expense.expense_id,
+            amount=expense.amount,
+            description=parts,
+            reference_no=ref,
+        )
 
         # Auto-save particulars to company library
         try:

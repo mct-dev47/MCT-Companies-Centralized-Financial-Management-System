@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, computed_field, model_validator
 
 
 class NotificationOut(BaseModel):
@@ -67,3 +67,68 @@ class NotificationOutboxOut(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CompanyNotificationSettingsUpdate(BaseModel):
+    transaction_alerts: Optional[bool] = None
+    loan_reminders: Optional[bool] = None
+    daily_summary: Optional[bool] = None
+    audit_alerts: Optional[bool] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_camel_case_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            normalized = dict(data)
+            camel_map = {
+                "transactionAlerts": "transaction_alerts",
+                "loanReminders": "loan_reminders",
+                "dailySummary": "daily_summary",
+                "auditAlerts": "audit_alerts",
+            }
+            for camel_key, snake_key in camel_map.items():
+                if camel_key in normalized and snake_key not in normalized:
+                    normalized[snake_key] = normalized.pop(camel_key)
+            return normalized
+        return data
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class CompanyNotificationSettingsOut(BaseModel):
+    id: int
+    company_id: int
+    transaction_alerts: bool = True
+    loan_reminders: bool = True
+    daily_summary: bool = False
+    audit_alerts: bool = True
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @computed_field
+    @property
+    def companyId(self) -> int:
+        return self.company_id
+
+    @computed_field
+    @property
+    def transactionAlerts(self) -> bool:
+        return self.transaction_alerts
+
+    @computed_field
+    @property
+    def loanReminders(self) -> bool:
+        return self.loan_reminders
+
+    @computed_field
+    @property
+    def dailySummary(self) -> bool:
+        return self.daily_summary
+
+    @computed_field
+    @property
+    def auditAlerts(self) -> bool:
+        return self.audit_alerts
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+

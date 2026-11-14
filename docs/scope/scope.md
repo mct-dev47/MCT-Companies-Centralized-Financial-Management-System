@@ -26,6 +26,7 @@
 | Secure Rate Limiting for Login, OTP Resend, and API Requests | in-progress | [0041](../specs/0041-secure-rate-limiting/index.md) |
 | Transactions Daily Summary and Remarks Refinements | in-progress | [0040](../specs/0040-transactions-daily-summary-and-remarks-refinements.md) |
 | Daily Remarks for Sales and Expenses | in-progress | [0041](../specs/0041-daily-remarks.md) |
+| Company Notification Alert Settings and Service Integration | in-progress | [0042](../specs/0042-notification-alert-settings.md) |
 
 ---
 
@@ -382,3 +383,21 @@
 - [x] Verify it: /check verify secure-rate-limiting
 - [x] Test it: /test secure-rate-limiting
 - [x] Review it: /check review secure-rate-limiting
+
+### Company Notification Alert Settings and Service Integration
+**Status**: in-progress
+**Spec**: [0042](../specs/0042-notification-alert-settings.md)
+**Intent**: Connect admin Settings notification alert toggles to a dedicated company notification settings table, serve them from in memory cache, enqueue large transaction alerts asynchronously, filter notification feeds per company, and enable admin system notifications in the navigation bar.
+**Done when**: Admin Settings loads and saves alert preferences per company via REST endpoints, Discard resets toggles, expense creation enqueues alerts asynchronously for expenses over ₱50,000 without blocking saves, loan reminders suppress upcoming due notices when disabled, notification feeds scope to the entered company, in memory cache prevents database burnout, and TopHeader displays the notification bell for admins.
+
+- [x] Design it (spec): [0042](../specs/0042-notification-alert-settings.md)
+- [x] Build it: /develop notification-alert-settings (code in `backend/app/`, `frontend/src/`)
+  - [x] Milestone 1: Database model `CompanyNotificationSettings`, migration, and Pydantic schemas (AC-1, AC-5)
+  - [x] Milestone 2: Backend REST endpoints with in memory caching and cache invalidation (AC-1, AC-3, AC-5, AC-10, AC-11)
+  - [x] Milestone 3: Frontend Settings page integration with two phase save and discard (AC-1, AC-2, AC-3, AC-4)
+  - [x] Milestone 4: Asynchronous large transaction alert dispatch and loan reminder suppression (AC-6, AC-7, AC-11)
+  - [x] Milestone 5: Notification bell scoping per entered company and admin system notifications in TopHeader (AC-8, AC-9)
+- [x] Verify it: /check verify notification-alert-settings
+- [ ] Test it: /test notification-alert-settings
+- [x] Review it: /check review notification-alert-settings
+
