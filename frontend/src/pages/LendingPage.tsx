@@ -26,12 +26,19 @@ import {
   Eye,
   Lock,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { BackButton, ConfirmModal } from '@/components/common'
 import { SharedPaymentModal, type EditPaymentInitialData } from '@/components/common/SharedPaymentModal'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -50,9 +57,9 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
@@ -235,6 +242,7 @@ export const LendingPage: React.FC = () => {
   const [deleteModalError, setDeleteModalError] = React.useState<string | null>(null)
   const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isCreatingBorrower, setIsCreatingBorrower] = React.useState(false)
+  const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isUpdatingBorrower, setIsUpdatingBorrower] = React.useState(false)
   const [isDeletingBorrower, setIsDeletingBorrower] = React.useState(false)
 
@@ -987,7 +995,7 @@ export const LendingPage: React.FC = () => {
       : 'Months'
 
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <BackButton onClick={() => setViewMode('list')} label="Back to Borrowers" />
@@ -1529,7 +1537,7 @@ export const LendingPage: React.FC = () => {
   const displayedCompanyTitle = COMPANY_NAME
 
   return (
-    <div className="space-y-6 pb-12 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-12 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {viewMode === 'details' && activeFacility ? (
         renderDetailsPage()
       ) : (
@@ -1539,11 +1547,19 @@ export const LendingPage: React.FC = () => {
             {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>
-                <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-                  Lending
-                </h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                    Lending
+                  </h1>
+                  <span
+                    className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                    title="Loan accounts, principal balances, interest terms, and payment schedules"
+                  >
+                    <HelpCircle className="h-5 w-5" />
+                  </span>
+                </div>
                 <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-                  Here's the summary of lending facilities in {displayedCompanyTitle}
+                  Credit facilities, loan portfolios, and repayment schedules for {displayedCompanyTitle}
                 </p>
               </div>
 
@@ -1729,10 +1745,10 @@ export const LendingPage: React.FC = () => {
             </div>
 
             {/* Date Range Picker */}
-            <DateRangePicker
+            <TransactionDateRangeControl
               value={dateRange}
               onChange={(newRange) => setDateRange(newRange)}
-              hidePresets
+              className="shrink-0"
             />
           </div>
         </div>
@@ -1744,7 +1760,7 @@ export const LendingPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Table with Requirement 3 columns and Action Buttons */}
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[1020px]">
             <colgroup>
               <col style={{ width: '22%' }} />
@@ -1758,28 +1774,28 @@ export const LendingPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="w-[22%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[22%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   BORROWER'S NAME
                 </TableHead>
-                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[12%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   LOAN AMOUNT
                 </TableHead>
-                <TableHead className="w-[16%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[16%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className="w-[12%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[12%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[14%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   AUDIT TAG
                 </TableHead>
-                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[6%] px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1788,17 +1804,22 @@ export const LendingPage: React.FC = () => {
               {isLoading ? (
                 <TableSkeleton rows={5} columns={8} />
               ) : paginatedFacilities.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-44 text-center py-8">
-                    <div className="flex flex-col items-center justify-center text-muted-fg">
-                      <CreditCard className="h-8 w-8 text-muted-fg/40 mb-2" />
-                      <p className="text-sm font-semibold">No borrowers found</p>
-                      <p className="text-xs text-muted-fg/70 mt-0.5">
-                        Try adjusting your search, status, or date range filter, or click &quot;New Borrower&quot;.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={8}
+                  title="No borrowers found"
+                  description="Try adjusting your search, status, or date range filter, or click 'New Borrower'."
+                  action={
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="rounded-[10px]"
+                    >
+                      New Borrower
+                    </Button>
+                  }
+                />
               ) : (
                 paginatedFacilities.map((facility) => {
                   const statusColorText = {
@@ -1856,9 +1877,7 @@ export const LendingPage: React.FC = () => {
 
                       {/* 6. Status */}
                       <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusColorText)}>
-                          {facility.status}
-                        </span>
+                        <StatusPill status={facility.status} />
                       </TableCell>
 
                       {/* 7. Audit Tag (Visible to all authenticated roles) */}
@@ -1943,45 +1962,18 @@ export const LendingPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* 6. Pagination Footer (Matching Sales table reference: Showing X of Y and Page 1 out of 10) */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {/* Left: Record summary */}
-          <span className="font-medium text-focus/80">
-            {filteredFacilities.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredFacilities.length} records`}
-          </span>
-
-          {/* Right: Page Indicator & Navigation */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+        {/* 6. Pagination Footer */}
+        <div className="pt-4 mt-2 border-t border-slate-100">
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredFacilities.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            itemLabel="borrowers"
+          />
         </div>
       </Card>
       </>
@@ -2133,7 +2125,7 @@ export const LendingPage: React.FC = () => {
 
       {/* 4. Modal: New Lending Facility (Requirement 2) */}
       <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto bg-white rounded-[16px] p-6 border border-stroke/40 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
@@ -2151,6 +2143,23 @@ export const LendingPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleCreateFacility} className="space-y-4 mt-3">
+            {isReviewingAdd ? (
+              <ModalReviewStep
+                title="Review Credit Agreement"
+                subtitle="Please verify the borrower and loan parameters before creating."
+                errorMessage={addModalError}
+                items={[
+                  { label: 'Borrower Name', value: formData.borrowerName.trim(), highlight: true },
+                  { label: 'Facility Type', value: formData.loanType },
+                  { label: 'Principal Loan Amount', value: formatPHP(formData.loanAmount), isCurrency: true },
+                  { label: 'Payment Frequency', value: formData.paymentFrequency },
+                  { label: 'Total Repayable', value: formatPHP(formData.totalLoanAmount), isCurrency: true },
+                  { label: 'Start / Contract Date', value: formData.dateBorrowed },
+                  { label: 'Maturity / Due Date', value: formData.dueDate },
+                ]}
+              />
+            ) : (
+              <>
             {/* Inline Error Banner */}
             {addModalError && (
               <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/20 rounded-xl flex items-start justify-between gap-2 text-xs text-[#960C01]">
@@ -2223,10 +2232,10 @@ export const LendingPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Payment Schedule <span className="text-[#960C01]">*</span>
                 </label>
-                <select
+                <Dropdown
                   value={formData.paymentFrequency}
-                  onChange={(e) => {
-                    const freq = e.target.value as 'Daily' | 'Monthly'
+                  onChange={(val) => {
+                    const freq = val as 'Daily' | 'Monthly'
                     let newTerm = formData.termDays
                     if (freq === 'Daily' && formData.paymentFrequency !== 'Daily') {
                       newTerm = '40'
@@ -2241,11 +2250,12 @@ export const LendingPage: React.FC = () => {
                       dueDate: newDue || formData.dueDate,
                     })
                   }}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 font-semibold"
-                >
-                  <option value="Daily">Daily</option>
-                  <option value="Monthly">Monthly</option>
-                </select>
+                  options={[
+                    { value: 'Daily', label: 'Daily' },
+                    { value: 'Monthly', label: 'Monthly' },
+                  ]}
+                  aria-label="Payment Schedule"
+                />
               </div>
 
               <div>
@@ -2379,32 +2389,36 @@ export const LendingPage: React.FC = () => {
               />
             </div>
 
-            {/* Action Buttons */}
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isCreatingBorrower}
-                onClick={() => setIsAddModalOpen(false)}
-                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={isCreatingBorrower}
-                className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 shadow-xs"
-              >
-                {isCreatingBorrower ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Creating...</span>
-                  </>
-                ) : (
-                  <span>Create Borrower</span>
-                )}
-              </Button>
-            </div>
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={isCreatingBorrower}
+              onClick={() => {
+                if (isReviewingAdd) {
+                  setIsReviewingAdd(false)
+                } else {
+                  setIsAddModalOpen(false)
+                }
+              }}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              {isReviewingAdd ? 'Back to Edit' : 'Cancel'}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isCreatingBorrower}
+              isLoading={isCreatingBorrower}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <span>{isReviewingAdd ? 'Create Facility' : 'Review Facility'}</span>
+            </Button>
+          </div>
           </form>
         </DialogContent>
       </Dialog>
@@ -2573,7 +2587,7 @@ export const LendingPage: React.FC = () => {
 
       {/* 6. Modal: Edit Borrower Details */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
+        <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto bg-white rounded-[16px] p-6 border border-stroke/40 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
@@ -2682,11 +2696,11 @@ export const LendingPage: React.FC = () => {
                   <label className="text-xs font-semibold text-focus block mb-1">
                     Payment Schedule
                   </label>
-                  <select
+                  <Dropdown
                     value={editFormData.paymentFrequency}
                     disabled={isTermsLocked}
-                    onChange={(e) => {
-                      const freq = e.target.value as 'Daily' | 'Monthly'
+                    onChange={(val) => {
+                      const freq = val as 'Daily' | 'Monthly'
                       let newTerm = editFormData.termDays
                       if (freq === 'Daily' && editFormData.paymentFrequency !== 'Daily') {
                         newTerm = '40'
@@ -2701,14 +2715,12 @@ export const LendingPage: React.FC = () => {
                         dueDate: newDue || editFormData.dueDate,
                       })
                     }}
-                    className={cn(
-                      'w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20',
-                      isTermsLocked && 'bg-slate-100 text-muted-fg cursor-not-allowed select-none'
-                    )}
-                  >
-                    <option value="Daily">Daily</option>
-                    <option value="Monthly">Monthly</option>
-                  </select>
+                    options={[
+                      { value: 'Daily', label: 'Daily' },
+                      { value: 'Monthly', label: 'Monthly' },
+                    ]}
+                    aria-label="Payment Schedule"
+                  />
                 </div>
 
                 <div>
@@ -2786,21 +2798,22 @@ export const LendingPage: React.FC = () => {
                 <label className="text-xs font-semibold text-focus block mb-1">
                   Status
                 </label>
-                <select
+                <Dropdown
                   value={editFormData.status}
-                  onChange={(e) =>
+                  onChange={(val) =>
                     setEditFormData({
                       ...editFormData,
-                      status: e.target.value as LendingFacility['status'],
+                      status: val as LendingFacility['status'],
                     })
                   }
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Overdue">Overdue</option>
-                  <option value="Pending">Pending</option>
-                </select>
+                  options={[
+                    { value: 'Active', label: 'Active' },
+                    { value: 'Completed', label: 'Completed' },
+                    { value: 'Overdue', label: 'Overdue' },
+                    { value: 'Pending', label: 'Pending' },
+                  ]}
+                  aria-label="Status"
+                />
               </div>
 
               <CompanyBankSelect

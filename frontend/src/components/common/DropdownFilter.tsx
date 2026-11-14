@@ -50,47 +50,37 @@ export interface DropdownFilterProps<T extends string = string> {
 
 const STATUS_PRESETS: Record<
   string,
-  { dot?: string; pill?: string; item?: string }
+  { pill?: string; item?: string }
 > = {
   Paid: {
-    dot: 'bg-emerald-500',
     pill: 'border-emerald-300 bg-emerald-50 text-emerald-700',
   },
   Completed: {
-    dot: 'bg-emerald-500',
     pill: 'border-emerald-300 bg-emerald-50 text-emerald-700',
   },
   Approved: {
-    dot: 'bg-emerald-500',
     pill: 'border-emerald-300 bg-emerald-50 text-emerald-700',
   },
   'Fully Paid': {
-    dot: 'bg-emerald-500',
     pill: 'border-emerald-300 bg-emerald-50 text-emerald-700',
   },
   Pending: {
-    dot: 'bg-yellow-400',
     pill: 'border-yellow-400 bg-yellow-50 text-yellow-800',
     item: 'bg-yellow-100 text-yellow-800 font-semibold',
   },
   'Partially Paid': {
-    dot: 'bg-amber-400',
     pill: 'border-amber-300 bg-amber-50 text-amber-800',
   },
   Unpaid: {
-    dot: 'bg-rose-500',
     pill: 'border-rose-300 bg-rose-50 text-rose-700',
   },
   Overdue: {
-    dot: 'bg-rose-500',
     pill: 'border-rose-300 bg-rose-50 text-rose-700',
   },
   Disapproved: {
-    dot: 'bg-rose-500',
     pill: 'border-rose-300 bg-rose-50 text-rose-700',
   },
   Active: {
-    dot: 'bg-blue-500',
     pill: 'border-blue-300 bg-blue-50 text-blue-700',
   },
 }
@@ -138,7 +128,6 @@ export function DropdownFilter<T extends string = string>({
           return {
             value: opt,
             label: opt,
-            dotClassName: hideOptionDots ? undefined : preset?.dot,
             activePillClassName: preset?.pill,
             activeItemClassName: preset?.item,
           }
@@ -146,9 +135,6 @@ export function DropdownFilter<T extends string = string>({
         const preset = STATUS_PRESETS[opt.value]
         return {
           ...opt,
-          dotClassName: hideOptionDots
-            ? undefined
-            : opt.dotClassName ?? opt.dotColor ?? preset?.dot,
           activePillClassName: opt.activePillClassName ?? preset?.pill,
           activeItemClassName: opt.activeItemClassName ?? preset?.item,
         }
@@ -161,8 +147,9 @@ export function DropdownFilter<T extends string = string>({
       ? defaultValue
       : (normalizedOptions[0]?.value as T)
 
-  const isDefault = value === resolvedDefault
   const selectedOption = normalizedOptions.find((o) => o.value === value)
+  const isDefault =
+    defaultValue !== undefined ? value === defaultValue : !selectedOption
 
   const filteredOptions = React.useMemo(() => {
     if (!searchable || !search.trim()) return normalizedOptions
@@ -220,12 +207,12 @@ export function DropdownFilter<T extends string = string>({
         aria-label={ariaLabel || effectivePlaceholder || effectiveMenuTitle}
         aria-expanded={open}
         className={cn(
-          'inline-flex items-center gap-2 h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
           fullWidth && 'w-full justify-between',
           !isDefault && selectedOption?.activePillClassName
             ? selectedOption.activePillClassName
-            : 'border-stroke/60',
-          open && 'ring-2 ring-slate-100 border-slate-300',
+            : 'border-stroke/60 hover:border-stroke/80',
+          open && 'ring-2 ring-focus/20 border-focus',
           className
         )}
       >
@@ -263,12 +250,12 @@ export function DropdownFilter<T extends string = string>({
         <div
           style={pos.isMobile ? pos.style : undefined}
           className={cn(
-            'bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
             pos.isMobile
               ? 'w-[min(calc(100vw-32px),320px)] overflow-y-auto'
               : cn(
                   'absolute top-full mt-2 min-w-[12rem]',
-                  searchable ? 'w-68 p-2.5 shadow-2xl' : 'w-48',
+                  searchable ? 'w-68 p-2.5 shadow-soft' : 'w-48',
                   menuWidthClassName,
                   align === 'left' ? 'left-0' : 'right-0'
                 ),
@@ -299,7 +286,7 @@ export function DropdownFilter<T extends string = string>({
                 placeholder={searchPlaceholder}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="h-8 text-xs rounded-lg"
+                className="h-9 text-xs rounded-[8px]"
                 autoFocus
               />
             </div>
@@ -323,22 +310,14 @@ export function DropdownFilter<T extends string = string>({
                       setSearch('')
                     }}
                     className={cn(
-                      'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                      'w-full flex items-center justify-between px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium transition-colors text-left cursor-pointer min-h-[44px]',
                       isSelected
                         ? opt.activeItemClassName ||
                             'bg-primary/10 text-primary font-semibold'
-                        : 'text-focus/80 hover:bg-surface'
+                        : 'text-focus hover:bg-surface'
                     )}
                   >
                     <span className="flex items-center gap-2 truncate">
-                      {opt.dotClassName && (
-                        <span
-                          className={cn(
-                            'w-2 h-2 rounded-full shrink-0',
-                            opt.dotClassName
-                          )}
-                        />
-                      )}
                       <span className="truncate">{opt.label}</span>
                     </span>
                     {isSelected && (

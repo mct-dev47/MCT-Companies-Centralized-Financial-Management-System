@@ -41,7 +41,7 @@ class ActivityLogOut(ActivityLogBase):
     record_id: Optional[Union[str, int]] = None
     record_ref: Optional[str] = None
     user_agent: Optional[str] = None
-    changes: Optional[Dict[str, Dict[str, Any]]] = None
+    changes: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(from_attributes=True)
 

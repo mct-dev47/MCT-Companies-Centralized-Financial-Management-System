@@ -15,7 +15,6 @@ import {
   Store,
   Wallet,
   RefreshCw,
-  Wifi,
   WifiOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -118,15 +117,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   }, [userId, isAuthenticated])
 
   const userRole = (user?.role || '').toLowerCase()
-  if (userRole === 'admin') {
-    return null
-  }
-
-  const isMultiCompanyRole =
-    userRole === 'finance' || userRole === 'audit' || userRole.includes('auditor')
-  const scopedCompanyName = isMultiCompanyRole
-    ? activeCompany || 'All Companies'
-    : user?.assignedCompany || activeCompany || 'All Companies'
+  const isAdmin = userRole === 'admin'
+  const scopedCompanyName = isAdmin
+    ? 'All Companies'
+    : activeCompany || user?.assignedCompany || 'All Companies'
 
   const fetchLiveNotifications = React.useCallback(
     async (forceRefresh = false) => {
@@ -185,6 +179,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           } else if (refType === 'deposit' || refType === 'sale' || nt.startsWith('DEPOSIT_')) {
             category = 'other'
             categoryLabel = 'Sales'
+          } else if (refType === 'expense' || nt.startsWith('EXPENSE_')) {
+            category = 'other'
+            categoryLabel = 'Expenses'
+          } else if (refType === 'activity_log' || nt === 'SYSTEM_ACTIVITY_NOTICE') {
+            category = 'other'
+            categoryLabel = 'System'
           }
 
           // Determine urgency / due reminder status & styling
@@ -266,6 +266,18 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             IconComponent = Landmark
             iconColor = 'text-slate-600'
             iconBg = 'bg-slate-100 border border-slate-200'
+          } else if (nt === 'EXPENSE_LARGE_TRANSACTION') {
+            IconComponent = Banknote
+            iconColor = 'text-amber-600'
+            iconBg = 'bg-amber-50 border border-amber-200/70'
+            urgencyBadge = {
+              label: 'Large Expense',
+              className: 'bg-amber-100 text-amber-800 border-amber-200',
+            }
+          } else if (nt === 'SYSTEM_ACTIVITY_NOTICE') {
+            IconComponent = FileCheck2
+            iconColor = 'text-blue-600'
+            iconBg = 'bg-blue-50 border border-blue-200/70'
           } else {
             IconComponent = Building2
             iconColor = 'text-primary'
@@ -312,14 +324,33 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     [isAuthenticated, userId, scopedCompanyName, userRole, notifications.length]
   )
 
-  // Initial fetch and polling every 30s
+  // Initial fetch and polling every 30s (pauses when browser tab is hidden)
   React.useEffect(() => {
     if (!isAuthenticated) return
     void fetchLiveNotifications(false)
     const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return
+      }
       void fetchLiveNotifications(false)
     }, 30000)
-    return () => clearInterval(timer)
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        void fetchLiveNotifications(false)
+      }
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange)
+    }
+
+    return () => {
+      clearInterval(timer)
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange)
+      }
+    }
   }, [isAuthenticated, fetchLiveNotifications])
 
   // Real-time synchronization & WebSocket status listener
@@ -496,6 +527,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         navigate('/sales')
       } else if (item.refType === 'loan' || item.refType === 'loan_repayment' || item.type.includes('LOAN')) {
         navigate('/loan')
+      } else if (item.refType === 'expense' || item.type.startsWith('EXPENSE_')) {
+        navigate('/expense')
+      } else if (item.refType === 'activity_log' || item.type === 'SYSTEM_ACTIVITY_NOTICE') {
+        navigate('/activity-log')
       }
     } catch (navErr) {
       console.error('Notification navigation error:', formatUserFriendlyErrorMessage(navErr))

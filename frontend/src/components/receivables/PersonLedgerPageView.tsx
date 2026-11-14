@@ -14,6 +14,7 @@ import {
   Lock,
   Edit2,
 } from 'lucide-react'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -421,19 +422,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
               </Button>
             )}
 
-            {canMutate && isStaff && hasBalance && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={person.all_locked || unlockedBalance <= 0.005}
-                onClick={() => setShowPayrollConfirm(true)}
-                className="h-10 px-3.5 rounded-xl border-purple-200 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-40"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-purple-600" />
-                <span>Deduct from Payroll</span>
-              </Button>
-            )}
-
             {canMutate && onOpenEditProfile && (
               <Button
                 type="button"
@@ -449,42 +437,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Payroll Deduction Confirmation Banner */}
-      {showPayrollConfirm && canMutate && isStaff && hasBalance && (
-        <div className="p-4 rounded-2xl bg-purple-50 border border-purple-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs animate-in fade-in duration-150">
-          <div className="space-y-0.5">
-            <span className="font-bold text-purple-950 block">
-              Confirm Full Payroll Deduction ({formatPHP(unlockedBalance)})
-            </span>
-            <span className="text-purple-800 block">
-              This will settle all unlocked unpaid credit orders for <strong>{person.name}</strong> via Staff Payroll Deduction.
-            </span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => setShowPayrollConfirm(false)}
-              className="h-8 px-3 text-xs rounded-xl bg-white"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                onSettlePayrollDeduction(person.name, person.company_id, person.company)
-                setShowPayrollConfirm(false)
-              }}
-              className="h-8 px-3.5 text-xs rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-semibold cursor-pointer"
-            >
-              Confirm Deduction
-            </Button>
-          </div>
-        </div>
-      )}
 
       {actionError && (
         <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center justify-between gap-2">
@@ -1096,16 +1048,15 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
                 <div>
                   <label className="font-semibold text-focus block mb-1">Customer Type</label>
-                  <select
-                    value={editCustomerType}
-                    onChange={(e) =>
-                      setEditCustomerType(e.target.value === 'Staff' ? 'Staff' : 'External')
-                    }
-                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                  >
-                    <option value="External">External</option>
-                    <option value="Staff">Staff</option>
-                  </select>
+                  <Dropdown
+                      value={editCustomerType}
+                      onChange={(val) => setEditCustomerType(val === 'Staff' ? 'Staff' : 'External')}
+                      options={[
+                        { value: 'External', label: 'External' },
+                        { value: 'Staff', label: 'Staff' },
+                      ]}
+                      aria-label="Customer Type"
+                    />
                 </div>
               </div>
 
@@ -1122,15 +1073,16 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
                 <div>
                   <label className="font-semibold text-focus block mb-1">Payment Status</label>
-                  <select
-                    value={editPaymentStatus}
-                    onChange={(e) => setEditPaymentStatus(e.target.value as PaymentStatus)}
-                    className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white font-semibold focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-                  >
-                    <option value="Unpaid">Unpaid</option>
-                    <option value="Partial">Partial</option>
-                    <option value="Paid">Paid</option>
-                  </select>
+                  <Dropdown
+                      value={editPaymentStatus}
+                      onChange={(val) => setEditPaymentStatus(val as PaymentStatus)}
+                      options={[
+                        { value: 'Unpaid', label: 'Unpaid' },
+                        { value: 'Partial', label: 'Partial' },
+                        { value: 'Paid', label: 'Paid' },
+                      ]}
+                      aria-label="Payment Status"
+                    />
                 </div>
               </div>
 
@@ -1171,15 +1123,16 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                       <label className="font-semibold text-emerald-900 block mb-1">
                         Payment Method
                       </label>
-                      <select
-                        value={editPaymentMethod}
-                        onChange={(e) => setEditPaymentMethod(e.target.value)}
-                        className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
-                      >
-                        <option value="Cash">Cash</option>
-                        <option value="GCash">GCash</option>
-                        <option value="Bank Transfer">Bank Transfer</option>
-                      </select>
+                      <Dropdown
+                          value={editPaymentMethod}
+                          onChange={(val) => setEditPaymentMethod(String(val))}
+                          options={[
+                            { value: 'Cash', label: 'Cash' },
+                            { value: 'GCash', label: 'GCash' },
+                            { value: 'Bank Transfer', label: 'Bank Transfer' },
+                          ]}
+                          aria-label="Payment Method"
+                        />
                     </div>
 
                     <div>
@@ -1193,18 +1146,16 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                             'Recorded bank'}
                         </div>
                       ) : (
-                        <select
+                        <Dropdown
                           value={editBankAccountId}
-                          onChange={(e) => setEditBankAccountId(e.target.value)}
-                          className="w-full h-10 px-2.5 rounded-xl border border-emerald-300 bg-white text-focus"
-                        >
-                          <option value="">No bank deposit</option>
-                          {editBankAccounts.map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.bankName}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(val) => setEditBankAccountId(String(val))}
+                          placeholder="No bank deposit"
+                          options={[
+                            { value: '', label: 'No bank deposit' },
+                            ...editBankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
+                          ]}
+                          aria-label="Bank Deposit Account"
+                        />
                       )}
                     </div>
                   </div>

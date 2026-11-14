@@ -28,13 +28,19 @@ import {
   User,
   History,
   RotateCw,
+  HelpCircle,
 } from 'lucide-react'
 import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
 import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -54,9 +60,9 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import {
   TopUpPettyCashModal,
 } from '@/components/dashboard/TopUpPettyCashModal'
@@ -98,12 +104,20 @@ function isBlankStatusEntry(entry: PettyCashTransaction | null | undefined): boo
   )
 }
 
+function formatToShortDate(val?: string | null): string {
+  if (!val) return '—'
+  const trimmed = String(val).trim()
+  if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(trimmed)) return trimmed
+  const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
+  if (mLong) return `${mLong[1]}/${mLong[2]}/${mLong[3].slice(2)}`
+  const mIso = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
+  if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1].slice(2)}`
+  return trimmed
+}
+
 const COMPANY_LIST = [
   'All Companies',
 ]
-
-const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
-type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 function downloadReceipt(url: string, name?: string) {
   if (!url) return
@@ -204,7 +218,6 @@ export const PettyCashPage: React.FC = () => {
   const [auditStatusFilter, setAuditStatusFilter] = React.useState<
     'All' | 'Pending Audit' | 'Verified' | 'Flagged'
   >('All')
-  const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: '',
     endDate: '',
@@ -214,13 +227,11 @@ export const PettyCashPage: React.FC = () => {
 
   // Dropdowns state
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
   const [isAuditStatusDropdownOpen, setIsAuditStatusDropdownOpen] = React.useState(false)
   const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const auditStatusDropdownRef = React.useRef<HTMLDivElement>(null)
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
@@ -238,6 +249,8 @@ export const PettyCashPage: React.FC = () => {
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)
   const [isSummaryModalOpen, setIsSummaryModalOpen] = React.useState(false)
+  const [isRemarksExpanded, setIsRemarksExpanded] = React.useState(false)
+  const [isTimelineExpanded, setIsTimelineExpanded] = React.useState(false)
   const [previewReceipt, setPreviewReceipt] = React.useState<{ url: string; name: string } | null>(null)
   const [isReviewConfirmModalOpen, setIsReviewConfirmModalOpen] = React.useState(false)
   const [receiptsLoading, setReceiptsLoading] = React.useState(false)
@@ -501,9 +514,6 @@ export const PettyCashPage: React.FC = () => {
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
       }
-      if (periodDropdownRef.current && !periodDropdownRef.current.contains(target)) {
-        setIsPeriodDropdownOpen(false)
-      }
       if (statusDropdownRef.current && !statusDropdownRef.current.contains(target)) {
         setIsStatusDropdownOpen(false)
       }
@@ -687,6 +697,8 @@ export const PettyCashPage: React.FC = () => {
     setTargetEntry(entry)
     setLoadedReceipts(null)
     setReceiptsError(null)
+    setIsRemarksExpanded(false)
+    setIsTimelineExpanded(false)
     setIsSummaryModalOpen(true)
     void fetchEntryReceipts(entry)
   }
@@ -1004,7 +1016,7 @@ export const PettyCashPage: React.FC = () => {
   const pendingCount = ledger.filter((l) => l.status === 'Pending Finance Approval').length
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
       {/* Feedback Banner */}
       {approvalFeedback && (
         <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-sm font-semibold text-emerald-800 flex items-center justify-between shadow-xs animate-in slide-in-from-top-2">
@@ -1026,11 +1038,19 @@ export const PettyCashPage: React.FC = () => {
       <div className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Petty Cash
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Petty Cash
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Petty cash custody, replenishments, expense disbursements, and liquidation claims"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Petty cash requests, approvals, and disbursements connected live to the MCT database
+              Petty cash requests, approvals, and disbursements for {displayedCompanyTitle}
             </p>
           </div>
 
@@ -1143,36 +1163,78 @@ export const PettyCashPage: React.FC = () => {
         </div>
 
         {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 pt-1">
-          {/* Search Bar & Type Filter Dropdown Group */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1 min-w-0">
-            <div className="relative flex-1 min-w-[220px]">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-              <Input
-                type="search"
-                placeholder="Search particulars, company, category…"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value)
-                  setCurrentPage(1)
-                }}
-                className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-              />
-            </div>
+        <div className="flex flex-col gap-3 pt-1">
+          {/* Row 1: All Companies + Type + Status + Audit Status + Date Range */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 w-full">
+            {/* 1. All Companies Dropdown (or Assigned Company for scoped roles) */}
+            {!isCompanyScoped ? (
+              <div ref={companyDropdownRef} className="relative flex-[2] min-w-[220px] sm:min-w-[260px]">
+                <button
+                  type="button"
+                  onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
+                  className={cn(
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                  )}
+                >
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
+                    {selectedCompany}
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                      isCompanyDropdownOpen && 'transform rotate-180'
+                    )}
+                  />
+                </button>
 
-            {/* Type Filter Dropdown Button */}
-            <div ref={typeDropdownRef} className="relative inline-block shrink-0">
+                {isCompanyDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150 max-h-64 overflow-y-auto">
+                    {companyList.map((comp) => (
+                      <button
+                        key={comp}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCompany(comp)
+                          setActiveCompany(comp)
+                          setIsCompanyDropdownOpen(false)
+                          setCurrentPage(1)
+                        }}
+                        className={cn(
+                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                          selectedCompany === comp
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-focus/80 hover:bg-slate-50'
+                        )}
+                      >
+                        <span className="truncate">{comp}</span>
+                        {selectedCompany === comp && (
+                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="inline-flex items-center justify-between gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs select-none">
+                <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
+              </div>
+            )}
+
+            {/* 2. Type Filter Dropdown Button */}
+            <div ref={typeDropdownRef} className="relative flex-1 min-w-[110px] sm:min-w-[130px]">
               <button
                 type="button"
                 onClick={() => setIsTypeDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   typeFilter !== 'All' && 'bg-[#960C01]/5 border-[#960C01]/40 text-[#960C01] font-semibold',
                   isTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <span className="font-medium">
-                  {typeFilter}
+                <span className="font-medium truncate">
+                  {typeFilter === 'All' ? 'Type' : typeFilter}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -1183,7 +1245,7 @@ export const PettyCashPage: React.FC = () => {
               </button>
 
               {isTypeDropdownOpen && (
-                <div className="absolute left-0 sm:right-0 sm:left-auto top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
                   {[
                     { id: 'All', label: 'All' },
                     { id: 'Top-up', label: 'Top-up' },
@@ -1215,66 +1277,18 @@ export const PettyCashPage: React.FC = () => {
                 </div>
               )}
             </div>
-          </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Custom Period Dropdown */}
-            <div ref={periodDropdownRef} className="relative inline-block">
-              <button
-                type="button"
-                onClick={() => setIsPeriodDropdownOpen((prev) => !prev)}
-                className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                  isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-medium text-focus/90">{selectedPeriod}</span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isPeriodDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isPeriodDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  {PERIOD_OPTIONS.map((period) => (
-                    <button
-                      key={period}
-                      type="button"
-                      onClick={() => {
-                        setSelectedPeriod(period)
-                        setIsPeriodDropdownOpen(false)
-                      }}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        selectedPeriod === period
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{period}</span>
-                      {selectedPeriod === period && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Status Filter Dropdown */}
-            <div ref={statusDropdownRef} className="relative inline-block">
+            {/* 3. Status Filter Dropdown */}
+            <div ref={statusDropdownRef} className="relative flex-1 min-w-[120px] sm:min-w-[140px]">
               <button
                 type="button"
                 onClick={() => setIsStatusDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <span className="font-medium text-focus/90">
+                <span className="font-medium text-focus/90 truncate">
                   {statusFilter === 'All' ? 'Status' : statusFilter}
                 </span>
                 <ChevronDown
@@ -1286,7 +1300,7 @@ export const PettyCashPage: React.FC = () => {
               </button>
 
               {isStatusDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
                   {[
                     { id: 'All', label: 'All Transactions' },
                     ...(isAudit
@@ -1325,17 +1339,17 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
-            {/* Audit Status Filter Dropdown */}
-            <div ref={auditStatusDropdownRef} className="relative inline-block">
+            {/* 4. Audit Status Filter Dropdown */}
+            <div ref={auditStatusDropdownRef} className="relative flex-1 min-w-[130px] sm:min-w-[150px]">
               <button
                 type="button"
                 onClick={() => setIsAuditStatusDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isAuditStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
-                <span className="font-medium text-focus/90">
+                <span className="font-medium text-focus/90 truncate">
                   {auditStatusFilter === 'All'
                     ? 'Audit Status'
                     : auditStatusFilter === 'Verified'
@@ -1385,69 +1399,33 @@ export const PettyCashPage: React.FC = () => {
               )}
             </div>
 
+            {/* 5. Date Range Picker */}
+            <div className="flex-1 min-w-[160px] sm:min-w-[180px]">
+              <TransactionDateRangeControl
+                value={dateRange}
+                onChange={(newRange) => {
+                  setDateRange(newRange)
+                  setCurrentPage(1)
+                }}
+                fullWidth
+                className="w-full"
+              />
+            </div>
+          </div>
 
-
-            {/* Date Range Picker */}
-            <DateRangePicker
-              value={dateRange}
-              onChange={(newRange) => {
-                setDateRange(newRange)
+          {/* Row 2: Full-width Search Bar */}
+          <div className="relative w-full">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+            <Input
+              type="search"
+              placeholder="Search particulars, Ref No., Cheque No., company, method…"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value)
                 setCurrentPage(1)
               }}
-              hidePresets
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
-
-            {/* Company Scope Dropdown: ONLY Finance and Audit have the dropdown filter */}
-            {!isCompanyScoped && (
-              <div ref={companyDropdownRef} className="relative inline-block">
-                <button
-                  type="button"
-                  onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-                  className={cn(
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                    isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                  )}
-                >
-                  <span className="font-medium text-focus/90 truncate max-w-[140px]">
-                    {selectedCompany}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                      isCompanyDropdownOpen && 'transform rotate-180'
-                    )}
-                  />
-                </button>
-
-                {isCompanyDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150 max-h-64 overflow-y-auto">
-                    {companyList.map((comp) => (
-                      <button
-                        key={comp}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCompany(comp)
-                          setActiveCompany(comp)
-                          setIsCompanyDropdownOpen(false)
-                          setCurrentPage(1)
-                        }}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          selectedCompany === comp
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <span className="truncate">{comp}</span>
-                        {selectedCompany === comp && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         </div>
       </div>
@@ -1477,73 +1455,77 @@ export const PettyCashPage: React.FC = () => {
       {/* 3. Main Table Card */}
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
         {/* Clean Table Structure: Reference / Voucher No and Funding Source are Removed */}
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
-          <Table className="w-full table-fixed min-w-[1120px]">
+        <div className="overflow-x-auto">
+          <Table className="w-full table-fixed min-w-[1150px]">
             <colgroup>
               <col style={{ width: '8%' }} />
+              <col style={{ width: '8%' }} />
+              <col style={{ width: '20%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '9%' }} />
               <col style={{ width: '9%' }} />
               <col style={{ width: '10%' }} />
-              <col style={{ width: '13%' }} />
-              <col style={{ width: '9%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '7%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '8%' }} />
-              <col style={{ width: '5%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '4%' }} />
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  COMPANY
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   TYPE
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                  FUNDING BANK
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  AMOUNT REQUESTED
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  IN (+)
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  OUT (-)
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                  RUNNING BALANCE
-                </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   STATUS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                  AMOUNT REQUESTED
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                  IN (+)
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                  OUT (-)
+                </TableHead>
+                <TableHead className="px-3 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                  RUNNING BALANCE
+                </TableHead>
+                <TableHead className="px-2 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   AUDIT STATUS
                 </TableHead>
-                <TableHead className="px-3 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
-                  ACTIONS
+                <TableHead className="px-1 py-3.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                  <span className="sr-only">Actions</span>
                 </TableHead>
               </TableRow>
             </TableHeader>
 
             <TableBody>
               {isLoading ? (
-                <TableSkeleton rows={5} columns={12} />
+                <TableSkeleton rows={5} columns={10} />
               ) : paginatedLedger.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={12} className="h-44 text-center text-muted-fg text-xs sm:text-sm">
-                    <Wallet className="w-8 h-8 text-muted-fg/40 mx-auto mb-2" />
-                    No petty cash transactions found for the selected criteria.
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={10}
+                  title="No petty cash transactions found"
+                  description="No transactions match your active company or filter criteria."
+                  action={
+                    canTransact ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsTopUpModalOpen(true)}
+                        className="rounded-full"
+                      >
+                        Top Up Petty Cash
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedLedger.map((entry) => {
                   const isPendingFinance = entry.status === 'Pending Finance Endorsement' || entry.status === 'Pending Finance Approval'
@@ -1559,69 +1541,24 @@ export const PettyCashPage: React.FC = () => {
                       className="border-b border-slate-100 hover:bg-slate-50/80 transition-colors cursor-pointer"
                       title="Click transaction to view details or review"
                     >
-                      {/* 1. Date */}
-                      <TableCell className="px-3 py-3.5 text-xs text-muted-fg tabular-nums font-medium">
-                        <div className="flex flex-col gap-0.5">
-                          <span>{entry.date}</span>
-                          {entry.createdAt && (
-                            <span className="text-[10px] text-slate-500 font-normal flex items-center gap-1" title={`Created at: ${formatCreatedAt(entry.createdAt)}`}>
-                              <Clock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                              <span className="tabular-nums">{formatCreatedAt(entry.createdAt, { timeOnly: true })}</span>
-                            </span>
-                          )}
-                        </div>
+                      {/* 1. Date (Formatted like transaction short date) */}
+                      <TableCell className="px-3 py-3.5 text-xs text-muted-fg tabular-nums font-medium whitespace-nowrap">
+                        <span>{formatToShortDate(entry.date)}</span>
                       </TableCell>
 
-                      {/* 2. Company */}
+                      {/* 2. Type (Clean text without rounded container or icon) */}
+                      <TableCell className="px-3 py-3.5 text-center text-xs font-medium text-focus whitespace-nowrap">
+                        {entry.requestType === 'disbursement' || entry.requestType === 'replenishment_disbursement'
+                          ? 'Disbursement'
+                          : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment'
+                          ? 'Reimburse'
+                          : entry.type === 'expense'
+                          ? 'Expense'
+                          : 'Top-up'}
+                      </TableCell>
+
+                      {/* 3. Particulars: Title, Company, Reference No (No who paid, no breakdown) */}
                       <TableCell className="px-3 py-3.5">
-                        <div
-                          className="font-semibold text-xs text-focus truncate"
-                          title={entry.companyName || ''}
-                        >
-                          {entry.companyName || '—'}
-                        </div>
-                      </TableCell>
-
-                      {/* 2b. Type Indicator */}
-                      <TableCell className="px-3 py-3.5 text-center overflow-hidden">
-                        {entry.requestType === 'disbursement' || entry.requestType === 'replenishment_disbursement' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-300 whitespace-nowrap">
-                            <Wallet className="w-3 h-3 text-slate-600 shrink-0" />
-                            <span>Disbursement</span>
-                          </span>
-                        ) : entry.requestType === 'reimbursement' || entry.requestType === 'replenishment' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
-                            <Receipt className="w-3 h-3 text-amber-600 shrink-0" />
-                            <span>Reimburse</span>
-                          </span>
-                        ) : entry.type === 'expense' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
-                            <span>Expense</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
-                            <Wallet className="w-3 h-3 text-blue-600 shrink-0" />
-                            <span>Top-up</span>
-                          </span>
-                        )}
-                      </TableCell>
-
-                      {/* 3. Particulars & Category (Remarks shown in modal per specification) */}
-                      <TableCell className="px-3 py-3.5">
-                        {(entry.requestType === 'reimbursement' || entry.requestType === 'disbursement' || entry.requestType === 'replenishment_disbursement' || entry.requestType === 'replenishment') && entry.paidBy && (
-                          <div className="text-[11px] text-slate-600 font-medium flex items-center gap-1 mb-1">
-                            <User className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span className="truncate">Paid by: <strong>{formatRealName(entry.paidBy)}</strong></span>
-                            {(entry.hasReceipt || entry.receiptUrl) && (
-                              <span className="inline-flex items-center text-[10px] text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200/60 ml-1">
-                                <Receipt className="w-2.5 h-2.5 text-emerald-600 mr-0.5" />
-                                {entry.attachmentCount && entry.attachmentCount > 1
-                                  ? `Receipts (${entry.attachmentCount})`
-                                  : 'Receipt'}
-                              </span>
-                            )}
-                          </div>
-                        )}
                         {(() => {
                           const summary = getParticularsSummary(entry.description)
                           if (summary.count > 1) {
@@ -1640,136 +1577,116 @@ export const PettyCashPage: React.FC = () => {
                             </div>
                           )
                         })()}
-                        <div className="text-[11px] text-muted-fg line-clamp-1 mt-0.5">
-                          {entry.category || 'General'}
+                        {entry.companyName && (
+                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate" title={entry.companyName}>
+                            {entry.companyName}
+                          </div>
+                        )}
+                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                          {entry.referenceNo || `PC-${entry.recordId || entry.id}`}
                         </div>
-                        {(entry.requestType === 'reimbursement' || entry.requestType === 'replenishment') &&
-                          entry.totalExpenses !== undefined &&
-                          entry.totalExpenses !== null && (
-                            <div className="text-[10.5px] text-slate-600 tabular-nums mt-0.5 truncate" title={`Total ${formatPHP(entry.totalExpenses)} | Petty Cash ${formatPHP(entry.companyFundedAmount || 0)} | Out of Pocket ${formatPHP(entry.employeeOutOfPocket ?? entry.amountRequested)}`}>
-                              E {formatPHP(entry.totalExpenses)} · PC {formatPHP(entry.companyFundedAmount || 0)} · O {formatPHP(entry.employeeOutOfPocket ?? entry.amountRequested)}
-                              {entry.existingExpenseId ? ` · #${entry.existingExpenseId}` : ''}
-                            </div>
-                          )}
                       </TableCell>
 
-                      {/* 3b. Funding Bank (spec 0014): the bank Finance chose and the company that owns it */}
-                      <TableCell className="px-3 py-3.5">
-                        {entry.fundingBankName ? (
-                          <div className="min-w-0" title={`${entry.fundingBankName} · ${entry.fundingAccountName || ''} (${entry.fundingCompanyName || ''})`}>
-                            <div className="font-semibold text-xs text-focus truncate">{entry.fundingBankName}</div>
-                            <div className="text-[11px] text-muted-fg truncate">
-                              {entry.isOwnAccount ? 'Own account' : entry.fundingCompanyName || ''}
-                            </div>
-                          </div>
+                      {/* 4. Status (Beside Particulars - No icon) */}
+                      <TableCell className="px-3 py-3.5 text-center whitespace-nowrap">
+                        {isBlankStatusEntry(entry) ? null : isPendingFinance ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            Pending Finance
+                          </span>
+                        ) : isPendingAudit ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-700 border border-indigo-500/20 whitespace-nowrap">
+                            Pending Audit
+                          </span>
+                        ) : isRejectedFinance ? (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                            Rejected (Finance)
+                          </span>
+                        ) : isDisapprovedAudit ? (
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                            Disapproved (Audit)
+                          </span>
+                        ) : entry.status === 'Transfer In Transit' ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                            Transfer In Transit
+                          </span>
+                        ) : entry.status === 'Return Pending' ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                            Return Pending
+                          </span>
+                        ) : entry.status === 'Transfer Received' ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-700 border border-teal-500/20 whitespace-nowrap">
+                            Transfer Received
+                          </span>
+                        ) : entry.status === 'Settled' ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            Settled
+                          </span>
+                        ) : entry.status === 'Reimbursed' ? (
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            Reimbursed
+                          </span>
                         ) : (
-                          <span className="text-muted-fg/60 text-xs">—</span>
+                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                            {entry.status}
+                          </span>
                         )}
                       </TableCell>
 
-                      {/* 4. Amount Requested */}
-                      <TableCell className="px-3 py-3.5 text-right font-semibold text-xs text-focus tabular-nums">
-                        {entry.amountRequested > 0 ? formatPHP(entry.amountRequested) : '—'}
+                      {/* 5. Amount Requested */}
+                      <TableCell className="px-3 py-3.5 text-right font-medium text-xs text-focus tabular-nums whitespace-nowrap">
+                        {entry.amountRequested > 0 ? (
+                          formatPHP(entry.amountRequested)
+                        ) : (
+                          <span className="text-muted-fg/40 font-normal">—</span>
+                        )}
                       </TableCell>
 
-                      {/* 5. In (+) */}
-                      <TableCell className="px-3 py-3.5 text-right font-bold text-xs text-emerald-700 tabular-nums">
-                        {isApproved && entry.amountIn > 0 ? formatPHP(entry.amountIn) : '—'}
+                      {/* 6. In (+) */}
+                      <TableCell className="px-3 py-3.5 text-right font-bold text-xs tabular-nums whitespace-nowrap">
+                        {isApproved && entry.amountIn > 0 ? (
+                          <span className="text-emerald-700">+{formatPHP(entry.amountIn)}</span>
+                        ) : (
+                          <span className="text-muted-fg/40 font-normal">—</span>
+                        )}
                       </TableCell>
 
-                      {/* 6. Out (-) */}
-                      <TableCell className="px-3 py-3.5 text-right font-bold text-xs text-rose-600 tabular-nums">
-                        {entry.amountOut > 0 ? formatPHP(entry.amountOut) : '—'}
+                      {/* 7. Out (-) */}
+                      <TableCell className="px-3 py-3.5 text-right font-bold text-xs text-rose-600 tabular-nums whitespace-nowrap">
+                        {entry.amountOut > 0 ? `−${formatPHP(entry.amountOut)}` : <span className="text-muted-fg/40 font-normal">—</span>}
                       </TableCell>
 
-                      {/* 7. Running Balance */}
-                      <TableCell className="px-3 py-3.5 text-right font-semibold text-xs text-focus tabular-nums">
+                      {/* 8. Running Balance */}
+                      <TableCell className="px-3 py-3.5 text-right font-semibold text-xs text-focus tabular-nums whitespace-nowrap">
                         {formatPHP(entry.runningBalance)}
                       </TableCell>
 
-                      {/* 8. Status (Blank for Disbursement & Expense rows) */}
-                      <TableCell className="px-3 py-3.5 text-center">
-                        {isBlankStatusEntry(entry) ? null : isPendingFinance ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            <span>Pending Finance</span>
-                          </span>
-                        ) : isPendingAudit ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-700 border border-indigo-500/20 whitespace-nowrap">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            <span>Pending Audit</span>
-                          </span>
-                        ) : isRejectedFinance ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
-                            <XCircle className="w-3 h-3" />
-                            <span>Rejected (Finance)</span>
-                          </span>
-                        ) : isDisapprovedAudit ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
-                            <XCircle className="w-3 h-3" />
-                            <span>Disapproved (Audit)</span>
-                          </span>
-                        ) : entry.status === 'Transfer In Transit' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            <span>Transfer In Transit</span>
-                          </span>
-                        ) : entry.status === 'Return Pending' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
-                            <AlertCircle className="w-3 h-3 shrink-0" />
-                            <span>Return Pending</span>
-                          </span>
-                        ) : entry.status === 'Transfer Received' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-700 border border-teal-500/20 whitespace-nowrap">
-                            <CheckCircle2 className="w-3 h-3 shrink-0" />
-                            <span>Transfer Received</span>
-                          </span>
-                        ) : entry.status === 'Settled' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-                            <Check className="w-3 h-3 shrink-0" />
-                            <span>Settled</span>
-                          </span>
-                        ) : entry.status === 'Reimbursed' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-                            <CheckCircle2 className="w-3 h-3 shrink-0" />
-                            <span>Reimbursed</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-                            <Check className="w-3 h-3" />
-                            <span>{entry.status}</span>
-                          </span>
-                        )}
-                      </TableCell>
-
-                      {/* 9. Audit Status */}
-                      <TableCell className="px-3 py-3.5 text-center">
+                      {/* 9. Audit Status (No icon) */}
+                      <TableCell className="px-2 py-3.5 text-center whitespace-nowrap">
                         {entry.auditStatus === 'Verified' ? (
                           <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
+                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
                             title={entry.auditedBy ? `Audited by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Audited'}
                           >
-                            <CheckCircle2 className="w-3 h-3 shrink-0" />
-                            <span>Audited</span>
+                            Audited
                           </span>
                         ) : entry.auditStatus === 'Flagged' ? (
                           <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap"
+                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap"
                             title={entry.auditedBy ? `Flagged by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Discrepancy'}
                           >
-                            <AlertCircle className="w-3 h-3 shrink-0" />
-                            <span>Discrepancy</span>
+                            Discrepancy
                           </span>
                         ) : entry.auditStatus === 'Pending Audit' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
-                            <Clock className="w-3 h-3 shrink-0" />
-                            <span>Pending Audit</span>
+                          <span
+                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap"
+                          >
+                            Pending Audit
                           </span>
                         ) : null}
                       </TableCell>
 
                       {/* 10. Actions */}
-                      <TableCell className="px-3 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <TableCell className="px-1 py-3.5 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-center">
                           <Button
                             type="button"
@@ -1810,51 +1727,30 @@ export const PettyCashPage: React.FC = () => {
         </div>
 
         {/* Pagination Toolbar */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-5 mt-2 border-t border-slate-100 text-xs text-muted-fg">
-          <div className="flex items-center gap-2">
+        <div className="pt-4 mt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs text-muted-fg">
             <span>Rows per page:</span>
-            <select
-              value={itemsPerPage}
-              onChange={(e) => {
-                setItemsPerPage(Number(e.target.value))
-                setCurrentPage(1)
-              }}
-              className="h-7 px-2 rounded-lg border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none"
-            >
-              <option value={5}>5</option>
-              <option value={10}>10</option>
-              <option value={20}>20</option>
-              <option value={50}>50</option>
-            </select>
-            <span className="ml-2">
-              Showing {filteredLedger.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to{' '}
-              {Math.min(currentPage * itemsPerPage, filteredLedger.length)} of {filteredLedger.length} records
-            </span>
+            <div className="w-20">
+              <Dropdown
+                value={itemsPerPage}
+                size="sm"
+                onChange={(val) => {
+                  setItemsPerPage(Number(val))
+                  setCurrentPage(1)
+                }}
+                options={[5, 10, 20, 50]}
+                aria-label="Rows per page"
+              />
+            </div>
           </div>
-
-          <div className="flex items-center gap-1 self-end sm:self-auto">
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 border-stroke/60"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <span className="text-xs font-semibold px-2">
-              Page {currentPage} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 border-stroke/60"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredLedger.length}
+            pageSize={itemsPerPage}
+            onPageChange={setCurrentPage}
+            itemLabel="entries"
+          />
         </div>
       </Card>
 
@@ -1862,57 +1758,138 @@ export const PettyCashPage: React.FC = () => {
       <Dialog open={isSummaryModalOpen} onOpenChange={setIsSummaryModalOpen}>
         <DialogContent className="sm:max-w-[700px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="pb-3 border-b border-stroke/20">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary shrink-0">
                 <Wallet className="w-5 h-5 text-primary" />
-                <span>Petty Cash Transaction Details</span>
-              </DialogTitle>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {!isBlankStatusEntry(targetEntry) && targetEntry?.status && (
-                  <span
-                    className={cn(
-                      'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider',
-                      targetEntry?.status === 'Approved' && 'bg-emerald-50 text-emerald-700 border border-emerald-200',
-                      (targetEntry?.status === 'Pending Finance Approval' || targetEntry?.status === 'Pending Finance Endorsement') &&
-                        'bg-amber-50 text-amber-700 border border-amber-200',
-                      (targetEntry?.status === 'Disapproved' || targetEntry?.status === 'Disapproved by Audit' || targetEntry?.status === 'Rejected' || targetEntry?.status === 'Rejected by Finance') &&
-                        'bg-red-50 text-red-700 border border-red-200'
-                    )}
-                  >
-                    {targetEntry?.status}
-                  </span>
-                )}
-                {targetEntry?.auditStatus && (
-                  <span
-                    className={cn(
-                      'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider border',
-                      targetEntry.auditStatus === 'Verified'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : targetEntry.auditStatus === 'Flagged'
-                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                        : 'bg-amber-50 text-amber-700 border-amber-200'
-                    )}
-                  >
-                    {targetEntry.auditStatus === 'Verified'
-                      ? 'Audited'
-                      : targetEntry.auditStatus === 'Flagged'
-                      ? 'Discrepancy'
-                      : 'Pending Audit'}
-                  </span>
-                )}
+              </div>
+              <div>
+                <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">
+                  {isAudit ? 'Audit Petty Cash Details' : 'Petty Cash Transaction Details'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg font-normal mt-0.5">
+                  {isAudit ? 'Complete audit record and petty cash transaction details' : 'Complete petty cash transaction record'}
+                </DialogDescription>
               </div>
             </div>
-            <DialogDescription className="text-xs text-muted-fg">
-              {targetEntry?.companyName} • {targetEntry?.date}
-            </DialogDescription>
           </DialogHeader>
 
           {targetEntry && (
-            <div className="space-y-4 pt-2">
-              <div className="grid grid-cols-2 gap-3 p-4 rounded-xl bg-slate-50 border border-stroke/30 text-xs">
-                <div>
-                  <span className="text-[11px] text-muted-fg">Transaction Date</span>
-                  <div className="font-semibold text-focus mt-0.5">{targetEntry.date}</div>
+            <div className="space-y-4 pt-3">
+              {/* 1. Primary Amount & Audit Status Banner (matching AuditTransactionModal) */}
+              <div className="p-4 rounded-2xl bg-slate-50/90 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-6">
+                  {targetEntry.amountIn > 0 && targetEntry.status === 'Approved' && (
+                    <div>
+                      <span className="text-xs font-medium text-muted-fg block">
+                        Cash In (Received)
+                      </span>
+                      <span className="text-xl sm:text-2xl font-bold text-emerald-700 tabular-nums">
+                        +{formatPHP(targetEntry.amountIn)}
+                      </span>
+                    </div>
+                  )}
+                  {targetEntry.amountOut > 0 && (
+                    <div>
+                      <span className="text-xs font-medium text-muted-fg block">
+                        Cash Out (Spent)
+                      </span>
+                      <span className="text-xl sm:text-2xl font-bold text-rose-700 tabular-nums">
+                        −{formatPHP(targetEntry.amountOut)}
+                      </span>
+                    </div>
+                  )}
+                  {!(targetEntry.amountIn > 0 && targetEntry.status === 'Approved') && targetEntry.amountOut <= 0 && (
+                    <div>
+                      <span className="text-xs font-medium text-muted-fg block">
+                        Amount Requested
+                      </span>
+                      <span className="text-xl sm:text-2xl font-bold text-focus tabular-nums">
+                        {targetEntry.amountRequested > 0 ? formatPHP(targetEntry.amountRequested) : '—'}
+                      </span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-xs font-medium text-muted-fg block">
+                      Running Balance
+                    </span>
+                    <span className="text-xl sm:text-2xl font-bold text-focus tabular-nums">
+                      {formatPHP(targetEntry.runningBalance)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:items-end gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {!isBlankStatusEntry(targetEntry) && targetEntry.status && (
+                      <span
+                        className={cn(
+                          'inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border shadow-2xs',
+                          targetEntry.status === 'Approved' && 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                          (targetEntry.status === 'Pending Finance Approval' || targetEntry.status === 'Pending Finance Endorsement') &&
+                            'bg-amber-50 text-amber-700 border-amber-200',
+                          (targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' || targetEntry.status === 'Rejected' || targetEntry.status === 'Rejected by Finance') &&
+                            'bg-rose-50 text-rose-700 border-rose-200',
+                          targetEntry.status === 'Settled' || targetEntry.status === 'Reimbursed'
+                            ? 'bg-teal-50 text-teal-700 border-teal-200'
+                            : 'bg-slate-50 text-slate-700 border-slate-200'
+                        )}
+                      >
+                        {targetEntry.status}
+                      </span>
+                    )}
+                    {targetEntry.auditStatus === 'Verified' ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs w-fit">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Audited</span>
+                      </span>
+                    ) : targetEntry.auditStatus === 'Flagged' ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs w-fit">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Discrepancy</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs w-fit">
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Pending Audit</span>
+                      </span>
+                    )}
+                  </div>
+                  {(targetEntry.auditedBy || targetEntry.auditDate) && targetEntry.auditStatus !== 'Pending Audit' && (
+                    <span className="text-xs text-muted-fg">
+                      by {formatRealName(targetEntry.auditedBy || 'Audit Officer', 'Audit Officer')}
+                      {targetEntry.auditDate ? ` · ${formatTimelineDateTime(targetEntry.auditDate)}` : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Key Details Grid (Label-above-value matching AuditTransactionModal) */}
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5">
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Reference No.
+                  </span>
+                  <span className="font-mono text-sm font-semibold text-focus break-all mt-0.5 block">
+                    {targetEntry.referenceNumber || targetEntry.id || '—'}
+                  </span>
+                </div>
+
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Subsidiary / Company
+                  </span>
+                  <span className="text-sm font-semibold text-focus break-words mt-0.5 block">
+                    {targetEntry.companyName || '—'}
+                  </span>
+                </div>
+
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Transaction Date
+                  </span>
+                  <span className="text-sm font-semibold text-focus mt-0.5 block">
+                    {targetEntry.date}
+                  </span>
                   {targetEntry.createdAt && (
                     <div className="text-[11px] text-slate-500 font-normal mt-0.5 flex items-center gap-1">
                       <Clock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
@@ -1920,33 +1897,32 @@ export const PettyCashPage: React.FC = () => {
                     </div>
                   )}
                 </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg">Subsidiary / Company</span>
-                  <div className="font-semibold text-focus mt-0.5">{targetEntry.companyName}</div>
+
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Transaction Type
+                  </span>
+                  <span className="text-sm font-semibold text-focus mt-0.5 block capitalize">
+                    {targetEntry.requestType?.replace(/_/g, ' ') || targetEntry.type || 'Petty Cash'}
+                  </span>
                 </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg">Amount Requested</span>
-                  <div className="font-semibold text-focus mt-0.5">
+
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Amount Requested
+                  </span>
+                  <span className="text-sm font-semibold text-focus mt-0.5 block">
                     {targetEntry.amountRequested > 0 ? formatPHP(targetEntry.amountRequested) : '—'}
-                  </div>
+                  </span>
                 </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg">Cash In (Received)</span>
-                  <div className="font-bold text-emerald-700 mt-0.5">
-                    {targetEntry.status === 'Approved' && targetEntry.amountIn > 0
-                      ? formatPHP(targetEntry.amountIn)
-                      : '—'}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg">Cash Out (Spent)</span>
-                  <div className="font-bold text-rose-600 mt-0.5">
-                    {targetEntry.amountOut > 0 ? formatPHP(targetEntry.amountOut) : '—'}
-                  </div>
-                </div>
-                <div>
-                  <span className="text-[11px] text-muted-fg">Running Balance</span>
-                  <div className="font-bold text-focus mt-0.5">{formatPHP(targetEntry.runningBalance)}</div>
+
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Requested / Recorded By
+                  </span>
+                  <span className="text-sm font-semibold text-focus break-words mt-0.5 block">
+                    {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
+                  </span>
                 </div>
               </div>
 
@@ -2175,248 +2151,353 @@ export const PettyCashPage: React.FC = () => {
 
               {/* Funding bank chosen by Finance (spec 0014). Top ups and requests only, never the account number. */}
               {targetEntry.type !== 'expense' && (
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-stroke/30 space-y-1 text-xs">
-                  <span className="text-[11px] font-bold text-muted-fg uppercase tracking-wider block">
+                <div className="rounded-2xl border border-slate-200/80 bg-white p-4 space-y-2 text-xs">
+                  <span className="text-xs font-bold text-muted-fg uppercase tracking-wider block">
                     Funding Bank
                   </span>
                   {targetEntry.fundingBankName ? (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 pt-1">
                       <div>
-                        <span className="text-[11px] text-muted-fg">Bank</span>
+                        <span className="text-xs text-muted-fg">Bank</span>
                         <div className="font-semibold text-focus mt-0.5">{targetEntry.fundingBankName}</div>
                         {targetEntry.fundingAccountName && (
-                          <div className="text-[11px] text-slate-500">{targetEntry.fundingAccountName}</div>
+                          <div className="text-xs text-slate-500">{targetEntry.fundingAccountName}</div>
                         )}
                       </div>
                       <div>
-                        <span className="text-[11px] text-muted-fg">Bank Owner Company</span>
+                        <span className="text-xs text-muted-fg">Bank Owner Company</span>
                         <div className="font-semibold text-focus mt-0.5">
                           {targetEntry.fundingCompanyName || '—'}
                         </div>
                         {targetEntry.isOwnAccount && (
-                          <div className="text-[11px] text-emerald-700 font-medium">Own account</div>
+                          <div className="text-xs text-emerald-700 font-medium">Own account</div>
                         )}
                       </div>
                     </div>
                   ) : (
-                    <div className="text-muted-fg italic">Not assigned yet</div>
+                    <div className="text-muted-fg italic pt-1">Not assigned yet</div>
                   )}
                 </div>
               )}
 
-              <div className="space-y-1 text-xs">
-                <span className="font-semibold text-focus">Particulars / Description</span>
-                <p className="p-3 rounded-xl bg-surface border border-stroke/40 text-focus leading-relaxed text-xs">
+              <div className="rounded-2xl border border-slate-200/80 bg-white p-4 space-y-2">
+                <span className="text-xs font-bold text-muted-fg uppercase tracking-wider block">
+                  Particulars / Description
+                </span>
+                <p className="p-3 rounded-xl bg-slate-50/70 border border-stroke/30 text-focus leading-relaxed text-xs">
                   {targetEntry.description}
                 </p>
               </div>
 
-              {/* Activity Timeline & Remarks Section (unified without circle bullet) */}
-              <div className="pt-3 mt-1 border-t border-stroke/20 space-y-2.5">
-                <div className="flex items-center justify-between pb-1">
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg flex items-center gap-1.5">
-                    <History className="w-3.5 h-3.5 text-primary" />
-                    Activity Timeline & Remarks
-                  </span>
-                  <span className="text-[10px] text-muted-fg font-mono">
-                    ID: {targetEntry.id || '—'}
-                  </span>
+              {/* Remarks (Collapsible Chevron matching AuditTransactionModal) */}
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsRemarksExpanded((prev) => !prev)}
+                    aria-expanded={isRemarksExpanded}
+                    className="inline-flex items-center gap-2 min-h-[36px] py-1 text-left text-xs font-bold uppercase tracking-wider text-muted-fg hover:text-focus transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                  >
+                    {isRemarksExpanded ? (
+                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                    )}
+                    <span>Remarks</span>
+                    {!isRemarksExpanded && (targetEntry.financeRemark || targetEntry.remark || targetEntry.auditNotes) && (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary normal-case tracking-normal">
+                        Has note
+                      </span>
+                    )}
+                  </button>
                 </div>
-
-                <div className="rounded-xl border border-stroke/20 bg-slate-50/70 p-3 space-y-2.5 text-xs">
-                  {/* Created / Requested Event */}
-                  <div className="min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold text-focus">
-                        {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement'
-                          ? 'Disbursement recorded by'
-                          : targetEntry.type === 'expense'
-                          ? 'Petty cash expense recorded by'
-                          : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
-                          ? 'Reimbursement filed by'
-                          : 'Requested by'}{' '}
-                        <span className="text-primary font-bold">
-                          {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
+                {isRemarksExpanded && (
+                  <div className="mt-2 pb-1.5 pl-6 space-y-2.5">
+                    {targetEntry.financeRemark && (
+                      <div className="p-2.5 rounded-lg bg-blue-50/90 border border-blue-200/80 text-blue-900 text-xs space-y-1">
+                        <span className="font-bold block text-[11px] uppercase tracking-wider text-blue-800">
+                          Finance Remarks
                         </span>
-                      </span>
-                      <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                        {formatTimelineDateTime(targetEntry.createdAt || targetEntry.date)}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-muted-fg mt-0.5">
-                      {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.type === 'expense'
-                        ? `Deducted immediately from ${targetEntry.companyName || 'Company'} petty cash fund`
-                        : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
-                        ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
-                        : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
-                    </p>
-                  </div>
-
-                  {/* Finance Endorsement Event */}
-                  {(targetEntry.endorsedBy || targetEntry.financeRemark) && (
-                    <div className="pt-2 border-t border-stroke/15 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-focus">
-                          {targetEntry.endorsedBy ? (
-                            <>
-                              Endorsed by Finance:{' '}
-                              <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy, 'Finance Officer')}</span>
-                            </>
-                          ) : (
-                            <span className="text-blue-600 font-semibold">Finance Endorsement</span>
-                          )}
-                        </span>
-                        {targetEntry.endorsedAt && (
-                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                            {formatTimelineDateTime(targetEntry.endorsedAt)}
-                          </span>
+                        <p className="whitespace-pre-wrap break-words leading-relaxed">
+                          &ldquo;{targetEntry.financeRemark}&rdquo;
+                        </p>
+                        {targetEntry.endorsedBy && (
+                          <p className="text-[11px] text-blue-700 opacity-85">
+                            By <span className="font-semibold">{formatRealName(targetEntry.endorsedBy, 'Finance Officer')}</span>
+                            {targetEntry.endorsedAt ? ` · ${formatTimelineDateTime(targetEntry.endorsedAt)}` : ''}
+                          </p>
                         )}
                       </div>
-                      {targetEntry.financeRemark && (
-                        <div className="mt-1.5 p-2 rounded-lg bg-blue-50/90 border border-blue-200/80 text-blue-900 text-[11px] italic">
-                          Remarks: &ldquo;{targetEntry.financeRemark}&rdquo;
-                        </div>
-                      )}
-                    </div>
-                  )}
+                    )}
 
-                  {/* Audit Review Event */}
-                  <div className="pt-2 border-t border-stroke/15 min-w-0">
-                    {isBlankStatusEntry(targetEntry) ? (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-focus">
-                            {targetEntry.auditStatus === 'Verified' ? (
-                              <span className="text-emerald-700 font-bold">
-                                Audited
-                                {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
-                              </span>
-                            ) : targetEntry.auditStatus === 'Flagged' ? (
-                              <span className="text-rose-700 font-bold">
-                                Discrepancy Flagged
-                                {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
-                              </span>
-                            ) : (
-                              <span className="text-amber-700 font-semibold">
-                                Pending Audit
-                              </span>
-                            )}
-                          </span>
-                          {targetEntry.auditDate && (
-                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                              {formatTimelineDateTime(targetEntry.auditDate)}
-                            </span>
-                          )}
-                        </div>
-                        {targetEntry.auditNotes ? (
-                          <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
-                            Audit Notes: &ldquo;{targetEntry.auditNotes}&rdquo;
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-muted-fg mt-0.5">
-                            {targetEntry.auditStatus === 'Verified'
-                              ? 'Verified by Internal Audit.'
-                              : targetEntry.auditStatus === 'Flagged'
-                              ? 'Flagged for discrepancy by Internal Audit.'
-                              : 'Awaiting Internal Audit verification.'}
+                    {targetEntry.remark && (
+                      <div className="p-2.5 rounded-lg bg-white border border-stroke/30 text-focus text-xs space-y-1 shadow-2xs">
+                        <span className="font-bold block text-[11px] uppercase tracking-wider text-muted-fg">
+                          General / Operational Remarks
+                        </span>
+                        <p className="whitespace-pre-wrap break-words leading-relaxed">
+                          {targetEntry.remark}
+                        </p>
+                        {targetEntry.reviewedBy && (
+                          <p className="text-[11px] text-muted-fg">
+                            By <span className="font-semibold text-focus">{formatRealName(targetEntry.reviewedBy, 'Reviewer')}</span>
+                            {targetEntry.reviewedAt ? ` · ${formatTimelineDateTime(targetEntry.reviewedAt)}` : ''}
                           </p>
                         )}
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-focus">
-                            {targetEntry.status === 'Approved' ? (
-                              <span className="text-emerald-700 font-bold">
-                                Audited & Approved
-                                {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
-                              </span>
-                            ) : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' ? (
-                              <span className="text-rose-700 font-bold">
-                                Rejected / Disapproved
-                                {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
-                              </span>
-                            ) : targetEntry.status === 'Pending Audit Approval' ? (
-                              <span className="text-amber-700 font-semibold">
-                                Pending Audit Review
-                              </span>
-                            ) : (
-                              <span className="text-slate-600 font-medium">
-                                {targetEntry.status}
-                              </span>
-                            )}
-                          </span>
-                          {targetEntry.reviewedAt && (
-                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                              {formatTimelineDateTime(targetEntry.reviewedAt)}
-                            </span>
-                          )}
-                        </div>
-                        {targetEntry.remark ? (
-                          <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
-                            Remarks: &ldquo;{targetEntry.remark}&rdquo;
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-muted-fg mt-0.5">
-                            {targetEntry.status === 'Approved'
-                              ? 'Approved by Internal Audit.'
-                              : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit'
-                              ? 'Request rejected by reviewer.'
-                              : 'Awaiting audit review and verification.'}
+                      </div>
+                    )}
+
+                    {targetEntry.auditNotes && (
+                      <div
+                        className={cn(
+                          'p-2.5 rounded-lg border text-xs space-y-1',
+                          targetEntry.auditStatus === 'Verified'
+                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                            : 'bg-rose-50/70 border-rose-200 text-rose-900'
+                        )}
+                      >
+                        <span className="font-bold block text-[11px] uppercase tracking-wider">
+                          {targetEntry.auditStatus === 'Verified' ? 'Audit Remarks' : 'Audit Discrepancy Note'}
+                        </span>
+                        <p className="whitespace-pre-wrap break-words leading-relaxed">
+                          &ldquo;{targetEntry.auditNotes}&rdquo;
+                        </p>
+                        {targetEntry.auditedBy && (
+                          <p className="text-[11px] opacity-85">
+                            By <span className="font-semibold">{formatRealName(targetEntry.auditedBy, 'Audit Officer')}</span>
+                            {targetEntry.auditDate ? ` · ${formatTimelineDateTime(targetEntry.auditDate)}` : ''}
                           </p>
                         )}
-                      </>
+                      </div>
+                    )}
+
+                    {!targetEntry.financeRemark && !targetEntry.remark && !targetEntry.auditNotes && (
+                      <span className="text-muted-fg/70 italic font-normal text-xs">
+                        No operational remarks provided
+                      </span>
                     )}
                   </div>
+                )}
+              </div>
 
-                  {/* Transfer Received Event */}
-                  {(targetEntry.transferReceivedAt || targetEntry.transferReceivedBy) && (
-                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+              {/* Activity Timeline (Collapsible Chevron matching AuditTransactionModal) */}
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsTimelineExpanded((prev) => !prev)}
+                  aria-expanded={isTimelineExpanded}
+                  className="w-full flex items-center justify-between min-h-[36px] py-1 text-left cursor-pointer rounded-md hover:text-focus transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                >
+                  <span className="text-xs font-bold uppercase tracking-wider text-muted-fg flex items-center gap-2">
+                    {isTimelineExpanded ? (
+                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                    )}
+                    <History className="w-3.5 h-3.5 text-primary" />
+                    <span>Activity Timeline</span>
+                  </span>
+                  <span className="text-xs text-muted-fg font-mono">
+                    ID: {targetEntry.id || '—'}
+                  </span>
+                </button>
+
+                {isTimelineExpanded && (
+                  <div className="rounded-xl border border-stroke/20 bg-white p-3 space-y-2.5 text-xs">
+                    {/* Created / Requested Event */}
+                    <div className="min-w-0">
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-semibold text-focus">
-                          Bank Transfer Received by{' '}
-                          <span className="text-teal-700 font-bold">
-                            {formatRealName(targetEntry.transferReceivedBy || 'Finance Officer', 'Finance Officer')}
+                          {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement'
+                            ? 'Disbursement recorded by'
+                            : targetEntry.type === 'expense'
+                            ? 'Petty cash expense recorded by'
+                            : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
+                            ? 'Reimbursement filed by'
+                            : 'Requested by'}{' '}
+                          <span className="text-primary font-bold">
+                            {formatRealName(targetEntry.requestedBy || targetEntry.paidBy || 'Employee', 'Staff')}
                           </span>
                         </span>
-                        {targetEntry.transferReceivedAt && (
-                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                            {formatTimelineDateTime(targetEntry.transferReceivedAt)}
-                          </span>
-                        )}
+                        <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                          {formatTimelineDateTime(targetEntry.createdAt || targetEntry.date)}
+                        </span>
                       </div>
                       <p className="text-[11px] text-muted-fg mt-0.5">
-                        Intercompany funding transfer confirmed received by requesting company bank.
+                        {targetEntry.requestType === 'disbursement' || targetEntry.requestType === 'replenishment_disbursement' || targetEntry.type === 'expense'
+                          ? `Deducted immediately from ${targetEntry.companyName || 'Company'} petty cash fund`
+                          : targetEntry.requestType === 'reimbursement' || targetEntry.requestType === 'replenishment'
+                          ? `Filed for ${targetEntry.companyName || 'Company'} petty cash fund`
+                          : `Top-up request initiated for ${targetEntry.companyName || 'Company'}`}
                       </p>
                     </div>
-                  )}
 
-                  {/* Reimbursement Disbursed / Float Settled Event */}
-                  {(targetEntry.reimbursedAt || targetEntry.reimbursedBy || targetEntry.status === 'Reimbursed' || targetEntry.status === 'Settled') && (
-                    <div className="pt-2 border-t border-stroke/15 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-focus">
-                          {targetEntry.status === 'Settled' ? (
-                            <span className="text-emerald-700 font-bold">Float Finalized & Settled</span>
-                          ) : (
-                            <span className="text-teal-700 font-bold">Reimbursement Payout Disbursed</span>
+                    {/* Finance Endorsement Event */}
+                    {(targetEntry.endorsedBy || targetEntry.financeRemark) && (
+                      <div className="pt-2 border-t border-stroke/15 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {targetEntry.endorsedBy ? (
+                              <>
+                                Endorsed by Finance:{' '}
+                                <span className="text-blue-600 font-bold">{formatRealName(targetEntry.endorsedBy, 'Finance Officer')}</span>
+                              </>
+                            ) : (
+                              <span className="text-blue-600 font-semibold">Finance Endorsement</span>
+                            )}
+                          </span>
+                          {targetEntry.endorsedAt && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(targetEntry.endorsedAt)}
+                            </span>
                           )}
-                          {targetEntry.reimbursedBy ? ` by ${formatRealName(targetEntry.reimbursedBy, 'Finance Officer')}` : ''}
-                        </span>
-                        {targetEntry.reimbursedAt && (
-                          <span className="text-[10px] text-muted-fg font-mono shrink-0">
-                            {formatTimelineDateTime(targetEntry.reimbursedAt)}
-                          </span>
+                        </div>
+                        {targetEntry.financeRemark && (
+                          <div className="mt-1.5 p-2 rounded-lg bg-blue-50/90 border border-blue-200/80 text-blue-900 text-[11px] italic">
+                            Remarks: &ldquo;{targetEntry.financeRemark}&rdquo;
+                          </div>
                         )}
                       </div>
-                      <p className="text-[11px] text-muted-fg mt-0.5">
-                        {targetEntry.status === 'Settled'
-                          ? 'Company float adjustment finalized and petty cash ledger updated.'
-                          : `Employee reimbursement disbursed to ${formatRealName(targetEntry.paidBy || 'Employee', 'Staff')}.`}
-                      </p>
+                    )}
+
+                    {/* Audit Review Event */}
+                    <div className="pt-2 border-t border-stroke/15 min-w-0">
+                      {isBlankStatusEntry(targetEntry) ? (
+                        <>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-focus">
+                              {targetEntry.auditStatus === 'Verified' ? (
+                                <span className="text-emerald-700 font-bold">
+                                  Audited
+                                  {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
+                                </span>
+                              ) : targetEntry.auditStatus === 'Flagged' ? (
+                                <span className="text-rose-700 font-bold">
+                                  Discrepancy Flagged
+                                  {targetEntry.auditedBy ? ` by ${formatRealName(targetEntry.auditedBy, 'Audit Officer')}` : ''}
+                                </span>
+                              ) : (
+                                <span className="text-amber-700 font-semibold">
+                                  Pending Audit
+                                </span>
+                              )}
+                            </span>
+                            {targetEntry.auditDate && (
+                              <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                                {formatTimelineDateTime(targetEntry.auditDate)}
+                              </span>
+                            )}
+                          </div>
+                          {targetEntry.auditNotes ? (
+                            <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                              Audit Notes: &ldquo;{targetEntry.auditNotes}&rdquo;
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-muted-fg mt-0.5">
+                              {targetEntry.auditStatus === 'Verified'
+                                ? 'Verified by Internal Audit.'
+                                : targetEntry.auditStatus === 'Flagged'
+                                ? 'Flagged for discrepancy by Internal Audit.'
+                                : 'Awaiting Internal Audit verification.'}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-semibold text-focus">
+                              {targetEntry.status === 'Approved' ? (
+                                <span className="text-emerald-700 font-bold">
+                                  Audited & Approved
+                                  {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                                </span>
+                              ) : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' ? (
+                                <span className="text-rose-700 font-bold">
+                                  Rejected / Disapproved
+                                  {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
+                                </span>
+                              ) : targetEntry.status === 'Pending Audit Approval' ? (
+                                <span className="text-amber-700 font-semibold">
+                                  Pending Audit Review
+                                </span>
+                              ) : (
+                                <span className="text-slate-600 font-medium">
+                                  {targetEntry.status}
+                                </span>
+                              )}
+                            </span>
+                            {targetEntry.reviewedAt && (
+                              <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                                {formatTimelineDateTime(targetEntry.reviewedAt)}
+                              </span>
+                            )}
+                          </div>
+                          {targetEntry.remark ? (
+                            <div className="mt-1.5 p-2 rounded-lg bg-amber-50/90 border border-amber-200/80 text-amber-900 text-[11px] italic">
+                              Remarks: &ldquo;{targetEntry.remark}&rdquo;
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-muted-fg mt-0.5">
+                              {targetEntry.status === 'Approved'
+                                ? 'Approved by Internal Audit.'
+                                : targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit'
+                                ? 'Request rejected by reviewer.'
+                                : 'Awaiting audit review and verification.'}
+                            </p>
+                          )}
+                        </>
+                      )}
                     </div>
-                  )}
-                </div>
+
+                    {/* Transfer Received Event */}
+                    {(targetEntry.transferReceivedAt || targetEntry.transferReceivedBy) && (
+                      <div className="pt-2 border-t border-stroke/15 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            Bank Transfer Received by{' '}
+                            <span className="text-teal-700 font-bold">
+                              {formatRealName(targetEntry.transferReceivedBy || 'Finance Officer', 'Finance Officer')}
+                            </span>
+                          </span>
+                          {targetEntry.transferReceivedAt && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(targetEntry.transferReceivedAt)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-fg mt-0.5">
+                          Intercompany funding transfer confirmed received by requesting company bank.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Reimbursement Disbursed / Float Settled Event */}
+                    {(targetEntry.reimbursedAt || targetEntry.reimbursedBy || targetEntry.status === 'Reimbursed' || targetEntry.status === 'Settled') && (
+                      <div className="pt-2 border-t border-stroke/15 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-focus">
+                            {targetEntry.status === 'Settled' ? (
+                              <span className="text-emerald-700 font-bold">Float Finalized & Settled</span>
+                            ) : (
+                              <span className="text-teal-700 font-bold">Reimbursement Payout Disbursed</span>
+                            )}
+                            {targetEntry.reimbursedBy ? ` by ${formatRealName(targetEntry.reimbursedBy, 'Finance Officer')}` : ''}
+                          </span>
+                          {targetEntry.reimbursedAt && (
+                            <span className="text-[10px] text-muted-fg font-mono shrink-0">
+                              {formatTimelineDateTime(targetEntry.reimbursedAt)}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-fg mt-0.5">
+                          {targetEntry.status === 'Settled'
+                            ? 'Company float adjustment finalized and petty cash ledger updated.'
+                            : `Employee reimbursement disbursed to ${formatRealName(targetEntry.paidBy || 'Employee', 'Staff')}.`}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Footer Actions */}
@@ -2779,28 +2860,22 @@ export const PettyCashPage: React.FC = () => {
                     </div>
                   ) : (
                   <div className="relative">
-                    <select
+                    <Dropdown
                       value={selectedFundingBankId}
-                      onChange={(e) => {
-                        setSelectedFundingBankId(e.target.value)
+                      onChange={(val) => {
+                        setSelectedFundingBankId(String(val))
                         if (reviewError) setReviewError('')
                       }}
-                      className="w-full h-11 pl-3 pr-9 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus appearance-none cursor-pointer"
-                      required={!isZeroExcessReview}
-                    >
-                      <option value="" disabled={!isZeroExcessReview}>
-                        Choose the bank that funds this request...
-                      </option>
-                      {(targetEntry?.companyName
+                      placeholder="Choose the bank that funds this request..."
+                      aria-label="Funding Bank"
+                      options={(targetEntry?.companyName
                         ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || ''))
                         : bankAccounts
-                      ).map((acc) => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.bankName} ({acc.accountName}) [{acc.companyName}]
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+                      ).map((acc) => ({
+                        value: String(acc.id),
+                        label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                      }))}
+                    />
                   </div>
                   )}
                   {!banksLoading && !banksError && (targetEntry?.companyName ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || '')).length === 0 : bankAccounts.length === 0) && (

@@ -1,5 +1,7 @@
 import * as React from 'react'
-import { createBrowserRouter, Navigate } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useRouteError } from 'react-router-dom'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { AppShell } from '@/components/layout/AppShell'
 import {
   ProtectedRoute,
@@ -14,7 +16,7 @@ import {
 
 function PageFallback() {
   return (
-    <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+    <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
       {/* Header skeleton */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="space-y-2">
@@ -60,13 +62,62 @@ function PageFallback() {
   )
 }
 
+function RootErrorBoundary() {
+  const error: any = useRouteError()
+  const errorMessage =
+    error?.message ||
+    (typeof error === 'string' ? error : 'The page encountered an unexpected error.')
+
+  return (
+    <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-6 text-center">
+      <div className="w-14 h-14 rounded-full bg-red-50 text-brand flex items-center justify-center mb-4 ring-8 ring-red-50/50">
+        <AlertTriangle className="w-7 h-7 text-brand" />
+      </div>
+      <h1 className="text-xl font-bold text-slate-800 mb-2">Something went wrong</h1>
+      <p className="text-sm text-slate-500 max-w-md mb-6 leading-relaxed">
+        {errorMessage}
+      </p>
+      <div className="flex items-center gap-3">
+        <Button
+          variant="primary"
+          onClick={() => window.location.reload()}
+          className="rounded-[10px] inline-flex items-center gap-2"
+        >
+          <RefreshCw className="w-4 h-4" />
+          Reload Page
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function lazyPage<P = any>(
   importer: () => Promise<{ [key: string]: any }>,
   name: string
 ) {
-  const LazyComponent = React.lazy(() =>
-    importer().then((m) => ({ default: m[name] }))
-  )
+  const LazyComponent = React.lazy(async () => {
+    try {
+      const m = await importer()
+      return { default: m[name] }
+    } catch (error: any) {
+      const isChunkLoadFailed =
+        error?.message?.includes('Failed to fetch dynamically imported module') ||
+        error?.message?.includes('dynamically imported module') ||
+        error?.name === 'ChunkLoadError'
+
+      if (isChunkLoadFailed) {
+        const key = `chunk_reload_${name}`
+        const alreadyReloaded = sessionStorage.getItem(key)
+        if (!alreadyReloaded) {
+          sessionStorage.setItem(key, 'true')
+          window.location.reload()
+          return new Promise<{ default: React.ComponentType<any> }>(() => {})
+        }
+        sessionStorage.removeItem(key)
+      }
+      throw error
+    }
+  })
   return function Wrapped(props: P & React.JSX.IntrinsicAttributes) {
     return (
       <React.Suspense fallback={<PageFallback />}>
@@ -111,6 +162,7 @@ export const router = createBrowserRouter([
   {
     path: '/',
     element: <LandingPage />,
+    errorElement: <RootErrorBoundary />,
   },
   // Finance Centralized Company Selector & Hub (Strictly Finance only)
   {
@@ -120,6 +172,7 @@ export const router = createBrowserRouter([
         <CentralizedAuthPage />
       </FinanceOnlyRoute>
     ),
+    errorElement: <RootErrorBoundary />,
   },
   {
     path: '/finance/centralized-auth',
@@ -137,6 +190,7 @@ export const router = createBrowserRouter([
         <LoginPage />
       </PublicOnlyRoute>
     ),
+    errorElement: <RootErrorBoundary />,
   },
   {
     path: '/forgot-password',
@@ -145,6 +199,7 @@ export const router = createBrowserRouter([
         <LoginPage />
       </PublicOnlyRoute>
     ),
+    errorElement: <RootErrorBoundary />,
   },
   {
     path: '/verify-2fa',
@@ -153,14 +208,17 @@ export const router = createBrowserRouter([
         <LoginPage />
       </PublicOnlyRoute>
     ),
+    errorElement: <RootErrorBoundary />,
   },
   {
     path: '/auth/setup-password',
     element: <SetupPasswordPage />,
+    errorElement: <RootErrorBoundary />,
   },
   {
     path: '/setup-password',
     element: <SetupPasswordPage />,
+    errorElement: <RootErrorBoundary />,
   },
   // Authenticated Persistent App Shell layout route
   // Using AppShell as a layout route keeps the sidebar and header mounted,
@@ -171,6 +229,7 @@ export const router = createBrowserRouter([
         <AppShell />
       </ProtectedRoute>
     ),
+    errorElement: <RootErrorBoundary />,
     children: [
       {
         path: '/dashboard',

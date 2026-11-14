@@ -229,6 +229,14 @@ class TestActivityLogEndpoints(unittest.TestCase):
 class TestAuditDiffAndIpExtraction(unittest.TestCase):
     """Verify compute_dict_diff, sensitive field redaction, and client IP extraction."""
 
+    @classmethod
+    def setUpClass(cls):
+        from app.db.session import engine, Base
+        import app.models  # register all models
+        Base.metadata.create_all(bind=engine)
+        from app.db.migrations import run_migrations
+        run_migrations(engine)
+
     def test_compute_dict_diff_update_and_redaction(self):
         from app.core.audit import compute_dict_diff
 
@@ -350,6 +358,37 @@ class TestAuditDiffAndIpExtraction(unittest.TestCase):
         self.assertEqual(item.user_agent, "Mozilla/5.0 Chrome")
         self.assertIn("amount", item.changes)
         self.assertEqual(item.changes["amount"]["new"], 1200.0)
+
+    def test_enriched_activity_log_flat_changes_normalized(self):
+        service = ActivityLogService()
+        raw_rows = [
+            {
+                "audit_log_id": 43,
+                "user_id": None,
+                "company_id": None,
+                "action": "EXPENSE_UPDATED",
+                "action_category": "EXPENSE",
+                "ip_address": "127.0.0.1",
+                "details": {
+                    "severity": "INFO",
+                    "changes": {
+                        "amount": "900.00",
+                        "description": "",
+                    },
+                },
+                "created_at": "2026-11-14T12:00:00+00:00",
+            }
+        ]
+
+        enriched = service._enrich_logs(raw_rows)
+        self.assertEqual(len(enriched), 1)
+        item = enriched[0]
+        self.assertIn("amount", item.changes)
+        self.assertEqual(item.changes["amount"]["new"], "900.00")
+        self.assertIsNone(item.changes["amount"]["old"])
+        self.assertIn("description", item.changes)
+        self.assertEqual(item.changes["description"]["new"], "")
+        self.assertIsNone(item.changes["description"]["old"])
 
     def test_get_entity_timeline_integration(self):
         service = ActivityLogService()

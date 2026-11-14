@@ -27,11 +27,17 @@ import {
   Landmark,
   Lock,
   Receipt,
+  MessageSquare,
+  HelpCircle,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -44,6 +50,14 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
   DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
@@ -51,6 +65,7 @@ import { TransactionDateRangeControl } from '@/components/transactions/Transacti
 import { IncomeSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { DepositDateDialog } from '@/components/dashboard/DepositDateDialog'
 import { AddSalesModal } from '@/components/dashboard/AddSalesModal'
 import { useReceivables } from '@/hooks/useReceivables'
@@ -71,6 +86,7 @@ import {
   formatToYYYYMMDD,
   formatCreatedAt,
 } from '@/utils/dateUtils'
+import { getCleanParticularsTitle } from '@/utils/transactionLifecycle'
 import {
   getParticularsSummary,
   matchesParticularsStatusFilter,
@@ -108,11 +124,16 @@ export const SalesPage: React.FC = () => {
     (userRole === 'company' || userRole === 'supervisor') && !isAudit
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
+  const isAdminUser = userRole === 'admin'
+  const isSupervisor =
+    userRole.includes('supervisor') ||
+    userRole.includes('company') ||
+    (!isAudit && !isFinance && !isOwner)
   const isCompanyScoped = isStrictlyCompanyScoped
   const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
-  const canAuditActions = isAudit && !isOwner
+  const canAuditActions = (isAudit || isAdminUser) && !isOwner
   const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
@@ -202,6 +223,15 @@ export const SalesPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
   >('All')
+  const statusFilterOptions: DropdownFilterOption<string>[] = React.useMemo(
+    () => [
+      { value: 'All', label: 'All Statuses' },
+      { value: 'Paid', label: 'Paid' },
+      { value: 'Pending', label: 'Pending' },
+      { value: 'Unpaid', label: 'Unpaid' },
+    ],
+    []
+  )
   const [selectedPeriod, setSelectedPeriod] =
     React.useState<PeriodType>('Monthly')
   const [tableTab, setTableTab] = React.useState<'Deposit' | 'Sales Record'>(
@@ -209,10 +239,42 @@ export const SalesPage: React.FC = () => {
   )
   const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('Daily Summary')
   const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
+  const [expandedDepositIds, setExpandedDepositIds] = React.useState<Set<string>>(new Set())
   const [dailyPage, setDailyPage] = React.useState(1)
+
+  // Operational remarks dialog state
+  const [isRemarksDialogOpen, setIsRemarksDialogOpen] = React.useState(false)
+  const [remarksTargetSale, setRemarksTargetSale] = React.useState<SalesItem | null>(null)
+  const [remarksInput, setRemarksInput] = React.useState('')
+  const [isSavingRemarks, setIsSavingRemarks] = React.useState(false)
 
   const toggleDateExpansion = (dateKey: string) => {
     setExpandedDates((prev) => (prev.has(dateKey) ? new Set() : new Set([dateKey])))
+  }
+
+  const toggleDepositExpansion = (depositId: string) => {
+    setExpandedDepositIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(depositId)) next.delete(depositId)
+      else next.add(depositId)
+      return next
+    })
+  }
+
+  const handleSaveRemarks = async () => {
+    if (!remarksTargetSale) return
+    setIsSavingRemarks(true)
+    try {
+      const updated = await salesService.updateSaleRemarks(remarksTargetSale.id, remarksInput)
+      setSales((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
+      showToast('Remarks updated successfully.', 'success')
+      setIsRemarksDialogOpen(false)
+      setRemarksTargetSale(null)
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update remarks.', 'error')
+    } finally {
+      setIsSavingRemarks(false)
+    }
   }
 
   // Handle switching period (Daily, Quarterly, Monthly, Annually)
@@ -539,10 +601,12 @@ export const SalesPage: React.FC = () => {
   // Data state
   const [sales, setSales] = React.useState<SalesItem[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load sales data. `silent` reloads without the loading skeleton (used by realtime updates).
   const loadSales = React.useCallback(async (silent = false, forceRefresh = false) => {
     if (!silent) setLoading(true)
+    setLoadError(null)
     try {
       const targetCompany = isCompanyScoped
         ? assignedCompany
@@ -553,6 +617,7 @@ export const SalesPage: React.FC = () => {
       setSales(data)
     } catch (err) {
       console.error('Failed to load sales data:', err)
+      setLoadError('Unable to load sales records. Please check your connection and try again.')
       notifyError(err, 'Unable to load sales records. Please try again.')
     } finally {
       setLoading(false)
@@ -979,6 +1044,39 @@ export const SalesPage: React.FC = () => {
     return Array.from(closing.entries()).sort((a, b) => a[0].localeCompare(b[0]))
   }, [combinedSales, depositBalanceByKey, selectedBankId])
 
+  const formatToShortDate = React.useCallback((val: string | null | undefined): string => {
+    if (!val) return '—'
+    const trimmed = String(val).trim()
+    if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(trimmed)) return trimmed
+    const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
+    if (mLong) return `${mLong[1]}/${mLong[2]}/${mLong[3].slice(2)}`
+    const mIso = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
+    if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1].slice(2)}`
+    return trimmed
+  }, [])
+
+  const activeStartingBalance = React.useMemo(() => {
+    if (selectedBankId) {
+      const b = allBankAccounts.find((acc) => String(acc.id) === selectedBankId)
+      return b ? Number(b.startingBalance) || 0 : 0
+    }
+    return Math.round(
+      allBankAccounts.reduce((sum, acc) => sum + (Number(acc.startingBalance) || 0), 0) * 100
+    ) / 100
+  }, [selectedBankId, allBankAccounts])
+
+  const getDayOpeningBalance = React.useCallback(
+    (date: string) => {
+      const norm = normalizeDateToYYYYMMDD(date) || date
+      const earlier = closingBalanceDates.filter(([d]) => d < norm)
+      if (earlier.length > 0) {
+        return earlier[earlier.length - 1][1]
+      }
+      return activeStartingBalance
+    },
+    [closingBalanceDates, activeStartingBalance]
+  )
+
   const getClosingBalance = React.useCallback(
     (date: string) => {
       const normDate = normalizeDateToYYYYMMDD(date) || date
@@ -992,11 +1090,11 @@ export const SalesPage: React.FC = () => {
           const seedBank = allBankAccounts.find((b) => String(b.id) === selectedBankId)
           return seedBank ? Number(seedBank.startingBalance) || 0 : 0
         }
-        return 0
+        return activeStartingBalance
       }
       return result
     },
-    [closingBalanceDates, selectedBankId, allBankAccounts]
+    [closingBalanceDates, selectedBankId, allBankAccounts, activeStartingBalance]
   )
 
   const hasFocusedDay = React.useMemo(
@@ -1164,17 +1262,25 @@ export const SalesPage: React.FC = () => {
       : selectedCompany
 
   return (
-    <div className="space-y-6 pb-10 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-10 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* 1. Header & Controls */}
       <div className="space-y-4">
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Sales
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Sales
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Overview of company revenue, sales receipts, and bank deposit settlements"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Here's the summary of sales in {displayedCompanyTitle}
+              Sales records and bank deposits for {displayedCompanyTitle}
             </p>
           </div>
 
@@ -1186,7 +1292,7 @@ export const SalesPage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-full font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -1211,7 +1317,7 @@ export const SalesPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportCsv}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Download as CSV</span>
@@ -1219,7 +1325,7 @@ export const SalesPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportPdf}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileText className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>Download as PDF</span>
@@ -1254,7 +1360,7 @@ export const SalesPage: React.FC = () => {
             aria-selected={tableTab === 'Deposit'}
             onClick={() => setTableTab('Deposit')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Deposit'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -1287,7 +1393,7 @@ export const SalesPage: React.FC = () => {
             aria-selected={tableTab === 'Sales Record'}
             onClick={() => setTableTab('Sales Record')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Sales Record'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -1317,22 +1423,22 @@ export const SalesPage: React.FC = () => {
 
         {/* Controls Container / Shared Filters */}
         <div className="flex flex-col gap-3 pt-1">
-          {/* Row 1: Company + Bank + Date + All Records / By Day toggle */}
+          {/* Row 1: Company + Bank + Status + Date + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Company Scope */}
               {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-1 min-w-[170px]">
+                <div ref={companyDropdownRef} className="relative flex-1 min-w-[200px] sm:min-w-[240px]">
                   <button
                     type="button"
                     onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer select-none box-border',
+                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                     aria-label="Filter sales by company"
                   >
-                    <span className="font-semibold text-focus truncate max-w-[240px]">
+                    <span className="font-semibold text-focus truncate flex-1 text-left">
                       {selectedCompany}
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
@@ -1357,7 +1463,7 @@ export const SalesPage: React.FC = () => {
                     <div
                       style={companyPos.isMobile ? companyPos.style : undefined}
                       className={cn(
-                        'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                        'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
                         companyPos.isMobile
                           ? 'w-[min(calc(100vw-32px),320px)]'
                           : 'absolute left-0 top-full mt-2 w-72'
@@ -1438,7 +1544,7 @@ export const SalesPage: React.FC = () => {
                 </div>
               ) : (
                 <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                   title={selectedCompany}
                 >
                   <span className="truncate min-w-0">{selectedCompany}</span>
@@ -1446,20 +1552,40 @@ export const SalesPage: React.FC = () => {
               )}
 
               {/* Bank Filter Select */}
-              <div className="flex-1 min-w-[170px]">
+              <div className="flex-1 min-w-[190px] sm:min-w-[220px]">
                 <BankFilterSelect
                   accounts={bankOptions}
                   value={selectedBankId}
                   onChange={setSelectedBankId}
-                  className="w-full min-h-[44px] h-11 text-xs sm:text-sm"
+                  className="w-full"
+                />
+              </div>
+
+              {/* Status Filter Dropdown beside the bank */}
+              <div className="w-full sm:w-auto min-w-[130px] shrink-0">
+                <DropdownFilter
+                  value={statusFilter}
+                  onChange={(val) => {
+                    setStatusFilter(val as any)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
+                  options={statusFilterOptions}
+                  defaultValue="All"
+                  placeholder="Status"
+                  fullWidth
                 />
               </div>
 
               {/* Date Range Control in Row 1 */}
-              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+              <div className="w-full sm:w-auto min-w-[180px] shrink-0">
                 <TransactionDateRangeControl
                   value={dateRange}
-                  onChange={(newRange) => setDateRange(newRange)}
+                  onChange={(newRange) => {
+                    setDateRange(newRange)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
                   fullWidth
                 />
               </div>
@@ -1601,7 +1727,7 @@ export const SalesPage: React.FC = () => {
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailySalesGroups.length} days</span>
@@ -1616,11 +1742,11 @@ export const SalesPage: React.FC = () => {
         </div>
 
         {subTab === 'Daily Summary' ? (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
             <Table className="w-full table-fixed min-w-[1000px]">
               <colgroup>
                 {(tableTab === 'Deposit'
-                  ? [14, 18, 17, 17, 18, 16]
+                  ? [16, 12, 14, 14, 15, 12, 13, 4]
                   : [16, 11, 15, 15, 20, 14, 9]
                 ).map((w, i) => (
                   <col key={i} style={{ width: `${w}%` }} />
@@ -1629,49 +1755,55 @@ export const SalesPage: React.FC = () => {
               <TableHeader>
                 {tableTab === 'Deposit' ? (
                   <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       DATE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                      CHECK NO
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                      TRANSACTIONS
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                      WITHDRAWAL
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                      TOTAL DEPOSIT
                     </TableHead>
-                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                      DEPOSIT
+                    <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                      TOTAL WITHDRAWAL
                     </TableHead>
                     <TableHead
-                      className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
-                      title="Balance of the bank"
+                      className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right"
+                      title="End-of-day balance"
                     >
-                      BALANCE
+                      END-OF-DAY BALANCE
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                      TRAN-CODE
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                      AUDIT STATUS
+                    </TableHead>
+                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                      PASSBOOK CHECK
+                    </TableHead>
+                    <TableHead className="px-1 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                      <span className="sr-only">Action</span>
                     </TableHead>
                   </TableRow>
                 ) : (
                   <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       SALES DATE & DAY
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       TRANSACTIONS
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       GROSS SALES
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                       REALIZED CASH
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                       DAY REMARK
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       AUDIT STATUS
                     </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                    <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       ACTION
                     </TableHead>
                   </TableRow>
@@ -1679,70 +1811,336 @@ export const SalesPage: React.FC = () => {
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 6 : 7} />
+                  <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 8 : 7} />
+                ) : loadError ? (
+                  <TableErrorState
+                    colSpan={tableTab === 'Deposit' ? 8 : 7}
+                    message={loadError}
+                    onRetry={() => loadSales(false, true)}
+                  />
                 ) : paginatedDailyGroups.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={tableTab === 'Deposit' ? 6 : 7}
-                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                    >
-                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                        </div>
-                        <p className="font-semibold text-focus text-sm sm:text-base">
-                          No daily {tableTab === 'Deposit' ? 'deposit' : 'sales'} records found
-                        </p>
-                        <p className="text-xs text-muted-fg leading-relaxed">
-                          There are no {tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for this period matching your filters.
-                        </p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                  <TableEmptyState
+                    colSpan={tableTab === 'Deposit' ? 8 : 7}
+                    title={`No daily ${tableTab === 'Deposit' ? 'deposit' : 'sales'} records found`}
+                    description={`There are no ${tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for this period matching your filters.`}
+                  />
                 ) : (
                   paginatedDailyGroups.map((group) => {
                     if (tableTab === 'Deposit') {
-                      const dayCheques = Array.from(new Set(group.items.map((s) => s.chequeNo).filter(Boolean))).join(', ') || '—'
-                      const dayRefs = Array.from(new Set(group.items.map((s) => s.refNo || (s as any).reference_no).filter(Boolean))).join(', ') || '—'
+                      const isExpanded = expandedDates.has(group.date)
                       const dayBal = getClosingBalance(group.date)
+                      const openingBal = getDayOpeningBalance(group.date)
+                      const dayTotalDeposit = group.realizedCash || group.grossTotal || 0
+                      const dayTotalWithdrawal = 0
+                      const expectedClosing = Math.round((openingBal + dayTotalDeposit - dayTotalWithdrawal) * 100) / 100
+                      const passbookDiff = Math.round((dayBal - expectedClosing) * 100) / 100
+                      const isBalanced = passbookDiff === 0
+                      const pendingCount = group.items.filter((s) => s.auditStatus !== 'Verified' && s.auditStatus !== 'Flagged').length
+                      const hasDiscrepancy = group.items.some((s) => s.auditStatus === 'Flagged')
 
                       return (
-                        <TableRow
-                          key={group.date}
-                          className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors"
-                        >
-                          {/* 1. DATE - NO CHEVRON */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
-                            {group.formattedDate}
-                          </TableCell>
+                        <React.Fragment key={group.date}>
+                          <TableRow
+                            tabIndex={0}
+                            aria-expanded={isExpanded}
+                            onClick={() => toggleDateExpansion(group.date)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                toggleDateExpansion(group.date)
+                              }
+                            }}
+                            className={cn(
+                              'border-b border-slate-100 transition-colors cursor-pointer select-none',
+                              isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/50'
+                            )}
+                          >
+                            {/* 1. DATE with Chevron */}
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-left">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                {isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-primary shrink-0" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                                )}
+                                <span className="text-xs font-bold text-focus truncate">
+                                  {group.formattedDate}
+                                </span>
+                              </div>
+                            </TableCell>
 
-                          {/* 2. CHECK NO */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
-                            {dayCheques}
-                          </TableCell>
+                            {/* 2. TRANSACTIONS */}
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                                {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
+                              </span>
+                            </TableCell>
 
-                          {/* 3. WITHDRAWAL */}
-                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
-                            <span className="text-muted-fg/40 font-normal">—</span>
-                          </TableCell>
+                            {/* 3. TOTAL DEPOSIT */}
+                            <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
+                              {dayTotalDeposit > 0 ? (
+                                `+${formatPHP(dayTotalDeposit)}`
+                              ) : (
+                                <span className="text-muted-fg/40 font-normal">—</span>
+                              )}
+                            </TableCell>
 
-                          {/* 4. DEPOSIT */}
-                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
-                            +{formatPHP(group.realizedCash || group.grossTotal)}
-                          </TableCell>
+                            {/* 4. TOTAL WITHDRAWAL */}
+                            <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                              <span className="text-muted-fg/40 font-normal">—</span>
+                            </TableCell>
 
-                          {/* 5. BALANCE */}
-                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap">
-                            <span className={dayBal < 0 ? 'text-rose-600' : 'text-focus'}>
+                            {/* 5. END-OF-DAY BALANCE */}
+                            <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
                               {dayBal < 0 ? `−${formatPHP(Math.abs(dayBal))}` : formatPHP(dayBal)}
-                            </span>
-                          </TableCell>
+                            </TableCell>
 
-                          {/* 6. TRAN-CODE */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
-                            {dayRefs}
-                          </TableCell>
-                        </TableRow>
+                            {/* 6. AUDIT STATUS */}
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs whitespace-nowrap">
+                              <span
+                                className={cn(
+                                  'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border',
+                                  hasDiscrepancy
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    : pendingCount > 0
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                )}
+                              >
+                                {hasDiscrepancy ? 'Discrepancy' : pendingCount > 0 ? `${pendingCount} pending` : 'All audited'}
+                              </span>
+                            </TableCell>
+
+                            {/* 7. PASSBOOK CHECK */}
+                            <TableCell className="px-2.5 sm:px-3 py-3 text-left text-xs whitespace-nowrap">
+                              <div className="flex items-center">
+                                {isBalanced ? (
+                                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
+                                    ✓ Balanced
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-700 font-semibold inline-flex items-center gap-1">
+                                    ⚠ {formatPHP(Math.abs(passbookDiff))} {passbookDiff < 0 ? 'short' : 'over'}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+
+                            {/* 8. ACTION */}
+                            <TableCell className="px-1 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (dayMenu?.date === group.date) {
+                                    setDayMenu(null)
+                                  } else {
+                                    const rect = e.currentTarget.getBoundingClientRect()
+                                    const openUpward = rect.bottom + 120 > window.innerHeight
+                                    setDayMenu({
+                                      date: group.date,
+                                      top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                      right: Math.max(12, window.innerWidth - rect.right),
+                                      openUpward,
+                                      items: group.items,
+                                    })
+                                  }
+                                }}
+                                className="h-8 w-8 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors mx-auto"
+                                title="Day actions"
+                                aria-label="Open day action menu"
+                              >
+                                <MoreVertical className="w-4 h-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+
+                          {/* Expanded Content for By Day Deposit */}
+                          {isExpanded && (
+                            <TableRow className="bg-slate-50/40 border-b border-slate-200 hover:bg-slate-50/40">
+                              <TableCell colSpan={8} className="p-3 sm:p-4">
+                                <div className="space-y-3.5">
+                                  {/* Formula Banner */}
+                                  <div
+                                    className={cn(
+                                      'rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border',
+                                      isBalanced
+                                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                                        : 'bg-amber-50/70 border-amber-200 text-amber-900'
+                                    )}
+                                  >
+                                    <span>
+                                      Opening {formatPHP(openingBal)} + Deposits {formatPHP(dayTotalDeposit)} − Withdrawals ₱0.00 = Closing {formatPHP(dayBal)} {isBalanced ? '✓' : `(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
+                                    </span>
+                                  </div>
+
+                                  {/* Transactions sub-table on this day */}
+                                  <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+                                    <table className="w-full text-left text-xs table-fixed">
+                                      <colgroup>
+                                        <col style={{ width: '12%' }} />
+                                        <col style={{ width: '18%' }} />
+                                        <col style={{ width: '28%' }} />
+                                        <col style={{ width: '14%' }} />
+                                        <col style={{ width: '14%' }} />
+                                        <col style={{ width: '10%' }} />
+                                        <col style={{ width: '4%' }} />
+                                      </colgroup>
+                                      <thead className="bg-slate-50 text-muted-fg font-semibold uppercase text-[10px] tracking-wider border-b border-slate-100">
+                                        <tr>
+                                          <th className="px-2.5 py-2 font-semibold">TYPE</th>
+                                          <th className="px-2.5 py-2 font-semibold">BANK / METHOD</th>
+                                          <th className="px-2.5 py-2 font-semibold">PARTICULARS</th>
+                                          <th className="px-2.5 py-2 text-right font-semibold">DEPOSIT</th>
+                                          <th className="px-2.5 py-2 text-right font-semibold">WITHDRAWAL</th>
+                                          <th className="px-2.5 py-2 text-center font-semibold">AUDIT STATUS</th>
+                                          <th className="px-1 py-2 text-center font-semibold">
+                                            <span className="sr-only">Actions</span>
+                                          </th>
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-slate-100">
+                                        {group.items.length === 0 ? (
+                                          <tr>
+                                            <td colSpan={7} className="px-3 py-6 text-center text-muted-fg text-xs">
+                                              No deposits recorded for this day.
+                                            </td>
+                                          </tr>
+                                        ) : (
+                                          group.items.map((sale) => {
+                                            const itemsCount = (sale.items && sale.items.length > 0) ? sale.items.length : 1
+                                            const depAmt = getRealizedCashForSale(sale) || sale.deposit || 0
+                                            const bankMethod = sale.bankName || (sale.bankAccountId ? bankLabel(sale.bankAccountId) : '') || sale.paymentMethod || 'Cash'
+                                            const depositDiff = Math.round((depAmt - (sale.deposit || depAmt)) * 100) / 100
+
+                                            return (
+                                              <tr
+                                                key={sale.id}
+                                                onClick={() => handleOpenRow(sale)}
+                                                title="Click to view transaction details"
+                                                className="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                                              >
+                                                {/* 1. TYPE */}
+                                                <td className="px-2.5 py-2.5 align-top whitespace-nowrap">
+                                                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+                                                    Sales
+                                                  </span>
+                                                </td>
+
+                                                {/* 2. BANK / METHOD */}
+                                                <td className="px-2.5 py-2.5 align-top text-xs text-focus/90 font-medium truncate">
+                                                  <div className="truncate font-medium">{bankMethod}</div>
+                                                </td>
+
+                                                {/* 3. PARTICULARS */}
+                                                <td className="px-2.5 py-2.5 align-top text-xs">
+                                                  <div className="font-semibold text-focus leading-snug">
+                                                    Bank deposit · {itemsCount} {itemsCount === 1 ? 'sale' : 'sales'}
+                                                  </div>
+                                                  <div className="mt-0.5 text-[11px] text-muted-fg truncate">
+                                                    {(sale.company || '') + (sale.refNo ? ` · ${sale.refNo}` : '')}
+                                                  </div>
+                                                  {depositDiff !== 0 && (
+                                                    <div className="mt-0.5 text-[10px] font-medium text-amber-700">
+                                                      ⚠ {formatPHP(Math.abs(depositDiff))} {depositDiff < 0 ? 'short' : 'over'}
+                                                    </div>
+                                                  )}
+                                                </td>
+
+                                                {/* 4. DEPOSIT */}
+                                                <td className="px-2.5 py-2.5 align-top text-right text-xs font-bold tabular-nums whitespace-nowrap text-emerald-700">
+                                                  {depAmt > 0 ? `+${formatPHP(depAmt)}` : '—'}
+                                                </td>
+
+                                                {/* 5. WITHDRAWAL */}
+                                                <td className="px-2.5 py-2.5 align-top text-right text-xs font-bold tabular-nums whitespace-nowrap text-rose-700">
+                                                  <span className="text-muted-fg/40 font-normal">—</span>
+                                                </td>
+
+                                                {/* 6. AUDIT STATUS */}
+                                                <td className="px-2.5 py-2.5 align-top text-center whitespace-nowrap">
+                                                  <span
+                                                    className={cn(
+                                                      'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+                                                      sale.auditStatus === 'Verified'
+                                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                        : sale.auditStatus === 'Flagged'
+                                                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                                                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                                                    )}
+                                                  >
+                                                    {sale.auditStatus === 'Verified' ? 'Audited' : sale.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
+                                                  </span>
+                                                </td>
+
+                                                {/* 7. ACTION (3 dots) */}
+                                                <td
+                                                  className="px-1 py-2 text-center whitespace-nowrap align-top"
+                                                  onClick={(e) => e.stopPropagation()}
+                                                >
+                                                  <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    onClick={(e) => {
+                                                      e.stopPropagation()
+                                                      if (openMenuSaleId === sale.id) {
+                                                        setOpenMenuSaleId(null)
+                                                        setMenuPosition(null)
+                                                        setActiveMenuSale(null)
+                                                      } else {
+                                                        const rect = e.currentTarget.getBoundingClientRect()
+                                                        const openUpward = rect.bottom + 160 > window.innerHeight
+                                                        setMenuPosition({
+                                                          top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                                          right: Math.max(12, window.innerWidth - rect.right),
+                                                          openUpward,
+                                                        })
+                                                        setActiveMenuSale(sale)
+                                                        setOpenMenuSaleId(sale.id)
+                                                      }
+                                                    }}
+                                                    className="h-8 w-8 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer inline-flex items-center justify-center transition-colors mx-auto"
+                                                    title="Actions"
+                                                    aria-label="Open action menu"
+                                                  >
+                                                    <MoreVertical className="w-4 h-4" />
+                                                  </Button>
+                                                </td>
+                                              </tr>
+                                            )
+                                          })
+                                        )}
+                                      </tbody>
+                                      <tfoot className="border-t border-slate-200 text-xs font-semibold bg-slate-50/50">
+                                        <tr>
+                                          <td colSpan={3} className="px-2.5 py-2.5 text-focus font-bold">
+                                            {group.items.length} {group.items.length === 1 ? 'transaction' : 'transactions'}
+                                          </td>
+                                          <td className="px-2.5 py-2.5 text-right font-bold text-emerald-700 tabular-nums">
+                                            {dayTotalDeposit > 0 ? `+${formatPHP(dayTotalDeposit)}` : '—'}
+                                          </td>
+                                          <td className="px-2.5 py-2.5 text-right font-bold text-rose-700 tabular-nums">
+                                            —
+                                          </td>
+                                          <td colSpan={2} className="px-2.5 py-2.5 text-center text-muted-fg text-[11px]">
+                                            {pendingCount === 0 ? (
+                                              <span className="text-emerald-700 font-semibold">All audited</span>
+                                            ) : (
+                                              <span>{pendingCount} pending</span>
+                                            )}
+                                          </td>
+                                        </tr>
+                                      </tfoot>
+                                    </table>
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
                       )
                     }
 
@@ -2034,11 +2432,11 @@ export const SalesPage: React.FC = () => {
             </Table>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[860px] lg:min-w-0">
             <colgroup>
               {(tableTab === 'Deposit'
-                ? [14, 18, 17, 17, 18, 16]
+                ? [11, 9, 10, 26, 13, 11, 11, 6, 3]
                 : [10, 23, 9, 11, 10, 11, 11, 9, 6]
               ).map((w, i) => (
                 <col key={i} style={{ width: `${w}%` }} />
@@ -2047,55 +2445,64 @@ export const SalesPage: React.FC = () => {
             <TableHeader>
               {tableTab === 'Deposit' ? (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                    CHECK NO
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                    TYPE
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                    WITHDRAWAL
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                    CHEQUE NO.
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                    PARTICULARS
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     DEPOSIT
+                  </TableHead>
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                    WITHDRAWAL
                   </TableHead>
                   <TableHead
                     className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
                     title="Balance of the bank"
                   >
-                    BALANCE
+                    BANK BALANCE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
-                    TRAN-CODE
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                    AUDIT STATUS
+                  </TableHead>
+                  <TableHead className="px-1 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                    <span className="sr-only">Actions</span>
                   </TableHead>
                 </TableRow>
               ) : (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     PARTICULARS
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     METHOD
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     AMOUNT
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHEQUE NO.
                   </TableHead>
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DEPOSIT DATE
                   </TableHead>
-                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     AMOUNT DEPOSIT
                   </TableHead>
-                  <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="pl-3 pr-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     STATUS
                   </TableHead>
-                  <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-1.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     ACTION
                   </TableHead>
                 </TableRow>
@@ -2104,70 +2511,243 @@ export const SalesPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 6 : 9} />
+                <TableSkeleton rows={5} columns={tableTab === 'Deposit' ? 9 : 9} />
+              ) : loadError ? (
+                <TableErrorState
+                  colSpan={tableTab === 'Deposit' ? 9 : 9}
+                  message={loadError}
+                  onRetry={() => loadSales(false, true)}
+                />
               ) : paginatedSales.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={tableTab === 'Deposit' ? 6 : 9}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No {tableTab === 'Deposit' ? 'deposit' : 'sales'} records found
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no {tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for {displayedCompanyTitle} matching your current filters.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={tableTab === 'Deposit' ? 9 : 9}
+                  title={`No ${tableTab === 'Deposit' ? 'deposit' : 'sales'} records found`}
+                  description={`There are no ${tableTab === 'Deposit' ? 'deposit' : 'sales'} transactions recorded for ${displayedCompanyTitle} matching your current filters.`}
+                  action={
+                    tableTab !== 'Deposit' ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        Record New Sale
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedSales.map((sale) => {
                   if (tableTab === 'Deposit') {
                     const rowBal = depositBalanceByKey.get(sale.id) ?? 0
+                    const isExpanded = expandedDepositIds.has(sale.id)
+                    const items = sale.items && sale.items.length > 0 ? sale.items : []
+                    const salesCount = items.length > 0 ? items.length : 1
+                    const hasSubItems = items.length > 0
+                    const depAmt = getRealizedCashForSale(sale) || sale.deposit || 0
+                    const depositDiff = Math.round((depAmt - (sale.deposit || depAmt)) * 100) / 100
+                    const saleDateShort = formatToShortDate(sale.deposit_date || sale.depositDate || sale.rawDate || sale.date)
+                    const refNo = sale.refNo || (sale as any).reference_no || '—'
+                    const company = sale.company || ''
+                    const subtitle = company ? `${company} · ${refNo}` : refNo
+
                     return (
-                      <TableRow
-                        key={sale.id}
-                        id={`sales-row-${sale.id}`}
-                        onClick={() => handleOpenRow(sale)}
-                        className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
-                        title="Click to view complete details"
-                      >
-                        {/* 1. DATE */}
-                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
-                          {formatDisplayDate(sale.deposit_date || sale.depositDate || sale.rawDate || sale.date)}
-                        </TableCell>
+                      <React.Fragment key={sale.id}>
+                        <TableRow
+                          id={`sales-row-${sale.id}`}
+                          onClick={() => {
+                            if (hasSubItems) toggleDepositExpansion(sale.id)
+                            else handleOpenRow(sale)
+                          }}
+                          className={cn(
+                            'border-b border-slate-100 transition-colors cursor-pointer',
+                            isExpanded ? 'bg-slate-50/90 font-medium' : 'hover:bg-slate-50/60'
+                          )}
+                          title="Click to expand sales in deposit or view complete details"
+                        >
+                          {/* 1. DATE with Chevron */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {hasSubItems ? (
+                                isExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-primary shrink-0" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                                )
+                              ) : null}
+                              <span>{saleDateShort}</span>
+                            </div>
+                          </TableCell>
 
-                        {/* 2. CHECK NO */}
-                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
-                          {sale.chequeNo || '—'}
-                        </TableCell>
+                          {/* 2. TYPE */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+                              Sales
+                            </span>
+                          </TableCell>
 
-                        {/* 3. WITHDRAWAL */}
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
-                          <span className="text-muted-fg/40 font-normal">—</span>
-                        </TableCell>
+                          {/* 3. CHEQUE NO. */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                            {sale.chequeNo || '—'}
+                          </TableCell>
 
-                        {/* 4. DEPOSIT */}
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-emerald-700">
-                          +{formatPHP(getRealizedCashForSale(sale) || sale.deposit)}
-                        </TableCell>
+                          {/* 4. PARTICULARS */}
+                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs">
+                            <div className="font-semibold text-focus leading-snug truncate">
+                              Bank deposit · {salesCount} {salesCount === 1 ? 'sale' : 'sales'}
+                            </div>
+                            <div className="mt-0.5 text-[11px] text-muted-fg truncate">
+                              {subtitle}
+                            </div>
+                          </TableCell>
 
-                        {/* 5. BALANCE */}
-                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap">
-                          <span className={rowBal < 0 ? 'text-rose-600' : 'text-focus'}>
+                          {/* 5. DEPOSIT */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs text-right tabular-nums whitespace-nowrap">
+                            <div className="font-bold text-emerald-700">+{formatPHP(depAmt)}</div>
+                            <div
+                              className={cn(
+                                'text-[11px] font-medium leading-tight',
+                                depositDiff === 0 ? 'text-emerald-700' : 'text-amber-700'
+                              )}
+                            >
+                              {depositDiff === 0
+                                ? `✓ matches ${salesCount} ${salesCount === 1 ? 'sale' : 'sales'}`
+                                : `⚠ ${formatPHP(Math.abs(depositDiff))} ${depositDiff < 0 ? 'short' : 'over'}`}
+                            </div>
+                          </TableCell>
+
+                          {/* 6. WITHDRAWAL */}
+                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                            <span className="text-muted-fg/40 font-normal">—</span>
+                          </TableCell>
+
+                          {/* 7. BANK BALANCE */}
+                          <TableCell
+                            className={cn(
+                              'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
+                              rowBal < 0 ? 'text-rose-600' : 'text-focus'
+                            )}
+                            title="Balance of the bank"
+                          >
                             {rowBal < 0 ? `−${formatPHP(Math.abs(rowBal))}` : formatPHP(rowBal)}
-                          </span>
-                        </TableCell>
+                          </TableCell>
 
-                        {/* 6. TRAN-CODE */}
-                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
-                          {sale.refNo || (sale as any).reference_no || '—'}
-                        </TableCell>
-                      </TableRow>
+                          {/* 8. AUDIT STATUS */}
+                          <TableCell className="px-2 py-3 text-center whitespace-nowrap">
+                            <span
+                              className={cn(
+                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                sale.auditStatus === 'Verified'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : sale.auditStatus === 'Flagged'
+                                  ? 'bg-rose-50 text-rose-800 border-rose-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              )}
+                            >
+                              {sale.auditStatus === 'Verified' ? 'Audited' : sale.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
+                            </span>
+                          </TableCell>
+
+                          {/* 9. ACTION 3 dots */}
+                          <TableCell
+                            className="px-1 py-2.5 text-center whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (openMenuSaleId === sale.id) {
+                                  setOpenMenuSaleId(null)
+                                  setMenuPosition(null)
+                                  setActiveMenuSale(null)
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  const openUpward = rect.bottom + 160 > window.innerHeight
+                                  setMenuPosition({
+                                    top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                    right: Math.max(12, window.innerWidth - rect.right),
+                                    openUpward,
+                                  })
+                                  setActiveMenuSale(sale)
+                                  setOpenMenuSaleId(sale.id)
+                                }
+                              }}
+                              className="h-8 w-8 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors mx-auto"
+                              title="Actions"
+                              aria-label="Open action menu"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Expanded sub-table showing sales in deposit */}
+                        {isExpanded && (
+                          <TableRow className="bg-slate-50/50 hover:bg-slate-50/50 border-b border-slate-200">
+                            <TableCell colSpan={9} className="p-3 sm:p-4">
+                              <div className="bg-white rounded-xl border border-slate-200/80 p-3 sm:p-4 shadow-xs">
+                                <div className="text-xs font-bold text-focus mb-2">
+                                  Sales in deposit {refNo}
+                                </div>
+                                <table className="w-full text-left text-xs">
+                                  <thead className="bg-slate-50 text-muted-fg font-semibold uppercase text-[10px] tracking-wider border-b border-slate-100">
+                                    <tr>
+                                      <th className="px-2.5 py-2 font-semibold">SALES DATE</th>
+                                      <th className="px-2.5 py-2 font-semibold">PARTICULARS</th>
+                                      <th className="px-2.5 py-2 font-semibold">METHOD</th>
+                                      <th className="px-2.5 py-2 text-right font-semibold">AMOUNT</th>
+                                      <th className="px-2.5 py-2 font-semibold">DEPOSIT DATE</th>
+                                      <th className="px-2.5 py-2 text-center font-semibold">STATUS</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {items.map((it, idx) => {
+                                      const itDate = formatToShortDate((it as any).date || sale.date)
+                                      const itTitle = (it as any).name || (it as any).particulars || (it as any).description || 'Sale item'
+                                      const itMethod = sale.paymentMethod || 'Cash'
+                                      const itAmt = (it as any).amount || (it as any).total || 0
+                                      const itDepositDate = saleDateShort
+
+                                      return (
+                                        <tr key={idx} className="hover:bg-slate-50/50">
+                                          <td className="px-2.5 py-2 whitespace-nowrap text-focus/80">{itDate}</td>
+                                          <td className="px-2.5 py-2 text-focus font-medium">{itTitle}</td>
+                                          <td className="px-2.5 py-2 text-focus/80">{itMethod}</td>
+                                          <td className="px-2.5 py-2 text-right font-medium text-focus tabular-nums">{formatPHP(itAmt)}</td>
+                                          <td className="px-2.5 py-2 whitespace-nowrap text-focus/80">{itDepositDate}</td>
+                                          <td className="px-2.5 py-2 text-center">
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                              Deposited
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                  <tfoot className="border-t border-slate-200 text-xs font-semibold">
+                                    <tr>
+                                      <td colSpan={3} className="px-2.5 py-2.5 text-focus font-bold">
+                                        {items.length} {items.length === 1 ? 'sale' : 'sales'} = {formatPHP(depAmt)}
+                                      </td>
+                                      <td colSpan={3} className="px-2.5 py-2.5 text-right font-bold">
+                                        {depositDiff === 0 ? (
+                                          <span className="text-emerald-700">✓ Matches the deposit</span>
+                                        ) : (
+                                          <span className="text-amber-700">⚠ {formatPHP(Math.abs(depositDiff))} {depositDiff < 0 ? 'short' : 'over'}</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  </tfoot>
+                                </table>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
                     )
                   }
                   const fallbackStatus = normalizeParticularStatus(sale.status, 'Paid')
@@ -2251,18 +2831,7 @@ export const SalesPage: React.FC = () => {
 
                       {/* 8. Status Badge */}
                       <TableCell className="pl-3 pr-2 py-3 text-center align-top">
-                        <span
-                          className={cn(
-                            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border tracking-wide uppercase',
-                            sale.status === 'Paid'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                              : sale.status === 'Pending'
-                              ? 'bg-amber-50 text-amber-700 border-amber-300'
-                              : 'bg-rose-50 text-rose-700 border-rose-300'
-                          )}
-                        >
-                          {sale.status || 'Paid'}
-                        </span>
+                        <StatusPill status={sale.status || 'Paid'} />
                       </TableCell>
 
                       {/* 9. Action: 3 dots action button */}
@@ -2311,100 +2880,42 @@ export const SalesPage: React.FC = () => {
         )}
 
         {/* 6. Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {subTab === 'Daily Summary' ? (
-            hasFocusedDay ? (
-              <div className="flex items-center justify-between w-full">
-                <span className="font-semibold text-focus">
-                  Viewing transactions for {paginatedDailyGroups[0]?.formattedDate}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setExpandedDates(new Set())}
-                  className="text-xs text-primary font-semibold hover:underline cursor-pointer"
-                >
-                  Back to all days
-                </button>
-              </div>
-            ) : (
-              <>
-                <span className="font-medium text-focus/80">
-                  {dailySalesGroups.length === 0
-                    ? 'Showing 0 of 0 days'
-                    : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailySalesGroups.length)} of ${dailySalesGroups.length} days`}
-                </span>
-
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <span className="text-xs text-muted-fg italic">
-                    Page {dailyPage} out of {totalDailyPages}
-                  </span>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage <= 1}
-                    onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Previous day page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage >= totalDailyPages}
-                    onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Next day page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </>
-            )
-          ) : (
-            <>
-              <span className="font-medium text-focus/80">
-                {filteredSales.length === 0
-                  ? 'Showing 0 of 0 records'
-                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredSales.length} records`}
+        {subTab === 'Daily Summary' ? (
+          hasFocusedDay ? (
+            <div className="pt-4 mt-2 flex items-center justify-between w-full text-xs text-muted-fg">
+              <span className="font-semibold text-focus">
+                Viewing transactions for {paginatedDailyGroups[0]?.formattedDate}
               </span>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <span className="text-xs text-muted-fg italic">
-                  Page {currentPage} out of {totalPages}
-                </span>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Next page"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
+              <button
+                type="button"
+                onClick={() => setExpandedDates(new Set())}
+                className="text-xs text-primary font-semibold hover:underline cursor-pointer"
+              >
+                Back to all days
+              </button>
+            </div>
+          ) : (
+            <TablePagination
+              currentPage={dailyPage}
+              totalPages={totalDailyPages}
+              totalRecords={dailySalesGroups.length}
+              pageSize={ITEMS_PER_PAGE}
+              onPageChange={setDailyPage}
+              itemLabel="days"
+            />
+          )
+        ) : (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredSales.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            itemLabel="records"
+          />
+        )}
       </Card>
 
 
@@ -2499,7 +3010,7 @@ export const SalesPage: React.FC = () => {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed w-48 bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            className="fixed w-52 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-1.5 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
             style={{
               top: `${menuPosition.top}px`,
               right: `${menuPosition.right}px`,
@@ -2508,45 +3019,118 @@ export const SalesPage: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
+            {/* 1. Audit Buttons (Audit role & Admin): mark as audited, flag discrepancy */}
+            {canAuditActions && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    const s = activeMenuSale
+                    setOpenMenuSaleId(null)
+                    setMenuPosition(null)
+                    setActiveMenuSale(null)
+                    handleMarkSaleAudit(s, 'Verified', e)
+                  }}
+                  className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                  <span>{activeMenuSale.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
+                </button>
+
+                {activeMenuSale.auditStatus !== 'Verified' && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const s = activeMenuSale
+                      setOpenMenuSaleId(null)
+                      setMenuPosition(null)
+                      setActiveMenuSale(null)
+                      handleMarkSaleAudit(s, 'Flagged', e)
+                    }}
+                    className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span>Flag Discrepancy</span>
+                  </button>
+                )}
+              </>
+            )}
+
+            {/* 2. Supervisor / Admin: Edit */}
+            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && (
+              <button
+                type="button"
+                onClick={() => {
+                  const s = activeMenuSale
+                  setOpenMenuSaleId(null)
+                  setMenuPosition(null)
+                  setActiveMenuSale(null)
+                  navigate('/sales/add', {
+                    state: { editSale: s },
+                  })
+                }}
+                className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                <span>Edit</span>
+              </button>
+            )}
+
+            {/* 3. Supervisor / Admin: Delete */}
+            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && (
+              <div className="border-t border-slate-100 mt-1 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const s = activeMenuSale
+                    setOpenMenuSaleId(null)
+                    setMenuPosition(null)
+                    setActiveMenuSale(null)
+                    setDeleteConfirmSale(s)
+                  }}
+                  className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Delete…</span>
+                </button>
+              </div>
+            )}
+
+            {/* 4. Supervisor / Finance / Admin: Add Remarks */}
+            {(isSupervisor || isFinance || isAdminUser) && !isAudit && (
+              <button
+                type="button"
+                onClick={() => {
+                  const s = activeMenuSale
+                  setOpenMenuSaleId(null)
+                  setMenuPosition(null)
+                  setActiveMenuSale(null)
+                  setRemarksTargetSale(s)
+                  setRemarksInput(s.remarks || '')
+                  setIsRemarksDialogOpen(true)
+                }}
+                className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 transition-colors text-left cursor-pointer"
+              >
+                <MessageSquare className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span>{activeMenuSale.remarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+              </button>
+            )}
+
+            {/* 5. View Details for ALL roles */}
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation()
+              onClick={() => {
                 const s = activeMenuSale
                 setOpenMenuSaleId(null)
                 setMenuPosition(null)
                 setActiveMenuSale(null)
                 if (s) handleOpenRow(s)
               }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
             >
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-              <span>See Details</span>
+              <span>View Details</span>
             </button>
-
-            {canAuditActions && (
-              <>
-                <button
-                  type="button"
-                  onClick={(e) =>
-                    handleMarkSaleAudit(activeMenuSale, 'Verified', e)
-                  }
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>{activeMenuSale.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={(e) => handleMarkSaleAudit(activeMenuSale, 'Flagged', e)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-                >
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Flag Discrepancy</span>
-                </button>
-              </>
-            )}
           </div>,
           document.body
         )}
@@ -2652,6 +3236,87 @@ export const SalesPage: React.FC = () => {
           </div>,
           document.body
         )}
+
+      {/* Remarks Dialog Modal */}
+      <Dialog
+        open={isRemarksDialogOpen}
+        onOpenChange={(nextOpen) => {
+          if (!isSavingRemarks) {
+            setIsRemarksDialogOpen(nextOpen)
+            if (!nextOpen) {
+              setRemarksInput('')
+              setRemarksTargetSale(null)
+            }
+          }
+        }}
+      >
+        <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shrink-0">
+                <MessageSquare className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+                  {remarksTargetSale?.remarks ? 'Edit Remarks' : 'Add Remarks'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-fg mt-0.5">
+                  Enter operational remarks for {remarksTargetSale?.particulars || 'sale'}.
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="py-4 space-y-3">
+            <label className="text-xs font-bold text-focus uppercase tracking-wider block">
+              Remarks Note
+            </label>
+            <textarea
+              value={remarksInput}
+              onChange={(e) => setRemarksInput(e.target.value)}
+              placeholder="e.g., Deposited via BDO check, verified by supervisor..."
+              rows={4}
+              maxLength={500}
+              className="w-full rounded-xl border border-stroke/50 bg-surface/50 p-3 text-xs text-focus placeholder:text-muted-fg focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-none"
+            />
+            <div className="flex justify-between items-center text-[11px] text-muted-fg font-medium">
+              <span>Visible to supervisors, finance, and auditors.</span>
+              <span>{remarksInput.length}/500</span>
+            </div>
+          </div>
+
+          <DialogFooter className="pt-3 border-t border-stroke/30 flex items-center justify-end gap-2.5">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isSavingRemarks}
+              onClick={() => {
+                setIsRemarksDialogOpen(false)
+                setRemarksInput('')
+                setRemarksTargetSale(null)
+              }}
+              className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isSavingRemarks}
+              onClick={handleSaveRemarks}
+              className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#960C01]/90 text-white flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+            >
+              {isSavingRemarks ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving…</span>
+                </>
+              ) : (
+                <span>Save Remarks</span>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Toast Notification */}
       {toast && (

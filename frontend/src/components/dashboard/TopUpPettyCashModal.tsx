@@ -6,6 +6,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -89,6 +91,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
   const [financeRemark, setFinanceRemark] = React.useState('')
   const [error, setError] = React.useState('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
 
   // Bank accounts list
   const [localBankAccounts, setLocalBankAccounts] = React.useState<BankAccount[]>(initialBankAccounts || [])
@@ -297,6 +300,26 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-3.5 pt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Petty Cash Top-Up"
+              subtitle="Please verify the replenishment details before submitting."
+              errorMessage={error}
+              items={[
+                { label: 'Requesting Company', value: requestingCompany, highlight: true },
+                { label: 'Amount', value: parseFloat(amountInput) || 0, isCurrency: true },
+                {
+                  label: 'Funding Bank',
+                  value: bankAccountsList.find((a) => String(a.id) === String(fundingBankId))
+                    ? `${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.bankName} (${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.accountNumber})`
+                    : 'Default account',
+                },
+                { label: 'Date', value: requestDate },
+                { label: 'Particulars / Reason', value: particulars.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {error && (
             <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -329,17 +352,13 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                   <span className="truncate font-semibold">{requestingCompany}</span>
                 </div>
               ) : (
-                <select
+                <Dropdown
                   value={requestingCompany}
-                  onChange={(e) => setRequestingCompany(e.target.value)}
-                  className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
-                >
-                  {availableCompanies.map((comp) => (
-                    <option key={comp} value={comp}>
-                      {comp}
-                    </option>
-                  ))}
-                </select>
+                  size="sm"
+                  onChange={(val) => setRequestingCompany(String(val))}
+                  options={availableCompanies.map((comp) => ({ value: comp, label: comp }))}
+                  aria-label="Requesting Company"
+                />
               )}
             </div>
           </div>
@@ -430,22 +449,20 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                     </div>
                   ) : (
                     <div className="relative">
-                      <select
+                      <Dropdown
                         value={fundingBankId}
-                        onChange={(e) => setFundingBankId(e.target.value)}
-                        className="w-full h-9 px-3 rounded-xl border border-stroke/60 bg-white text-xs font-medium text-focus focus:outline-none focus:ring-2 focus:ring-focus"
-                        required
-                      >
-                        <option value="">Select funding bank account...</option>
-                        {(requestingCompany
+                        size="sm"
+                        onChange={(val) => setFundingBankId(String(val))}
+                        placeholder="Select funding bank account..."
+                        options={(requestingCompany
                           ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
                           : bankAccountsList
-                        ).map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.bankName} ({acc.accountName}) [{acc.companyName || 'Corporate'}]
-                          </option>
-                        ))}
-                      </select>
+                        ).map((acc) => ({
+                          value: acc.id,
+                          label: `${acc.bankName} (${acc.accountName}) [${acc.companyName || 'Corporate'}]`,
+                        }))}
+                        aria-label="Funding Bank"
+                      />
                     </div>
                   )}
                   {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? bankAccountsList.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : bankAccountsList.length === 0) && (
@@ -493,29 +510,34 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
             )}
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/20">
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-10 px-4 rounded-xl text-xs font-medium border-stroke/60 hover:bg-slate-50"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white font-semibold text-xs shadow-xs flex items-center gap-2 cursor-pointer"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span>
-                {isSubmitting
-                  ? 'Submitting...'
-                  : isFinance
-                  ? 'Endorse to Internal Audit'
-                  : 'Submit Request to Finance'}
-              </span>
+              <span>{isReviewing ? 'Top Up Petty Cash' : 'Review Top-Up'}</span>
             </Button>
           </div>
         </form>

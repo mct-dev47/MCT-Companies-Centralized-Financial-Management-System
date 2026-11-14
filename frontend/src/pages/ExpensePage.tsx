@@ -26,6 +26,7 @@ import {
   Landmark,
   Lock,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -33,6 +34,10 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
 import {
   Table,
   TableHeader,
@@ -48,6 +53,7 @@ import {
 import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { BankFilterSelect, useBankFilter } from '@/components/common/BankFilter'
+import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { AddExpenseModal } from '@/components/dashboard/AddExpenseModal'
 import { ExpenseSummaryChart } from '@/components/dashboard/CategorySummaryChart'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -112,6 +118,7 @@ export const ExpensePage: React.FC = () => {
 
   const [expenses, setExpenses] = React.useState<ExpenseItem[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Dynamic companies list populated directly from database
   const [companyList, setCompanyList] =
@@ -177,6 +184,15 @@ export const ExpensePage: React.FC = () => {
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
   >('All')
+  const statusFilterOptions: DropdownFilterOption<string>[] = React.useMemo(
+    () => [
+      { value: 'All', label: 'All Statuses' },
+      { value: 'Paid', label: 'Paid' },
+      { value: 'Pending', label: 'Pending' },
+      { value: 'Unpaid', label: 'Unpaid' },
+    ],
+    []
+  )
   const [selectedPeriod, setSelectedPeriod] =
     React.useState<PeriodOption>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
@@ -313,6 +329,7 @@ export const ExpensePage: React.FC = () => {
   const loadExpenses = React.useCallback(async (silent = false) => {
     try {
       if (!silent) setLoading(true)
+    setLoadError(null)
       const targetCompany = isCompanyScoped
         ? assignedCompany
         : selectedCompany === 'All Companies'
@@ -845,17 +862,25 @@ export const ExpensePage: React.FC = () => {
       : selectedCompany
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12">
       {/* 1. Header & Controls */}
       <div className="space-y-4">
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Expense
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Expense
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Operational and corporate expenditures across companies and payment methods"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Comprehensive breakdown of operational expenses.
+              Operational expenses and disbursements for {displayedCompanyTitle}
             </p>
           </div>
 
@@ -867,7 +892,7 @@ export const ExpensePage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-full font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -893,7 +918,7 @@ export const ExpensePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportCsv}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Download as CSV</span>
@@ -901,7 +926,7 @@ export const ExpensePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleExportPdf}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-focus/90 hover:bg-slate-50 transition-colors text-left cursor-pointer"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-[8px] text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors text-left cursor-pointer min-h-[44px]"
                   >
                     <FileText className="w-4 h-4 text-rose-600 shrink-0" />
                     <span>Download as PDF</span>
@@ -936,7 +961,7 @@ export const ExpensePage: React.FC = () => {
             aria-selected={tableTab === 'Withdraw'}
             onClick={() => setTableTab('Withdraw')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Withdraw'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -969,7 +994,7 @@ export const ExpensePage: React.FC = () => {
             aria-selected={tableTab === 'Expense Record'}
             onClick={() => setTableTab('Expense Record')}
             className={cn(
-              'min-h-[64px] w-full rounded-[15px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 flex items-center justify-between gap-3',
+              'min-h-[64px] w-full rounded-[16px] px-5 py-3.5 text-left transition-all border cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40 focus-visible:ring-offset-2 flex items-center justify-between gap-3',
               tableTab === 'Expense Record'
                 ? 'bg-[#960C01] border-[#960C01] text-white shadow-xs'
                 : 'bg-white border-stroke/40 text-focus hover:bg-surface/60'
@@ -999,22 +1024,22 @@ export const ExpensePage: React.FC = () => {
 
         {/* Controls Container / Shared Filters */}
         <div className="flex flex-col gap-3 pt-1">
-          {/* Row 1: Company + Bank + Date + All Records / By Day toggle */}
+          {/* Row 1: Company + Bank + Status + Date + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Company Scope */}
               {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-1 min-w-[170px]">
+                <div ref={companyDropdownRef} className="relative flex-1 min-w-[200px] sm:min-w-[240px]">
                   <button
                     type="button"
                     onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer select-none box-border',
+                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                     aria-label="Filter expenses by company"
                   >
-                    <span className="font-semibold text-focus truncate max-w-[240px]">
+                    <span className="font-semibold text-focus truncate flex-1 text-left">
                       {selectedCompany}
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
@@ -1039,7 +1064,7 @@ export const ExpensePage: React.FC = () => {
                     <div
                       style={companyPos.isMobile ? companyPos.style : undefined}
                       className={cn(
-                        'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+                        'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
                         companyPos.isMobile
                           ? 'w-[min(calc(100vw-32px),320px)]'
                           : 'absolute left-0 top-full mt-2 w-72'
@@ -1120,7 +1145,7 @@ export const ExpensePage: React.FC = () => {
                 </div>
               ) : (
                 <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[170px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                   title={selectedCompany}
                 >
                   <span className="truncate min-w-0">{selectedCompany}</span>
@@ -1128,20 +1153,40 @@ export const ExpensePage: React.FC = () => {
               )}
 
               {/* Bank Filter Select */}
-              <div className="flex-1 min-w-[170px]">
+              <div className="flex-1 min-w-[190px] sm:min-w-[220px]">
                 <BankFilterSelect
                   accounts={bankOptions}
                   value={selectedBankId}
                   onChange={setSelectedBankId}
-                  className="w-full min-h-[44px] h-11 text-xs sm:text-sm"
+                  className="w-full"
+                />
+              </div>
+
+              {/* Status Filter Dropdown beside the bank */}
+              <div className="w-full sm:w-auto min-w-[130px] shrink-0">
+                <DropdownFilter
+                  value={statusFilter}
+                  onChange={(val) => {
+                    setStatusFilter(val as any)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
+                  options={statusFilterOptions}
+                  defaultValue="All"
+                  placeholder="Status"
+                  fullWidth
                 />
               </div>
 
               {/* Date Range Control in Row 1 */}
-              <div className="w-full sm:w-auto min-w-[190px] shrink-0">
+              <div className="w-full sm:w-auto min-w-[180px] shrink-0">
                 <TransactionDateRangeControl
                   value={dateRange}
-                  onChange={(newRange) => setDateRange(newRange)}
+                  onChange={(newRange) => {
+                    setDateRange(newRange)
+                    setDailyPage(1)
+                    setCurrentPage(1)
+                  }}
                   fullWidth
                 />
               </div>
@@ -1300,7 +1345,7 @@ export const ExpensePage: React.FC = () => {
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailyExpenseGroups.length} days</span>
@@ -1315,7 +1360,7 @@ export const ExpensePage: React.FC = () => {
         </div>
 
         {subTab === 'Daily Summary' ? (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
             <Table className="w-full table-fixed min-w-[1000px]">
               <colgroup>
                 <col style={{ width: '16%' }} />
@@ -1328,25 +1373,25 @@ export const ExpensePage: React.FC = () => {
               </colgroup>
               <TableHeader>
                 <TableRow className="border-b border-slate-200/80 hover:bg-transparent">
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DATE & DAY
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     TRANSACTIONS
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     {tableTab === 'Withdraw' ? 'TOTAL WITHDRAWN' : 'GROSS EXPENSES'}
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                     REALIZED CASH
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     DAY REMARK
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     AUDIT STATUS
                   </TableHead>
-                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                  <TableHead className="px-2.5 sm:px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                     ACTION
                   </TableHead>
                 </TableRow>
@@ -1354,25 +1399,18 @@ export const ExpensePage: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableSkeleton rows={5} columns={7} />
+                ) : loadError ? (
+                  <TableErrorState
+                    colSpan={7}
+                    message={loadError}
+                    onRetry={() => loadExpenses(false, true)}
+                  />
                 ) : paginatedDailyGroups.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={7}
-                      className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                    >
-                      <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                          <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                        </div>
-                        <p className="font-semibold text-focus text-sm sm:text-base">
-                          No daily expense records found
-                        </p>
-                        <p className="text-xs text-muted-fg leading-relaxed">
-                          There are no expense transactions recorded for this period matching your filters.
-                        </p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                  <TableEmptyState
+                    colSpan={7}
+                    title="No daily expense records found"
+                    description="There are no expense transactions recorded for this period matching your filters."
+                  />
                 ) : (
                   paginatedDailyGroups.map((group) => {
                     const isExpanded = expandedDates.has(group.date)
@@ -1654,7 +1692,7 @@ export const ExpensePage: React.FC = () => {
             </Table>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-xl border border-slate-100">
+          <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[860px] lg:min-w-0">
             <colgroup>
               <col style={{ width: '10%' }} />
@@ -1669,31 +1707,31 @@ export const ExpensePage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   DATE
                 </TableHead>
-                <TableHead className="px-2.5 sm:px-3 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   METHOD
                 </TableHead>
-                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   AMOUNT
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   CHEQUE NO.
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                   DEPOSIT DATE
                 </TableHead>
-                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
+                <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
                   AMOUNT DEPOSIT
                 </TableHead>
-                <TableHead className="pl-3 pr-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="pl-3 pr-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   STATUS
                 </TableHead>
-                <TableHead className="px-1.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center">
+                <TableHead className="px-1.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                   ACTION
                 </TableHead>
               </TableRow>
@@ -1702,25 +1740,29 @@ export const ExpensePage: React.FC = () => {
             <TableBody>
               {loading ? (
                 <TableSkeleton rows={5} columns={9} />
+              ) : loadError ? (
+                <TableErrorState
+                  colSpan={9}
+                  message={loadError}
+                  onRetry={() => loadExpenses(false, true)}
+                />
               ) : paginatedExpenses.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={9}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No expense records found
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no expense transactions recorded for {displayedCompanyTitle} matching your current filters.
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={9}
+                  title="No expense records found"
+                  description={`There are no expense transactions recorded for ${displayedCompanyTitle} matching your current filters.`}
+                  action={
+                    <Button
+                      type="button"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => setIsAddModalOpen(true)}
+                      className="rounded-[10px]"
+                    >
+                      Record New Expense
+                    </Button>
+                  }
+                />
               ) : (
                 paginatedExpenses.map((expense) => {
                   const fallbackStatus = normalizeParticularStatus(expense.status, 'Paid')
@@ -1796,18 +1838,7 @@ export const ExpensePage: React.FC = () => {
 
                       {/* 8. Status Badge */}
                       <TableCell className="pl-3 pr-2 py-3 text-center align-top">
-                        <span
-                          className={cn(
-                            'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border tracking-wide uppercase',
-                            expense.status === 'Paid'
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
-                              : expense.status === 'Pending'
-                              ? 'bg-amber-50 text-amber-700 border-amber-300'
-                              : 'bg-rose-50 text-rose-700 border-rose-300'
-                          )}
-                        >
-                          {expense.status || 'Paid'}
-                        </span>
+                        <StatusPill status={expense.status || 'Paid'} />
                       </TableCell>
 
                       {/* 9. Action: 3 dots action button */}
@@ -1856,100 +1887,42 @@ export const ExpensePage: React.FC = () => {
         )}
 
         {/* 6. Pagination Footer */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {subTab === 'Daily Summary' ? (
-            hasFocusedDay ? (
-              <div className="flex items-center justify-between w-full">
-                <span className="font-semibold text-focus">
-                  Viewing disbursements for {paginatedDailyGroups[0]?.formattedDate}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setExpandedDates(new Set())}
-                  className="text-xs text-primary font-semibold hover:underline cursor-pointer"
-                >
-                  Back to all days
-                </button>
-              </div>
-            ) : (
-              <>
-                <span className="font-medium text-focus/80">
-                  {dailyExpenseGroups.length === 0
-                    ? 'Showing 0 of 0 days'
-                    : `Showing ${(dailyPage - 1) * ITEMS_PER_PAGE + 1}-${Math.min(dailyPage * ITEMS_PER_PAGE, dailyExpenseGroups.length)} of ${dailyExpenseGroups.length} days`}
-                </span>
-
-                <div className="flex items-center gap-2 self-end sm:self-auto">
-                  <span className="text-xs text-muted-fg italic">
-                    Page {dailyPage} out of {totalDailyPages}
-                  </span>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage <= 1}
-                    onClick={() => setDailyPage((p) => Math.max(1, p - 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Previous day page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={dailyPage >= totalDailyPages}
-                    onClick={() => setDailyPage((p) => Math.min(totalDailyPages, p + 1))}
-                    className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                    aria-label="Next day page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
-              </>
-            )
-          ) : (
-            <>
-              <span className="font-medium text-focus/80">
-                {filteredExpenses.length === 0
-                  ? 'Showing 0 of 0 records'
-                  : `Showing ${startIndex + 1}-${endIndex} of ${filteredExpenses.length} records`}
+        {subTab === 'Daily Summary' ? (
+          hasFocusedDay ? (
+            <div className="pt-4 mt-2 flex items-center justify-between w-full text-xs text-muted-fg">
+              <span className="font-semibold text-focus">
+                Viewing disbursements for {paginatedDailyGroups[0]?.formattedDate}
               </span>
-
-              <div className="flex items-center gap-2 self-end sm:self-auto">
-                <span className="text-xs text-muted-fg italic">
-                  Page {currentPage} out of {totalPages}
-                </span>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage <= 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={currentPage >= totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40"
-                  aria-label="Next page"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
+              <button
+                type="button"
+                onClick={() => setExpandedDates(new Set())}
+                className="text-xs text-primary font-semibold hover:underline cursor-pointer"
+              >
+                Back to all days
+              </button>
+            </div>
+          ) : (
+            <TablePagination
+              currentPage={dailyPage}
+              totalPages={totalDailyPages}
+              totalRecords={dailyExpenseGroups.length}
+              pageSize={ITEMS_PER_PAGE}
+              onPageChange={setDailyPage}
+              itemLabel="days"
+            />
+          )
+        ) : (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredExpenses.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            itemLabel="records"
+          />
+        )}
       </Card>
 
       {/* Add Expense Modal */}

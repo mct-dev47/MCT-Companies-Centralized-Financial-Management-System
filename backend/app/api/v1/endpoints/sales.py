@@ -530,6 +530,7 @@ def create_sale(
 
     cheque = (sale_in.cheque_no or sale_in.chequeNo or "").strip() or None
     use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    effective_bank_id = getattr(sale_in, "bank_account_id", None)
 
     try:
         if not use_sb:
@@ -567,6 +568,16 @@ def create_sale(
             category_name = "None"
 
         # 3. Insert into Supabase
+        effective_bank_id = getattr(sale_in, "bank_account_id", None)
+        if not effective_bank_id and target_company_name:
+            try:
+                from app.services.bank_service import BankService
+                found_acct = BankService(db).find_account_for_company(target_company_name)
+                if found_acct:
+                    effective_bank_id = str(found_acct.id)
+            except Exception:
+                pass
+
         payment_method_str = (sale_in.payment_method or "").strip() or None
         sb_insert = client.table("sales").insert({
             "company_id": target_company_id,
@@ -580,7 +591,7 @@ def create_sale(
             "amount": float(sale_in.amount),
             "particulars": parts,
             "remarks": sale_in.remarks,
-            "bank_account_id": sale_in.bank_account_id,
+            "bank_account_id": effective_bank_id,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -626,7 +637,7 @@ def create_sale(
                 amount=sale_in.amount,
                 particulars=parts,
                 remarks=sale_in.remarks,
-                bank_account_id=sale_in.bank_account_id,
+                bank_account_id=effective_bank_id,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -643,7 +654,7 @@ def create_sale(
         # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
         reconcile_sale_bank(
             db,
-            sale_id=sb_sales_id, bank_account_id=sale_in.bank_account_id,
+            sale_id=sb_sales_id, bank_account_id=effective_bank_id,
             reference_no=cheque,
         )
 
@@ -711,6 +722,15 @@ def create_sale(
         target_company = resolve_company(db, company_id=sale_in.company_id, company_name=sale_in.company)
         check_company_access(current_user, target_company.company_id)
 
+        if not effective_bank_id and target_company.company_name:
+            try:
+                from app.services.bank_service import BankService
+                found_acct = BankService(db).find_account_for_company(target_company.company_name)
+                if found_acct:
+                    effective_bank_id = str(found_acct.id)
+            except Exception:
+                pass
+
         sale = Sale(
             company_id=target_company.company_id,
             category_id=sale_in.category_id,
@@ -723,7 +743,7 @@ def create_sale(
             amount=sale_in.amount,
             particulars=parts,
             remarks=sale_in.remarks,
-            bank_account_id=sale_in.bank_account_id,
+            bank_account_id=effective_bank_id,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,
@@ -738,7 +758,7 @@ def create_sale(
         reconcile_sale_bank(
             db,
             sale_id=sale.sales_id,
-            bank_account_id=sale_in.bank_account_id,
+            bank_account_id=effective_bank_id,
             reference_no=cheque,
         )
 

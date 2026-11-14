@@ -10,6 +10,7 @@ import { AlertTriangle, CloudOff, Loader2, Pause, Pencil, Play, RefreshCw, Trash
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { useOutbox } from '@/hooks/useOutbox'
 import { offlineQueue, type OutboxEntry } from '@/services/offlineQueue'
 import { offlineSync } from '@/services/offlineSync'
@@ -299,7 +300,7 @@ const EntryRow: React.FC<{ entry: OutboxEntry; entries: OutboxEntry[] }> = ({ en
               onChange={(e) => setDraft({ ...draft, remarks: e.target.value })}
             />
           </label>
-          {error && <p className="text-xs text-rose-700 sm:col-span-2">{error}</p>}
+          <FormFieldError error={error} className="sm:col-span-2" />
           <div className="flex justify-end gap-2 sm:col-span-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
               Cancel
