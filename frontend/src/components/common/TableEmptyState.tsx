@@ -33,7 +33,7 @@ export const TableEmptyState: React.FC<TableEmptyStateProps> = ({
         className={cn('py-14 text-center text-xs sm:text-sm text-muted-fg', className)}
       >
         <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-          <div className="w-12 h-12 rounded-2xl bg-surface flex items-center justify-center text-muted-fg/70 mb-1">
+          <div className="w-12 h-12 rounded-[16px] bg-surface flex items-center justify-center text-muted-fg/70 mb-1 shadow-2xs">
             <Icon className="w-6 h-6" />
           </div>
           <p className="font-semibold text-focus text-sm sm:text-base">{title}</p>

@@ -39,17 +39,26 @@ class WebSocketService {
   private status: ConnectionStatus = 'offline'
 
   constructor() {
-    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-      try {
-        this.broadcastChannel = new BroadcastChannel('mct_realtime_sync')
-        this.broadcastChannel.onmessage = (event) => {
-          if (event.data && event.data.type) {
-            this.enqueueNotification(event.data.type, event.data.payload)
+    if (typeof window !== 'undefined') {
+      if ('BroadcastChannel' in window) {
+        try {
+          this.broadcastChannel = new BroadcastChannel('mct_realtime_sync')
+          this.broadcastChannel.onmessage = (event) => {
+            if (event.data && event.data.type) {
+              this.enqueueNotification(event.data.type, event.data.payload)
+            }
           }
+        } catch {
+          // Fallback gracefully if BroadcastChannel fails
         }
-      } catch {
-        // Fallback gracefully if BroadcastChannel fails
       }
+
+      window.addEventListener('online', () => {
+        this.reconnectAttempts = 0
+        if (this.getToken()) {
+          this.connect()
+        }
+      })
     }
   }
 
@@ -89,9 +98,22 @@ class WebSocketService {
     this.isConnecting = true
     this.setStatus(this.reconnectAttempts > 0 ? 'reconnecting' : 'offline')
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Connect via relative proxy (/ws) without sensitive auth token in URL query parameter
-    const wsUrl = `${protocol}//${window.location.host}/ws`
+    const explicitWsUrl = import.meta.env.VITE_WS_URL
+    let wsUrl: string
+    if (explicitWsUrl) {
+      wsUrl = explicitWsUrl
+    } else {
+      const isLocalhost =
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1' ||
+        window.location.hostname === '0.0.0.0'
+      if (isLocalhost) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+        wsUrl = `${protocol}//${window.location.host}/ws`
+      } else {
+        wsUrl = 'wss://mct-companies-centralized-financial.onrender.com/ws'
+      }
+    }
 
     try {
       this.socket = new WebSocket(wsUrl)
@@ -131,11 +153,15 @@ class WebSocketService {
       }
 
       this.socket.onerror = (event) => {
-        console.warn('WebSocket connection error:', formatUserFriendlyErrorMessage(event, 'Real-time connection interrupted.'))
+        if (this.reconnectAttempts <= 1) {
+          console.warn('WebSocket connection error:', formatUserFriendlyErrorMessage(event, 'Real-time connection interrupted.'))
+        }
         this.handleDisconnect()
       }
     } catch (err) {
-      console.warn('WebSocket initialization error:', formatUserFriendlyErrorMessage(err, 'Unable to establish real-time connection.'))
+      if (this.reconnectAttempts <= 1) {
+        console.warn('WebSocket initialization error:', formatUserFriendlyErrorMessage(err, 'Unable to establish real-time connection.'))
+      }
       this.handleDisconnect()
     }
   }
@@ -152,6 +178,7 @@ class WebSocketService {
     this.pendingNotifications.clear()
     this.stopPing()
     this.isConnecting = false
+    this.reconnectAttempts = 0
     if (this.socket) {
       try {
         this.socket.close()
@@ -194,6 +221,12 @@ class WebSocketService {
     if (this.reconnectTimeout) return
     const token = this.getToken()
     if (!token) return
+
+    // Limit automatic reconnect attempts to avoid continuous battery drain and network noise
+    if (this.reconnectAttempts >= 10) {
+      this.setStatus('offline')
+      return
+    }
 
     this.reconnectAttempts += 1
     // Exponential backoff with random jitter (1s, 2s, 4s, 8s, max 30s)

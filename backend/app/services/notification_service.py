@@ -28,9 +28,9 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.cache import system_cache
 from app.models.audit_log import AuditLog
-from app.models.company import Company
+from app.models.company import Company, CompanyNotificationSettings
 from app.models.loan import Loan, LoanRepayment
-from app.schemas.notification import NotificationOut
+from app.schemas.notification import CompanyNotificationSettingsOut, NotificationOut
 from app.services.finance_service import FinanceCalculator
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,29 @@ class NotificationType:
 
     # Deposits & Audit
     DEPOSIT_VERIFIED            = "DEPOSIT_VERIFIED"
+    EXPENSE_LARGE_TRANSACTION   = "EXPENSE_LARGE_TRANSACTION"
+    SYSTEM_ACTIVITY_NOTICE      = "SYSTEM_ACTIVITY_NOTICE"
+
+
+LOAN_REMINDER_TYPES = {
+    NotificationType.LOAN_OVERDUE,
+    NotificationType.LOAN_DUE_TODAY,
+    NotificationType.LOAN_DUE_TOMORROW,
+    NotificationType.LOAN_DUE_SOON,
+    NotificationType.LENDING_OVERDUE,
+    NotificationType.LENDING_INSTALLMENT_OVERDUE,
+    NotificationType.LENDING_DUE_TODAY,
+    NotificationType.LENDING_DUE_TOMORROW,
+    NotificationType.LENDING_DUE_SOON,
+}
+
+AUDIT_ALERT_TYPES = {
+    NotificationType.DEPOSIT_VERIFIED,
+    NotificationType.PETTY_CASH_APPROVED,
+    NotificationType.PETTY_CASH_REJECTED,
+    NotificationType.LOAN_APPROVED_SUPERVISOR,
+    NotificationType.LOAN_REJECTED_SUPERVISOR,
+}
 
 
 OVERDUE_TYPES = {
@@ -235,6 +258,153 @@ class NotificationService:
         except Exception:
             return {}
 
+    def _get_company_settings(self, company_id: Optional[int]) -> CompanyNotificationSettingsOut:
+        if not company_id or company_id <= 0:
+            return CompanyNotificationSettingsOut(
+                id=0,
+                company_id=0,
+                transaction_alerts=True,
+                loan_reminders=True,
+                daily_summary=False,
+                audit_alerts=True,
+            )
+        cache_key = f"notif_settings:c:{company_id}"
+        cached = system_cache.get(cache_key)
+        if cached is not None and getattr(cached, "id", 0) > 0:
+            return cached
+        try:
+            row = (
+                self.db.query(CompanyNotificationSettings)
+                .filter(CompanyNotificationSettings.company_id == company_id)
+                .first()
+            )
+            if row:
+                out = CompanyNotificationSettingsOut.model_validate(row)
+                system_cache.set(
+                    cache_key,
+                    out,
+                    ttl=300,
+                    tags=["notif_settings", f"notif_settings:c:{company_id}"],
+                )
+                return out
+            return CompanyNotificationSettingsOut(
+                id=0,
+                company_id=company_id,
+                transaction_alerts=True,
+                loan_reminders=True,
+                daily_summary=False,
+                audit_alerts=True,
+            )
+        except Exception:
+            return CompanyNotificationSettingsOut(
+                id=0,
+                company_id=company_id,
+                transaction_alerts=True,
+                loan_reminders=True,
+                daily_summary=False,
+                audit_alerts=True,
+            )
+
+    def _get_disabled_notification_types(self, company_id: Optional[int]) -> set[str]:
+        if not company_id:
+            return set()
+        settings_out = self._get_company_settings(company_id)
+        disabled: set[str] = set()
+        if not settings_out.transaction_alerts:
+            disabled.add(NotificationType.EXPENSE_LARGE_TRANSACTION)
+        if not settings_out.loan_reminders:
+            disabled.update(LOAN_REMINDER_TYPES)
+        if not settings_out.audit_alerts:
+            disabled.update(AUDIT_ALERT_TYPES)
+        return disabled
+
+    def _is_notification_enabled_for_company(
+        self,
+        company_id: Optional[int],
+        notification_type: str,
+    ) -> bool:
+        if not company_id:
+            return True
+        disabled = self._get_disabled_notification_types(company_id)
+        return (notification_type or "").upper() not in disabled
+
+    def _admin_system_notifications(
+        self,
+        name_map: Optional[dict] = None,
+        limit: int = 50,
+    ) -> list[NotificationOut]:
+        cache_key = f"admin_system_notifs:limit:{limit}"
+        cached = system_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        results: list[NotificationOut] = []
+        if name_map is None:
+            name_map = self._get_company_names_map()
+        try:
+            admin_actions = [
+                "SYSTEM_ERROR",
+                "UNAUTHORIZED_ACCESS",
+                "PERMISSION_DENIED",
+                "ACCOUNT_LOCKED",
+                "USER_CREATED",
+                "USER_UPDATED",
+                "USER_DELETED",
+                "USER_ROLE_CHANGED",
+                "COMPANY_CREATED",
+                "COMPANY_UPDATED",
+                "COMPANY_DELETED",
+                "PASSWORD_RESET_SUCCESS",
+                "PASSWORD_RESET_FAILED",
+                "LOGIN_FAILED",
+            ]
+            rows = (
+                self.db.query(AuditLog)
+                .filter(
+                    or_(
+                        AuditLog.action.in_(admin_actions),
+                        AuditLog.action_category.in_(["SYSTEM", "USER", "COMPANY", "SETTINGS"]),
+                    )
+                )
+                .order_by(AuditLog.created_at.desc(), AuditLog.audit_log_id.desc())
+                .limit(limit)
+                .all()
+            )
+            for row in rows:
+                details = _parse_details(row.details)
+                action_str = (row.action or "SYSTEM_ACTIVITY").upper()
+                cname = _company_name(self.db, row.company_id, name_map) if row.company_id else "System"
+                title = f"System Activity: {action_str.replace('_', ' ').title()}"
+                if action_str in ("SYSTEM_ERROR", "UNAUTHORIZED_ACCESS", "PERMISSION_DENIED", "ACCOUNT_LOCKED", "LOGIN_FAILED"):
+                    title = f"Security / System Alert: {action_str.replace('_', ' ').title()}"
+                msg_parts = [f"Action {action_str} recorded"]
+                if row.company_id:
+                    msg_parts.append(f"for {cname}")
+                if details.get("email"):
+                    msg_parts.append(f"({details['email']})")
+                elif details.get("company_name"):
+                    msg_parts.append(f"({details['company_name']})")
+                if row.ip_address:
+                    msg_parts.append(f"from IP {row.ip_address}")
+                msg = " ".join(msg_parts) + "."
+                results.append(
+                    NotificationOut(
+                        notification_id=_make_id(NotificationType.SYSTEM_ACTIVITY_NOTICE, row.audit_log_id),
+                        notification_type=NotificationType.SYSTEM_ACTIVITY_NOTICE,
+                        title=title,
+                        message=msg,
+                        company_id=row.company_id,
+                        reference_type="activity_log",
+                        reference_id=row.audit_log_id,
+                        is_read=False,
+                        created_at=row.created_at or datetime.now(timezone.utc),
+                    )
+                )
+            system_cache.set(cache_key, results, ttl=15, tags=["notifications"])
+        except Exception as exc:
+            logger.warning("Error computing admin system notifications: %s", exc)
+        return results
+
     def _load_loans_context(
         self,
         company_id: Optional[int],
@@ -324,7 +494,11 @@ class NotificationService:
     ) -> list[NotificationOut]:
         effective_role = (user_role or "supervisor").strip().lower() or "supervisor"
         if effective_role == "admin":
-            return []
+            sys_items = self._admin_system_notifications(limit=limit + offset)
+            if notification_type:
+                nt = notification_type.upper()
+                sys_items = [n for n in sys_items if n.notification_type == nt]
+            return sys_items[offset: offset + limit]
 
         scope_ident = user_scope_key or f"r:{effective_role}:c:{company_id}"
         base_cache_key = f"notifs_v2:{scope_ident}"
@@ -402,7 +576,10 @@ class NotificationService:
             )
             system_cache.set(base_cache_key, deduped, ttl=15, tags=["notifications"])
 
-        filtered = deduped
+        filtered = [
+            n for n in deduped
+            if self._is_notification_enabled_for_company(n.company_id or company_id, n.notification_type)
+        ]
         if not _is_supervisor_role(effective_role):
             filtered = [n for n in filtered if n.notification_type not in DUE_DATE_TYPES]
         if notification_type:
@@ -419,13 +596,26 @@ class NotificationService:
         user_scope_key: Optional[str] = None,
         recipient_user_id: Optional[int] = None,
     ) -> int:
-        if (user_role or "").strip().lower() == "admin":
-            return 0
+        effective_role = (user_role or "").strip().lower()
+        if effective_role == "admin":
+            if recipient_user_id is not None:
+                from sqlalchemy import select, func
+                from app.models.notification import Notification
+
+                admin_q = select(func.count(Notification.notification_id)).where(
+                    Notification.recipient_user_id == recipient_user_id,
+                    Notification.read_at.is_(None),
+                    Notification.resolved_at.is_(None),
+                )
+                persisted_admin = self.db.scalar(admin_q) or 0
+                if persisted_admin > 0:
+                    return int(persisted_admin)
+            return len(self._admin_system_notifications(limit=100))
 
         if recipient_user_id is not None:
-            from sqlalchemy import select, func
+            from sqlalchemy import func, select
             from app.models.notification import Notification
-            
+
             q = select(func.count(Notification.notification_id)).where(
                 Notification.recipient_user_id == recipient_user_id,
                 Notification.read_at.is_(None),
@@ -433,20 +623,26 @@ class NotificationService:
             )
             if company_id is not None:
                 q = q.where(Notification.company_id == company_id)
+                disabled_types = self._get_disabled_notification_types(company_id)
+                if disabled_types:
+                    q = q.where(Notification.notification_type.notin_(disabled_types))
             if not _is_supervisor_role(user_role):
                 q = q.where(Notification.notification_type.notin_(DUE_DATE_TYPES))
-            count = self.db.scalar(q)
+            count = int(self.db.scalar(q) or 0)
 
-            active_q = select(func.count(Notification.notification_id)).where(
+            active_q = select(Notification.notification_id).where(
                 Notification.recipient_user_id == recipient_user_id,
                 Notification.resolved_at.is_(None),
             )
             if company_id is not None:
                 active_q = active_q.where(Notification.company_id == company_id)
+                disabled_types = self._get_disabled_notification_types(company_id)
+                if disabled_types:
+                    active_q = active_q.where(Notification.notification_type.notin_(disabled_types))
             if not _is_supervisor_role(user_role):
                 active_q = active_q.where(Notification.notification_type.notin_(DUE_DATE_TYPES))
-            has_any = self.db.scalar(active_q)
-            if has_any and has_any > 0:
+            has_any = self.db.scalars(active_q.limit(1)).first()
+            if has_any is not None:
                 extra_pc = self._unpersisted_petty_cash_workflow(
                     recipient_user_id=recipient_user_id,
                     company_id=company_id,
@@ -2073,6 +2269,10 @@ def _extend_service(cls):
 
         if company_id is not None:
             query = query.where(Notification.company_id == company_id)
+            if (user_role or "").strip().lower() != "admin":
+                disabled_types = self._get_disabled_notification_types(company_id)
+                if disabled_types:
+                    query = query.where(Notification.notification_type.notin_(disabled_types))
 
         if notification_type:
             query = query.where(Notification.notification_type == notification_type.upper())
@@ -2108,7 +2308,12 @@ def _extend_service(cls):
             query = query.order_by(Notification.created_at.desc(), Notification.notification_id.desc())
 
         items = self.db.scalars(query.limit(limit + 1)).all()
-        
+        if (user_role or "").strip().lower() != "admin":
+            items = [
+                r for r in items
+                if self._is_notification_enabled_for_company(r.company_id, r.notification_type)
+            ]
+
         # If persistent table has no active items for this user yet, fallback to computed items
         if not items and not cursor:
             computed = self.get_notifications(
@@ -2326,6 +2531,8 @@ def run_temporal_due_date_sweep(session_factory: Callable[[], Session]) -> dict:
             upserted = 0
             for item in all_notifs:
                 if not item.company_id:
+                    continue
+                if not svc._is_notification_enabled_for_company(item.company_id, item.notification_type):
                     continue
                 recipients = resolve_event_recipients(
                     db=db,

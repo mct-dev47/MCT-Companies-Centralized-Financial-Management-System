@@ -25,6 +25,7 @@ import {
 import { formatPHP } from '@/lib/format'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { sanitizeNumericInput } from '@/utils/numericInputUtils'
 
@@ -227,7 +228,10 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     }
   }
 
-  const isDeleteMatch = activeCompany ? deleteConfirmationName.trim() === activeCompany.name.trim() : false
+  const isDeleteMatch = Boolean(
+    activeCompany &&
+    deleteConfirmationName.trim() === activeCompany.name.trim()
+  )
 
   const handleOpenDeleteConfirm = () => {
     setDeleteConfirmationName('')
@@ -268,7 +272,15 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   return (
     <>
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
-        <DialogContent className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            if (document.activeElement && e.currentTarget.contains(document.activeElement)) {
+              e.preventDefault()
+              ;(document.activeElement as HTMLElement)?.blur()
+            }
+          }}
+          className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto"
+        >
           <DialogTitle className="sr-only">
             {activeCompany.name} Details
           </DialogTitle>
@@ -310,6 +322,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   <img
                     src={profilePreview || logo2Url}
                     alt="Company Logo Preview"
+                    onError={(e) => {
+                      const target = e.currentTarget
+                      target.onerror = null
+                      target.src = logo2Url
+                    }}
                     className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white rounded-full">
@@ -319,6 +336,8 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                 </div>
 
                 <input
+                  id="view-company-logo"
+                  name="companyLogo"
                   type="file"
                   ref={fileInputRef}
                   onChange={handleImageFileChange}
@@ -430,9 +449,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       className="h-10 rounded-xl text-sm"
                       required
                     />
-                    {formErrors.contactNumber && (
-                      <p className="text-xs text-rose-500">{formErrors.contactNumber}</p>
-                    )}
+                    <FormFieldError error={formErrors.contactNumber} />
                   </div>
 
                   <div className="space-y-1">
@@ -454,9 +471,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       placeholder="81234567"
                       className="h-10 rounded-xl text-sm"
                     />
-                    {formErrors.telephoneNumber && (
-                      <p className="text-xs text-rose-500">{formErrors.telephoneNumber}</p>
-                    )}
+                    <FormFieldError error={formErrors.telephoneNumber} />
                   </div>
                 </div>
 
@@ -552,6 +567,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                 <img
                   src={activeCompany.logoUrl || logo2Url}
                   alt={activeCompany.name}
+                  onError={(e) => {
+                    const target = e.currentTarget
+                    target.onerror = null
+                    target.src = logo2Url
+                  }}
                   className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
                 />
               </div>
@@ -673,13 +693,13 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
         onConfirm={handleConfirmDelete}
       >
         <div className="space-y-4 pt-2 text-left w-full">
-          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm space-y-1.5">
-            <div className="flex items-center gap-1.5 font-semibold text-rose-900">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+          <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-focus text-xs sm:text-sm space-y-1.5">
+            <div className="flex items-center gap-1.5 font-semibold text-primary">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-primary" />
               <span>Permanent deletion warning</span>
             </div>
-            <p className="text-xs text-rose-700 leading-relaxed">
-              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-rose-950">{company.name}</strong>.
+            <p className="text-xs text-muted-fg leading-relaxed">
+              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-primary">{company.name}</strong>.
             </p>
           </div>
 

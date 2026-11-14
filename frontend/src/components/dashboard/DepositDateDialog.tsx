@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { formatDisplayDate } from '@/utils/dateUtils'
@@ -77,18 +78,18 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
 
   return (
     <Dialog open={!!sale} onOpenChange={(open) => !open && !saving && onClose()}>
-      <DialogContent className="max-w-[420px] rounded-[24px] p-6 bg-white border border-stroke/50 shadow-modal">
+      <DialogContent className="max-w-[440px] rounded-[16px] p-6 bg-white border border-stroke/40 shadow-modal">
         <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-[10px] bg-emerald-50 border border-emerald-200 flex items-center justify-center shrink-0">
               <Landmark className="w-5 h-5 text-emerald-600" />
             </div>
             <div>
-              <DialogTitle className="text-lg font-extrabold text-focus leading-tight">
+              <DialogTitle className="text-lg font-bold text-focus leading-tight">
                 Mark as Deposited
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                {sale ? `Sale of ${formatDisplayDate(saleDay)}. Pick the bank and the day the money arrived.` : ''}
+                {sale ? `Record deposit of ₱${Number(sale.deposit ?? sale.netAmount ?? (sale as any).amount ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${sale.particulars || sale.category || 'sale'} (${formatDisplayDate(saleDay)}).` : ''}
               </DialogDescription>
             </div>
           </div>
@@ -96,59 +97,61 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
 
         <div className="space-y-4 pt-4">
           <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-focus block">Bank account</Label>
-            <select
+            <Label htmlFor="deposit-bank-select" className="text-xs font-semibold text-focus block">Bank account</Label>
+            <Dropdown
+              id="deposit-bank-select"
+              name="bankAccount"
               value={bankId}
-              onChange={(e) => setBankId(e.target.value)}
-              className="w-full h-10 px-3 rounded-xl border border-stroke/50 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-            >
-              <option value="">{companyAccounts.length === 0 ? 'No bank account for this company' : 'Default account'}</option>
-              {companyAccounts.map((a) => (
-                <option key={a.id} value={String(a.id)}>
-                  {a.bankName}
-                  {a.accountName ? ` - ${a.accountName}` : ''}
-                </option>
-              ))}
-            </select>
+              onChange={(val) => setBankId(String(val))}
+              placeholder={companyAccounts.length === 0 ? 'No bank account for this company' : 'Default account'}
+              options={companyAccounts.map((a) => ({
+                value: String(a.id),
+                label: `${a.bankName}${a.accountName ? ` - ${a.accountName}` : ''}`,
+              }))}
+              aria-label="Bank Account"
+            />
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-focus block">
+            <Label htmlFor="deposit-date-input" className="text-xs font-semibold text-focus block">
               Deposit date <span className="text-rose-600">*</span>
             </Label>
             <input
+              id="deposit-date-input"
+              name="depositDate"
               type="date"
               value={depositDate}
               min={saleDay || undefined}
               max={todayIso()}
               onChange={(e) => setDepositDate(e.target.value)}
-              className="w-full h-10 px-3 rounded-xl border border-stroke/50 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+              className="w-full h-11 px-3 rounded-[10px] border border-stroke/50 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
             />
             {invalidDate && (
-              <p className="text-[10px] text-rose-600 leading-tight">
+              <p className="text-[11px] text-rose-600 leading-tight">
                 The deposit date cannot be before the sale date or in the future.
               </p>
             )}
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-3 border-t border-stroke/30">
+          <div className="flex items-center justify-between gap-2 pt-4 border-t border-stroke/30">
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               disabled={saving}
               onClick={onClose}
-              className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
+              className="h-11 px-4 text-xs font-semibold rounded-[10px] cursor-pointer"
             >
               Cancel
             </Button>
             <Button
               type="button"
+              variant="primary"
               disabled={invalidDate || saving}
+              isLoading={saving}
               onClick={handleConfirm}
-              className="h-10 px-5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              className="h-11 px-5 text-xs font-semibold rounded-[10px] cursor-pointer"
             >
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-              <span>Confirm</span>
+              <span>Mark as Deposited</span>
             </Button>
           </div>
         </div>

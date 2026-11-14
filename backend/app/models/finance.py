@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Numeric, Date, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Numeric, Date, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, synonym
 from app.db.session import Base
@@ -15,6 +15,25 @@ class Category(Base):
     sales = relationship("Sale", back_populates="category")
     expenses = relationship("Expense", back_populates="category")
     budgets = relationship("Budget", back_populates="category")
+
+
+class CompanyCategory(Base):
+    __tablename__ = "company_categories"
+
+    category_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    company_id = Column(Integer, ForeignKey("company.company_id", ondelete="CASCADE"), nullable=False, index=True)
+    company_name = Column(String(100), nullable=True, index=True)
+    category_type = Column(String(20), nullable=False, index=True)  # 'sales' or 'expense'
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "category_type", "name", name="uq_company_category_type_name"),
+    )
+
+    company = relationship("Company", backref="company_categories")
 
 
 class CashInflow(Base):

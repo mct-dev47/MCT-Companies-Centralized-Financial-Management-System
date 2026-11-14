@@ -32,9 +32,18 @@ export default {
         'icon-tile': '#E5E5E5',
       },
       borderRadius: {
+        control: '10px',
+        surface: '16px',
+        item: '8px',
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
+      },
+      boxShadow: {
+        soft: '0 4px 20px -2px rgba(0, 0, 0, 0.08), 0 2px 6px -1px rgba(0, 0, 0, 0.04)',
+      },
+      minHeight: {
+        control: '44px',
       },
       fontFamily: {
         sans: ['"Inter Variable"', 'InterVariable', 'Inter', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],

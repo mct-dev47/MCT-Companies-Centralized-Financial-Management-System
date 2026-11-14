@@ -7,6 +7,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -84,6 +85,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const [referenceNo, setReferenceNo] = React.useState<string>('')
   const [notes, setNotes] = React.useState<string>('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
 
@@ -99,6 +101,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       setReferenceNo('')
       setNotes('')
       setError('')
+      setIsReviewing(false)
       setSuccessBanner(null)
     }
   }, [open, loan, expense])
@@ -143,6 +146,11 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       setError(
         `Payment amount (${formatPHP(numericAmount)}) cannot exceed remaining balance (${formatPHP(outstandingBalance)}).`
       )
+      return
+    }
+
+    if (!isReviewing) {
+      setIsReviewing(true)
       return
     }
 
@@ -225,7 +233,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
   const targetName = isLoan
     ? (loan?.borrower || loan?.lender || loan?.particulars || loan?.refNo)
-    : (expense?.particulars || expense?.vendor || expense?.refNo)
+    : (expense?.particulars || (expense as any)?.vendor || expense?.refNo)
 
   const targetDetail = isLoan
     ? (loan?.refNo ? `Ref: ${loan.refNo}` : 'Loan Facility')
@@ -286,7 +294,23 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+            {isReviewing ? (
+              <ModalReviewStep
+                title="Review Repayment Details"
+                subtitle="Please verify the repayment remittance before recording."
+                errorMessage={error}
+                items={[
+                  { label: 'Obligation / Payee', value: targetName || 'N/A', highlight: true },
+                  { label: 'Payment Amount', value: formatPHP(numericAmount), isCurrency: true },
+                  { label: 'Payment Date', value: paymentDate },
+                  { label: 'Payment Method', value: paymentMethod },
+                  { label: 'Reference No.', value: referenceNo.trim() || 'None' },
+                  { label: 'Notes', value: notes.trim() || 'None' },
+                ]}
+              />
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
               {/* Left Column: Interactive Calendar Date Picker & Financial Summary */}
               <div className="space-y-4">
                 {/* Calendar Date Picker */}
@@ -664,37 +688,39 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                       </Button>
                     )}
                   </div>
-
-                  <div className="flex items-center gap-2.5">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => onOpenChange(false)}
-                      className="h-10 px-4 rounded-xl border-stroke/60 text-xs font-medium cursor-pointer"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="submit"
-                      disabled={isSubmitting || numericAmount <= 0 || numericAmount > outstandingBalance}
-                      className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover active:bg-primary-active text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          <span>Recording...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Confirm & Record Payment</span>
-                        </>
-                      )}
-                    </Button>
-                  </div>
                 </div>
               </div>
             </div>
+
+            </>
+          )}
+
+                  <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        if (isReviewing) {
+                          setIsReviewing(false)
+                        } else {
+                          onOpenChange(false)
+                        }
+                      }}
+                      disabled={isSubmitting}
+                      className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+                    >
+                      {isReviewing ? 'Back to Edit' : 'Cancel'}
+                    </Button>
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      disabled={isSubmitting || numericAmount <= 0 || numericAmount > outstandingBalance}
+                      isLoading={isSubmitting}
+                      className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+                    >
+                      <span>{isReviewing ? 'Record Repayment' : 'Review Repayment'}</span>
+                    </Button>
+                  </div>
           </form>
         ) : (
           <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between gap-3 text-left">

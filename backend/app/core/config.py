@@ -3,6 +3,9 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 import json
+import logging
+
+logger = logging.getLogger("mct.config")
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
@@ -27,6 +30,7 @@ class Settings(BaseSettings):
     PORT: int = 8000
     ENVIRONMENT: str = "development"
     ENABLE_API_DOCS: bool = False
+    FRONTEND_URL: str = "http://localhost:5173"
 
     # Supabase settings
     SUPABASE_URL: str = ""
@@ -163,8 +167,47 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def enforce_production_security_defaults(self):
-        if str(self.ENVIRONMENT or "").strip().lower() == "production":
+        is_production = str(self.ENVIRONMENT or "").strip().lower() == "production"
+        if is_production:
             self.OTP_COOKIE_SECURE = True
+
+        # Normalize FRONTEND_URL
+        if self.FRONTEND_URL:
+            self.FRONTEND_URL = self.FRONTEND_URL.strip().rstrip("/")
+
+        # In production:
+        # If FRONTEND_URL is unconfigured, empty, or default localhost,
+        # automatically fallback to the primary HTTPS origin configured in CORS_ORIGINS.
+        if is_production:
+            is_localhost = (
+                not self.FRONTEND_URL
+                or "localhost" in self.FRONTEND_URL
+                or "127.0.0.1" in self.FRONTEND_URL
+            )
+            if is_localhost:
+                https_origins = [
+                    orig for orig in (self.CORS_ORIGINS if isinstance(self.CORS_ORIGINS, list) else [])
+                    if isinstance(orig, str) and orig.startswith("https://")
+                ]
+                if https_origins:
+                    self.FRONTEND_URL = https_origins[0]
+                    logger.info(
+                        "Auto-configured FRONTEND_URL to primary production CORS origin: %s",
+                        self.FRONTEND_URL,
+                    )
+                else:
+                    logger.warning(
+                        "[PRODUCTION WARNING] FRONTEND_URL is pointing to localhost ('%s') in production and no HTTPS origin was found in CORS_ORIGINS! "
+                        "Magic link invitations and password reset emails will point to localhost and will not be accessible to remote users. "
+                        "Please configure FRONTEND_URL in your production environment variables (e.g. FRONTEND_URL='https://your-domain.vercel.app').",
+                        self.FRONTEND_URL,
+                    )
+
+        # Ensure FRONTEND_URL is included in CORS_ORIGINS if it's a valid HTTP/HTTPS URL
+        if self.FRONTEND_URL and self.FRONTEND_URL.startswith(("http://", "https://")):
+            if isinstance(self.CORS_ORIGINS, list) and self.FRONTEND_URL not in self.CORS_ORIGINS:
+                self.CORS_ORIGINS.append(self.FRONTEND_URL)
+
         return self
 
     model_config = SettingsConfigDict(

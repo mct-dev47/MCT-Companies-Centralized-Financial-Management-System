@@ -345,7 +345,7 @@ export const DashboardPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-5 pb-8 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-5 pb-8 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Visually hidden h1 for accessibility compliance */}
       <h1 className="sr-only">MCT Centralized Financial Dashboard</h1>
 

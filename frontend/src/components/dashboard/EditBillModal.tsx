@@ -1,3 +1,6 @@
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import * as React from 'react'
 import {
   Dialog,
@@ -110,6 +113,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
   const [notes, setNotes] = React.useState('')
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
     billerName?: string
@@ -219,7 +223,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[620px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
+      <DialogContent className="sm:max-w-[560px] max-h-[85vh] overflow-y-auto rounded-[16px] p-6 bg-white border border-stroke/40 shadow-modal">
         <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#960C01] text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -237,6 +241,22 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Bill Updates"
+              subtitle="Please confirm the updated bill details before saving."
+              errorMessage={error}
+              items={[
+                { label: 'Provider / Biller', value: billerName.trim(), highlight: true },
+                { label: 'Company', value: company || 'N/A' },
+                { label: 'Billing Cycle', value: billingCycle },
+                { label: 'Next Due Date', value: getComputedDueDate() || `Day ${dueDayOfMonth} of month` },
+                { label: 'Reminder', value: `${reminderDaysBefore} day(s) before` },
+                { label: 'Notes', value: notes.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {error && (
             <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -265,9 +285,7 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 fieldErrors.billerName && 'border-red-500 focus-visible:ring-red-200'
               )}
             />
-            {fieldErrors.billerName && (
-              <p className="text-[11px] text-red-600 font-medium">{fieldErrors.billerName}</p>
-            )}
+            <FormFieldError error={fieldErrors.billerName} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -279,17 +297,12 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span className="text-red-500">*</span>
               </Label>
               {canChooseCompany ? (
-                <select
+                <Dropdown
                   value={company}
-                  onChange={(e) => setCompany(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {dbCompanies.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setCompany(String(val))}
+                  options={dbCompanies.map((c) => ({ value: c, label: c }))}
+                  aria-label="Company"
+                />
               ) : (
                 <div className="w-full h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 text-xs text-focus font-semibold flex items-center truncate">
                   {company}
@@ -304,15 +317,16 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Recurring Schedule</span>
                 <span className="text-red-500">*</span>
               </Label>
-              <select
-                value={billingCycle}
-                onChange={(e) => handleBillingCycleChange(e.target.value as 'Daily' | 'Monthly' | 'Yearly')}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value="Daily">Daily (Every Day)</option>
-                <option value="Monthly">Monthly (Day of Month)</option>
-                <option value="Yearly">Yearly (Annual Renewal)</option>
-              </select>
+              <Dropdown
+                  value={billingCycle}
+                  onChange={(val) => handleBillingCycleChange(val as 'Daily' | 'Monthly' | 'Yearly')}
+                  options={[
+                    { value: 'Monthly', label: 'Monthly' },
+                    { value: 'Daily', label: 'Daily' },
+                    { value: 'Yearly', label: 'Yearly' },
+                  ]}
+                  aria-label="Billing Cycle"
+                />
             </div>
           </div>
 
@@ -324,18 +338,15 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Due Day of the Month</span>
                 <span className="text-red-500">*</span>
               </Label>
-              <select
-                value={dueDayOfMonth}
-                onChange={(e) => setDueDayOfMonth(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                {Array.from({ length: 30 }, (_, i) => i + 1).map((d) => (
-                  <option key={d} value={d}>
-                    Due every {d}{getOrdinalSuffix(d)} of the month
-                  </option>
-                ))}
-                <option value={31}>Due every 31st (or last day of month)</option>
-              </select>
+              <Dropdown
+                      value={dueDayOfMonth}
+                      onChange={(val) => setDueDayOfMonth(Number(val))}
+                      options={Array.from({ length: 31 }, (_, i) => ({
+                        value: i + 1,
+                        label: `Day ${i + 1}`,
+                      }))}
+                      aria-label="Due Day"
+                    />
             </div>
           )}
 
@@ -347,28 +358,24 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span className="text-red-500">*</span>
               </Label>
               <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={yearlyMonth}
-                  onChange={(e) => setYearlyMonth(parseInt(e.target.value, 10))}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {MONTH_NAMES.map((m, idx) => (
-                    <option key={m} value={idx + 1}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={yearlyDay}
-                  onChange={(e) => setYearlyDay(parseInt(e.target.value, 10))}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                    <option key={d} value={d}>
-                      Day {d} ({d}{getOrdinalSuffix(d)})
-                    </option>
-                  ))}
-                </select>
+                <Dropdown
+                        value={yearlyMonth}
+                        onChange={(val) => setYearlyMonth(Number(val))}
+                        options={[
+                          'January', 'February', 'March', 'April', 'May', 'June',
+                          'July', 'August', 'September', 'October', 'November', 'December'
+                        ].map((m, idx) => ({ value: idx, label: m }))}
+                        aria-label="Month"
+                      />
+                <Dropdown
+                        value={yearlyDay}
+                        onChange={(val) => setYearlyDay(Number(val))}
+                        options={Array.from({ length: 31 }, (_, i) => ({
+                          value: i + 1,
+                          label: `Day ${i + 1}`,
+                        }))}
+                        aria-label="Day"
+                      />
               </div>
             </div>
           )}
@@ -384,29 +391,25 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
                 <span>Automatic daily alerts: Notifies on <strong>Due Today</strong> and <strong>Overdue</strong></span>
               </div>
             ) : billingCycle === 'Yearly' ? (
-              <select
+              <Dropdown
                 value={reminderDaysBefore}
-                onChange={(e) => setReminderDaysBefore(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value={7}>7 days before annual renewal</option>
-                <option value={14}>14 days before annual renewal</option>
-                <option value={30}>30 days before annual renewal</option>
-                <option value={60}>60 days before annual renewal</option>
-              </select>
+                onChange={(val) => setReminderDaysBefore(Number(val))}
+                options={[7, 14, 30, 60].map((d) => ({
+                  value: d,
+                  label: `${d} days before annual renewal`,
+                }))}
+                aria-label="Reminder"
+              />
             ) : (
-              <select
-                value={reminderDaysBefore}
-                onChange={(e) => setReminderDaysBefore(parseInt(e.target.value, 10))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-              >
-                <option value={1}>1 day before due date</option>
-                <option value={3}>3 days before due date</option>
-                <option value={5}>5 days before due date</option>
-                <option value={7}>7 days before due date</option>
-                <option value={10}>10 days before due date</option>
-                <option value={14}>14 days before due date</option>
-              </select>
+              <Dropdown
+                    value={reminderDaysBefore}
+                    onChange={(val) => setReminderDaysBefore(Number(val))}
+                    options={[1, 2, 3, 5, 7, 10].map((d) => ({
+                      value: d,
+                      label: `${d} day${d > 1 ? 's' : ''} before`,
+                    }))}
+                    aria-label="Reminder"
+                  />
             )}
           </div>
 
@@ -424,24 +427,35 @@ export const EditBillModal: React.FC<EditBillModalProps> = ({
             />
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
               <Check className="w-4 h-4" />
-              <span>{isSubmitting ? 'Saving...' : 'Save Changes'}</span>
+              <span>{isReviewing ? 'Update Bill' : 'Review Updates'}</span>
             </Button>
           </div>
         </form>

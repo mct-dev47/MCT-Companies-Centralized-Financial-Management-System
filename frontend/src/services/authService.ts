@@ -615,4 +615,29 @@ export const authService = {
       }
     }
   },
+
+  /**
+   * Reauthenticates the current user by password for sensitive actions (AC-16).
+   */
+  async reauthenticate(password: string): Promise<string> {
+    const encrypted = encryptPayload({ password })
+    const body = encrypted ? { encrypted_payload: encrypted } : { password }
+    const response = await fetch('/api/v1/auth/reauthenticate', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-MCT-CSRF': '1',
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(inMemoryAccessToken ? { Authorization: `Bearer ${inMemoryAccessToken}` } : {}),
+      },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}))
+      throw new Error(err.detail || 'Reauthentication failed. Incorrect password.')
+    }
+    const data = await response.json()
+    return data.reauth_token
+  },
 }

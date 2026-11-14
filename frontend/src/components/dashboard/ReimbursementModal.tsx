@@ -6,6 +6,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -168,6 +171,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   const [generalError, setGeneralError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
 
   // Discard Confirmation Modal
   const [isDiscardModalOpen, setIsDiscardModalOpen] = React.useState(false)
@@ -590,7 +594,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const trimmed = name.trim()
     if (!trimmed || !requestingCompany) return
     try {
-      const saved = await particularsService.saveParticular(requestingCompany, trimmed)
+      const saved = await particularsService.addParticular(requestingCompany, trimmed)
       if (saved) {
         setSavedParticulars((prev) => [saved, ...prev.filter((p) => p.name.toLowerCase() !== trimmed.toLowerCase())])
       }
@@ -894,6 +898,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       return
     }
 
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -1060,9 +1069,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     )}
                   />
                 </div>
-                {fieldErrors.date && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                )}
+                <FormFieldError error={fieldErrors.date} />
               </div>
 
               {/* Row 1, Right: Company */}
@@ -1070,11 +1077,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 <Label htmlFor="reimbursement-company" className="text-xs font-semibold text-focus">
                   Company <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   id="reimbursement-company"
                   value={requestingCompany}
-                  onChange={(e) => {
-                    setRequestingCompany(e.target.value)
+                  onChange={(val) => {
+                    setRequestingCompany(String(val))
                     if (fieldErrors.company) {
                       setFieldErrors((prev) => {
                         const n = { ...prev }
@@ -1083,20 +1090,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       })
                     }
                   }}
-                  className={cn(
-                    'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
-                    fieldErrors.company ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                  )}
-                >
-                  {availableCompanies.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                {fieldErrors.company && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.company}</p>
-                )}
+                  options={availableCompanies.map((c) => ({ value: c, label: c }))}
+                  error={fieldErrors.company}
+                  aria-label="Requesting Company"
+                />
+                <FormFieldError error={fieldErrors.company} />
               </div>
 
               {/* Row 2, Left: Paid by */}
@@ -1132,9 +1130,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                     fieldErrors.paidBy ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                   )}
                 />
-                {fieldErrors.paidBy && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.paidBy}</p>
-                )}
+                <FormFieldError error={fieldErrors.paidBy} />
               </div>
 
               {/* Row 2, Right: Category (Configurable per company) */}
@@ -1201,9 +1197,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                         {isSubmittingCategory ? 'Saving...' : 'Save'}
                       </Button>
                     </div>
-                    {categoryError && (
-                      <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
-                    )}
+                    <FormFieldError error={categoryError} />
                   </div>
                 )}
 
@@ -1242,18 +1236,15 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   <div className="p-3 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-900 space-y-1.5">
                     <div className="flex items-center gap-1.5 text-xs font-bold">
                       <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                      <span>No categories for {requestingCompany} yet</span>
+                      <span>Please add categories</span>
                     </div>
-                    <p className="text-[11px] text-amber-800 leading-snug">
-                      Please click <strong>"+ Add Category"</strong> above to create at least one category before submitting.
-                    </p>
                   </div>
                 ) : (
-                  <select
+                  <Dropdown
                     id="reimbursement-category"
                     value={category}
-                    onChange={(e) => {
-                      setCategory(e.target.value)
+                    onChange={(val) => {
+                      setCategory(String(val))
                       if (fieldErrors.category) {
                         setFieldErrors((prev) => {
                           const n = { ...prev }
@@ -1262,23 +1253,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                         })
                       }
                     }}
-                    className={cn(
-                      'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
-                      fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                    )}
-                  >
-                    <option value="" disabled>Select a category…</option>
-                    {companyCategories.map((cat) => (
-                      <option key={cat.category_id} value={cat.name}>
-                        {cat.name}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Select a category…"
+                    options={companyCategories.map((cat) => ({ value: cat.name, label: cat.name }))}
+                    error={fieldErrors.category}
+                    aria-label="Expense Category"
+                  />
                 )}
 
-                {fieldErrors.category && (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.category}</p>
-                )}
+                <FormFieldError error={fieldErrors.category} />
               </div>
             </div>
 
@@ -1429,9 +1411,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                 </div>
               </div>
 
-              {fieldErrors.lines && (
-                <p className="text-[11px] text-red-600 font-medium px-1">{fieldErrors.lines}</p>
-              )}
+              <FormFieldError error={fieldErrors.lines} className="px-1" />
             </div>
 
             <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
@@ -1483,9 +1463,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                     )}
                   />
-                  {fieldErrors.companyFunded && (
-                    <p className="text-[11px] text-red-600 font-medium">{fieldErrors.companyFunded}</p>
-                  )}
+                  <FormFieldError error={fieldErrors.companyFunded} />
                   <p className="text-[10.5px] text-muted-fg">
                     {isPreRecorded
                       ? 'Matched to your selected pre-recorded expense.'
@@ -1573,11 +1551,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       </div>
                     ) : (
                       <div className="relative">
-                        <select
+                        <Dropdown
                           id="reimbursement-funding-bank"
                           value={fundingBankId}
-                          onChange={(e) => {
-                            setFundingBankId(e.target.value)
+                          onChange={(val) => {
+                            setFundingBankId(String(val))
                             if (fieldErrors.fundingBank) {
                               setFieldErrors((prev) => {
                                 const next = { ...prev }
@@ -1586,29 +1564,21 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                               })
                             }
                           }}
-                          className={cn(
-                            'w-full h-10 pl-3 pr-9 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none appearance-none cursor-pointer',
-                            fieldErrors.fundingBank ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                          )}
-                        >
-                          <option value="" disabled={!(employeeOutOfPocket === 0 && grandTotal > 0)}>
-                            Choose the bank that funds this reimbursement...
-                          </option>
-                          {(requestingCompany
+                          placeholder="Choose the bank that funds this reimbursement..."
+                          options={(requestingCompany
                             ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
                             : effectiveBankAccounts
-                          ).map((acc) => (
-                            <option key={acc.id} value={acc.id}>
-                              {acc.bankName} ({acc.accountName}) [{acc.companyName}]
-                            </option>
-                          ))}
-                        </select>
+                          ).map((acc) => ({
+                            value: acc.id,
+                            label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                          }))}
+                          error={fieldErrors.fundingBank}
+                          aria-label="Funding Bank"
+                        />
                         <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
                       </div>
                     )}
-                    {fieldErrors.fundingBank && (
-                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.fundingBank}</p>
-                    )}
+                    <FormFieldError error={fieldErrors.fundingBank} />
                     {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : effectiveBankAccounts.length === 0) && (
                       <p className="text-[11px] text-amber-700 font-medium">
                         {requestingCompany
@@ -1775,9 +1745,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       </div>
                     )}
 
-                    {fieldErrors.existingExpenseId && (
-                      <p className="text-[11px] text-red-600 font-medium">{fieldErrors.existingExpenseId}</p>
-                    )}
+                    <FormFieldError error={fieldErrors.existingExpenseId} />
                   </div>
                 )}
               </div>
@@ -1791,6 +1759,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               </Label>
 
               <input
+                id="reimbursement-attachments"
+                name="attachments"
                 type="file"
                 ref={fileInputRef}
                 multiple
@@ -1930,27 +1900,28 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               <div className="flex items-center justify-end gap-2.5 shrink-0 self-end sm:self-auto">
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={handleRequestClose}
+                  variant="secondary"
+                  onClick={() => {
+                    if (isReviewing) {
+                      setIsReviewing(false)
+                    } else {
+                      handleRequestClose()
+                    }
+                  }}
                   disabled={isSubmitting}
-                  className="h-10 px-4 rounded-xl text-xs font-semibold border-stroke/60 text-focus hover:bg-slate-50 cursor-pointer shadow-2xs"
+                  className="h-11 px-5 rounded-[10px] text-xs font-semibold cursor-pointer"
                 >
-                  Cancel
+                  {isReviewing ? 'Back to Edit' : 'Cancel'}
                 </Button>
 
                 <Button
                   type="submit"
+                  variant="primary"
                   disabled={isSubmitting || isUploadingActive}
-                  className="h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs font-semibold shadow-xs flex items-center gap-2 cursor-pointer transition-all"
+                  isLoading={isSubmitting}
+                  className="h-11 px-6 rounded-[10px] text-xs font-semibold cursor-pointer"
                 >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Submitting…</span>
-                    </>
-                  ) : (
-                    <span>Submit Reimbursement</span>
-                  )}
+                  <span>{isReviewing ? 'Submit Reimbursement' : 'Review Reimbursement'}</span>
                 </Button>
               </div>
             </div>

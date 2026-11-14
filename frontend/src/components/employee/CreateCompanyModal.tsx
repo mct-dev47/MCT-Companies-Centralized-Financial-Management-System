@@ -235,6 +235,8 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                 </div>
 
                 <input
+                  id="create-company-logo"
+                  name="companyLogo"
                   type="file"
                   ref={fileInputRef}
                   onChange={handleImageFileChange}

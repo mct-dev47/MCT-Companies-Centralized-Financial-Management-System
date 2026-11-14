@@ -6,13 +6,15 @@ from typing import List, Optional
 from uuid import uuid4
 
 from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.cache import system_cache
 from app.db.supabase import get_supabase_admin_client
-from app.models.company import Company
+from app.models.company import Company, CompanyNotificationSettings
 from app.models.petty_cash import PettyCashTopUp, PettyCashWallet
 from app.schemas.company import CompanyCreate, CompanyOut, CompanyUpdate
+from app.schemas.notification import CompanyNotificationSettingsOut, CompanyNotificationSettingsUpdate
 from app.services.finance_service import FinanceService
 
 logger = logging.getLogger(__name__)
@@ -521,6 +523,7 @@ class CompanyService:
             self.db.execute(text("DELETE FROM staff_credits WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM company_payment_methods WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM company_particulars WHERE company_id = :id"), {"id": company_id})
+            self.db.execute(text("DELETE FROM company_notification_settings WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("UPDATE users SET company_id = NULL WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("UPDATE audit_logs SET company_id = NULL WHERE company_id = :id"), {"id": company_id})
 
@@ -538,6 +541,100 @@ class CompanyService:
 
         self._cleanup_company_storage(company_id, logo_url)
         return True
+
+    def get_notification_settings(self, company_id: int) -> Optional[CompanyNotificationSettingsOut]:
+        cache_key = f"notif_settings:c:{company_id}"
+        cached = system_cache.get(cache_key)
+        if cached is not None and getattr(cached, "id", 0) > 0:
+            return cached
+
+        company = self.get_company(company_id)
+        if not company:
+            return None
+
+        try:
+            settings_row = (
+                self.db.query(CompanyNotificationSettings)
+                .filter(CompanyNotificationSettings.company_id == company_id)
+                .first()
+            )
+            if not settings_row:
+                try:
+                    settings_row = CompanyNotificationSettings(
+                        company_id=company_id,
+                        transaction_alerts=True,
+                        loan_reminders=True,
+                        daily_summary=False,
+                        audit_alerts=True,
+                    )
+                    self.db.add(settings_row)
+                    self.db.commit()
+                    self.db.refresh(settings_row)
+                except IntegrityError:
+                    self.db.rollback()
+                    settings_row = (
+                        self.db.query(CompanyNotificationSettings)
+                        .filter(CompanyNotificationSettings.company_id == company_id)
+                        .first()
+                    )
+
+            out = CompanyNotificationSettingsOut.model_validate(settings_row)
+            system_cache.set(
+                cache_key,
+                out,
+                ttl=300,
+                tags=["notif_settings", f"notif_settings:c:{company_id}"],
+            )
+            return out
+        except SQLAlchemyError as error:
+            raise self._database_error("get company notification settings", error)
+
+    def update_notification_settings(
+        self,
+        company_id: int,
+        payload: CompanyNotificationSettingsUpdate,
+    ) -> Optional[CompanyNotificationSettingsOut]:
+        company = self.get_company(company_id)
+        if not company:
+            return None
+
+        try:
+            settings_row = (
+                self.db.query(CompanyNotificationSettings)
+                .filter(CompanyNotificationSettings.company_id == company_id)
+                .first()
+            )
+            if not settings_row:
+                settings_row = CompanyNotificationSettings(
+                    company_id=company_id,
+                    transaction_alerts=True,
+                    loan_reminders=True,
+                    daily_summary=False,
+                    audit_alerts=True,
+                )
+                self.db.add(settings_row)
+
+            update_data = payload.model_dump(exclude_unset=True)
+            for field in ("transaction_alerts", "loan_reminders", "daily_summary", "audit_alerts"):
+                if field in update_data and update_data[field] is not None:
+                    setattr(settings_row, field, bool(update_data[field]))
+
+            self.db.commit()
+            self.db.refresh(settings_row)
+
+            out = CompanyNotificationSettingsOut.model_validate(settings_row)
+            cache_key = f"notif_settings:c:{company_id}"
+            system_cache.invalidate_tag(f"notif_settings:c:{company_id}")
+            system_cache.invalidate_tag("notifications")
+            system_cache.set(
+                cache_key,
+                out,
+                ttl=300,
+                tags=["notif_settings", f"notif_settings:c:{company_id}"],
+            )
+            return out
+        except SQLAlchemyError as error:
+            raise self._database_error("update company notification settings", error)
 
     #converts a Company object into a CompanyOut object, including financial summary data retrieved from the FinanceService.
     def to_response(self, company: Company) -> CompanyOut:

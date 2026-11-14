@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
 import {
   Dialog,
   DialogContent,
@@ -7,14 +6,19 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   PlusCircle,
-  ChevronDown,
-  Check,
+  Plus,
+  Trash2,
+  Pencil,
+  RotateCw,
   AlertCircle,
 } from 'lucide-react'
 import {
@@ -26,8 +30,9 @@ import {
   particularsService,
   type CompanyParticular,
 } from '@/services/particularsService'
-import { expenseService } from '@/services/expenseService'
+import { categoryService, type CompanyCategory } from '@/services/categoryService'
 import { bankService } from '@/services/bankService'
+import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import { receivablesStore, type PaymentOption, type CustomerType } from '@/services/receivablesStore'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -53,8 +58,6 @@ const PAYMENT_METHOD_OPTIONS = [
   'In-house',
 ]
 
-const DEFAULT_SALES_CATEGORIES = SALES_CATEGORY_LIST
-
 export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   open,
   onOpenChange,
@@ -73,11 +76,20 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
   const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('sales', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState('Cash')
-  const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
-  const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
-  const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
-  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
-  const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+  const [bankAccountId, setBankAccountId] = React.useState('')
+
+  // Company Category states (ReimbursementModal pattern)
+  const [category, setCategory] = React.useState('')
+  const [companyCategories, setCompanyCategories] = React.useState<CompanyCategory[]>([])
+  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+  const [isAddingCategory, setIsAddingCategory] = React.useState(false)
+  const [isCategoryManaging, setIsCategoryManaging] = React.useState(false)
+  const [newCategoryName, setNewCategoryName] = React.useState('')
+  const [editingCategoryId, setEditingCategoryId] = React.useState<number | null>(null)
+  const [editingCategoryName, setEditingCategoryName] = React.useState('')
+  const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+  const [categoryError, setCategoryError] = React.useState('')
+
   // Food Utang / Payment Option states
   const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
   const [customerType, setCustomerType] = React.useState<CustomerType>('External')
@@ -85,7 +97,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [amountPaid, setAmountPaid] = React.useState('')
 
   // Confirmation dialogue state
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
@@ -97,24 +109,99 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     amountPaid?: string
   }>({})
 
-  // Load categories from database
+  // Load company-specific categories from database
   React.useEffect(() => {
     let mounted = true
-    expenseService.getCategories().then((cats) => {
-      if (mounted && cats && cats.length > 0) {
-        const names = Array.from(
-          new Set([
-            ...DEFAULT_SALES_CATEGORIES,
-            ...cats.map((c) => c.name?.trim()).filter(Boolean),
-          ])
-        )
-        setCategoryOptions(names)
-      }
-    }).catch(() => {})
+    if (open && assignedCompany) {
+      setIsLoadingCategories(true)
+      categoryService
+        .getCompanyCategories(assignedCompany, 'sales', { forceRefresh: true })
+        .then((cats) => {
+          if (mounted) {
+            setCompanyCategories(cats)
+            if (cats.length > 0) {
+              setCategory((prev) => {
+                if (prev && cats.some((c) => c.name.toLowerCase() === prev.toLowerCase())) {
+                  return prev
+                }
+                return cats[0].name
+              })
+            } else {
+              setCategory('')
+            }
+          }
+        })
+        .catch(() => {
+          if (mounted) setCompanyCategories([])
+        })
+        .finally(() => {
+          if (mounted) setIsLoadingCategories(false)
+        })
+    } else {
+      setCompanyCategories([])
+      setCategory('')
+    }
     return () => {
       mounted = false
     }
-  }, [open])
+  }, [open, assignedCompany])
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) {
+      setCategoryError('Category name cannot be empty.')
+      return
+    }
+    setIsSubmittingCategory(true)
+    setCategoryError('')
+    try {
+      const created = await categoryService.createCompanyCategory(assignedCompany, 'sales', trimmed)
+      const updated = [...companyCategories, created]
+      setCompanyCategories(updated)
+      setCategory(created.name)
+      setNewCategoryName('')
+      setIsAddingCategory(false)
+      if (fieldErrors.category) {
+        setFieldErrors((prev) => ({ ...prev, category: undefined }))
+      }
+    } catch (err: any) {
+      setCategoryError(err.message || 'Failed to create category.')
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleUpdateCategory = async (catId: number) => {
+    const trimmed = editingCategoryName.trim()
+    if (!trimmed) return
+    try {
+      const updatedCat = await categoryService.updateCompanyCategory(catId, trimmed, assignedCompany, 'sales')
+      setCompanyCategories((prev) =>
+        prev.map((c) => (c.category_id === catId ? updatedCat : c))
+      )
+      if (category.toLowerCase() === companyCategories.find((c) => c.category_id === catId)?.name.toLowerCase()) {
+        setCategory(updatedCat.name)
+      }
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+    } catch (err: any) {
+      alert(err.message || 'Failed to update category.')
+    }
+  }
+
+  const handleDeleteCategory = async (catId: number, catName: string) => {
+    if (!window.confirm(`Are you sure you want to delete category "${catName}"?`)) return
+    try {
+      await categoryService.deleteCompanyCategory(catId, assignedCompany, 'sales')
+      const updated = companyCategories.filter((c) => c.category_id !== catId)
+      setCompanyCategories(updated)
+      if (category.toLowerCase() === catName.toLowerCase()) {
+        setCategory(updated.length > 0 ? updated[0].name : '')
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete category.')
+    }
+  }
 
   // Load previous particulars for suggestions/autocomplete
   React.useEffect(() => {
@@ -154,28 +241,6 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
   }, [open, assignedCompany])
 
-  // Dynamic filter for category suggestions (show full list until user types)
-  const filteredCategoryOptions = React.useMemo(() => {
-    if (!isCategoryTyping) return categoryOptions
-    const q = category.trim().toLowerCase()
-    if (!q) return categoryOptions
-    return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions, isCategoryTyping])
-
-  // Close category dropdown on click outside
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        categoryContainerRef.current &&
-        !categoryContainerRef.current.contains(e.target as Node)
-      ) {
-        setIsCategoryOpen(false)
-        setIsCategoryTyping(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   // Reset form when modal opens
   React.useEffect(() => {
@@ -187,16 +252,20 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setDayRemark('')
       setDayRemarkTouched(false)
       setPaymentMethod('Cash')
-      setCategory(DEFAULT_SALES_CATEGORIES[0])
-      setIsCategoryOpen(false)
-      setIsCategoryTyping(false)
+      setBankAccountId('')
+      setIsAddingCategory(false)
+      setIsCategoryManaging(false)
+      setNewCategoryName('')
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+      setCategoryError('')
       setPaymentOption('Paid in full')
       setCustomerType('External')
       setCustomerName('')
       setAmountPaid('')
       setError('')
       setFieldErrors({})
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     }
   }, [open])
 
@@ -250,6 +319,10 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       errors.amount = 'Amount must be at least 1.00 (cannot be 0 or less than 1).'
     }
 
+    if (!category.trim() || companyCategories.length === 0) {
+      errors.category = 'Please add and select a category for this company.'
+    }
+
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       setError('Please fill in all required fields.')
@@ -257,7 +330,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
 
     setFieldErrors({})
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   // Step 2: Confirmed submission
@@ -266,11 +339,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     setError('')
     try {
       const parsedAmount = parseFloat(amount.replace(/,/g, ''))
-      const catTrimmed = category.trim() || DEFAULT_SALES_CATEGORIES[0]
-      if (catTrimmed && !categoryOptions.includes(catTrimmed)) {
-        expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
-      }
-
+      const catTrimmed = category.trim()
       const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Pending' : 'Unpaid'
 
       const payload: NewSalesInput = {
@@ -281,6 +350,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         category: catTrimmed,
         paymentMethod: paymentMethod,
         company: assignedCompany,
+        bankAccountId: bankAccountId || undefined,
         status: effectiveStatus as any,
         depositStatus: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
         deposit_status: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
@@ -322,23 +392,21 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       }
 
       // Close confirmation and modal
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
 
       // Trigger callback to redirect & highlight newly added row in table
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record sales entry.'))
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }
   }
 
   return (
-    <>
-      {/* 1. Main Add Sales Modal */}
-      <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
@@ -356,7 +424,17 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
             </div>
           </DialogHeader>
 
-          <form onSubmit={handlePreSubmit} className="space-y-4 pt-2">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (isReviewing) {
+                handleConfirmedSubmit()
+              } else {
+                handlePreSubmit(e)
+              }
+            }}
+            className="space-y-4 pt-2"
+          >
             {error && (
               <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -371,7 +449,30 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {isReviewing ? (
+              <ModalReviewStep
+                title="Review Sales Record"
+                subtitle="Please verify this sales transaction entry before saving."
+                errorMessage={error}
+                items={[
+                  { label: 'Company', value: assignedCompany, highlight: true },
+                  { label: 'Date', value: date },
+                  { label: 'Particulars', value: particulars || 'None' },
+                  { label: 'Payment Method', value: paymentMethod },
+                  { label: 'Category', value: category },
+                  ...(chequeNo ? [{ label: 'Cheque No.', value: chequeNo }] : []),
+                  ...(paymentOption !== 'Paid in full' ? [
+                    { label: 'Customer / Staff', value: customerName || 'Walk-in Customer' },
+                    { label: 'Customer Type', value: customerType },
+                    { label: 'Payment Option', value: paymentOption },
+                    ...(paymentOption === 'Partial' ? [{ label: 'Amount Paid Now', value: formatPHP(parseFloat(amountPaid) || 0), isCurrency: true }] : []),
+                  ] : []),
+                  { label: 'Total Deposit Amount', value: formatPHP(parseFloat(amount) || 0), isCurrency: true },
+                ]}
+              />
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               {/* 1. Date (editable, defaults to today) */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-focus block">
@@ -393,9 +494,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   )}
                   title="Transaction date (cannot be in the future)"
                 />
-                {fieldErrors.date ? (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                ) : (
+                <FormFieldError error={fieldErrors.date} />
+                {!fieldErrors.date && (
                   <p className="text-[11px] text-muted-fg font-normal">
                     Defaults to today (Max: today)
                   </p>
@@ -445,11 +545,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   <option key={opt.id} value={opt.name} />
                 ))}
               </datalist>
-              {fieldErrors.particulars && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.particulars}
-                </p>
-              )}
+              <FormFieldError error={fieldErrors.particulars} />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -475,11 +571,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                     fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.amount && (
-                  <p className="text-[11px] text-red-600 font-medium">
-                    {fieldErrors.amount}
-                  </p>
-                )}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 5. Payment Method */}
@@ -487,17 +579,12 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 <Label className="text-xs font-semibold text-focus block">
                   Payment Method <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {PAYMENT_METHOD_OPTIONS.map((pm) => (
-                    <option key={pm} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setPaymentMethod(String(val))}
+                  options={PAYMENT_METHOD_OPTIONS.map((pm) => ({ value: pm, label: pm }))}
+                  aria-label="Payment Method"
+                />
               </div>
             </div>
 
@@ -549,14 +636,16 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                       <Label className="text-[11px] font-semibold text-slate-700 block">
                         Customer Type <span className="text-red-500">*</span>
                       </Label>
-                      <select
+                      <Dropdown
                         value={customerType}
-                        onChange={(e) => setCustomerType(e.target.value as 'External' | 'Staff')}
-                        className="w-full h-9 px-2.5 rounded-lg border border-stroke/50 bg-white text-xs font-medium text-focus cursor-pointer"
-                      >
-                        <option value="External">External Customer</option>
-                        <option value="Staff">Internal Staff</option>
-                      </select>
+                        size="sm"
+                        onChange={(val) => setCustomerType(val as 'External' | 'Staff')}
+                        options={[
+                          { value: 'External', label: 'External Customer' },
+                          { value: 'Staff', label: 'Internal Staff' },
+                        ]}
+                        aria-label="Customer Type"
+                      />
                     </div>
 
                     <div className="space-y-1">
@@ -576,9 +665,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                         }}
                         className={cn('h-9 rounded-lg border-stroke/50 text-xs', fieldErrors.customerName && 'border-red-500')}
                       />
-                      {fieldErrors.customerName && (
-                        <p className="text-[10px] text-red-600 font-medium">{fieldErrors.customerName}</p>
-                      )}
+                      <FormFieldError error={fieldErrors.customerName} />
                     </div>
                   </div>
 
@@ -603,9 +690,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                           }}
                           className={cn('h-9 rounded-lg border-stroke/50 text-xs font-semibold tabular-nums', fieldErrors.amountPaid && 'border-red-500')}
                         />
-                        {fieldErrors.amountPaid && (
-                          <p className="text-[10px] text-red-600 font-medium">{fieldErrors.amountPaid}</p>
-                        )}
+                        <FormFieldError error={fieldErrors.amountPaid} />
                       </div>
 
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
@@ -626,119 +711,209 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               )}
             </div>
 
-            {/* 6. Category (Searchable / Configurable) */}
-            <div className="space-y-1.5" ref={categoryContainerRef}>
-              <Label className="text-xs font-semibold text-focus block">
-                Category <span className="text-red-500">*</span>
-              </Label>
-              <div className="relative">
-                <Input
-                  type="text"
+            {/* 6. Deposit Bank */}
+            <CompanyBankSelect
+              company={assignedCompany}
+              value={bankAccountId}
+              onChange={setBankAccountId}
+              label="Deposit Bank"
+              required
+              onAccountsLoaded={(accounts) => {
+                if (accounts.length > 0 && !bankAccountId) {
+                  setBankAccountId(String(accounts[0].id))
+                }
+              }}
+            />
+
+            {/* 7. Category (Configurable per company - ReimbursementModal pattern) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-focus">
+                  Category <span className="text-red-500">*</span>
+                </Label>
+                <div className="flex items-center gap-2">
+                  {companyCategories.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCategoryManaging((prev) => !prev)
+                        setIsAddingCategory(false)
+                      }}
+                      className="text-[11px] font-semibold text-muted-fg hover:text-focus transition-colors cursor-pointer"
+                    >
+                      {isCategoryManaging ? 'Done' : 'Manage'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingCategory((prev) => !prev)
+                      setIsCategoryManaging(false)
+                      setCategoryError('')
+                      setNewCategoryName('')
+                    }}
+                    className="text-[11px] font-bold text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{isAddingCategory ? 'Cancel' : 'Add Category'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Inline Add Category Input */}
+              {isAddingCategory && (
+                <div className="p-2.5 rounded-xl border border-primary/30 bg-primary/5 space-y-2 animate-in fade-in-50 duration-150">
+                  <div className="text-[11px] font-bold text-focus">
+                    New Category for <span className="text-primary">{assignedCompany}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="text"
+                      placeholder="e.g. Food Sales, Catering..."
+                      value={newCategoryName}
+                      onChange={(e) => {
+                        setNewCategoryName(e.target.value)
+                        if (categoryError) setCategoryError('')
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleCreateCategory()
+                        }
+                      }}
+                      className="h-8 rounded-lg text-xs bg-white border-stroke/50 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isSubmittingCategory || !newCategoryName.trim()}
+                      onClick={handleCreateCategory}
+                      className="h-8 px-3 rounded-lg text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                    >
+                      {isSubmittingCategory ? 'Saving...' : 'Save'}
+                    </Button>
+                  </div>
+                  {categoryError && (
+                    <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Manage / Delete / Edit Existing Categories List */}
+              {isCategoryManaging && companyCategories.length > 0 && (
+                <div className="p-2 rounded-xl border border-stroke/40 bg-slate-50 space-y-1.5 max-h-48 overflow-y-auto">
+                  <div className="text-[11px] font-semibold text-muted-fg px-1 pb-1 border-b border-stroke/20">
+                    Manage {assignedCompany} Categories
+                  </div>
+                  {companyCategories.map((cat) => (
+                    <div
+                      key={cat.category_id}
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs bg-white border border-stroke/20 gap-2"
+                    >
+                      {editingCategoryId === cat.category_id ? (
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <Input
+                            type="text"
+                            value={editingCategoryName}
+                            onChange={(e) => setEditingCategoryName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                handleUpdateCategory(cat.category_id)
+                              }
+                            }}
+                            className="h-7 text-xs flex-1 bg-white"
+                            autoFocus
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 px-2 text-[10px] bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                            onClick={() => handleUpdateCategory(cat.category_id)}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[10px] cursor-pointer"
+                            onClick={() => setEditingCategoryId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="font-medium text-focus truncate flex-1">{cat.name}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCategoryId(cat.category_id)
+                                setEditingCategoryName(cat.name)
+                              }}
+                              className="p-1 text-slate-400 hover:text-focus rounded cursor-pointer transition-colors"
+                              title={`Edit ${cat.name}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCategory(cat.category_id, cat.name)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer transition-colors"
+                              title={`Delete ${cat.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Category Dropdown or Empty Warning */}
+              {isLoadingCategories ? (
+                <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 flex items-center text-xs text-muted-fg">
+                  <RotateCw className="w-3.5 h-3.5 animate-spin mr-2" />
+                  <span>Loading categories for {assignedCompany}…</span>
+                </div>
+              ) : companyCategories.length === 0 ? (
+                <div className="p-3 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-900 space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold">
+                    <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Please add categories</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    No sales categories configured for {assignedCompany}. Click "Add Category" above to create one.
+                  </p>
+                </div>
+              ) : (
+                <select
                   value={category}
                   onChange={(e) => {
                     setCategory(e.target.value)
-                    setIsCategoryTyping(true)
-                    setIsCategoryOpen(true)
                     if (fieldErrors.category) {
                       setFieldErrors((prev) => ({ ...prev, category: undefined }))
                     }
                   }}
-                  onFocus={(e) => {
-                    setIsCategoryTyping(false)
-                    setIsCategoryOpen(true)
-                    e.currentTarget.select()
-                  }}
-                  onClick={() => {
-                    if (!isCategoryOpen) {
-                      setIsCategoryTyping(false)
-                      setIsCategoryOpen(true)
-                    }
-                  }}
-                  placeholder="Select or type category…"
                   className={cn(
-                    'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium bg-white',
-                    fieldErrors.category && 'border-red-500 focus-visible:ring-red-200'
+                    'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
+                    fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                   )}
-                />
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setIsCategoryTyping(false)
-                    setIsCategoryOpen((prev) => !prev)
-                  }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5 rounded cursor-pointer transition-colors"
-                  aria-label="Toggle category list"
                 >
-                  <ChevronDown className={cn('w-4 h-4 transition-transform duration-200', isCategoryOpen && 'rotate-180')} />
-                </button>
-
-                {/* Suggestions dropdown with dynamic matching or custom input indication */}
-                {isCategoryOpen && (
-                  <div
-                    onMouseDown={(e) => e.preventDefault()}
-                    className="absolute left-0 right-0 bottom-full mb-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100"
-                  >
-                    <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
-                      <span>Specific Categories</span>
-                      {isCategoryTyping && category.trim() && (
-                        <span className="text-[10px] text-slate-400 font-normal">
-                          {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="space-y-0.5">
-                      {filteredCategoryOptions.length > 0 ? (
-                        filteredCategoryOptions.map((opt) => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => {
-                              setCategory(opt)
-                              setIsCategoryTyping(false)
-                              setIsCategoryOpen(false)
-                              if (fieldErrors.category) {
-                                setFieldErrors((prev) => ({ ...prev, category: undefined }))
-                              }
-                            }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-medium text-left transition-colors cursor-pointer',
-                              category.toLowerCase() === opt.toLowerCase()
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-focus/80 hover:bg-slate-50'
-                            )}
-                          >
-                            <span>{opt}</span>
-                            {category.toLowerCase() === opt.toLowerCase() && (
-                              <Check className="w-3.5 h-3.5 text-primary" />
-                            )}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="p-2">
-                          <div className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-left">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-semibold text-focus break-all">"{category.trim()}"</span>
-                              <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-200/80 px-1.5 py-0.5 rounded">
-                                User Input
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-muted-fg mt-1">
-                              Will be saved as specific category in dropdown.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-              {fieldErrors.category && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.category}
-                </p>
+                  <option value="" disabled>Select a category…</option>
+                  {companyCategories.map((cat) => (
+                    <option key={cat.category_id} value={cat.name}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
               )}
+
+              <FormFieldError error={fieldErrors.category} />
             </div>
 
             {/* Day remarks */}
@@ -759,77 +934,38 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               />
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                className="h-10 px-4 rounded-xl border-stroke/60 text-xs font-medium cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="h-10 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold shadow-xs cursor-pointer"
-              >
-                Add Sales
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 2. Confirmation Dialogue */}
-      <ConfirmModal
-        open={isConfirmOpen}
-        onOpenChange={setIsConfirmOpen}
-        title="Confirm Sales Record"
-        description="Please review and confirm this sales transaction entry before saving."
-        confirmLabel="Confirm & Add"
-        variant="primary"
-        actionType="add"
-        onConfirm={handleConfirmedSubmit}
-        isLoading={isSubmitting}
-        loadingLabel="Recording…"
-      >
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Company</span>
-            <span className="font-semibold text-focus">{assignedCompany}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Date</span>
-            <span className="font-semibold text-focus">{date}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Particulars</span>
-            <span className="font-semibold text-focus max-w-[220px] truncate text-right">
-              {particulars}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Payment Method</span>
-            <span className="font-semibold text-focus">{paymentMethod}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Category</span>
-            <span className="font-semibold text-focus">{category}</span>
-          </div>
-          {chequeNo && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-fg font-medium">Cheque No.</span>
-              <span className="font-mono font-semibold text-focus">{chequeNo}</span>
-            </div>
+            </>
           )}
-          <div className="flex items-center justify-between pt-2.5 border-t border-slate-200">
-            <span className="font-bold text-focus">Total Deposit Amount</span>
-            <span className="font-bold text-emerald-600 text-base">
-              {formatPHP(parseFloat(amount) || 0)}
-            </span>
+
+          {/* Actions */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isSubmitting}
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <span>{isReviewing ? 'Add Sales' : 'Review Sales'}</span>
+            </Button>
           </div>
-        </div>
-      </ConfirmModal>
-    </>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

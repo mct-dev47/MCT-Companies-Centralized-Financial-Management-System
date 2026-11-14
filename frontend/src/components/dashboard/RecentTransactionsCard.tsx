@@ -1,9 +1,8 @@
 import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  ChevronLeft,
-  ChevronRight,
   ArrowRight,
+  Eye,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import {
@@ -15,16 +14,39 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TablePagination } from '@/components/common/TablePagination'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { getParticularsSummary } from '@/utils/particularsUtils'
+import { TransactionStatusBadge } from '@/components/transactions/TransactionProgress'
+import {
+  deriveTransactionLifecycle,
+  getTransactionTypeMeta,
+  formatSignedTransactionAmount,
+  getDepositedAmountForRow,
+  getCleanParticularsTitle,
+  getRowSaleDateIso,
+} from '@/utils/transactionLifecycle'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 
 export type { DashboardTransactionItem as DashboardTransaction }
 
 const ITEMS_PER_PAGE = 10
+
+const toLedgerDate = (iso: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
+  return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : iso
+}
+
+const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
+  if (tx.type !== 'Sales') return null
+  if ((tx.depositStatus || (tx as any).deposit_status) !== 'Deposited') return null
+  const day = String((tx as any).deposit_date || tx.depositDate || '').slice(0, 10)
+  const [y, m, d] = day.split('-')
+  return y && m && d ? `${m}/${d}/${y.slice(2)}` : null
+}
 
 interface RecentTransactionsCardProps {
   className?: string
@@ -82,20 +104,20 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
         className
       )}
     >
-      {/* 1. Clean Header with Red View All Button */}
+      {/* 1. Header with Red View All Button */}
       <div className="mb-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h2 className="text-base sm:text-lg font-bold text-focus leading-tight">
-            Recent Transactions
+            All Transactions
           </h2>
           <p className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-            Here's the summary of recent transactions in {displayedTitle}.
+            Here's the summary of all transactions (all records) in {displayedTitle}.
           </p>
         </div>
 
         <Button
           type="button"
-          onClick={() => navigate('/transaction')}
+          onClick={() => navigate('/transaction?tab=all')}
           className="h-9 px-4 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 self-start sm:self-auto cursor-pointer transition-colors"
         >
           <span>View All</span>
@@ -103,50 +125,80 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
         </Button>
       </div>
 
-      {/* 2. Table matching the Sales table columns:
-          DATE | CHEQUE NO. | PARTICULARS | WITHDRAWAL | DEPOSIT | CATEGORY | NET AMOUNT
+      {/* 2. Table matching All Transactions (All Records):
+          DATE | PARTICULARS | METHOD | AMOUNT | CHEQUE NO. | DEPOSIT DATE | AMOUNT DEPOSIT | STATUS
       */}
-      <div className="overflow-x-auto rounded-xl border border-slate-100">
-        <Table>
+      <div className="overflow-x-auto">
+        <Table className="w-full min-w-[820px] lg:min-w-0 table-fixed text-left text-xs">
+          <colgroup>
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '25%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '11%' }} />
+            <col style={{ width: '12%' }} />
+          </colgroup>
           <TableHeader>
             <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                 DATE
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                CHEQUE NO.
-              </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
+              <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                 PARTICULARS
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                WITHDRAWAL
+              <TableHead className="px-2 sm:px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                METHOD
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                DEPOSIT
+              <TableHead className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right">
+                AMOUNT
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg">
-                CATEGORY
+              <TableHead className="px-2 sm:px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                CHEQUE NO.
               </TableHead>
-              <TableHead className="px-4 py-3.5 text-xs font-bold uppercase tracking-wider text-muted-fg text-right">
-                NET AMOUNT
+              <TableHead
+                className="px-2 sm:px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left"
+                title="Day the sale's money was deposited or transferred; empty until deposited"
+              >
+                DEPOSIT DATE
+              </TableHead>
+              <TableHead
+                className="pl-2 pr-3 sm:pr-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-right"
+                title="Amount actually deposited to the bank; empty until deposited"
+              >
+                AMOUNT DEPOSIT
+              </TableHead>
+              <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
+                STATUS
               </TableHead>
             </TableRow>
           </TableHeader>
 
           <TableBody>
             {paginatedTransactions.length === 0 ? (
-              <TableRow>
-                <TableCell
-                  colSpan={7}
-                  className="py-12 text-center text-xs sm:text-sm text-muted-fg"
-                >
-                  No transactions found for the selected date range.
-                </TableCell>
-              </TableRow>
+              <TableEmptyState
+                colSpan={8}
+                title="No transactions found"
+                description="No transactions found for the selected date range."
+              />
             ) : (
               paginatedTransactions.map((tx) => {
-                const netAmount = (tx.deposit || 0) - (tx.withdrawal || 0)
+                const depositAmt = tx.deposit || 0
+                const withdrawalAmt = tx.withdrawal || 0
+                const rowAmt = tx.amount || (depositAmt > 0 ? depositAmt : withdrawalAmt)
+                const depositedAmt = getDepositedAmountForRow(tx)
+                const lifecycle = deriveTransactionLifecycle(tx)
+                const typeMeta = getTransactionTypeMeta(tx)
+                const { title, itemCount } = getCleanParticularsTitle(
+                  tx.particulars || tx.description,
+                  tx.items,
+                  rowAmt
+                )
+                const saleDateShort = toLedgerDate(getRowSaleDateIso(tx)) || tx.date
+                const depDateShort = lifecycle.effectiveDepositDate
+                  ? toLedgerDate(lifecycle.effectiveDepositDate)
+                  : getDepositDayShort(tx)
 
                 return (
                   <TableRow
@@ -156,51 +208,78 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
                     className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer text-xs"
                   >
                     {/* 1. Date */}
-                    <TableCell className="px-4 py-3.5 text-xs font-medium text-focus whitespace-nowrap">
-                      {tx.date}
+                    <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
+                      {saleDateShort}
                     </TableCell>
 
-                    {/* 2. Cheque No. */}
-                    <TableCell className="px-4 py-3.5 text-xs text-focus/90 whitespace-nowrap font-mono">
+                    {/* 2. Particulars */}
+                    <TableCell className="px-2.5 sm:px-3 py-3 text-xs align-top">
+                      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                        <span className="font-semibold text-focus break-words leading-snug">
+                          {title}
+                        </span>
+                        {itemCount > 1 && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                            +{itemCount - 1} more
+                          </span>
+                        )}
+                        {lifecycle.overdueLabel && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-300">
+                            {lifecycle.overdueLabel}
+                          </span>
+                        )}
+                      </div>
+                      {tx.company && (
+                        <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
+                          {tx.company}
+                        </div>
+                      )}
+                      <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
+                        {tx.refNo || '—'}
+                      </div>
+                    </TableCell>
+
+                    {/* 3. Method */}
+                    <TableCell className="px-2 sm:px-2.5 py-3 text-xs text-focus/90 font-medium truncate align-top">
+                      {tx.paymentMethod || 'Cash'}
+                    </TableCell>
+
+                    {/* 4. Signed Gross Amount */}
+                    <TableCell
+                      className={cn(
+                        'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
+                        typeMeta.isOutflow ? 'text-rose-700' : 'text-emerald-700'
+                      )}
+                    >
+                      {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
+                    </TableCell>
+
+                    {/* 5. Cheque No. */}
+                    <TableCell className="px-2 sm:px-2.5 py-3 text-xs font-mono text-focus/80 truncate align-top">
                       {tx.chequeNo || '—'}
                     </TableCell>
 
-                    {/* 3. Particulars */}
-                    <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-normal max-w-xs" title={tx.particulars || tx.description}>
-                      {(() => {
-                        const summary = getParticularsSummary(tx.particulars || tx.description, tx.items)
-                        if (summary.count > 1) {
-                          return (
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="truncate block font-medium">{summary.firstItemName}</span>
-                              <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
-                                +{summary.count - 1} more
-                              </span>
-                            </div>
-                          )
-                        }
-                        return <span className="truncate block font-medium">{summary.firstItemName}</span>
-                      })()}
+                    {/* 6. Deposit Date */}
+                    <TableCell className="px-2 sm:px-2.5 py-3 text-xs font-medium whitespace-nowrap align-top">
+                      {depDateShort ? (
+                        <span className="text-emerald-700">{depDateShort}</span>
+                      ) : (
+                        <span className="text-muted-fg/50">—</span>
+                      )}
                     </TableCell>
 
-                    {/* 4. Withdrawal */}
-                    <TableCell className="px-4 py-3.5 text-xs font-medium text-right tabular-nums whitespace-nowrap text-muted-fg">
-                      {tx.withdrawal > 0 ? formatPHP(tx.withdrawal) : ''}
+                    {/* 7. Deposit Amount */}
+                    <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top">
+                      {depositedAmt > 0 ? (
+                        <span className="text-emerald-700">{formatPHP(depositedAmt)}</span>
+                      ) : (
+                        <span className="text-muted-fg/50 font-normal">—</span>
+                      )}
                     </TableCell>
 
-                    {/* 5. Deposit */}
-                    <TableCell className="px-4 py-3.5 text-xs font-semibold text-right tabular-nums whitespace-nowrap text-emerald-600">
-                      {tx.deposit > 0 ? formatPHP(tx.deposit) : ''}
-                    </TableCell>
-
-                    {/* 6. Category (Clean text per Sales table reference) */}
-                    <TableCell className="px-4 py-3.5 text-xs text-focus/90 font-medium whitespace-nowrap">
-                      {tx.category}
-                    </TableCell>
-
-                    {/* 7. Net Amount */}
-                    <TableCell className="px-4 py-3.5 text-xs font-bold text-right tabular-nums whitespace-nowrap text-focus">
-                      {formatPHP(netAmount)}
+                    {/* 8. Status Badge */}
+                    <TableCell className="px-2 py-3 text-center align-top">
+                      <TransactionStatusBadge lifecycle={lifecycle} />
                     </TableCell>
                   </TableRow>
                 )
@@ -210,45 +289,18 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
         </Table>
       </div>
 
-      {/* 3. Pagination Footer matching Sales table */}
-      <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-        {/* Left: Record summary */}
-        <span className="font-medium text-focus/80">
-          {totalItems === 0
-            ? 'Showing 0 of 0 records'
-            : `Showing ${startIndex + 1}-${endIndex} of ${totalItems} records`}
-        </span>
-
-        {/* Right: Page Indicator & Navigation without words Previous and Next */}
-        <div className="flex items-center gap-2 self-end sm:self-auto">
-          <span className="text-xs text-muted-fg italic">
-            Page {currentPage} out of {totalPages}
-          </span>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={currentPage <= 1}
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            aria-label="Previous page"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={currentPage >= totalPages}
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-            aria-label="Next page"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
+      {/* 3. Pagination Footer */}
+      <div className="pt-4 mt-2 border-t border-slate-100">
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalRecords={totalItems}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          pageSize={ITEMS_PER_PAGE}
+          onPageChange={setCurrentPage}
+          itemLabel="transactions"
+        />
       </div>
 
       {/* 4. Complete Read-Only Transaction Details Modal */}

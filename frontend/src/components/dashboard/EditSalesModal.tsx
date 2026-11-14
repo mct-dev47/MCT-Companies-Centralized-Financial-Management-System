@@ -7,6 +7,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -63,6 +65,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
   const categoryContainerRef = React.useRef<HTMLDivElement>(null)
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
     date?: string
@@ -148,6 +151,11 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
       return
     }
 
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
+    }
+
     setFieldErrors({})
     setIsSubmitting(true)
 
@@ -204,7 +212,24 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Sale Entry Updates"
+              subtitle="Please verify your updated values before saving."
+              errorMessage={error}
+              items={[
+                { label: 'Company', value: sale.company || 'N/A' },
+                { label: 'Reference No.', value: sale.refNo || 'N/A' },
+                { label: 'Date', value: date },
+                { label: 'Particulars', value: particulars, highlight: true },
+                { label: 'Amount', value: parseFloat(amount) || 0, isCurrency: true },
+                { label: 'Category', value: category || 'None' },
+                { label: 'Cheque No.', value: chequeNo.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {/* Date */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-focus block">
@@ -224,9 +249,8 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                 )}
                 title="Transaction date (cannot be in the future)"
               />
-              {fieldErrors.date ? (
-                <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-              ) : (
+              <FormFieldError error={fieldErrors.date} />
+              {!fieldErrors.date && (
                 <p className="text-[11px] text-muted-fg font-normal">
                   Max: today
                 </p>
@@ -272,9 +296,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                 <option key={opt.id} value={opt.name} />
               ))}
             </datalist>
-            {fieldErrors.particulars && (
-              <p className="text-[11px] text-red-600 font-medium">{fieldErrors.particulars}</p>
-            )}
+            <FormFieldError error={fieldErrors.particulars} />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -298,9 +320,7 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
                   fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                 )}
               />
-              {fieldErrors.amount && (
-                <p className="text-[11px] text-red-600 font-medium">{fieldErrors.amount}</p>
-              )}
+              <FormFieldError error={fieldErrors.amount} />
             </div>
 
             {/* Category */}
@@ -361,29 +381,33 @@ export const EditSalesModal: React.FC<EditSalesModalProps> = ({
 
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">
+            </>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-10 px-5 text-xs font-medium rounded-xl border-stroke/50"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting}
-              className="h-10 px-6 text-xs font-semibold rounded-xl bg-primary hover:bg-primary/90 text-white"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" />
-                  Saving…
-                </>
-              ) : (
-                'Save Changes'
-              )}
+              <span>{isReviewing ? 'Save Changes' : 'Review Updates'}</span>
             </Button>
           </div>
         </form>
