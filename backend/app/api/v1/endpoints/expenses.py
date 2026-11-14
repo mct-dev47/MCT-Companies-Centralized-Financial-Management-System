@@ -606,6 +606,7 @@ def create_expense(
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
+    effective_bank_id = getattr(expense_in, "bank_account_id", None)
 
     try:
         client = get_supabase_admin_client()
@@ -644,6 +645,18 @@ def create_expense(
             category_name = "None"
 
         # 3. Insert into Supabase
+        effective_bank_id = getattr(expense_in, "bank_account_id", None)
+        if _is_petty_cash_payment(expense_in.payment_method):
+            effective_bank_id = None
+        elif not effective_bank_id and target_company_name:
+            try:
+                from app.services.bank_service import BankService
+                found_acct = BankService(db).find_account_for_company(target_company_name)
+                if found_acct:
+                    effective_bank_id = str(found_acct.id)
+            except Exception:
+                pass
+
         payment_method_str = (expense_in.payment_method or "").strip() or None
         creator_id = expense_in.created_by or current_user.get("user_id")
         sb_insert = client.table("expenses").insert({
@@ -658,7 +671,7 @@ def create_expense(
             "amount_paid": float(expense_in.amount_paid or 0.0),
             "description": parts,
             "remarks": expense_in.remarks,
-            "bank_account_id": expense_in.bank_account_id,
+            "bank_account_id": effective_bank_id,
             "audit_status": "Pending Audit",
             "audited_by": None,
             "audited_at": None,
@@ -705,7 +718,7 @@ def create_expense(
                 amount_paid=expense_in.amount_paid or Decimal("0.00"),
                 description=parts,
                 remarks=expense_in.remarks,
-                bank_account_id=expense_in.bank_account_id,
+                bank_account_id=effective_bank_id,
                 audit_status="Pending Audit",
                 audited_by=None,
                 audited_at=None,
@@ -800,6 +813,17 @@ def create_expense(
 
         PettyCashService(db).ensure_sufficient_balance(target_company.company_id, expense_in.payment_method, expense_in.amount)
 
+        if _is_petty_cash_payment(expense_in.payment_method):
+            effective_bank_id = None
+        elif not effective_bank_id and target_company.company_name:
+            try:
+                from app.services.bank_service import BankService
+                found_acct = BankService(db).find_account_for_company(target_company.company_name)
+                if found_acct:
+                    effective_bank_id = str(found_acct.id)
+            except Exception:
+                pass
+
         expense = Expense(
             company_id=target_company.company_id,
             category_id=expense_in.category_id or _local_category_id(db, expense_in.category or ""),
@@ -811,7 +835,7 @@ def create_expense(
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
             remarks=expense_in.remarks,
-            bank_account_id=expense_in.bank_account_id,
+            bank_account_id=effective_bank_id,
             audit_status="Pending Audit",
             audited_by=None,
             audited_at=None,

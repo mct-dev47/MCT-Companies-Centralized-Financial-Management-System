@@ -12,8 +12,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   PlusCircle,
-  ChevronDown,
-  Check,
+  Plus,
+  Trash2,
+  Pencil,
+  RotateCw,
   AlertCircle,
 } from 'lucide-react'
 import {
@@ -25,11 +27,13 @@ import {
   particularsService,
   type CompanyParticular,
 } from '@/services/particularsService'
+import { categoryService, type CompanyCategory } from '@/services/categoryService'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { pettyCashService } from '@/services/pettyCashService'
 import { bankService } from '@/services/bankService'
+import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 
@@ -55,42 +59,6 @@ const PAYMENT_METHOD_OPTIONS = [
   'In-house',
 ]
 
-const DEFAULT_EXPENSE_CATEGORIES = [
-  'Petty Cash',
-  'Rendered Fee',
-  'BBMP Foundation',
-  'HDMF',
-  'Philhealth',
-  'Electricity',
-  'BIR',
-  'Payroll',
-  'SSS',
-  'Hotel Supplies',
-  'Revolving Funds',
-]
-
-const DEPRECATED_OLD_CATEGORIES = new Set([
-  'gcash',
-  'maya',
-  'panda',
-  'package 1',
-  'in-house',
-  'cheque',
-  'cash',
-  'bank transfer',
-  'paymongo',
-  'office supplies',
-  'kitchen & food supplies',
-  'utilities',
-  'salaries & wages',
-  'rent & lease',
-  'maintenance & repairs',
-  'transportation & logistics',
-  'marketing & advertising',
-  'equipment',
-  'petty cash replenishment',
-])
-
 export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   open,
   onOpenChange,
@@ -110,15 +78,23 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
   const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('expense', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState(initialPaymentMethod || 'Cash')
+  const [bankAccountId, setBankAccountId] = React.useState('')
+
+  // Company Category states (ReimbursementModal pattern)
   const [category, setCategory] = React.useState(
     (initialPaymentMethod || '').trim().toLowerCase() === 'petty cash'
       ? 'Petty Cash'
-      : (DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
+      : ''
   )
-  const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_EXPENSE_CATEGORIES)
-  const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
-  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
-  const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+  const [companyCategories, setCompanyCategories] = React.useState<CompanyCategory[]>([])
+  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+  const [isAddingCategory, setIsAddingCategory] = React.useState(false)
+  const [isCategoryManaging, setIsCategoryManaging] = React.useState(false)
+  const [newCategoryName, setNewCategoryName] = React.useState('')
+  const [editingCategoryId, setEditingCategoryId] = React.useState<number | null>(null)
+  const [editingCategoryName, setEditingCategoryName] = React.useState('')
+  const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+  const [categoryError, setCategoryError] = React.useState('')
 
   // Petty cash is strictly determined by payment method being Petty Cash
   const isPettyCash = paymentMethod.trim().toLowerCase() === 'petty cash'
@@ -170,33 +146,99 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     category?: string
   }>({})
 
-  // Fetch categories from the database
+  // Fetch company-specific categories from database
   React.useEffect(() => {
     let isMounted = true
-    const fetchCategories = async () => {
-      try {
-        const cats = await expenseService.getCategories()
-        if (isMounted && cats && cats.length > 0) {
-          const names = Array.from(
-            new Set([
-              ...DEFAULT_EXPENSE_CATEGORIES,
-              ...cats
-                .map((c) => c.name?.trim())
-                .filter(Boolean)
-                .filter((n) => !DEPRECATED_OLD_CATEGORIES.has(n.toLowerCase())),
-            ])
-          )
-          setCategoryOptions(names)
-        }
-      } catch (err) {
-        console.warn('Could not load categories from database:', err)
-      }
+    if (open && assignedCompany && !isPettyCash) {
+      setIsLoadingCategories(true)
+      categoryService
+        .getCompanyCategories(assignedCompany, 'expense', { forceRefresh: true })
+        .then((cats) => {
+          if (isMounted) {
+            setCompanyCategories(cats)
+            if (cats.length > 0) {
+              setCategory((prev) => {
+                if (prev && cats.some((c) => c.name.toLowerCase() === prev.toLowerCase())) {
+                  return prev
+                }
+                return cats[0].name
+              })
+            } else {
+              setCategory('')
+            }
+          }
+        })
+        .catch(() => {
+          if (isMounted) setCompanyCategories([])
+        })
+        .finally(() => {
+          if (isMounted) setIsLoadingCategories(false)
+        })
+    } else if (isPettyCash) {
+      setCategory('Petty Cash')
+      setCompanyCategories([])
     }
-    fetchCategories()
     return () => {
       isMounted = false
     }
-  }, [open])
+  }, [open, assignedCompany, isPettyCash])
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) {
+      setCategoryError('Category name cannot be empty.')
+      return
+    }
+    setIsSubmittingCategory(true)
+    setCategoryError('')
+    try {
+      const created = await categoryService.createCompanyCategory(assignedCompany, 'expense', trimmed)
+      const updated = [...companyCategories, created]
+      setCompanyCategories(updated)
+      setCategory(created.name)
+      setNewCategoryName('')
+      setIsAddingCategory(false)
+      if (fieldErrors.category) {
+        setFieldErrors((prev) => ({ ...prev, category: undefined }))
+      }
+    } catch (err: any) {
+      setCategoryError(err.message || 'Failed to create category.')
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleUpdateCategory = async (catId: number) => {
+    const trimmed = editingCategoryName.trim()
+    if (!trimmed) return
+    try {
+      const updatedCat = await categoryService.updateCompanyCategory(catId, trimmed, assignedCompany, 'expense')
+      setCompanyCategories((prev) =>
+        prev.map((c) => (c.category_id === catId ? updatedCat : c))
+      )
+      if (category.toLowerCase() === companyCategories.find((c) => c.category_id === catId)?.name.toLowerCase()) {
+        setCategory(updatedCat.name)
+      }
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+    } catch (err: any) {
+      alert(err.message || 'Failed to update category.')
+    }
+  }
+
+  const handleDeleteCategory = async (catId: number, catName: string) => {
+    if (!window.confirm(`Are you sure you want to delete category "${catName}"?`)) return
+    try {
+      await categoryService.deleteCompanyCategory(catId, assignedCompany, 'expense')
+      const updated = companyCategories.filter((c) => c.category_id !== catId)
+      setCompanyCategories(updated)
+      if (category.toLowerCase() === catName.toLowerCase()) {
+        setCategory(updated.length > 0 ? updated[0].name : '')
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete category.')
+    }
+  }
 
   // Load previous particulars for suggestions/autocomplete
   React.useEffect(() => {
@@ -216,28 +258,6 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
   }, [open, assignedCompany])
 
-  const filteredCategoryOptions = React.useMemo(() => {
-    if (!isCategoryTyping) return categoryOptions
-    const q = category.trim().toLowerCase()
-    if (!q) return categoryOptions
-    return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions, isCategoryTyping])
-
-  // Close category dropdown on click outside
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        categoryContainerRef.current &&
-        !categoryContainerRef.current.contains(e.target as Node)
-      ) {
-        setIsCategoryOpen(false)
-        setIsCategoryTyping(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
   // Reset form when modal opens
   React.useEffect(() => {
     if (open) {
@@ -248,15 +268,19 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       setAmount('')
       setDayRemark('')
       setDayRemarkTouched(false)
+      setBankAccountId('')
+      setIsAddingCategory(false)
+      setIsCategoryManaging(false)
+      setNewCategoryName('')
+      setEditingCategoryId(null)
+      setCategoryError('')
       const pm = initialPaymentMethod || 'Cash'
       setPaymentMethod(pm)
       if (pm.trim().toLowerCase() === 'petty cash') {
         setCategory('Petty Cash')
       } else {
-        setCategory(DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
+        setCategory('')
       }
-      setIsCategoryOpen(false)
-      setIsCategoryTyping(false)
       setIsConfirmOpen(false)
       setIsSubmitting(false)
       setError('')
@@ -314,8 +338,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       }
     }
 
-    if (!category.trim()) {
-      errors.category = 'Please choose or type a specific category.'
+    if (!isPettyCash && (!category.trim() || companyCategories.length === 0)) {
+      errors.category = 'Please add and select an expense category for this company.'
     }
 
     if (Object.keys(errors).length > 0) {
@@ -334,12 +358,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     setError('')
     try {
       const parsedAmount = parseFloat(amount.replace(/,/g, ''))
-      const catTrimmed = isPettyCash
-        ? 'Petty Cash'
-        : (category.trim() || DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
-      if (catTrimmed && !categoryOptions.includes(catTrimmed)) {
-        expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
-      }
+      const catTrimmed = isPettyCash ? 'Petty Cash' : category.trim()
 
       let finalParticulars = particulars.trim()
       if (isPettyCash && pettyCashCategory.trim()) {
@@ -356,6 +375,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         category: catTrimmed,
         paymentMethod: paymentMethod,
         company: assignedCompany,
+        bankAccountId: !isPettyCash ? (bankAccountId || undefined) : undefined,
         status: 'Paid',
       }
       const created = await expenseService.addExpense(payload)
@@ -610,7 +630,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     if (newPm.trim().toLowerCase() === 'petty cash') {
                       setCategory('Petty Cash')
                     } else if (category.trim().toLowerCase() === 'petty cash') {
-                      setCategory(DEFAULT_EXPENSE_CATEGORIES[1] || 'Rendered Fee')
+                      setCategory(companyCategories[0]?.name || '')
                     }
                   }}
                   className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
@@ -635,117 +655,200 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
               </div>
             </div>
 
-            {/* 6. Category (Searchable Dropdown; hidden when Payment Method is Petty Cash since category is auto-set to Petty Cash and specific categories are selected above) */}
+            {/* Bank account selection (hidden for petty cash) */}
             {!isPettyCash && (
-              <div className="space-y-1.5" ref={categoryContainerRef}>
-                <Label className="text-xs font-semibold text-focus block">
-                  Category <span className="text-red-500">*</span>
-                </Label>
-                <div className="relative">
-                  <Input
-                    type="text"
-                    placeholder="Search or enter category..."
+              <CompanyBankSelect
+                company={assignedCompany}
+                value={bankAccountId}
+                onChange={setBankAccountId}
+                label="Disbursement Bank"
+                required
+                onAccountsLoaded={(accounts) => {
+                  if (accounts.length > 0 && !bankAccountId) {
+                    setBankAccountId(String(accounts[0].id))
+                  }
+                }}
+              />
+            )}
+
+            {/* 6. Category (Configurable per company - ReimbursementModal pattern; hidden when Payment Method is Petty Cash) */}
+            {!isPettyCash && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold text-focus">
+                    Category <span className="text-red-500">*</span>
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    {companyCategories.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCategoryManaging((prev) => !prev)
+                          setIsAddingCategory(false)
+                        }}
+                        className="text-[11px] font-semibold text-muted-fg hover:text-focus transition-colors cursor-pointer"
+                      >
+                        {isCategoryManaging ? 'Done' : 'Manage'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddingCategory((prev) => !prev)
+                        setIsCategoryManaging(false)
+                        setCategoryError('')
+                        setNewCategoryName('')
+                      }}
+                      className="text-[11px] font-bold text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{isAddingCategory ? 'Cancel' : 'Add Category'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline Add Category Input */}
+                {isAddingCategory && (
+                  <div className="p-2.5 rounded-xl border border-primary/30 bg-primary/5 space-y-2 animate-in fade-in-50 duration-150">
+                    <div className="text-[11px] font-bold text-focus">
+                      New Category for <span className="text-primary">{assignedCompany}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="text"
+                        placeholder="e.g. Office Supplies, Travel..."
+                        value={newCategoryName}
+                        onChange={(e) => {
+                          setNewCategoryName(e.target.value)
+                          if (categoryError) setCategoryError('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            handleCreateCategory()
+                          }
+                        }}
+                        className="h-8 rounded-lg text-xs bg-white border-stroke/50 flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={isSubmittingCategory || !newCategoryName.trim()}
+                        onClick={handleCreateCategory}
+                        className="h-8 px-3 rounded-lg text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                      >
+                        {isSubmittingCategory ? 'Saving...' : 'Save'}
+                      </Button>
+                    </div>
+                    {categoryError && (
+                      <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Category Management List (Edit / Delete) */}
+                {isCategoryManaging && (
+                  <div className="p-2.5 rounded-xl border border-stroke/40 bg-slate-50 space-y-2 max-h-48 overflow-y-auto">
+                    <div className="text-[11px] font-bold text-focus uppercase tracking-wider">
+                      Manage {assignedCompany} Expense Categories
+                    </div>
+                    <div className="space-y-1">
+                      {companyCategories.map((cat) => (
+                        <div
+                          key={cat.category_id}
+                          className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-white border border-stroke/30 text-xs"
+                        >
+                          {editingCategoryId === cat.category_id ? (
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <Input
+                                type="text"
+                                value={editingCategoryName}
+                                onChange={(e) => setEditingCategoryName(e.target.value)}
+                                className="h-7 text-xs flex-1"
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => handleUpdateCategory(cat.category_id)}
+                                className="h-7 px-2 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setEditingCategoryId(null)}
+                                className="h-7 px-2 text-[11px] cursor-pointer"
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="font-medium text-focus truncate">{cat.name}</span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingCategoryId(cat.category_id)
+                                    setEditingCategoryName(cat.name)
+                                  }}
+                                  className="p-1 text-slate-500 hover:text-focus transition-colors cursor-pointer"
+                                  title="Edit category"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCategory(cat.category_id, cat.name)}
+                                  className="p-1 text-red-500 hover:text-red-700 transition-colors cursor-pointer"
+                                  title="Delete category"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Category Dropdown */}
+                {companyCategories.length > 0 ? (
+                  <select
                     value={category}
                     onChange={(e) => {
-                      const newCat = e.target.value
-                      setCategory(newCat)
-                      setIsCategoryTyping(true)
-                      setIsCategoryOpen(true)
-                      if (newCat.trim().toLowerCase() === 'petty cash') {
-                        setPaymentMethod('Petty Cash')
-                      }
+                      setCategory(e.target.value)
                       if (fieldErrors.category) {
                         setFieldErrors((prev) => ({ ...prev, category: undefined }))
                       }
                     }}
-                    onFocus={(e) => {
-                      setIsCategoryTyping(false)
-                      setIsCategoryOpen(true)
-                      e.currentTarget.select()
-                    }}
-                    onClick={() => {
-                      if (!isCategoryOpen) {
-                        setIsCategoryTyping(false)
-                        setIsCategoryOpen(true)
-                      }
-                    }}
                     className={cn(
-                      'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium',
-                      fieldErrors.category && 'border-red-500 focus-visible:ring-red-200'
+                      'w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer',
+                      fieldErrors.category && 'border-red-500 focus:ring-red-200'
                     )}
-                  />
-                  <button
-                    type="button"
-                    tabIndex={-1}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      setIsCategoryTyping(false)
-                      setIsCategoryOpen((prev) => !prev)
-                    }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-1 cursor-pointer"
-                    aria-label="Toggle category options"
                   >
-                    <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-200", isCategoryOpen && "rotate-180")} />
-                  </button>
+                    <option value="" disabled>
+                      Select an expense category
+                    </option>
+                    {companyCategories.map((cat) => (
+                      <option key={cat.category_id} value={cat.name}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="p-3 rounded-xl bg-amber-50 border border-amber-200/80 text-amber-800 text-xs">
+                    <p className="font-semibold">No expense categories configured for {assignedCompany}.</p>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Click "+ Add Category" above to create the first category for this company.
+                    </p>
+                  </div>
+                )}
 
-                  {isCategoryOpen && (
-                    <div
-                      onMouseDown={(e) => e.preventDefault()}
-                      className="absolute z-50 left-0 right-0 bottom-full mb-1.5 bg-white border border-stroke/40 rounded-xl shadow-xl max-h-52 overflow-y-auto p-1.5"
-                    >
-                      <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
-                        <span>Specific Categories</span>
-                        {isCategoryTyping && category.trim() && (
-                          <span className="text-[10px] text-slate-400 font-normal">
-                            {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
-                          </span>
-                        )}
-                      </div>
-                      <div className="space-y-0.5">
-                        {filteredCategoryOptions.length > 0 ? (
-                          filteredCategoryOptions.map((opt) => (
-                            <button
-                              key={opt}
-                              type="button"
-                              onClick={() => {
-                                setCategory(opt)
-                                setIsCategoryTyping(false)
-                                setIsCategoryOpen(false)
-                                if (opt.trim().toLowerCase() === 'petty cash') {
-                                  setPaymentMethod('Petty Cash')
-                                }
-                                if (fieldErrors.category) {
-                                  setFieldErrors((prev) => ({ ...prev, category: undefined }))
-                                }
-                              }}
-                              className={cn(
-                                'w-full text-left px-3 py-1.5 text-xs rounded-lg flex items-center justify-between transition-colors cursor-pointer',
-                                category.toLowerCase() === opt.toLowerCase()
-                                  ? 'bg-primary/10 text-primary font-semibold'
-                                  : 'hover:bg-slate-100 text-focus'
-                              )}
-                            >
-                              <span>{opt}</span>
-                              {category.toLowerCase() === opt.toLowerCase() && <Check className="w-3.5 h-3.5" />}
-                            </button>
-                          ))
-                        ) : (
-                          <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-left">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-semibold text-focus break-all">"{category.trim()}"</span>
-                              <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-200/80 px-1.5 py-0.5 rounded">
-                                Custom
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-muted-fg mt-0.5">
-                              Will be saved as a new category.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
                 {fieldErrors.category && (
                   <p className="text-[11px] text-red-600 font-medium">
                     {fieldErrors.category}

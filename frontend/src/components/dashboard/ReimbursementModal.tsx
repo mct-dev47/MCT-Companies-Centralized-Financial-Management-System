@@ -1242,11 +1242,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   <div className="p-3 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-900 space-y-1.5">
                     <div className="flex items-center gap-1.5 text-xs font-bold">
                       <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                      <span>No categories for {requestingCompany} yet</span>
+                      <span>Please add categories</span>
                     </div>
-                    <p className="text-[11px] text-amber-800 leading-snug">
-                      Please click <strong>"+ Add Category"</strong> above to create at least one category before submitting.
-                    </p>
                   </div>
                 ) : (
                   <select

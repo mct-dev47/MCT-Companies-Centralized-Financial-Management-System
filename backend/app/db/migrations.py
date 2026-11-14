@@ -556,6 +556,24 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0063_company_notification_settings failed and was skipped: %s", exc)
 
+    # 30. 0064: company_categories table
+    result_0064 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0064_company_categories'")
+    ).first()
+
+    if not result_0064:
+        script_0064 = MIGRATIONS_DIR / "0064_company_categories.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0064.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0064_company_categories')"))
+            applied.append("0064_company_categories")
+            logger.info("Migration 0064_company_categories applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0064_company_categories failed and was skipped: %s", exc)
+
     conn.commit()
     return applied
 
@@ -1319,6 +1337,18 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 conn.execute(text(stmt))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0063_company_notification_settings')"))
         applied.append("0063_company_notification_settings")
+
+    # 29. 0064: company_categories table
+    result_0064 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0064_company_categories'")
+    ).first()
+    if not result_0064:
+        script_0064 = MIGRATIONS_DIR / "0064_company_categories.sqlite.sql"
+        if script_0064.exists():
+            for stmt in _sql_statements(script_0064.read_text(encoding="utf-8")):
+                conn.execute(text(stmt))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0064_company_categories')"))
+        applied.append("0064_company_categories")
 
     conn.commit()
     return applied
