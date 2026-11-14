@@ -6,6 +6,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
+import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
@@ -94,7 +97,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [amountPaid, setAmountPaid] = React.useState('')
 
   // Confirmation dialogue state
-  const [isConfirmOpen, setIsConfirmOpen] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [error, setError] = React.useState('')
   const [fieldErrors, setFieldErrors] = React.useState<{
@@ -262,7 +265,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setAmountPaid('')
       setError('')
       setFieldErrors({})
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     }
   }, [open])
 
@@ -327,7 +330,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
 
     setFieldErrors({})
-    setIsConfirmOpen(true)
+    setIsReviewing(true)
   }
 
   // Step 2: Confirmed submission
@@ -389,23 +392,21 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       }
 
       // Close confirmation and modal
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
       onOpenChange(false)
 
       // Trigger callback to redirect & highlight newly added row in table
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record sales entry.'))
-      setIsConfirmOpen(false)
+      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }
   }
 
   return (
-    <>
-      {/* 1. Main Add Sales Modal */}
-      <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
@@ -423,7 +424,17 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
             </div>
           </DialogHeader>
 
-          <form onSubmit={handlePreSubmit} className="space-y-4 pt-2">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (isReviewing) {
+                handleConfirmedSubmit()
+              } else {
+                handlePreSubmit(e)
+              }
+            }}
+            className="space-y-4 pt-2"
+          >
             {error && (
               <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -438,7 +449,30 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {isReviewing ? (
+              <ModalReviewStep
+                title="Review Sales Record"
+                subtitle="Please verify this sales transaction entry before saving."
+                errorMessage={error}
+                items={[
+                  { label: 'Company', value: assignedCompany, highlight: true },
+                  { label: 'Date', value: date },
+                  { label: 'Particulars', value: particulars || 'None' },
+                  { label: 'Payment Method', value: paymentMethod },
+                  { label: 'Category', value: category },
+                  ...(chequeNo ? [{ label: 'Cheque No.', value: chequeNo }] : []),
+                  ...(paymentOption !== 'Paid in full' ? [
+                    { label: 'Customer / Staff', value: customerName || 'Walk-in Customer' },
+                    { label: 'Customer Type', value: customerType },
+                    { label: 'Payment Option', value: paymentOption },
+                    ...(paymentOption === 'Partial' ? [{ label: 'Amount Paid Now', value: formatPHP(parseFloat(amountPaid) || 0), isCurrency: true }] : []),
+                  ] : []),
+                  { label: 'Total Deposit Amount', value: formatPHP(parseFloat(amount) || 0), isCurrency: true },
+                ]}
+              />
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               {/* 1. Date (editable, defaults to today) */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-focus block">
@@ -460,9 +494,8 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   )}
                   title="Transaction date (cannot be in the future)"
                 />
-                {fieldErrors.date ? (
-                  <p className="text-[11px] text-red-600 font-medium">{fieldErrors.date}</p>
-                ) : (
+                <FormFieldError error={fieldErrors.date} />
+                {!fieldErrors.date && (
                   <p className="text-[11px] text-muted-fg font-normal">
                     Defaults to today (Max: today)
                   </p>
@@ -512,11 +545,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   <option key={opt.id} value={opt.name} />
                 ))}
               </datalist>
-              {fieldErrors.particulars && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.particulars}
-                </p>
-              )}
+              <FormFieldError error={fieldErrors.particulars} />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
@@ -542,11 +571,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                     fieldErrors.amount && 'border-red-500 focus-visible:ring-red-200'
                   )}
                 />
-                {fieldErrors.amount && (
-                  <p className="text-[11px] text-red-600 font-medium">
-                    {fieldErrors.amount}
-                  </p>
-                )}
+                <FormFieldError error={fieldErrors.amount} />
               </div>
 
               {/* 5. Payment Method */}
@@ -554,17 +579,12 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 <Label className="text-xs font-semibold text-focus block">
                   Payment Method <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs font-medium text-focus shadow-2xs focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus cursor-pointer"
-                >
-                  {PAYMENT_METHOD_OPTIONS.map((pm) => (
-                    <option key={pm} value={pm}>
-                      {pm}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(val) => setPaymentMethod(String(val))}
+                  options={PAYMENT_METHOD_OPTIONS.map((pm) => ({ value: pm, label: pm }))}
+                  aria-label="Payment Method"
+                />
               </div>
             </div>
 
@@ -616,14 +636,16 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                       <Label className="text-[11px] font-semibold text-slate-700 block">
                         Customer Type <span className="text-red-500">*</span>
                       </Label>
-                      <select
+                      <Dropdown
                         value={customerType}
-                        onChange={(e) => setCustomerType(e.target.value as 'External' | 'Staff')}
-                        className="w-full h-9 px-2.5 rounded-lg border border-stroke/50 bg-white text-xs font-medium text-focus cursor-pointer"
-                      >
-                        <option value="External">External Customer</option>
-                        <option value="Staff">Internal Staff</option>
-                      </select>
+                        size="sm"
+                        onChange={(val) => setCustomerType(val as 'External' | 'Staff')}
+                        options={[
+                          { value: 'External', label: 'External Customer' },
+                          { value: 'Staff', label: 'Internal Staff' },
+                        ]}
+                        aria-label="Customer Type"
+                      />
                     </div>
 
                     <div className="space-y-1">
@@ -643,9 +665,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                         }}
                         className={cn('h-9 rounded-lg border-stroke/50 text-xs', fieldErrors.customerName && 'border-red-500')}
                       />
-                      {fieldErrors.customerName && (
-                        <p className="text-[10px] text-red-600 font-medium">{fieldErrors.customerName}</p>
-                      )}
+                      <FormFieldError error={fieldErrors.customerName} />
                     </div>
                   </div>
 
@@ -670,9 +690,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                           }}
                           className={cn('h-9 rounded-lg border-stroke/50 text-xs font-semibold tabular-nums', fieldErrors.amountPaid && 'border-red-500')}
                         />
-                        {fieldErrors.amountPaid && (
-                          <p className="text-[10px] text-red-600 font-medium">{fieldErrors.amountPaid}</p>
-                        )}
+                        <FormFieldError error={fieldErrors.amountPaid} />
                       </div>
 
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
@@ -895,11 +913,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                 </select>
               )}
 
-              {fieldErrors.category && (
-                <p className="text-[11px] text-red-600 font-medium">
-                  {fieldErrors.category}
-                </p>
-              )}
+              <FormFieldError error={fieldErrors.category} />
             </div>
 
             {/* Day remarks */}
@@ -920,77 +934,38 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               />
             </div>
 
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/15">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => onOpenChange(false)}
-                className="h-10 px-4 rounded-xl border-stroke/60 text-xs font-medium cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                className="h-10 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white text-xs font-semibold shadow-xs cursor-pointer"
-              >
-                Add Sales
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* 2. Confirmation Dialogue */}
-      <ConfirmModal
-        open={isConfirmOpen}
-        onOpenChange={setIsConfirmOpen}
-        title="Confirm Sales Record"
-        description="Please review and confirm this sales transaction entry before saving."
-        confirmLabel="Confirm & Add"
-        variant="primary"
-        actionType="add"
-        onConfirm={handleConfirmedSubmit}
-        isLoading={isSubmitting}
-        loadingLabel="Recording…"
-      >
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-2.5 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Company</span>
-            <span className="font-semibold text-focus">{assignedCompany}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Date</span>
-            <span className="font-semibold text-focus">{date}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Particulars</span>
-            <span className="font-semibold text-focus max-w-[220px] truncate text-right">
-              {particulars}
-            </span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Payment Method</span>
-            <span className="font-semibold text-focus">{paymentMethod}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-muted-fg font-medium">Category</span>
-            <span className="font-semibold text-focus">{category}</span>
-          </div>
-          {chequeNo && (
-            <div className="flex items-center justify-between">
-              <span className="text-muted-fg font-medium">Cheque No.</span>
-              <span className="font-mono font-semibold text-focus">{chequeNo}</span>
-            </div>
+            </>
           )}
-          <div className="flex items-center justify-between pt-2.5 border-t border-slate-200">
-            <span className="font-bold text-focus">Total Deposit Amount</span>
-            <span className="font-bold text-emerald-600 text-base">
-              {formatPHP(parseFloat(amount) || 0)}
-            </span>
+
+          {/* Actions */}
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              disabled={isSubmitting}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={isSubmitting}
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+            >
+              <span>{isReviewing ? 'Add Sales' : 'Review Sales'}</span>
+            </Button>
           </div>
-        </div>
-      </ConfirmModal>
-    </>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

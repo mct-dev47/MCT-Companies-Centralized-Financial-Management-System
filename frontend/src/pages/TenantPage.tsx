@@ -27,13 +27,20 @@ import {
   Receipt,
   Wallet,
   Loader2,
+  HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
-import { BackButton, ConfirmModal } from '@/components/common'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { TablePagination } from '@/components/common/TablePagination'
+import { StatusPill } from '@/components/common/StatusPill'
+import { BackButton, ConfirmModal, FormFieldError } from '@/components/common'
 import { SharedPaymentModal } from '@/components/common/SharedPaymentModal'
 import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import { RowActionsMenu } from '@/components/common/RowActionsMenu'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { formatRealName } from '@/utils/formatRealName'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -53,9 +60,9 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { useSession } from '@/hooks/useSession'
 import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
@@ -283,6 +290,7 @@ export const TenantPage: React.FC = () => {
     }
   }, [selectedPeriod])
   const [isSubmittingAdd, setIsSubmittingAdd] = React.useState(false)
+  const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = React.useState(false)
   const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isSubmittingDelete, setIsSubmittingDelete] = React.useState(false)
@@ -757,6 +765,10 @@ export const TenantPage: React.FC = () => {
     e.preventDefault()
     if (isSubmittingAdd) return
     if (!validateForm()) return
+    if (!isReviewingAdd) {
+      setIsReviewingAdd(true)
+      return
+    }
 
     setIsSubmittingAdd(true)
     const rent = parseFloat(formData.rentAmount)
@@ -1392,7 +1404,7 @@ export const TenantPage: React.FC = () => {
     )
 
     return (
-      <div className="space-y-6 max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
+      <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
         {/* Top navigation row */}
         <div className="flex items-center justify-between gap-3">
           <BackButton onClick={() => setViewMode('list')} label="Back to Tenants" />
@@ -2014,20 +2026,17 @@ export const TenantPage: React.FC = () => {
               <label htmlFor="payment-period" className="text-xs font-semibold text-focus block mb-1">
                 {isMissedMark ? 'Day' : 'Pay Starting From'} <span className="text-red-500">*</span>
               </label>
-              <select
+              <Dropdown
                 id="payment-period"
                 value={selected ? selected.index : ''}
-                onChange={(e) => handlePeriodSelect(Number(e.target.value))}
-                className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-              >
-                {selectablePeriods.length === 0 && <option value="">Every period is fully paid</option>}
-                {selectablePeriods.map((p) => (
-                  <option key={p.index} value={p.index}>
-                    {p.label} · due {p.dueDate} · {formatPHP(p.remaining)} left
-                    {p.isOverdue ? ' · overdue' : ''}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => handlePeriodSelect(Number(val))}
+                placeholder={selectablePeriods.length === 0 ? 'Every period is fully paid' : 'Select period...'}
+                aria-label="Payment Period"
+                options={selectablePeriods.map((p) => ({
+                  value: p.index,
+                  label: `${p.label} · due ${p.dueDate} · ${formatPHP(p.remaining)} left${p.isOverdue ? ' · overdue' : ''}`,
+                }))}
+              />
               <p className="text-[10.5px] text-muted-fg mt-1">
                 Fully paid periods are not listed. Any extra money flows forward into the next periods.
               </p>
@@ -2142,16 +2151,17 @@ export const TenantPage: React.FC = () => {
 
                 <div>
                   <label className="text-xs font-semibold text-focus block mb-1">Payment Method</label>
-                  <select
+                  <Dropdown
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="GCash">GCash</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
-                  </select>
+                    onChange={(val) => setPaymentMethod(String(val))}
+                    aria-label="Payment Method"
+                    options={[
+                      { value: 'Cash', label: 'Cash' },
+                      { value: 'GCash', label: 'GCash' },
+                      { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      { value: 'Cheque', label: 'Cheque' },
+                    ]}
+                  />
                 </div>
 
                 <div>
@@ -2202,7 +2212,7 @@ export const TenantPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-10 max-w-[1600px] mx-auto animate-in fade-in duration-300">
+    <div className="space-y-6 pb-10 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
       {/* Server problems (spec 0017): the page never saves anything only in this browser */}
       {loadError && (
         <div
@@ -2256,11 +2266,19 @@ export const TenantPage: React.FC = () => {
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              Tenants
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                Tenants
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title="Commercial and residential lease agreements, rental schedules, and tenant ledger"
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
-              Here's the summary of tenant leases and collections in JK Property and Ventures
+              Tenant lease agreements, billing schedules, and rental collections
             </p>
           </div>
 
@@ -2427,10 +2445,10 @@ export const TenantPage: React.FC = () => {
             </div>
 
             {/* Unified Date Range Picker */}
-            <DateRangePicker
+            <TransactionDateRangeControl
               value={dateRange}
               onChange={(newRange) => setDateRange(newRange)}
-              hidePresets
+              className="shrink-0"
             />
           </div>
         </div>
@@ -2442,7 +2460,7 @@ export const TenantPage: React.FC = () => {
         className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6"
       >
         {/* Table matching FilCap Lending layout: clean columns, no separate ID, dedicated Status, Audit & Actions */}
-        <div className="overflow-x-auto rounded-xl border border-slate-100">
+        <div className="overflow-x-auto">
           <Table className="w-full table-fixed min-w-[1000px]">
             <colgroup>
               <col style={{ width: '21%' }} />
@@ -2456,28 +2474,28 @@ export const TenantPage: React.FC = () => {
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="w-[21%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[21%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TENANT&apos;S NAME
                 </TableHead>
-                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[13%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   RENT RATE
                 </TableHead>
-                <TableHead className="w-[15%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[15%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   TOTAL PAYABLE
                 </TableHead>
-                <TableHead className="w-[13%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[13%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT PAID
                 </TableHead>
-                <TableHead className="w-[14%] px-3.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="w-[14%] px-3.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REMAINING BALANCE
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                <TableHead className="w-[9%] px-2.5 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[9%] px-2.5 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   AUDIT TAG
                 </TableHead>
-                <TableHead className="w-[6%] px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="w-[6%] px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -2487,24 +2505,24 @@ export const TenantPage: React.FC = () => {
               {isLoading ? (
                 <TableSkeleton rows={5} columns={8} />
               ) : paginatedTenants.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No tenant lease records found
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no tenant leases recorded for JK Property and Ventures matching your current filters. {!isAudit && 'Click "New Tenant Lease" above to register a commercial lease.'}
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={8}
+                  title="No tenant lease records found"
+                  description={`There are no tenant leases recorded for JK Property and Ventures matching your current filters.${!isAudit ? ' Click "New Tenant Lease" above to register a commercial lease.' : ''}`}
+                  action={
+                    !isAudit ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        New Tenant Lease
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedTenants.map((tenant) => {
                   const fin = financialsById.get(tenant.id) ?? getTenantPeriodFinancials(tenant, todayStr)
@@ -2567,11 +2585,9 @@ export const TenantPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 6. Status (Clean colored text without background pill or border) */}
+                      {/* 6. Status */}
                       <TableCell className="w-[9%] px-2.5 py-3 text-center whitespace-nowrap">
-                        <span className={cn('text-xs font-bold uppercase tracking-wider', statusTextColor)}>
-                          {fin.status}
-                        </span>
+                        <StatusPill status={fin.status} />
                       </TableCell>
 
                       {/* 7. Audit Tag (Visible to all authenticated roles) */}
@@ -2654,45 +2670,18 @@ export const TenantPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* 4. Pagination Footer (Exact Sales & Expense matching) */}
-        <div className="pt-4 mt-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-muted-fg">
-          {/* Left: Record summary */}
-          <span className="font-medium text-focus/80">
-            {filteredTenants.length === 0
-              ? 'Showing 0 of 0 records'
-              : `Showing ${startIndex + 1}-${endIndex} of ${filteredTenants.length} records`}
-          </span>
-
-          {/* Right: Page Indicator & Navigation */}
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-xs text-muted-fg italic">
-              Page {currentPage} out of {totalPages}
-            </span>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className="h-8 w-8 p-0 flex items-center justify-center rounded-lg border-slate-200 text-focus hover:bg-slate-50 disabled:opacity-40 cursor-pointer"
-              aria-label="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+        {/* 4. Pagination Footer */}
+        <div className="pt-4 mt-2 border-t border-slate-100">
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalRecords={filteredTenants.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            pageSize={ITEMS_PER_PAGE}
+            onPageChange={setCurrentPage}
+            itemLabel="tenants"
+          />
         </div>
       </Card>
 
@@ -2836,6 +2825,22 @@ export const TenantPage: React.FC = () => {
           </DialogHeader>
 
           <form onSubmit={handleSubmitAdd} className="space-y-3.5 pt-3">
+            {isReviewingAdd ? (
+              <ModalReviewStep
+                title="Review Lease Agreement"
+                subtitle="Please verify tenant and unit terms before creating this lease."
+                errorMessage={formErrors.form}
+                items={[
+                  { label: 'Tenant Name', value: formData.tenantName.trim(), highlight: true },
+                  { label: 'Unit / Property', value: `${formData.propertyName || ''} · ${formData.unitName}` },
+                  { label: 'Monthly Rent', value: formatPHP(formData.monthlyRent), isCurrency: true },
+                  { label: 'Security Deposit', value: formatPHP(formData.securityDeposit), isCurrency: true },
+                  { label: 'Lease Term', value: formData.leasePeriod },
+                  { label: 'Notes', value: formData.notes || 'None' },
+                ]}
+              />
+            ) : (
+              <>
             {formErrors.form && (
               <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700" role="alert">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
@@ -2854,7 +2859,7 @@ export const TenantPage: React.FC = () => {
                 className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
               />
               {formErrors.tenantName && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.tenantName}</p>
+                <FormFieldError error={formErrors.tenantName} />
               )}
             </div>
 
@@ -2870,7 +2875,7 @@ export const TenantPage: React.FC = () => {
                 className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
               />
               {formErrors.unitName && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.unitName}</p>
+                <FormFieldError error={formErrors.unitName} />
               )}
             </div>
 
@@ -2895,7 +2900,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.rentAmount && 'border-red-500')}
                 />
                 {formErrors.rentAmount && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.rentAmount}</p>
+                  <FormFieldError error={formErrors.rentAmount} />
                 )}
               </div>
 
@@ -2927,7 +2932,7 @@ export const TenantPage: React.FC = () => {
                   <p className="text-[10px] text-muted-fg">Calculated: rent × number of payments.</p>
                 )}
                 {formErrors.totalAmountPayable && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
+                  <FormFieldError error={formErrors.totalAmountPayable} />
                 )}
               </div>
             </div>
@@ -2960,7 +2965,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.contractDate && 'border-red-500')}
                 />
                 {formErrors.contractDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                  <FormFieldError error={formErrors.contractDate} />
                 )}
               </div>
 
@@ -2975,7 +2980,7 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.leaseEndDate && 'border-red-500')}
                 />
                 {formErrors.leaseEndDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.leaseEndDate}</p>
+                  <FormFieldError error={formErrors.leaseEndDate} />
                 )}
               </div>
             </div>
@@ -2993,22 +2998,23 @@ export const TenantPage: React.FC = () => {
                   className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.dueDate && 'border-red-500')}
                 />
                 {formErrors.dueDate && (
-                  <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
+                  <FormFieldError error={formErrors.dueDate} />
                 )}
               </div>
 
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-focus block">Status</label>
-                <select
+                <Dropdown
                   value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-                >
-                  <option value="Active">Active</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Overdue">Overdue</option>
-                  <option value="Completed">Completed</option>
-                </select>
+                  onChange={(val) => setFormData({ ...formData, status: val as any })}
+                  options={[
+                    { value: 'Active', label: 'Active' },
+                    { value: 'Pending', label: 'Pending' },
+                    { value: 'Overdue', label: 'Overdue' },
+                    { value: 'Completed', label: 'Completed' },
+                  ]}
+                  aria-label="Status"
+                />
               </div>
             </div>
 
@@ -3035,26 +3041,37 @@ export const TenantPage: React.FC = () => {
                 className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
               />
               {formErrors.notes && (
-                <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+                <FormFieldError error={formErrors.notes} />
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2.5 pt-4 mt-2 border-t border-stroke/20">
+              </>
+            )}
+
+            <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
               <Button
                 type="button"
-                variant="outline"
-                onClick={() => setIsAddModalOpen(false)}
-                className="h-10 px-4 text-xs font-medium rounded-xl border-stroke/50 hover:bg-slate-50 text-focus cursor-pointer"
+                variant="secondary"
+                onClick={() => {
+                  if (isReviewingAdd) {
+                    setIsReviewingAdd(false)
+                  } else {
+                    setIsAddModalOpen(false)
+                  }
+                }}
+                disabled={isSubmittingAdd}
+                className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                Cancel
+                {isReviewingAdd ? 'Back to Edit' : 'Cancel'}
               </Button>
               <Button
                 type="submit"
+                variant="primary"
                 disabled={isSubmittingAdd}
-                className="h-10 px-5 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                isLoading={isSubmittingAdd}
+                className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
               >
-                {isSubmittingAdd && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
-                <span>{isSubmittingAdd ? 'Saving...' : 'Create Lease'}</span>
+                <span>{isReviewingAdd ? 'Create Lease' : 'Review Lease'}</span>
               </Button>
             </div>
           </form>
@@ -3103,7 +3120,7 @@ export const TenantPage: React.FC = () => {
                     className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.tenantName && 'border-red-500')}
                   />
                   {formErrors.tenantName && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.tenantName}</p>
+                    <FormFieldError error={formErrors.tenantName} />
                   )}
                 </div>
 
@@ -3118,7 +3135,7 @@ export const TenantPage: React.FC = () => {
                     className={cn('h-10 text-xs sm:text-sm rounded-xl border-stroke/50', formErrors.unitName && 'border-red-500')}
                   />
                   {formErrors.unitName && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.unitName}</p>
+                    <FormFieldError error={formErrors.unitName} />
                   )}
                 </div>
 
@@ -3148,7 +3165,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.rentAmount && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.rentAmount}</p>
+                      <FormFieldError error={formErrors.rentAmount} />
                     )}
                   </div>
 
@@ -3176,7 +3193,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.totalAmountPayable && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.totalAmountPayable}</p>
+                      <FormFieldError error={formErrors.totalAmountPayable} />
                     )}
                   </div>
                 </div>
@@ -3213,7 +3230,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.contractDate && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.contractDate}</p>
+                      <FormFieldError error={formErrors.contractDate} />
                     )}
                   </div>
 
@@ -3234,7 +3251,7 @@ export const TenantPage: React.FC = () => {
                       )}
                     />
                     {formErrors.dueDate && (
-                      <p className="text-[10px] text-red-600 font-medium">{formErrors.dueDate}</p>
+                      <FormFieldError error={formErrors.dueDate} />
                     )}
                   </div>
                 </div>
@@ -3250,16 +3267,17 @@ export const TenantPage: React.FC = () => {
 
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-focus block">Status</label>
-                  <select
+                  <Dropdown
                     value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/50 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-1 focus:ring-focus"
-                  >
-                    <option value="Active">Active</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Overdue">Overdue</option>
-                    <option value="Completed">Completed</option>
-                  </select>
+                    onChange={(val) => setFormData({ ...formData, status: val as any })}
+                    options={[
+                      { value: 'Active', label: 'Active' },
+                      { value: 'Pending', label: 'Pending' },
+                      { value: 'Overdue', label: 'Overdue' },
+                      { value: 'Completed', label: 'Completed' },
+                    ]}
+                    aria-label="Status"
+                  />
                 </div>
 
                 <CompanyBankSelect
@@ -3284,7 +3302,7 @@ export const TenantPage: React.FC = () => {
                     className="h-10 text-xs sm:text-sm rounded-xl border-stroke/50"
                   />
                   {formErrors.notes && (
-                    <p className="text-[10px] text-red-600 font-medium">{formErrors.notes}</p>
+                    <FormFieldError error={formErrors.notes} />
                   )}
                 </div>
 

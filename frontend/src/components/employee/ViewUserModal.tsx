@@ -17,6 +17,7 @@ import {
   DialogContent,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -444,18 +445,13 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                 <div className="space-y-1">
                   <Label htmlFor="edit-user-role" className="text-xs font-medium text-focus/80">Role</Label>
                   <div className="relative">
-                    <select
+                    <Dropdown
                       id="edit-user-role"
                       value={formData.role}
-                      onChange={(e) => handleRoleChange(e.target.value)}
-                      className="flex h-10 w-full rounded-xl border border-stroke/60 bg-white px-3 py-2 text-xs sm:text-sm text-focus shadow-none transition-colors appearance-none focus:outline-none focus:ring-1 focus:ring-focus cursor-pointer"
-                    >
-                      {ROLES.map((role) => (
-                        <option key={role} value={role}>
-                          {role}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => handleRoleChange(String(val))}
+                      options={ROLES.map((role) => ({ value: role, label: role }))}
+                      aria-label="User Role"
+                    />
                     <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-muted-fg">
                       <svg className="h-4 w-4 fill-current" viewBox="0 0 20 20">
                         <path

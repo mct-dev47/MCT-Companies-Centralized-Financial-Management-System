@@ -6,6 +6,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -65,6 +67,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
   const [saleDate, setSaleDate] = React.useState<string>(() => formatToYYYYMMDD(new Date()))
   const [notes, setNotes] = React.useState<string>('')
   const [error, setError] = React.useState<string>('')
+  const [isReviewing, setIsReviewing] = React.useState<boolean>(false)
 
   const filteredPeople = React.useMemo(() => {
     return existingPeople.filter((p) => p.type === customerType)
@@ -83,6 +86,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
       setSaleDate(formatToYYYYMMDD(new Date()))
       setNotes('')
       setError('')
+      setIsReviewing(false)
     }
   }, [open])
 
@@ -95,14 +99,16 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
     return Math.max(0, totalAmount - amountPaid)
   }, [paymentOption, totalAmount, amountPaid])
 
+  const currentCustomerName =
+    selectedPersonName === '__NEW__' || !selectedPersonName
+      ? customName.trim()
+      : selectedPersonName.trim()
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
 
-    const finalName =
-      selectedPersonName === '__NEW__' || !selectedPersonName
-        ? customName.trim()
-        : selectedPersonName.trim()
+    const finalName = currentCustomerName
 
     if (!finalName) {
       setError('Please select or enter the customer or staff member name.')
@@ -128,6 +134,11 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
         setError('Partial payment amount cannot equal or exceed total amount. Select "Paid in full" instead.')
         return
       }
+    }
+
+    if (!isReviewing) {
+      setIsReviewing(true)
+      return
     }
 
     const newSale = onAddNewSale({
@@ -174,7 +185,33 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
             </div>
           )}
 
-          <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-0 text-left">
+          {isReviewing ? (
+            <div className="overflow-y-auto flex-1 min-h-0">
+              <ModalReviewStep
+                title="Review Food Sale Details"
+                subtitle="Please verify customer, order items, and payment remittance."
+                errorMessage={error}
+                items={[
+                  { label: 'Customer', value: currentCustomerName || 'Unspecified', highlight: true },
+                  { label: 'Type', value: customerType },
+                  { label: 'Items / Meal', value: itemsSummary.trim() },
+                  { label: 'Total Amount', value: totalAmount, isCurrency: true },
+                  { label: 'Payment Terms', value: paymentOption },
+                  ...(paymentOption === 'Partial'
+                    ? [
+                        { label: 'Amount Paid', value: amountPaid, isCurrency: true },
+                        { label: 'Remaining Balance', value: computedBalance, isCurrency: true },
+                      ]
+                    : []),
+                  ...(paymentOption !== 'Pay Later' ? [{ label: 'Payment Method', value: paymentMethod }] : []),
+                  { label: 'Sale Date', value: saleDate },
+                  { label: 'Notes', value: notes.trim() || 'None' },
+                ]}
+              />
+            </div>
+          ) : (
+            <>
+              <div className="space-y-3 overflow-y-auto pr-1 flex-1 min-h-0 text-left">
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-focus">Customer Type</Label>
               <div className="flex gap-2">
@@ -219,19 +256,19 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                   {customerType === 'Staff' ? 'Staff Member' : 'Customer Name'}{' '}
                   <span className="text-red-500">*</span>
                 </Label>
-                <select
+                <Dropdown
                   value={selectedPersonName}
-                  onChange={(e) => setSelectedPersonName(e.target.value)}
-                  className="w-full h-9 sm:h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20"
-                >
-                  <option value="">Select from existing {customerType.toLowerCase()} list...</option>
-                  {filteredPeople.map((p) => (
-                    <option key={p.key} value={p.name}>
-                      {p.name} {p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}
-                    </option>
-                  ))}
-                  <option value="__NEW__">+ Enter new {customerType.toLowerCase()} name...</option>
-                </select>
+                  onChange={(val) => setSelectedPersonName(String(val))}
+                  placeholder={`Select from existing ${customerType.toLowerCase()} list...`}
+                  options={[
+                    ...filteredPeople.map((p) => ({
+                      value: p.name,
+                      label: `${p.name} ${p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}`,
+                    })),
+                    { value: '__NEW__', label: `+ Enter new ${customerType.toLowerCase()} name...` },
+                  ]}
+                  aria-label="Customer"
+                />
               </div>
 
               {(selectedPersonName === '__NEW__' || !selectedPersonName) && (
@@ -360,15 +397,17 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
 
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold text-amber-900">Payment Method</Label>
-                    <select
+                    <Dropdown
                       value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                      className="w-full h-9 px-3 rounded-xl border border-amber-300 bg-white text-xs sm:text-sm text-focus"
-                    >
-                      <option value="Cash">Cash</option>
-                      <option value="GCash">GCash</option>
-                      <option value="Bank Transfer">Bank Transfer</option>
-                    </select>
+                      size="sm"
+                      onChange={(val) => setPaymentMethod(val as PaymentMethod)}
+                      options={[
+                        { value: 'Cash', label: 'Cash' },
+                        { value: 'GCash', label: 'GCash' },
+                        { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      ]}
+                      aria-label="Payment Method"
+                    />
                   </div>
                 </div>
 
@@ -423,21 +462,30 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
+            </>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20 shrink-0">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-              className="h-9 sm:h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
-              className="h-9 sm:h-10 px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+              variant="primary"
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <Check className="w-3.5 h-3.5" />
-              <span>Record Food Sale</span>
+              <span>{isReviewing ? 'Record Sale' : 'Review Sale'}</span>
             </Button>
           </div>
         </form>

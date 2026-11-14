@@ -6,6 +6,8 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Dropdown } from '@/components/ui/Dropdown'
+import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -107,6 +109,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   const [dailyCalendarMonth, setDailyCalendarMonth] = React.useState<Date>(() => new Date())
 
   const [isSubmitting, setIsSubmitting] = React.useState(false)
+  const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
 
@@ -403,6 +406,31 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {isReviewing ? (
+            <ModalReviewStep
+              title="Review Bill Payment Details"
+              subtitle="Please verify the payment details before submitting this remittance."
+              errorMessage={error}
+              items={[
+                { label: 'Provider / Bill', value: bill?.billerName, highlight: true },
+                { label: 'Amount Paid', value: parseFloat(amountInput) || 0, isCurrency: true },
+                { label: 'Payment Method', value: paymentMethod },
+                {
+                  label: 'Funding Source',
+                  value:
+                    fundingSource === 'petty_cash'
+                      ? 'Petty Cash'
+                      : fundingSource === 'bank' && bankAccounts.find((a) => String(a.id) === String(bankAccountId))
+                        ? `${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.bankName} (${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.accountNumber})`
+                        : 'Unassigned',
+                },
+                { label: 'Payment Date', value: paymentDate },
+                { label: 'Billing Period', value: selectedPeriod?.label || 'Current Period' },
+                { label: 'Remarks / Notes', value: notes.trim() || 'None' },
+              ]}
+            />
+          ) : (
+            <>
           {/* Error Banner */}
           {error && (
             <div className="p-3 bg-[#960C01]/10 border border-[#960C01]/30 rounded-xl flex items-start gap-2 text-xs text-[#960C01]">
@@ -945,15 +973,15 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   </span>
                   {isLoadingFunds && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-fg" />}
                 </label>
-                <select
+                <Dropdown
                   value={fundingSource === 'bank' ? `bank:${bankAccountId}` : fundingSource}
-                  onChange={(e) => {
+                  onChange={(val) => {
                     setError('')
-                    const val = e.target.value
-                    if (val.startsWith('bank:')) {
+                    const sVal = String(val)
+                    if (sVal.startsWith('bank:')) {
                       setFundingSource('bank')
-                      setBankAccountId(val.slice(5))
-                    } else if (val === 'petty_cash') {
+                      setBankAccountId(sVal.slice(5))
+                    } else if (sVal === 'petty_cash') {
                       setFundingSource('petty_cash')
                       setBankAccountId('')
                     } else {
@@ -961,26 +989,19 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                       setBankAccountId('')
                     }
                   }}
-                  className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
-                >
-                  <option value="">Select bank or petty cash...</option>
-                  {bankAccounts.length > 0 && (
-                    <optgroup label="Bank Accounts">
-                      {bankAccounts.map((acc) => (
-                        <option key={acc.id} value={`bank:${acc.id}`}>
-                          {acc.bankName}
-                          {acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} —{' '}
-                          {formatPHP(Number(acc.currentBalance) || 0)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="Petty Cash">
-                    <option value="petty_cash">
-                      Petty Cash{pettyCashBalance !== null ? ` — ${formatPHP(pettyCashBalance)}` : ''}
-                    </option>
-                  </optgroup>
-                </select>
+                  placeholder="Select bank or petty cash..."
+                  options={[
+                    ...bankAccounts.map((acc) => ({
+                      value: `bank:${acc.id}`,
+                      label: `${acc.bankName}${acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} — ${formatPHP(Number(acc.currentBalance) || 0)}`,
+                    })),
+                    {
+                      value: 'petty_cash',
+                      label: `Petty Cash${pettyCashBalance !== null ? ` — ${formatPHP(pettyCashBalance)}` : ''}`,
+                    },
+                  ]}
+                  aria-label="Funding Source"
+                />
                 {!isLoadingFunds && bankAccounts.length === 0 && (
                   <p className="text-[11px] text-muted-fg">No bank account is registered for {bill.company}.</p>
                 )}
@@ -997,16 +1018,17 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   <label className="text-xs font-semibold text-focus block">
                     Payment Method
                   </label>
-                  <select
+                  <Dropdown
                     value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 cursor-pointer"
-                  >
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Cheque">Cheque</option>
-                    <option value="Online Banking">Online Banking</option>
-                    <option value="Debit Card">Debit Card</option>
-                  </select>
+                    onChange={(val) => setPaymentMethod(String(val))}
+                    options={[
+                      { value: 'Bank Transfer', label: 'Bank Transfer' },
+                      { value: 'Cheque', label: 'Cheque' },
+                      { value: 'Online Banking', label: 'Online Banking' },
+                      { value: 'Debit Card', label: 'Debit Card' },
+                    ]}
+                    aria-label="Payment Method"
+                  />
                 </div>
               )}
 
@@ -1039,30 +1061,34 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+            </>
+          )}
+
+          {/* Action Buttons - Standard Phase 2 Layout */}
+          <div className="flex items-center justify-between gap-3 pt-3 border-t border-stroke/20">
             <Button
               type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
+              variant="secondary"
+              onClick={() => {
+                if (isReviewing) {
+                  setIsReviewing(false)
+                } else {
+                  onOpenChange(false)
+                }
+              }}
               disabled={isSubmitting}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              Cancel
+              {isReviewing ? 'Back to Edit' : 'Cancel'}
             </Button>
             <Button
               type="submit"
+              variant="primary"
               disabled={isSubmitting || !isAmountValid || isPeriodPaid || !paymentDate || Boolean(fundingError)}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-1.5"
+              isLoading={isSubmitting}
+              className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span>Recording...</span>
-                </>
-              ) : (
-                <span>Confirm Payment</span>
-              )}
+              <span>{isReviewing ? 'Record Payment' : 'Review Payment'}</span>
             </Button>
           </div>
         </form>

@@ -23,6 +23,7 @@ import {
   Clock,
   MoreVertical,
   Eye,
+  HelpCircle,
 } from 'lucide-react'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -30,6 +31,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { TablePagination, ConfirmModal } from '@/components/common'
+import { TableEmptyState } from '@/components/common/TableEmptyState'
+import { TableErrorState } from '@/components/common/TableErrorState'
+import { StatusPill } from '@/components/common/StatusPill'
 import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
@@ -47,9 +51,9 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
+import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
 import { AddLoanModal } from '@/components/dashboard/AddLoanModal'
 import { EditLoanModal } from '@/components/dashboard/EditLoanModal'
 import { ApproveLoanModal } from '@/components/dashboard/ApproveLoanModal'
@@ -709,7 +713,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   }
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-[1600px] mx-auto pb-12">
+    <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12">
       {viewLoanItem ? (
         <LoanDetailPageView
           loan={viewLoanItem}
@@ -736,13 +740,25 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
         {/* Top Header Row: Page Title on Left, Action Buttons on Right */}
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
-              {loanType} Loans
-            </h1>
-            <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
+            <div className="flex items-center gap-2">
+              <h1 className="text-3xl sm:text-4xl font-bold text-focus tracking-tight">
+                {loanType} Loans
+              </h1>
+              <span
+                className="text-muted-fg hover:text-focus transition-colors cursor-help inline-flex items-center"
+                title={
+                  loanType === 'Borrower'
+                    ? 'Loans and credit facilities borrowed from partner companies'
+                    : 'Loans and financing facilities extended to partner companies'
+                }
+              >
+                <HelpCircle className="h-5 w-5" />
+              </span>
+            </div>
+            <p className="text-xs sm:text-sm text-muted-fg font-normal mt-1">
               {loanType === 'Borrower'
-                ? 'Loans and facilities borrowed from partner companies.'
-                : 'Loans and financing extended to partner companies.'}
+                ? 'Loans and credit facilities borrowed from partner companies.'
+                : 'Loans and financing facilities extended to partner companies.'}
             </p>
           </div>
 
@@ -807,261 +823,275 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           </div>
         </div>
 
-        {/* Second Row: Search Bar & Filter Toolbar */}
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pt-1">
-          {/* Extended Width Search Bar */}
-          <div className="relative flex-1 w-full">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-            <Input
-              type="search"
-              placeholder="Search ref no, company, purpose…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
-            />
-          </div>
+        {/* Second Row: Filter Toolbars */}
+        <div className="flex flex-col gap-3 pt-1">
+          {/* Row 1: All Companies + Periods + Status + Date Range + Approve/Pending Toggle */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 sm:gap-3 w-full">
+            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 min-w-0">
+              {/* Company Scope: Dropdown for Admin/Finance only */}
+              {!isCompanyScoped ? (
+                <div ref={companyDropdownRef} className="relative flex-[2] min-w-[220px] sm:min-w-[260px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCompanyDropdownOpen((prev) => !prev)
+                      setIsPeriodDropdownOpen(false)
+                      setIsStatusDropdownOpen(false)
+                      setIsExportDropdownOpen(false)
+                    }}
+                    className={cn(
+                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                    )}
+                  >
+                    <span className="font-medium text-focus/90 truncate flex-1 text-left">
+                      {selectedCompany}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {selectedCompany !== 'All Companies' && (
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setSelectedCompany('All Companies')
+                            setActiveCompany('All Companies')
+                          }}
+                          className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
+                          title="Reset to All Companies"
+                        >
+                          <X className="h-3 w-3" />
+                        </span>
+                      )}
+                      <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                    </div>
+                  </button>
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 self-start lg:self-auto shrink-0">
-            {/* Period Dropdown */}
-            <div ref={periodDropdownRef} className="relative inline-block shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPeriodDropdownOpen((prev) => !prev)
-                  setIsStatusDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
-                  setIsExportDropdownOpen(false)
-                }}
-                className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
-                  isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-medium text-focus/90">{selectedPeriod}</span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isPeriodDropdownOpen && 'transform rotate-180'
+                  {isCompanyDropdownOpen && (
+                    <div className="absolute left-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
+                          Filter By Company
+                        </span>
+                        {selectedCompany !== 'All Companies' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedCompany('All Companies')
+                              setActiveCompany('All Companies')
+                              setIsCompanyDropdownOpen(false)
+                            }}
+                            className="text-xs text-primary hover:underline font-semibold cursor-pointer"
+                          >
+                            Clear Filter
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="px-1 mb-2">
+                        <Input
+                          type="text"
+                          placeholder="Search company…"
+                          value={companySearch}
+                          onChange={(e) => setCompanySearch(e.target.value)}
+                          className="h-8 text-xs rounded-lg"
+                          autoFocus
+                        />
+                      </div>
+
+                      <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
+                        {filteredCompanyList.length === 0 ? (
+                          <div className="py-4 text-center text-xs text-muted-fg">
+                            No matching companies
+                          </div>
+                        ) : (
+                          filteredCompanyList.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                setSelectedCompany(c)
+                                setActiveCompany(c)
+                                setIsCompanyDropdownOpen(false)
+                                setCompanySearch('')
+                              }}
+                              className={cn(
+                                'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                                selectedCompany === c
+                                  ? 'bg-primary/10 text-primary font-semibold'
+                                  : 'text-focus/80 hover:bg-slate-50'
+                              )}
+                            >
+                              <span className="truncate">{c}</span>
+                              {selectedCompany === c && (
+                                <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                              )}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
                   )}
-                />
-              </button>
-
-              {isPeriodDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-40 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  {PERIOD_OPTIONS.map((period) => (
-                    <button
-                      key={period}
-                      type="button"
-                      onClick={() => handlePeriodChange(period)}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        selectedPeriod === period
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{period}</span>
-                      {selectedPeriod === period && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 select-none">
+                  <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
                 </div>
               )}
-            </div>
 
-            {/* Status Dropdown */}
-            <div ref={statusDropdownRef} className="relative inline-block shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsStatusDropdownOpen((prev) => !prev)
-                  setIsPeriodDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
-                  setIsExportDropdownOpen(false)
-                }}
-                className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap shrink-0',
-                  isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <span className="font-medium text-focus/90">
-                  {statusFilter === 'All' ? 'Status' : statusFilter}
-                </span>
-                <ChevronDown
-                  className={cn(
-                    'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                    isStatusDropdownOpen && 'transform rotate-180'
-                  )}
-                />
-              </button>
-
-              {isStatusDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  {statusOptions.map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => {
-                        setStatusFilter(st)
-                        setIsStatusDropdownOpen(false)
-                      }}
-                      className={cn(
-                        'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                        statusFilter === st
-                          ? 'bg-primary/10 text-primary font-semibold'
-                          : 'text-focus/80 hover:bg-slate-50'
-                      )}
-                    >
-                      <span>{st === 'All' ? 'All Status' : st}</span>
-                      {statusFilter === st && (
-                        <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Unified Date Range Picker (presets hidden) */}
-            <DateRangePicker
-              value={dateRange}
-              onChange={(newRange: DateRange) => setDateRange(newRange)}
-              hidePresets
-            />
-
-            {/* Company Scope: Dropdown for Admin/Finance only */}
-            {!isCompanyScoped && (
-              <div ref={companyDropdownRef} className="relative inline-block shrink-0">
+              {/* Period Dropdown */}
+              <div ref={periodDropdownRef} className="relative flex-1 min-w-[120px] sm:min-w-[140px]">
                 <button
                   type="button"
                   onClick={() => {
-                    setIsCompanyDropdownOpen((prev) => !prev)
-                    setIsPeriodDropdownOpen(false)
+                    setIsPeriodDropdownOpen((prev) => !prev)
                     setIsStatusDropdownOpen(false)
+                    setIsCompanyDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
-                    isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
-                  <span className="font-medium text-focus/90 truncate max-w-[140px] sm:max-w-[180px]">
-                    {selectedCompany}
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                  {selectedCompany !== 'All Companies' && (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedCompany('All Companies')
-                        setActiveCompany('All Companies')
-                      }}
-                      className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-                      title="Reset to All Companies"
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
-                  )}
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">{selectedPeriod}</span>
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                      isPeriodDropdownOpen && 'transform rotate-180'
+                    )}
+                  />
                 </button>
 
-                {isCompanyDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                        Filter By Company
-                      </span>
-                      {selectedCompany !== 'All Companies' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCompany('All Companies')
-                            setActiveCompany('All Companies')
-                            setIsCompanyDropdownOpen(false)
-                          }}
-                          className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                        >
-                          Clear Filter
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="px-1 mb-2">
-                      <Input
-                        type="text"
-                        placeholder="Search company…"
-                        value={companySearch}
-                        onChange={(e) => setCompanySearch(e.target.value)}
-                        className="h-8 text-xs rounded-lg"
-                        autoFocus
-                      />
-                    </div>
-
-                    <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                      {filteredCompanyList.length === 0 ? (
-                        <div className="py-4 text-center text-xs text-muted-fg">
-                          No matching companies
-                        </div>
-                      ) : (
-                        filteredCompanyList.map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() => {
-                              setSelectedCompany(c)
-                              setActiveCompany(c)
-                              setIsCompanyDropdownOpen(false)
-                              setCompanySearch('')
-                            }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                              selectedCompany === c
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-focus/80 hover:bg-slate-50'
-                            )}
-                          >
-                            <span className="truncate">{c}</span>
-                            {selectedCompany === c && (
-                              <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                            )}
-                          </button>
-                        ))
-                      )}
-                    </div>
+                {isPeriodDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-40 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    {PERIOD_OPTIONS.map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        onClick={() => handlePeriodChange(period)}
+                        className={cn(
+                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                          selectedPeriod === period
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-focus/80 hover:bg-slate-50'
+                        )}
+                      >
+                        <span>{period}</span>
+                        {selectedPeriod === period && (
+                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                        )}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
-            )}
 
-            {/* Tab Switcher: Approve / Pending (Right Side, matching Deposit / Expense Record style) */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
+              {/* Status Dropdown */}
+              <div ref={statusDropdownRef} className="relative flex-1 min-w-[120px] sm:min-w-[140px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsStatusDropdownOpen((prev) => !prev)
+                    setIsPeriodDropdownOpen(false)
+                    setIsCompanyDropdownOpen(false)
+                    setIsExportDropdownOpen(false)
+                  }}
+                  className={cn(
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap',
+                    isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                  )}
+                >
+                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
+                    {statusFilter === 'All' ? 'Status' : statusFilter}
+                  </span>
+                  <ChevronDown
+                    className={cn(
+                      'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
+                      isStatusDropdownOpen && 'transform rotate-180'
+                    )}
+                  />
+                </button>
+
+                {isStatusDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    {statusOptions.map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => {
+                          setStatusFilter(st)
+                          setIsStatusDropdownOpen(false)
+                        }}
+                        className={cn(
+                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                          statusFilter === st
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-focus/80 hover:bg-slate-50'
+                        )}
+                      >
+                        <span>{st === 'All' ? 'All Status' : st}</span>
+                        {statusFilter === st && (
+                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Unified Date Range Picker */}
+              <div className="flex-1 min-w-[160px] sm:min-w-[180px]">
+                <TransactionDateRangeControl
+                  value={dateRange}
+                  onChange={(newRange: DateRange) => setDateRange(newRange)}
+                  fullWidth
+                  className="w-full"
+                />
+              </div>
+            </div>
+
+            {/* Tab Switcher: Approve / Pending (Segmented toggle styled like screenshot, active filled with brand color) */}
+            <div
+              role="group"
+              aria-label="Filter loans by approval status"
+              className="inline-flex items-center rounded-full border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
+            >
               <button
                 type="button"
                 onClick={() => setApprovalTab('Approve')}
                 className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Approve'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
+                    ? 'bg-[#960C01] text-white shadow-xs'
+                    : 'text-focus/70 hover:bg-white/60 hover:text-focus'
                 )}
               >
-                <CheckCircle2 className="h-4 w-4 shrink-0" />
                 Approve
               </button>
               <button
                 type="button"
                 onClick={() => setApprovalTab('Pending')}
                 className={cn(
-                  'inline-flex items-center gap-2 h-10 sm:h-11 px-4 sm:px-4.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Pending'
                     ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white hover:text-focus'
+                    : 'text-focus/70 hover:bg-white/60 hover:text-focus'
                 )}
               >
-                <Clock className="h-4 w-4 shrink-0" />
                 Pending
               </button>
             </div>
+          </div>
+
+          {/* Row 2: Search Bar */}
+          <div className="relative w-full">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
+            <Input
+              type="search"
+              placeholder="Search ref no, company, purpose…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+            />
           </div>
         </div>
       </div>
@@ -1146,34 +1176,34 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             </colgroup>
             <TableHeader>
               <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   DATE
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   REF NO.
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   {loanType === 'Borrower' ? 'LENDER COMPANY' : 'BORROWER COMPANY'}
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   PARTICULARS
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   AMOUNT
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap">
                   DUE DATE
                 </TableHead>
                 {/* Interest Rate ONLY in Borrower Tab per user instructions */}
                 {loanType === 'Borrower' && (
-                  <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap" title="Interest Rate">
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left whitespace-nowrap" title="Interest Rate">
                     INT. RATE
                   </TableHead>
                 )}
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   STATUS
                 </TableHead>
-                <TableHead className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
+                <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center whitespace-nowrap">
                   ACTIONS
                 </TableHead>
               </TableRow>
@@ -1183,25 +1213,24 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               {loading ? (
                 <TableSkeleton rows={6} columns={loanType === 'Borrower' ? 9 : 8} />
               ) : paginatedLoans.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={loanType === 'Borrower' ? 9 : 8}
-                    className="py-14 text-center text-xs sm:text-sm text-muted-fg"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 max-w-md mx-auto">
-                      <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center text-slate-400 mb-1">
-                        <AlertCircle className="w-6 h-6 stroke-[1.5]" />
-                      </div>
-                      <p className="font-semibold text-focus text-sm sm:text-base">
-                        No loan transaction yet
-                      </p>
-                      <p className="text-xs text-muted-fg leading-relaxed">
-                        There are no {loanType.toLowerCase()} loan records found for {displayedCompanyTitle} matching your current filters.
-                        {loanType === 'Borrower' && ' Click "Request Loan" above to initiate a new borrowing request.'}
-                      </p>
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <TableEmptyState
+                  colSpan={loanType === 'Borrower' ? 9 : 8}
+                  title="No loan transaction yet"
+                  description={`There are no ${loanType.toLowerCase()} loan records found for ${displayedCompanyTitle} matching your current filters.${loanType === 'Borrower' ? ' Click "Request Loan" above to initiate a new borrowing request.' : ''}`}
+                  action={
+                    loanType === 'Borrower' ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="sm"
+                        onClick={() => setIsAddModalOpen(true)}
+                        className="rounded-[10px]"
+                      >
+                        Request Loan
+                      </Button>
+                    ) : undefined
+                  }
+                />
               ) : (
                 paginatedLoans.map((loan) => {
                   const isRejectedFinance = loan.status === 'Rejected by Finance'
@@ -1306,30 +1335,30 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 8. Status */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                        <span
-                          className={cn(
-                            'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold shadow-2xs',
-                            statusDisplay.badgeClass
-                          )}
-                          title={
-                            isRejectedFinance
-                              ? loan.financeRemark || 'Rejected by finance'
+                        <StatusPill
+                          status={
+                            isPendingFinance
+                              ? 'Pending Finance'
+                              : isPendingAudit
+                              ? 'Pending Audit'
+                              : isRejectedFinance
+                              ? 'Rejected'
                               : isDisapprovedAudit
-                              ? loan.auditRemark || 'Disapproved by audit'
-                              : loan.status === 'Approved'
-                              ? 'Approved by Audit. Waiting for Finance to disburse the money.'
-                              : loan.status
+                              ? 'Disapproved'
+                              : loan.status || 'Pending'
                           }
-                        >
-                          {statusDisplay.tone === 'red' ? (
-                            <X className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
-                          ) : statusDisplay.tone === 'green' ? (
-                            <Check className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
-                          ) : (
-                            <Clock className={cn('w-3 h-3 shrink-0', statusDisplay.iconClass)} />
-                          )}
-                          <span>{statusDisplay.label}</span>
-                        </span>
+                          label={
+                            isPendingFinance
+                              ? 'Pending Finance'
+                              : isPendingAudit
+                              ? 'Pending Audit'
+                              : isRejectedFinance
+                              ? 'Rejected'
+                              : isDisapprovedAudit
+                              ? 'Disapproved'
+                              : loan.status || 'Pending'
+                          }
+                        />
                       </TableCell>
 
                       {/* 9. Actions (3 Dots Menu) */}
