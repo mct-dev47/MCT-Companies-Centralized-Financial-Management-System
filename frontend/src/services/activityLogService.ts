@@ -10,6 +10,7 @@
  */
 
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { getAuthToken } from '@/services/authService'
 
 export interface ActivityLogItem {
   id: string
@@ -92,7 +93,7 @@ interface RawAuditLogRow {
 }
 
 function getAuthHeaders(): HeadersInit {
-  const token = sessionStorage.getItem(['mct', 'access', 'token'].join('_'))
+  const token = getAuthToken() || sessionStorage.getItem('mct_access_token')
   return token ? { Authorization: 'Bearer ' + token } : {}
 }
 
@@ -132,21 +133,23 @@ export const activityLogService = {
    */
   async getActivityLogs(params: ActivityLogQueryParams = {}): Promise<ActivityLogItem[]> {
     try {
-      const url = new URL('/api/v1/activity-logs', window.location.origin)
+      const searchParams = new URLSearchParams()
       const limit = params.limit ?? 1000
-      url.searchParams.set('limit', String(limit))
+      searchParams.set('limit', String(limit))
 
-      if (params.offset !== undefined) url.searchParams.set('offset', String(params.offset))
-      if (params.search) url.searchParams.set('search', params.search.trim())
-      if (params.userId) url.searchParams.set('user_id', String(params.userId))
-      if (params.companyId) url.searchParams.set('company_id', String(params.companyId))
-      if (params.module) url.searchParams.set('module', params.module.trim())
-      if (params.actionCategory) url.searchParams.set('action_category', params.actionCategory.trim())
-      if (params.startDate) url.searchParams.set('start_date', params.startDate)
-      if (params.endDate) url.searchParams.set('end_date', params.endDate)
+      if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
+      if (params.search) searchParams.set('search', params.search.trim())
+      if (params.userId) searchParams.set('user_id', String(params.userId))
+      if (params.companyId) searchParams.set('company_id', String(params.companyId))
+      if (params.module) searchParams.set('module', params.module.trim())
+      if (params.actionCategory) searchParams.set('action_category', params.actionCategory.trim())
+      if (params.startDate) searchParams.set('start_date', params.startDate)
+      if (params.endDate) searchParams.set('end_date', params.endDate)
 
-      const response = await fetch(url.toString(), {
+      const endpoint = `/api/v1/activity-logs?${searchParams.toString()}`
+      const response = await fetch(endpoint, {
         cache: 'no-store',
+        credentials: 'include',
         headers: getAuthHeaders(),
       })
 
@@ -167,11 +170,12 @@ export const activityLogService = {
           }
         }
 
-        const sev = (row.severity || parsedDetails?.severity || 'INFO') as string
+        const sevRaw = row.severity || parsedDetails?.severity || 'INFO'
+        const sevStr = typeof sevRaw === 'string' ? sevRaw : String(sevRaw || 'INFO')
         const normalizedSeverity: 'INFO' | 'WARNING' | 'CRITICAL' =
-          sev.toUpperCase() === 'CRITICAL'
+          sevStr.toUpperCase() === 'CRITICAL'
             ? 'CRITICAL'
-            : sev.toUpperCase() === 'WARNING'
+            : sevStr.toUpperCase() === 'WARNING'
             ? 'WARNING'
             : 'INFO'
 
@@ -207,6 +211,7 @@ export const activityLogService = {
     try {
       const response = await fetch(`/api/v1/activity-logs/purge-expired?retention_days=${retentionDays}`, {
         method: 'POST',
+        credentials: 'include',
         headers: getAuthHeaders(),
       })
       if (!response.ok) {
@@ -224,20 +229,22 @@ export const activityLogService = {
    */
   async getEntityTimeline(params: EntityTimelineQueryParams): Promise<EntityTimelineEvent[]> {
     try {
-      const url = new URL('/api/v1/activity-logs/timeline', window.location.origin)
-      url.searchParams.set('record_type', params.recordType)
+      const searchParams = new URLSearchParams()
+      searchParams.set('record_type', params.recordType)
       if (params.recordId !== undefined && params.recordId !== null) {
-        url.searchParams.set('record_id', String(params.recordId))
+        searchParams.set('record_id', String(params.recordId))
       }
       if (params.refNo) {
-        url.searchParams.set('ref_no', params.refNo)
+        searchParams.set('ref_no', params.refNo)
       }
       if (params.companyId !== undefined && params.companyId !== null) {
-        url.searchParams.set('company_id', String(params.companyId))
+        searchParams.set('company_id', String(params.companyId))
       }
 
-      const response = await fetch(url.toString(), {
+      const endpoint = `/api/v1/activity-logs/timeline?${searchParams.toString()}`
+      const response = await fetch(endpoint, {
         cache: 'no-store',
+        credentials: 'include',
         headers: getAuthHeaders(),
       })
 

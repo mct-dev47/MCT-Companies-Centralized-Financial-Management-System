@@ -303,7 +303,15 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
   return (
     <>
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
-        <DialogContent className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            if (document.activeElement && e.currentTarget.contains(document.activeElement)) {
+              e.preventDefault()
+              ;(document.activeElement as HTMLElement)?.blur()
+            }
+          }}
+          className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto"
+        >
           <DialogTitle className="sr-only">
             {user.fullName} Details
           </DialogTitle>
@@ -358,6 +366,8 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                 </div>
 
                 <input
+                  id="view-user-avatar"
+                  name="userAvatar"
                   type="file"
                   ref={fileInputRef}
                   onChange={handleImageFileChange}

@@ -343,6 +343,8 @@ export const ImageCropperModal: React.FC<ImageCropperModalProps> = ({
               <ZoomOut className="h-4 w-4" />
             </Button>
             <input
+              id="image-cropper-zoom"
+              name="zoom"
               type="range"
               min="0.5"
               max="3"

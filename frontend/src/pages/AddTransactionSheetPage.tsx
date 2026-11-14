@@ -15,6 +15,8 @@ import {
   MoreVertical,
   RotateCcw,
   Landmark,
+  Pencil,
+  FolderCog,
   X,
 } from 'lucide-react'
 import { receivablesStore, type CustomerType } from '@/services/receivablesStore'
@@ -59,7 +61,8 @@ import {
 } from '@/utils/particularsUtils'
 import { cn } from '@/lib/utils'
 import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
+import { categoryService, type CompanyCategory } from '@/services/categoryService'
 import {
   particularsService,
   type CompanyParticular,
@@ -998,6 +1001,11 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
               style={{ maxHeight: `${pos.maxHeight}px` }}
               className="overflow-y-auto"
             >
+              {filtered.length === 0 && !canSaveToList && (
+                <div className="px-3 py-3 text-xs text-muted-fg italic text-center">
+                  No categories configured. Type to add a new category.
+                </div>
+              )}
               {filtered.map((cat, idx) => {
                 const actualIndex = canSaveToList ? idx + 1 : idx
                 const isSelected =
@@ -1110,10 +1118,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }, [])
 
+  const targetCompany = React.useMemo(() => {
+    return isAuditor ? assignedCompany : selectedCompany
+  }, [isAuditor, assignedCompany, selectedCompany])
+
   // Day remarks (optional): asked for when the user clicks Save, one note per date in the sheet
   const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
     isSales ? 'sales' : 'expense',
-    [isAuditor ? assignedCompany : selectedCompany]
+    [targetCompany]
   )
   const [isDayRemarkOpen, setIsDayRemarkOpen] = React.useState(false)
   const [dayRemarkDates, setDayRemarkDates] = React.useState<string[]>([])
@@ -1138,7 +1150,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   React.useEffect(() => {
     let mounted = true
-    const targetComp = isAuditor ? assignedCompany : selectedCompany
+    const targetComp = targetCompany
     const cached = bankService.getCachedAccounts(targetComp)
     if (cached.length > 0) {
       setBankAccounts(cached)
@@ -1164,15 +1176,14 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     return () => {
       mounted = false
     }
-  }, [isAuditor, assignedCompany, selectedCompany])
+  }, [targetCompany])
 
   const availableBankAccounts = React.useMemo(() => {
-    const targetComp = isAuditor ? assignedCompany : selectedCompany
-    if (!targetComp || targetComp === 'All Companies') return bankAccounts
+    if (!targetCompany || targetCompany === 'All Companies') return bankAccounts
     const matching = bankAccounts.filter((a) =>
-      isAccountOwnedBy(a, targetComp)
+      isAccountOwnedBy(a, targetCompany)
     )
-    if (matching.length > 0) return matching
+    if (matching.length > 0) return preferSoleOwnedBanks(matching, targetCompany)
     const general = bankAccounts.filter(
       (a) =>
         !a.companyName ||
@@ -1180,9 +1191,17 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         a.companyName.toLowerCase().includes('unassigned')
     )
     return general
-  }, [bankAccounts, selectedCompany, isAuditor, assignedCompany])
+  }, [bankAccounts, targetCompany])
 
+  const prevTargetCompRef = React.useRef(targetCompany)
   React.useEffect(() => {
+    if (prevTargetCompRef.current !== targetCompany) {
+      prevTargetCompRef.current = targetCompany
+      if (availableBankAccounts.length > 0) {
+        setSelectedBankAccountId(availableBankAccounts[0].id)
+        return
+      }
+    }
     if (availableBankAccounts.length > 0) {
       const exists = availableBankAccounts.some(
         (a) => a.id === selectedBankAccountId
@@ -1193,7 +1212,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
     }
-  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks])
+  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks, targetCompany])
 
   // Company Particulars List (per company)
   const [savedParticulars, setSavedParticulars] = React.useState<
@@ -1333,62 +1352,145 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
-  // Categories list (initialized immediately with defaults, then merged with custom DB categories)
-  const [categories, setCategories] = React.useState<string[]>(() =>
-    isSales ? [...SALES_CATEGORY_LIST] : [...DEFAULT_EXPENSE_CATEGORIES]
-  )
+  // Categories list (isolated per company; 0 default for new companies)
+  const [companyCategories, setCompanyCategories] = React.useState<CompanyCategory[]>([])
+  const [categories, setCategories] = React.useState<string[]>([])
+  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+
+  // Manage categories dialog state
+  const [isManageCategoriesOpen, setIsManageCategoriesOpen] = React.useState(false)
+  const [newCategoryName, setNewCategoryName] = React.useState('')
+  const [editingCategoryId, setEditingCategoryId] = React.useState<number | null>(null)
+  const [editingCategoryName, setEditingCategoryName] = React.useState('')
+  const [categoryModalError, setCategoryModalError] = React.useState('')
+  const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+
+  const fetchCategories = React.useCallback(async () => {
+    if (!targetCompany || targetCompany === 'All Companies') {
+      setCompanyCategories([])
+      setCategories([])
+      return
+    }
+    setIsLoadingCategories(true)
+    try {
+      const cats = await categoryService.getCompanyCategories(
+        targetCompany,
+        isSales ? 'sales' : 'expense',
+        { forceRefresh: true }
+      )
+      setCompanyCategories(cats)
+      setCategories(cats.map((c) => c.name))
+    } catch (e) {
+      console.warn('Could not load company categories:', e)
+      setCompanyCategories([])
+      setCategories([])
+    } finally {
+      setIsLoadingCategories(false)
+    }
+  }, [targetCompany, isSales])
 
   React.useEffect(() => {
-    const baseCategories = isSales
-      ? [...SALES_CATEGORY_LIST]
-      : [...DEFAULT_EXPENSE_CATEGORIES]
-    setCategories(baseCategories)
-
-    let mounted = true
-    expenseService
-      .getCategories()
-      .then((cats) => {
-        if (!mounted) return
-        const fetchedNames = (cats || [])
-          .map((c) => c.name?.trim())
-          .filter(Boolean)
-          .filter((name) => !DEPRECATED_OLD_CATEGORIES.has(name.toLowerCase()))
-
-        const combined = Array.from(new Set([...baseCategories, ...fetchedNames]))
-        setCategories(combined)
-      })
-      .catch(() => {
-        // Keep base categories on fetch error
-      })
-    return () => {
-      mounted = false
-    }
-  }, [isSales])
+    fetchCategories()
+  }, [fetchCategories])
 
   const handleSaveCategory = async (name: string) => {
     const trimmed = name.trim()
-    if (!trimmed) return
+    if (!trimmed || !targetCompany) return
 
-    setCategories((prev) => {
-      if (prev.some((c) => c.toLowerCase() === trimmed.toLowerCase())) {
-        return prev
-      }
-      return [...prev, trimmed]
-    })
+    try {
+      const created = await categoryService.createCompanyCategory(
+        targetCompany,
+        isSales ? 'sales' : 'expense',
+        trimmed
+      )
+      setCompanyCategories((prev) => [...prev, created])
+      setCategories((prev) => (prev.includes(created.name) ? prev : [...prev, created.name]))
+    } catch (err: any) {
+      console.warn('Failed to save category:', err)
+      setCategories((prev) => (prev.includes(trimmed) ? prev : [...prev, trimmed]))
+    }
+  }
 
-    if (!isSales) {
-      try {
-        await expenseService.createCategory(trimmed)
-      } catch (err) {
-        console.warn('Failed to save category to backend:', err)
+  const handleUpdateCategory = async (catId: number) => {
+    const trimmed = editingCategoryName.trim()
+    if (!trimmed || !targetCompany) return
+    setIsSubmittingCategory(true)
+    setCategoryModalError('')
+    try {
+      const updatedCat = await categoryService.updateCompanyCategory(
+        catId,
+        trimmed,
+        targetCompany,
+        isSales ? 'sales' : 'expense'
+      )
+      const oldCat = companyCategories.find((c) => c.category_id === catId)
+      setCompanyCategories((prev) =>
+        prev.map((c) => (c.category_id === catId ? updatedCat : c))
+      )
+      setCategories((prev) =>
+        prev.map((name) => (name === oldCat?.name ? updatedCat.name : name))
+      )
+      if (oldCat) {
+        setRows((prev) =>
+          prev.map((r) =>
+            r.category === oldCat.name ? { ...r, category: updatedCat.name } : r
+          )
+        )
       }
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+    } catch (err: any) {
+      setCategoryModalError(err.message || 'Failed to update category.')
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleDeleteCategory = async (catId: number, catName: string) => {
+    if (!window.confirm(`Are you sure you want to delete category "${catName}"?`)) return
+    setIsSubmittingCategory(true)
+    setCategoryModalError('')
+    try {
+      await categoryService.deleteCompanyCategory(
+        catId,
+        targetCompany,
+        isSales ? 'sales' : 'expense'
+      )
+      setCompanyCategories((prev) => prev.filter((c) => c.category_id !== catId))
+      setCategories((prev) => prev.filter((c) => c !== catName))
+      setRows((prev) =>
+        prev.map((r) => (r.category === catName ? { ...r, category: '' } : r))
+      )
+    } catch (err: any) {
+      setCategoryModalError(err.message || 'Failed to delete category.')
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleCreateCategoryInModal = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed || !targetCompany) return
+    setIsSubmittingCategory(true)
+    setCategoryModalError('')
+    try {
+      const created = await categoryService.createCompanyCategory(
+        targetCompany,
+        isSales ? 'sales' : 'expense',
+        trimmed
+      )
+      setCompanyCategories((prev) => [...prev, created])
+      setCategories((prev) => (prev.includes(created.name) ? prev : [...prev, created.name]))
+      setNewCategoryName('')
+    } catch (err: any) {
+      setCategoryModalError(err.message || 'Failed to create category.')
+    } finally {
+      setIsSubmittingCategory(false)
     }
   }
 
   const todayIso = formatToYYYYMMDD(new Date())
-  const defaultCategory = isSales
-    ? SALES_CATEGORY_LIST[0]
-    : DEFAULT_EXPENSE_CATEGORIES[0]
+  const defaultCategory = categories[0] || ''
 
   const [rows, setRows] = React.useState<SpreadsheetRow[]>([
     {
@@ -1406,13 +1508,26 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     },
   ])
 
+  // If sales mode, ensure rows never use Petty Cash as payment method
+  React.useEffect(() => {
+    if (isSales) {
+      setRows((prev) =>
+        prev.map((r) =>
+          (r.paymentMethod || '').toLowerCase() === 'petty cash'
+            ? { ...r, paymentMethod: 'Cash' }
+            : r
+        )
+      )
+    }
+  }, [isSales])
+
   const paymentOptions = React.useMemo(() => {
     const base = isSales
       ? ['Cash', 'Cheque', 'GCash']
       : ['Cash', 'Cheque', 'GCash', 'Petty Cash']
     const customNames = companyCustomPaymentMethods
       .map((m) => m.name)
-      .filter((name) => !base.includes(name))
+      .filter((name) => !base.includes(name) && (!isSales || name.trim().toLowerCase() !== 'petty cash'))
     return [...base, ...customNames]
   }, [isSales, companyCustomPaymentMethods])
 
@@ -2443,7 +2558,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             amount: firstAmount,
             paymentMethod: first.paymentMethod,
             chequeNo: first.chequeNo.trim() || undefined,
-            category: first.category || SALES_CATEGORY_LIST[0],
+            category: first.category.trim(),
             status: first.status,
             depositStatus: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
             deposit_status: first.depositStatus || (first.status === 'Paid' ? 'Deposited' : 'Not Deposited'),
@@ -2586,7 +2701,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               chequeNo: row.chequeNo.trim() || undefined,
               status: row.status,
               items: extraItemized,
-              bankAccountId: effectiveBankId,
+              bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
             })
           }
@@ -2617,7 +2732,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               date: rowDate,
               particulars: formatted,
               amount: rowAmount,
-              category: row.category || SALES_CATEGORY_LIST[0],
+              category: row.category.trim(),
               paymentMethod: row.paymentMethod,
               chequeNo: row.chequeNo.trim() || undefined,
               status: row.status,
@@ -2672,12 +2787,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               date: rowDate,
               particulars: formatted,
               amount: rowAmount,
-              category: row.category || 'Rendered Fee',
+              category: row.category.trim(),
               paymentMethod: row.paymentMethod,
               chequeNo: row.chequeNo.trim() || undefined,
               status: row.status,
               items: itemized,
-              bankAccountId: effectiveBankId,
+              bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
             })
           }
@@ -3156,6 +3271,26 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     type="button"
                     variant="outline"
                     size="sm"
+                    onClick={() => {
+                      setIsManageCategoriesOpen(true)
+                      setCategoryModalError('')
+                      setNewCategoryName('')
+                      setEditingCategoryId(null)
+                    }}
+                    className="h-8 px-3 rounded-xl border-slate-200 text-xs font-semibold text-slate-700 hover:text-focus cursor-pointer flex items-center gap-1.5"
+                  >
+                    <FolderCog className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Manage Categories</span>
+                    {companyCategories.length > 0 && (
+                      <span className="ml-0.5 px-1.5 py-0.2 bg-slate-200/80 text-slate-700 rounded-full text-[10px] font-bold">
+                        {companyCategories.length}
+                      </span>
+                    )}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => setIsResetConfirmOpen(true)}
                     className="h-8 px-3 rounded-xl border-slate-200 text-xs font-semibold text-muted-fg hover:text-focus cursor-pointer"
                   >
@@ -3200,6 +3335,33 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   Paste from Excel / Sheets supported
                 </span>
               </div>
+
+              {/* Empty categories guidance banner */}
+              {!isLoadingCategories && companyCategories.length === 0 && (
+                <div className="mt-2 p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      No {isSales ? 'sales' : 'expense'} categories configured for <strong>{targetCompany}</strong>.
+                      Type a category in the table or click &ldquo;Add Category&rdquo;.
+                    </span>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setIsManageCategoriesOpen(true)
+                      setCategoryModalError('')
+                      setNewCategoryName('')
+                      setEditingCategoryId(null)
+                    }}
+                    className="h-7 px-2.5 rounded-lg border-amber-300 bg-white text-amber-900 text-xs font-semibold hover:bg-amber-100/50 cursor-pointer shrink-0"
+                  >
+                    + Add Category
+                  </Button>
+                </div>
+              )}
             </div>
 
             {/* Row validation error alert banner */}
@@ -3283,7 +3445,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                       PARTICULARS <span className="text-red-700">*</span>
                     </TableHead>
                     <TableHead title="CATEGORY" className={SALES_TH}>
-                      CATEGORY
+                      <div className="flex items-center justify-between">
+                        <span>CATEGORY</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsManageCategoriesOpen(true)
+                            setCategoryModalError('')
+                            setNewCategoryName('')
+                            setEditingCategoryId(null)
+                          }}
+                          className="text-[10px] lowercase font-normal text-muted-fg hover:text-focus transition-colors cursor-pointer"
+                        >
+                          (manage)
+                        </button>
+                      </div>
                     </TableHead>
                     <TableHead title="PAYMENT" className={SALES_TH}>
                       PAYMENT
@@ -4162,6 +4338,154 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               Save {transactionType} {validRowsCount > 1 ? 'Records' : 'Record'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Company Categories Dialog */}
+      <Dialog open={isManageCategoriesOpen} onOpenChange={setIsManageCategoriesOpen}>
+        <DialogContent className="sm:max-w-[480px] w-full rounded-[24px] p-6 bg-white border border-stroke/30 shadow-2xl">
+          <DialogHeader className="text-left pb-3 border-b border-stroke/20">
+            <DialogTitle className="text-lg font-bold text-focus">
+              Manage {isSales ? 'Sales' : 'Expense'} Categories
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-fg">
+              Categories configured for <span className="font-semibold text-primary">{targetCompany}</span>. Changes apply only to this company.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            {categoryModalError && (
+              <div className="p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 font-medium">
+                {categoryModalError}
+              </div>
+            )}
+
+            {/* Add Category Form */}
+            <div className="p-3 rounded-xl border border-primary/20 bg-primary/5 space-y-2">
+              <label className="text-xs font-bold text-focus block">
+                Add New {isSales ? 'Sales' : 'Expense'} Category
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder={isSales ? 'e.g. Food Sales, Catering...' : 'e.g. Office Supplies, Maintenance...'}
+                  value={newCategoryName}
+                  onChange={(e) => {
+                    setNewCategoryName(e.target.value)
+                    if (categoryModalError) setCategoryModalError('')
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleCreateCategoryInModal()
+                    }
+                  }}
+                  className="h-9 px-3 rounded-lg text-xs bg-white border border-stroke/50 flex-1 focus:outline-none focus:ring-1 focus:ring-focus"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isSubmittingCategory || !newCategoryName.trim()}
+                  onClick={handleCreateCategoryInModal}
+                  className="h-9 px-3.5 rounded-lg text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                >
+                  {isSubmittingCategory ? 'Saving...' : 'Add'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Existing Categories List */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-focus block">
+                Configured Categories ({companyCategories.length})
+              </label>
+              {companyCategories.length === 0 ? (
+                <div className="p-4 rounded-xl border border-dashed border-slate-200 text-center text-xs text-muted-fg">
+                  No categories configured for {targetCompany} yet.
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                  {companyCategories.map((cat) => (
+                    <div
+                      key={cat.category_id}
+                      className="flex items-center justify-between gap-2 p-2 rounded-xl bg-slate-50 border border-stroke/30 text-xs"
+                    >
+                      {editingCategoryId === cat.category_id ? (
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <input
+                            type="text"
+                            value={editingCategoryName}
+                            onChange={(e) => setEditingCategoryName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                handleUpdateCategory(cat.category_id)
+                              }
+                            }}
+                            className="h-7 px-2 text-xs flex-1 bg-white border border-stroke/50 rounded-md focus:outline-none focus:ring-1 focus:ring-focus"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={isSubmittingCategory || !editingCategoryName.trim()}
+                            onClick={() => handleUpdateCategory(cat.category_id)}
+                            className="h-7 px-2 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setEditingCategoryId(null)}
+                            className="h-7 px-2 text-[11px] cursor-pointer"
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="font-medium text-focus truncate">{cat.name}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCategoryId(cat.category_id)
+                                setEditingCategoryName(cat.name)
+                              }}
+                              className="p-1 text-slate-400 hover:text-focus transition-colors cursor-pointer"
+                              title="Edit category"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCategory(cat.category_id, cat.name)}
+                              className="p-1 text-red-400 hover:text-red-600 transition-colors cursor-pointer"
+                              title="Delete category"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-stroke/15">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsManageCategoriesOpen(false)}
+                className="h-9 px-4 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 

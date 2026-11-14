@@ -5,10 +5,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import AdminUser, CurrentUser, AuthenticatedUser, get_current_user, require_reauthentication
+from app.core.dependencies import (
+    AdminUser,
+    AuthenticatedUser,
+    CurrentUser,
+    check_company_access,
+    get_current_user,
+)
 from app.db.session import get_db
 from app.models.company import Company
 from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLookupOut, CompanyOut, CompanyUpdate
+from app.schemas.notification import CompanyNotificationSettingsOut, CompanyNotificationSettingsUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
 
@@ -328,7 +335,6 @@ def delete_company(
     company_id: int,
     request: Request,
     admin: AdminUser,
-    _reauth: AuthenticatedUser = Depends(require_reauthentication),
     db: Session = Depends(get_db),
 ):
     try:
@@ -348,3 +354,66 @@ def delete_company(
         ip_address=request.client.host if request.client else "unknown",
         extra={"deleted_company_id": company_id},
     )
+
+
+@router.get(
+    "/{company_id}/notification-settings",
+    response_model=CompanyNotificationSettingsOut,
+    summary="Get company notification alert settings",
+)
+def get_company_notification_settings(
+    company_id: int,
+    current_user: CurrentUser,
+    db: Session = Depends(get_db),
+):
+    check_company_access(current_user, company_id)
+    try:
+        result = CompanyService(db).get_notification_settings(company_id)
+    except CompanyServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(error),
+        ) from error
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    return result
+
+
+@router.put(
+    "/{company_id}/notification-settings",
+    response_model=CompanyNotificationSettingsOut,
+    summary="Update company notification alert settings (Admin only)",
+)
+def update_company_notification_settings(
+    company_id: int,
+    settings_in: CompanyNotificationSettingsUpdate,
+    request: Request,
+    admin: AdminUser,
+    db: Session = Depends(get_db),
+):
+    try:
+        result = CompanyService(db).update_notification_settings(company_id, settings_in)
+    except CompanyServiceError as error:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(error),
+        ) from error
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+
+    log_company_management(
+        db,
+        AuditAction.COMPANY_UPDATED,
+        user_id=admin.get("user_id"),
+        company_id=company_id,
+        ip_address=request.client.host if request.client else "unknown",
+        extra={
+            "action": "update_notification_settings",
+            "transaction_alerts": result.transaction_alerts,
+            "loan_reminders": result.loan_reminders,
+            "daily_summary": result.daily_summary,
+            "audit_alerts": result.audit_alerts,
+        },
+    )
+    return result
+

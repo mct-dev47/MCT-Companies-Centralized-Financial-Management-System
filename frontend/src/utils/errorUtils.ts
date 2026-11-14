@@ -227,6 +227,8 @@ export function formatUserFriendlyErrorMessage(
       lower.includes('suspended') ||
       lower.includes('invitation is pending') ||
       lower.includes('password setup') ||
+      lower.includes('reauth') ||
+      lower.includes('reauthentication') ||
       lower.includes('administrator accounts manage system configuration') ||
       lower.includes('owner accounts') ||
       lower.includes('auditor accounts') ||

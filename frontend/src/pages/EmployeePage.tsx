@@ -263,6 +263,11 @@ export const EmployeePage: React.FC = () => {
                   <img
                     src={comp.logoUrl || logo2Url}
                     alt={comp.name}
+                    onError={(e) => {
+                      const target = e.currentTarget
+                      target.onerror = null
+                      target.src = logo2Url
+                    }}
                     className="h-9 w-9 sm:h-12 sm:w-12 object-contain"
                   />
                 </div>

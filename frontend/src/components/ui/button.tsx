@@ -21,7 +21,8 @@ const buttonVariants = cva(
         primary:
           'bg-primary text-white hover:bg-primary-hover active:bg-primary-active shadow-xs disabled:bg-primary/70',
         destructive:
-          'bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 shadow-xs focus-visible:ring-rose-500/40',
+        destructive:
+          'bg-primary text-white hover:bg-primary-hover active:bg-primary-active shadow-xs focus-visible:ring-primary/40',
         outline:
           'border border-stroke/40 bg-white text-focus hover:bg-surface shadow-2xs',
         secondary:

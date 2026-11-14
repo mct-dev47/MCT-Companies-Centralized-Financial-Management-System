@@ -25,7 +25,12 @@ import {
   ImageCropperModal,
 } from '@/components/common'
 import { useSession } from '@/hooks/useSession'
-import { employeeService, type Company } from '@/services/employeeService'
+import {
+  employeeService,
+  type Company,
+  type CompanyNotificationSettings,
+} from '@/services/employeeService'
+import { notifyNotificationsUpdated } from '@/services/notificationService'
 import {
   notifyError,
   notifySuccess,
@@ -33,11 +38,16 @@ import {
 } from '@/utils/errorUtils'
 import logo2Url from '@/assets/LOGO2.png'
 
-interface NotificationSettings {
-  transactionAlerts: boolean
-  loanReminders: boolean
-  dailySummary: boolean
-  auditAlerts: boolean
+type NotificationSettings = Pick<
+  CompanyNotificationSettings,
+  'transactionAlerts' | 'loanReminders' | 'dailySummary' | 'auditAlerts'
+>
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  transactionAlerts: true,
+  loanReminders: true,
+  dailySummary: false,
+  auditAlerts: true,
 }
 
 export const SettingsPage: React.FC = () => {
@@ -67,23 +77,48 @@ export const SettingsPage: React.FC = () => {
 
   // Toggle Switches: Notifications
   const [notificationSettings, setNotificationSettings] =
-    React.useState<NotificationSettings>({
-      transactionAlerts: true,
-      loanReminders: true,
-      dailySummary: false,
-      auditAlerts: true,
-    })
+    React.useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS)
+  const [savedNotificationSettings, setSavedNotificationSettings] =
+    React.useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS)
+
+  // Load notification settings for target company ID
+  const loadNotificationSettingsForCompany = React.useCallback(
+    async (companyId: string) => {
+      if (!companyId) return
+      try {
+        const loaded = await employeeService.getCompanyNotificationSettings(companyId)
+        const normalized: NotificationSettings = {
+          transactionAlerts: loaded.transactionAlerts,
+          loanReminders: loaded.loanReminders,
+          dailySummary: loaded.dailySummary,
+          auditAlerts: loaded.auditAlerts,
+        }
+        setNotificationSettings(normalized)
+        setSavedNotificationSettings(normalized)
+      } catch {
+        setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS)
+        setSavedNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS)
+      }
+    },
+    []
+  )
 
   // Populate state with target company
-  const populateCompanyData = (target: Company) => {
-    setSelectedCompanyId(target.id)
-    setCompanyName(target.name)
-    setContactPerson(target.contactPerson || '')
-    setTelephoneNumber(target.telephoneNumber || target.contactNumber || '')
-    setEmail(target.email || '')
-    setAddress(target.address)
-    setLogoUrl(target.logoUrl || logo2Url)
-  }
+  const populateCompanyData = React.useCallback(
+    (target: Company, fetchSettings = true) => {
+      setSelectedCompanyId(target.id)
+      setCompanyName(target.name)
+      setContactPerson(target.contactPerson || '')
+      setTelephoneNumber(target.telephoneNumber || target.contactNumber || '')
+      setEmail(target.email || '')
+      setAddress(target.address)
+      setLogoUrl(target.logoUrl || logo2Url)
+      if (fetchSettings) {
+        void loadNotificationSettingsForCompany(target.id)
+      }
+    },
+    [loadNotificationSettingsForCompany]
+  )
 
   // Load companies from employeeService
   const loadCompanies = React.useCallback(async () => {
@@ -103,12 +138,12 @@ export const SettingsPage: React.FC = () => {
       }
 
       if (target) {
-        populateCompanyData(target)
+        populateCompanyData(target, true)
       }
     } finally {
       setLoading(false)
     }
-  }, [isAuditor, assignedCompany])
+  }, [isAuditor, assignedCompany, populateCompanyData])
 
   React.useEffect(() => {
     void loadCompanies()
@@ -181,43 +216,78 @@ export const SettingsPage: React.FC = () => {
 
     try {
       setSaving(true)
-      const updated = await employeeService.updateCompany(selectedCompanyId, {
-        name: companyName,
-        contactPerson,
-        telephoneNumber,
-        contactNumber: telephoneNumber,
-        email,
-        address,
-        logoUrl: logoFile ? undefined : logoUrl,
-        logoFile: logoFile || undefined,
-      })
+      const results = await Promise.allSettled([
+        employeeService.updateCompany(selectedCompanyId, {
+          name: companyName,
+          contactPerson,
+          telephoneNumber,
+          contactNumber: telephoneNumber,
+          email,
+          address,
+          logoUrl: logoFile ? undefined : logoUrl,
+          logoFile: logoFile || undefined,
+        }),
+        employeeService.updateCompanyNotificationSettings(
+          selectedCompanyId,
+          notificationSettings
+        ),
+      ])
 
-      setLogoFile(null)
-      const finalAvatar = updated.logoUrl || logoUrl
-      if (updated.logoUrl) {
-        setLogoUrl(updated.logoUrl)
+      const [companyResult, notifResult] = results
+      let hasError = false
+
+      if (notifResult.status === 'fulfilled') {
+        const updatedSettings = notifResult.value
+        const persistedNotifs: NotificationSettings = {
+          transactionAlerts: updatedSettings.transactionAlerts,
+          loanReminders: updatedSettings.loanReminders,
+          dailySummary: updatedSettings.dailySummary,
+          auditAlerts: updatedSettings.auditAlerts,
+        }
+        setNotificationSettings(persistedNotifs)
+        setSavedNotificationSettings(persistedNotifs)
+        notifyNotificationsUpdated()
+      } else {
+        hasError = true
+        notifyError(notifResult.reason, 'Failed to update notification settings.')
       }
-      updateUser({ avatarUrl: finalAvatar })
 
-      setCompanies((prev) =>
-        prev.map((c) =>
-          c.id === selectedCompanyId
-            ? {
-                ...c,
-                name: updated.name || companyName,
-                contactPerson,
-                telephoneNumber,
-                email,
-                address,
-                logoUrl: updated.logoUrl || logoUrl,
-              }
-            : c
+      if (companyResult.status === 'fulfilled') {
+        const updated = companyResult.value
+        setLogoFile(null)
+        const finalAvatar = updated.logoUrl || logoUrl
+        if (updated.logoUrl) {
+          setLogoUrl(updated.logoUrl)
+        }
+        updateUser({ avatarUrl: finalAvatar })
+
+        setCompanies((prev) =>
+          prev.map((c) =>
+            c.id === selectedCompanyId
+              ? {
+                  ...c,
+                  name: updated.name || companyName,
+                  contactPerson,
+                  telephoneNumber,
+                  email,
+                  address,
+                  logoUrl: updated.logoUrl || logoUrl,
+                }
+              : c
+          )
         )
-      )
+      } else {
+        hasError = true
+        notifyError(companyResult.reason, 'Failed to update company profile.')
+      }
 
-      const msg = 'Company profile and settings have been saved successfully.'
-      setSuccessBanner(msg)
-      notifySuccess(msg)
+      if (!hasError) {
+        const msg = 'Company profile and settings have been saved successfully.'
+        setSuccessBanner(msg)
+        notifySuccess(msg)
+      } else if (companyResult.status === 'fulfilled' || notifResult.status === 'fulfilled') {
+        setSuccessBanner('Some settings saved, but other changes encountered errors.')
+      }
     } catch (err) {
       notifyError(err, 'Failed to save settings. Please try again.')
     } finally {
@@ -229,8 +299,9 @@ export const SettingsPage: React.FC = () => {
   const handleDiscardChanges = () => {
     const original = companies.find((c) => c.id === selectedCompanyId)
     if (original) {
-      populateCompanyData(original)
+      populateCompanyData(original, false)
     }
+    setNotificationSettings(savedNotificationSettings)
   }
 
   const selectedCompany = companies.find((c) => c.id === selectedCompanyId)
@@ -267,6 +338,7 @@ export const SettingsPage: React.FC = () => {
           {!isAuditor && companies.length > 0 && (
             <DropdownFilter
               value={selectedCompanyId}
+              defaultValue=""
               placeholder="Select Company"
               menuTitle="Configuring Company"
               icon={Building2}
@@ -363,6 +435,8 @@ export const SettingsPage: React.FC = () => {
                       <span className="text-[10px] font-semibold">Change</span>
                     </button>
                     <input
+                      id="settings-company-logo"
+                      name="companyLogo"
                       ref={fileInputRef}
                       type="file"
                       accept="image/png, image/jpeg, image/webp"

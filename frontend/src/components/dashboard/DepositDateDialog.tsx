@@ -97,8 +97,10 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
 
         <div className="space-y-4 pt-4">
           <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-focus block">Bank account</Label>
+            <Label htmlFor="deposit-bank-select" className="text-xs font-semibold text-focus block">Bank account</Label>
             <Dropdown
+              id="deposit-bank-select"
+              name="bankAccount"
               value={bankId}
               onChange={(val) => setBankId(String(val))}
               placeholder={companyAccounts.length === 0 ? 'No bank account for this company' : 'Default account'}
@@ -111,10 +113,12 @@ export const DepositDateDialog: React.FC<DepositDateDialogProps> = ({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs font-semibold text-focus block">
+            <Label htmlFor="deposit-date-input" className="text-xs font-semibold text-focus block">
               Deposit date <span className="text-rose-600">*</span>
             </Label>
             <input
+              id="deposit-date-input"
+              name="depositDate"
               type="date"
               value={depositDate}
               min={saleDay || undefined}

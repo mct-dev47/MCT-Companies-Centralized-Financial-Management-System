@@ -89,8 +89,8 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   const getIcon = () => {
     if (isDestructive) {
       return (
-        <div className="h-12 w-12 rounded-[10px] bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shadow-xs">
-          <Trash2 className="h-6 w-6 text-rose-600" aria-hidden="true" />
+        <div className="h-12 w-12 rounded-[10px] bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-xs">
+          <Trash2 className="h-6 w-6 text-primary" aria-hidden="true" />
         </div>
       )
     }

@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
 import {
   Dialog,
   DialogContent,
@@ -16,8 +15,10 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   PlusCircle,
-  ChevronDown,
-  Check,
+  Plus,
+  Trash2,
+  Pencil,
+  RotateCw,
   AlertCircle,
 } from 'lucide-react'
 import {
@@ -29,8 +30,9 @@ import {
   particularsService,
   type CompanyParticular,
 } from '@/services/particularsService'
-import { expenseService } from '@/services/expenseService'
+import { categoryService, type CompanyCategory } from '@/services/categoryService'
 import { bankService } from '@/services/bankService'
+import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import { receivablesStore, type PaymentOption, type CustomerType } from '@/services/receivablesStore'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -56,8 +58,6 @@ const PAYMENT_METHOD_OPTIONS = [
   'In-house',
 ]
 
-const DEFAULT_SALES_CATEGORIES = SALES_CATEGORY_LIST
-
 export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   open,
   onOpenChange,
@@ -76,11 +76,20 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
   const [dayRemarkTouched, setDayRemarkTouched] = React.useState(false)
   const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks('sales', [assignedCompany])
   const [paymentMethod, setPaymentMethod] = React.useState('Cash')
-  const [category, setCategory] = React.useState(DEFAULT_SALES_CATEGORIES[0])
-  const [categoryOptions, setCategoryOptions] = React.useState<string[]>(DEFAULT_SALES_CATEGORIES)
-  const [isCategoryOpen, setIsCategoryOpen] = React.useState(false)
-  const [isCategoryTyping, setIsCategoryTyping] = React.useState(false)
-  const categoryContainerRef = React.useRef<HTMLDivElement>(null)
+  const [bankAccountId, setBankAccountId] = React.useState('')
+
+  // Company Category states (ReimbursementModal pattern)
+  const [category, setCategory] = React.useState('')
+  const [companyCategories, setCompanyCategories] = React.useState<CompanyCategory[]>([])
+  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+  const [isAddingCategory, setIsAddingCategory] = React.useState(false)
+  const [isCategoryManaging, setIsCategoryManaging] = React.useState(false)
+  const [newCategoryName, setNewCategoryName] = React.useState('')
+  const [editingCategoryId, setEditingCategoryId] = React.useState<number | null>(null)
+  const [editingCategoryName, setEditingCategoryName] = React.useState('')
+  const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+  const [categoryError, setCategoryError] = React.useState('')
+
   // Food Utang / Payment Option states
   const [paymentOption, setPaymentOption] = React.useState<PaymentOption>('Paid in full')
   const [customerType, setCustomerType] = React.useState<CustomerType>('External')
@@ -100,24 +109,99 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     amountPaid?: string
   }>({})
 
-  // Load categories from database
+  // Load company-specific categories from database
   React.useEffect(() => {
     let mounted = true
-    expenseService.getCategories().then((cats) => {
-      if (mounted && cats && cats.length > 0) {
-        const names = Array.from(
-          new Set([
-            ...DEFAULT_SALES_CATEGORIES,
-            ...cats.map((c) => c.name?.trim()).filter(Boolean),
-          ])
-        )
-        setCategoryOptions(names)
-      }
-    }).catch(() => {})
+    if (open && assignedCompany) {
+      setIsLoadingCategories(true)
+      categoryService
+        .getCompanyCategories(assignedCompany, 'sales', { forceRefresh: true })
+        .then((cats) => {
+          if (mounted) {
+            setCompanyCategories(cats)
+            if (cats.length > 0) {
+              setCategory((prev) => {
+                if (prev && cats.some((c) => c.name.toLowerCase() === prev.toLowerCase())) {
+                  return prev
+                }
+                return cats[0].name
+              })
+            } else {
+              setCategory('')
+            }
+          }
+        })
+        .catch(() => {
+          if (mounted) setCompanyCategories([])
+        })
+        .finally(() => {
+          if (mounted) setIsLoadingCategories(false)
+        })
+    } else {
+      setCompanyCategories([])
+      setCategory('')
+    }
     return () => {
       mounted = false
     }
-  }, [open])
+  }, [open, assignedCompany])
+
+  const handleCreateCategory = async () => {
+    const trimmed = newCategoryName.trim()
+    if (!trimmed) {
+      setCategoryError('Category name cannot be empty.')
+      return
+    }
+    setIsSubmittingCategory(true)
+    setCategoryError('')
+    try {
+      const created = await categoryService.createCompanyCategory(assignedCompany, 'sales', trimmed)
+      const updated = [...companyCategories, created]
+      setCompanyCategories(updated)
+      setCategory(created.name)
+      setNewCategoryName('')
+      setIsAddingCategory(false)
+      if (fieldErrors.category) {
+        setFieldErrors((prev) => ({ ...prev, category: undefined }))
+      }
+    } catch (err: any) {
+      setCategoryError(err.message || 'Failed to create category.')
+    } finally {
+      setIsSubmittingCategory(false)
+    }
+  }
+
+  const handleUpdateCategory = async (catId: number) => {
+    const trimmed = editingCategoryName.trim()
+    if (!trimmed) return
+    try {
+      const updatedCat = await categoryService.updateCompanyCategory(catId, trimmed, assignedCompany, 'sales')
+      setCompanyCategories((prev) =>
+        prev.map((c) => (c.category_id === catId ? updatedCat : c))
+      )
+      if (category.toLowerCase() === companyCategories.find((c) => c.category_id === catId)?.name.toLowerCase()) {
+        setCategory(updatedCat.name)
+      }
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+    } catch (err: any) {
+      alert(err.message || 'Failed to update category.')
+    }
+  }
+
+  const handleDeleteCategory = async (catId: number, catName: string) => {
+    if (!window.confirm(`Are you sure you want to delete category "${catName}"?`)) return
+    try {
+      await categoryService.deleteCompanyCategory(catId, assignedCompany, 'sales')
+      const updated = companyCategories.filter((c) => c.category_id !== catId)
+      setCompanyCategories(updated)
+      if (category.toLowerCase() === catName.toLowerCase()) {
+        setCategory(updated.length > 0 ? updated[0].name : '')
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete category.')
+    }
+  }
 
   // Load previous particulars for suggestions/autocomplete
   React.useEffect(() => {
@@ -157,28 +241,6 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     }
   }, [open, assignedCompany])
 
-  // Dynamic filter for category suggestions (show full list until user types)
-  const filteredCategoryOptions = React.useMemo(() => {
-    if (!isCategoryTyping) return categoryOptions
-    const q = category.trim().toLowerCase()
-    if (!q) return categoryOptions
-    return categoryOptions.filter((opt) => opt.toLowerCase().includes(q))
-  }, [category, categoryOptions, isCategoryTyping])
-
-  // Close category dropdown on click outside
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        categoryContainerRef.current &&
-        !categoryContainerRef.current.contains(e.target as Node)
-      ) {
-        setIsCategoryOpen(false)
-        setIsCategoryTyping(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   // Reset form when modal opens
   React.useEffect(() => {
@@ -190,9 +252,13 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       setDayRemark('')
       setDayRemarkTouched(false)
       setPaymentMethod('Cash')
-      setCategory(DEFAULT_SALES_CATEGORIES[0])
-      setIsCategoryOpen(false)
-      setIsCategoryTyping(false)
+      setBankAccountId('')
+      setIsAddingCategory(false)
+      setIsCategoryManaging(false)
+      setNewCategoryName('')
+      setEditingCategoryId(null)
+      setEditingCategoryName('')
+      setCategoryError('')
       setPaymentOption('Paid in full')
       setCustomerType('External')
       setCustomerName('')
@@ -253,6 +319,10 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       errors.amount = 'Amount must be at least 1.00 (cannot be 0 or less than 1).'
     }
 
+    if (!category.trim() || companyCategories.length === 0) {
+      errors.category = 'Please add and select a category for this company.'
+    }
+
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors)
       setError('Please fill in all required fields.')
@@ -269,11 +339,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
     setError('')
     try {
       const parsedAmount = parseFloat(amount.replace(/,/g, ''))
-      const catTrimmed = category.trim() || DEFAULT_SALES_CATEGORIES[0]
-      if (catTrimmed && !categoryOptions.includes(catTrimmed)) {
-        expenseService.createCategory(catTrimmed).catch((e) => console.warn('Could not persist category:', e))
-      }
-
+      const catTrimmed = category.trim()
       const effectiveStatus = paymentOption === 'Paid in full' ? 'Paid' : paymentOption === 'Partial' ? 'Pending' : 'Unpaid'
 
       const payload: NewSalesInput = {
@@ -284,6 +350,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
         category: catTrimmed,
         paymentMethod: paymentMethod,
         company: assignedCompany,
+        bankAccountId: bankAccountId || undefined,
         status: effectiveStatus as any,
         depositStatus: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
         deposit_status: effectiveStatus === 'Paid' && (paymentMethod === 'Cash' || paymentMethod !== 'GCash') ? 'Deposited' : 'Not Deposited',
@@ -644,114 +711,208 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
               )}
             </div>
 
-            {/* 6. Category (Searchable / Configurable) */}
-            <div className="space-y-1.5" ref={categoryContainerRef}>
-              <Label className="text-xs font-semibold text-focus block">
-                Category <span className="text-red-500">*</span>
-              </Label>
-              <div className="relative">
-                <Input
-                  type="text"
+            {/* 6. Deposit Bank */}
+            <CompanyBankSelect
+              company={assignedCompany}
+              value={bankAccountId}
+              onChange={setBankAccountId}
+              label="Deposit Bank"
+              required
+              onAccountsLoaded={(accounts) => {
+                if (accounts.length > 0 && !bankAccountId) {
+                  setBankAccountId(String(accounts[0].id))
+                }
+              }}
+            />
+
+            {/* 7. Category (Configurable per company - ReimbursementModal pattern) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold text-focus">
+                  Category <span className="text-red-500">*</span>
+                </Label>
+                <div className="flex items-center gap-2">
+                  {companyCategories.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCategoryManaging((prev) => !prev)
+                        setIsAddingCategory(false)
+                      }}
+                      className="text-[11px] font-semibold text-muted-fg hover:text-focus transition-colors cursor-pointer"
+                    >
+                      {isCategoryManaging ? 'Done' : 'Manage'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingCategory((prev) => !prev)
+                      setIsCategoryManaging(false)
+                      setCategoryError('')
+                      setNewCategoryName('')
+                    }}
+                    className="text-[11px] font-bold text-primary hover:underline flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{isAddingCategory ? 'Cancel' : 'Add Category'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Inline Add Category Input */}
+              {isAddingCategory && (
+                <div className="p-2.5 rounded-xl border border-primary/30 bg-primary/5 space-y-2 animate-in fade-in-50 duration-150">
+                  <div className="text-[11px] font-bold text-focus">
+                    New Category for <span className="text-primary">{assignedCompany}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="text"
+                      placeholder="e.g. Food Sales, Catering..."
+                      value={newCategoryName}
+                      onChange={(e) => {
+                        setNewCategoryName(e.target.value)
+                        if (categoryError) setCategoryError('')
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          handleCreateCategory()
+                        }
+                      }}
+                      className="h-8 rounded-lg text-xs bg-white border-stroke/50 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={isSubmittingCategory || !newCategoryName.trim()}
+                      onClick={handleCreateCategory}
+                      className="h-8 px-3 rounded-lg text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                    >
+                      {isSubmittingCategory ? 'Saving...' : 'Save'}
+                    </Button>
+                  </div>
+                  {categoryError && (
+                    <p className="text-[11px] text-red-600 font-medium">{categoryError}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Manage / Delete / Edit Existing Categories List */}
+              {isCategoryManaging && companyCategories.length > 0 && (
+                <div className="p-2 rounded-xl border border-stroke/40 bg-slate-50 space-y-1.5 max-h-48 overflow-y-auto">
+                  <div className="text-[11px] font-semibold text-muted-fg px-1 pb-1 border-b border-stroke/20">
+                    Manage {assignedCompany} Categories
+                  </div>
+                  {companyCategories.map((cat) => (
+                    <div
+                      key={cat.category_id}
+                      className="flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs bg-white border border-stroke/20 gap-2"
+                    >
+                      {editingCategoryId === cat.category_id ? (
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <Input
+                            type="text"
+                            value={editingCategoryName}
+                            onChange={(e) => setEditingCategoryName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                handleUpdateCategory(cat.category_id)
+                              }
+                            }}
+                            className="h-7 text-xs flex-1 bg-white"
+                            autoFocus
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 px-2 text-[10px] bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
+                            onClick={() => handleUpdateCategory(cat.category_id)}
+                          >
+                            Save
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-[10px] cursor-pointer"
+                            onClick={() => setEditingCategoryId(null)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="font-medium text-focus truncate flex-1">{cat.name}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingCategoryId(cat.category_id)
+                                setEditingCategoryName(cat.name)
+                              }}
+                              className="p-1 text-slate-400 hover:text-focus rounded cursor-pointer transition-colors"
+                              title={`Edit ${cat.name}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCategory(cat.category_id, cat.name)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded cursor-pointer transition-colors"
+                              title={`Delete ${cat.name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Category Dropdown or Empty Warning */}
+              {isLoadingCategories ? (
+                <div className="h-10 px-3 rounded-xl border border-stroke/40 bg-slate-50 flex items-center text-xs text-muted-fg">
+                  <RotateCw className="w-3.5 h-3.5 animate-spin mr-2" />
+                  <span>Loading categories for {assignedCompany}…</span>
+                </div>
+              ) : companyCategories.length === 0 ? (
+                <div className="p-3 rounded-xl border border-amber-300 bg-amber-50/70 text-amber-900 space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold">
+                    <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Please add categories</span>
+                  </div>
+                  <p className="text-[11px] text-amber-800">
+                    No sales categories configured for {assignedCompany}. Click "Add Category" above to create one.
+                  </p>
+                </div>
+              ) : (
+                <select
                   value={category}
                   onChange={(e) => {
                     setCategory(e.target.value)
-                    setIsCategoryTyping(true)
-                    setIsCategoryOpen(true)
                     if (fieldErrors.category) {
                       setFieldErrors((prev) => ({ ...prev, category: undefined }))
                     }
                   }}
-                  onFocus={(e) => {
-                    setIsCategoryTyping(false)
-                    setIsCategoryOpen(true)
-                    e.currentTarget.select()
-                  }}
-                  onClick={() => {
-                    if (!isCategoryOpen) {
-                      setIsCategoryTyping(false)
-                      setIsCategoryOpen(true)
-                    }
-                  }}
-                  placeholder="Select or type category…"
                   className={cn(
-                    'h-10 rounded-xl border-stroke/50 text-xs pr-8 font-medium bg-white',
-                    fieldErrors.category && 'border-red-500 focus-visible:ring-red-200'
+                    'w-full h-10 px-3 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs focus-visible:ring-1 focus-visible:ring-focus outline-none cursor-pointer',
+                    fieldErrors.category ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
                   )}
-                />
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setIsCategoryTyping(false)
-                    setIsCategoryOpen((prev) => !prev)
-                  }}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5 rounded cursor-pointer transition-colors"
-                  aria-label="Toggle category list"
                 >
-                  <ChevronDown className={cn('w-4 h-4 transition-transform duration-200', isCategoryOpen && 'rotate-180')} />
-                </button>
+                  <option value="" disabled>Select a category…</option>
+                  {companyCategories.map((cat) => (
+                    <option key={cat.category_id} value={cat.name}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              )}
 
-                {/* Suggestions dropdown with dynamic matching or custom input indication */}
-                {isCategoryOpen && (
-                  <div
-                    onMouseDown={(e) => e.preventDefault()}
-                    className="absolute left-0 right-0 bottom-full mb-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-100"
-                  >
-                    <div className="px-2 py-1 text-[10px] font-bold text-muted-fg uppercase tracking-wider flex items-center justify-between">
-                      <span>Specific Categories</span>
-                      {isCategoryTyping && category.trim() && (
-                        <span className="text-[10px] text-slate-400 font-normal">
-                          {filteredCategoryOptions.length} match{filteredCategoryOptions.length === 1 ? '' : 'es'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="space-y-0.5">
-                      {filteredCategoryOptions.length > 0 ? (
-                        filteredCategoryOptions.map((opt) => (
-                          <button
-                            key={opt}
-                            type="button"
-                            onClick={() => {
-                              setCategory(opt)
-                              setIsCategoryTyping(false)
-                              setIsCategoryOpen(false)
-                              if (fieldErrors.category) {
-                                setFieldErrors((prev) => ({ ...prev, category: undefined }))
-                              }
-                            }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-medium text-left transition-colors cursor-pointer',
-                              category.toLowerCase() === opt.toLowerCase()
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-focus/80 hover:bg-slate-50'
-                            )}
-                          >
-                            <span>{opt}</span>
-                            {category.toLowerCase() === opt.toLowerCase() && (
-                              <Check className="w-3.5 h-3.5 text-primary" />
-                            )}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="p-2">
-                          <div className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-left">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-semibold text-focus break-all">"{category.trim()}"</span>
-                              <span className="text-[10px] uppercase font-bold text-slate-600 bg-slate-200/80 px-1.5 py-0.5 rounded">
-                                User Input
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-muted-fg mt-1">
-                              Will be saved as specific category in dropdown.
-                            </p>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
               <FormFieldError error={fieldErrors.category} />
             </div>
 
