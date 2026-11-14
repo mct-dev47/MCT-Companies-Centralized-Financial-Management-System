@@ -77,8 +77,8 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
     switch (effectiveAction) {
       case 'delete':
         return (
-          <div className="h-14 w-14 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shadow-xs">
-            <Trash2 className="h-7 w-7 text-rose-600" />
+          <div className="h-14 w-14 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-xs">
+            <Trash2 className="h-7 w-7 text-primary" />
           </div>
         )
       case 'warning':

@@ -120,6 +120,18 @@ def _parse_details(raw: Optional[Any]) -> dict:
         return {"note": str(raw)}
 
 
+def _normalize_changes(raw_changes: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw_changes, dict):
+        return None
+    normalized: Dict[str, Any] = {}
+    for k, v in raw_changes.items():
+        if isinstance(v, dict):
+            normalized[str(k)] = v
+        else:
+            normalized[str(k)] = {"old": None, "new": v}
+    return normalized
+
+
 def _target_for(details: dict) -> str:
     if details.get("record_ref"):
         return str(details["record_ref"])
@@ -505,7 +517,7 @@ class ActivityLogService:
             record_id = details.get("record_id")
             record_ref = details.get("record_ref") or details.get("ref") or details.get("reference_no")
             user_agent = details.get("user_agent")
-            changes = details.get("changes") if isinstance(details.get("changes"), dict) else None
+            changes = _normalize_changes(details.get("changes"))
 
             results.append(
                 ActivityLogOut(
@@ -665,7 +677,7 @@ class ActivityLogService:
 
                     raw_d = _parse_details(item.details)
                     notes_val = raw_d.get("notes") or raw_d.get("remark") or raw_d.get("remarks")
-                    changes_val = raw_d.get("changes") if isinstance(raw_d.get("changes"), dict) else None
+                    changes_val = _normalize_changes(raw_d.get("changes"))
 
                     timeline.append(
                         TimelineEventOut(

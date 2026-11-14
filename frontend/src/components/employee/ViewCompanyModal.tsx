@@ -23,7 +23,6 @@ import {
   type CreateCompanyPayload,
 } from '@/services/employeeService'
 import { formatPHP } from '@/lib/format'
-import { authService } from '@/services/authService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
@@ -48,7 +47,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
   const [deleteConfirmationName, setDeleteConfirmationName] = React.useState('')
-  const [adminPassword, setAdminPassword] = React.useState('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
@@ -231,13 +229,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
 
   const isDeleteMatch = Boolean(
     activeCompany &&
-    deleteConfirmationName.trim() === activeCompany.name.trim() &&
-    adminPassword.trim().length > 0
+    deleteConfirmationName.trim() === activeCompany.name.trim()
   )
 
   const handleOpenDeleteConfirm = () => {
     setDeleteConfirmationName('')
-    setAdminPassword('')
     setActionError(null)
     setIsConfirmDeleteOpen(true)
   }
@@ -245,7 +241,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const handleDeleteOpenChange = (nextOpen: boolean) => {
     setIsConfirmDeleteOpen(nextOpen)
     setDeleteConfirmationName('')
-    setAdminPassword('')
     if (!nextOpen) {
       setActionError(null)
     }
@@ -254,26 +249,19 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const handleConfirmDelete = async () => {
     if (!activeCompany) return
     if (deleteConfirmationName.trim() !== activeCompany.name.trim()) return
-    if (!adminPassword.trim()) {
-      notifyError('Please enter your admin password to reauthenticate.')
-      return
-    }
 
     try {
       setIsSubmitting(true)
-      const reauthToken = await authService.reauthenticate(adminPassword.trim())
-      await employeeService.deleteCompany(activeCompany.id, reauthToken)
+      await employeeService.deleteCompany(activeCompany.id)
       onDelete?.(activeCompany.id)
       setIsConfirmDeleteOpen(false)
       setDeleteConfirmationName('')
-      setAdminPassword('')
       onOpenChange(false)
     } catch (error) {
-      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please check your password and try again.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please try again.')
       setActionError(errorMsg)
       setIsConfirmDeleteOpen(false)
       setDeleteConfirmationName('')
-      setAdminPassword('')
       notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
@@ -708,13 +696,13 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
         onConfirm={handleConfirmDelete}
       >
         <div className="space-y-4 pt-2 text-left w-full">
-          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs sm:text-sm space-y-1.5">
-            <div className="flex items-center gap-1.5 font-semibold text-rose-900">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600" />
+          <div className="p-3.5 rounded-xl bg-primary/5 border border-primary/20 text-focus text-xs sm:text-sm space-y-1.5">
+            <div className="flex items-center gap-1.5 font-semibold text-primary">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-primary" />
               <span>Permanent deletion warning</span>
             </div>
-            <p className="text-xs text-rose-700 leading-relaxed">
-              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-rose-950">{company.name}</strong>.
+            <p className="text-xs text-muted-fg leading-relaxed">
+              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-primary">{company.name}</strong>.
             </p>
           </div>
 
@@ -729,22 +717,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               onChange={(e) => setDeleteConfirmationName(e.target.value)}
               placeholder={company.name}
               autoComplete="off"
-              className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="confirm-admin-password" className="text-xs sm:text-sm font-medium text-focus block">
-              Confirm Admin Password <span className="text-rose-600">*</span>
-            </Label>
-            <Input
-              id="confirm-admin-password"
-              name="adminPassword"
-              type="password"
-              value={adminPassword}
-              onChange={(e) => setAdminPassword(e.target.value)}
-              placeholder="Enter your current password"
-              autoComplete="current-password"
               className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
             />
           </div>

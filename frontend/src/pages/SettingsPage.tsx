@@ -322,6 +322,7 @@ export const SettingsPage: React.FC = () => {
           {!isAuditor && companies.length > 0 && (
             <DropdownFilter
               value={selectedCompanyId}
+              defaultValue=""
               placeholder="Select Company"
               menuTitle="Configuring Company"
               icon={Building2}

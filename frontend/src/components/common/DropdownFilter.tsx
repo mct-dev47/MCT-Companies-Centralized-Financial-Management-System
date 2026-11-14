@@ -161,8 +161,9 @@ export function DropdownFilter<T extends string = string>({
       ? defaultValue
       : (normalizedOptions[0]?.value as T)
 
-  const isDefault = value === resolvedDefault
   const selectedOption = normalizedOptions.find((o) => o.value === value)
+  const isDefault =
+    defaultValue !== undefined ? value === defaultValue : !selectedOption
 
   const filteredOptions = React.useMemo(() => {
     if (!searchable || !search.trim()) return normalizedOptions

@@ -11,7 +11,6 @@ from app.core.dependencies import (
     CurrentUser,
     check_company_access,
     get_current_user,
-    require_reauthentication,
 )
 from app.db.session import get_db
 from app.models.company import Company
@@ -336,7 +335,6 @@ def delete_company(
     company_id: int,
     request: Request,
     admin: AdminUser,
-    _reauth: AuthenticatedUser = Depends(require_reauthentication),
     db: Session = Depends(get_db),
 ):
     try:
