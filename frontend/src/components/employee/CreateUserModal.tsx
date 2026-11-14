@@ -442,6 +442,8 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                 </div>
 
                 <input
+                  id="create-user-avatar"
+                  name="userAvatar"
                   type="file"
                   ref={fileInputRef}
                   onChange={handleImageFileChange}

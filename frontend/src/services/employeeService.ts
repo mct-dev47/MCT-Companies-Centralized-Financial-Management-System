@@ -202,7 +202,7 @@ function mapCompany(value: unknown): Company {
     pettyCash: Number(company.petty_cash) || 0,
     status: 'Active',
     createdAt: company.created_at || '',
-    logoUrl: company.logo_url || undefined,
+    logoUrl: company.logo_url && company.logo_url.trim().length > 0 ? company.logo_url.trim() : undefined,
   }
 }
 
@@ -522,10 +522,14 @@ export const employeeService = {
     return comp
   },
 
-  async deleteCompany(id: string): Promise<void> {
+  async deleteCompany(id: string, reauthToken?: string): Promise<void> {
+    const headers = getAuthHeaders()
+    if (reauthToken) {
+      headers['X-MCT-Reauth'] = reauthToken
+    }
     const response = await fetch(`/api/v1/companies/${id}`, {
       method: 'DELETE',
-      headers: getAuthHeaders(),
+      headers,
     })
     if (!response.ok) {
       throw new Error(await getApiError(response))

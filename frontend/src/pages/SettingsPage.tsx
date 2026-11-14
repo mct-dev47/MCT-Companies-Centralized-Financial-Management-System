@@ -347,6 +347,8 @@ export const SettingsPage: React.FC = () => {
                       <span className="text-[10px] font-semibold">Change</span>
                     </button>
                     <input
+                      id="settings-company-logo"
+                      name="companyLogo"
                       ref={fileInputRef}
                       type="file"
                       accept="image/png, image/jpeg, image/webp"

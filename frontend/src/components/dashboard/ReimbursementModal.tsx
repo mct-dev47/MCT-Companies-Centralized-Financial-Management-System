@@ -1791,6 +1791,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               </Label>
 
               <input
+                id="reimbursement-attachments"
+                name="attachments"
                 type="file"
                 ref={fileInputRef}
                 multiple

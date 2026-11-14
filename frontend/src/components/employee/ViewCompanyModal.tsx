@@ -23,6 +23,7 @@ import {
   type CreateCompanyPayload,
 } from '@/services/employeeService'
 import { formatPHP } from '@/lib/format'
+import { authService } from '@/services/authService'
 import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
@@ -47,6 +48,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [isConfirmEditOpen, setIsConfirmEditOpen] = React.useState(false)
   const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = React.useState(false)
   const [deleteConfirmationName, setDeleteConfirmationName] = React.useState('')
+  const [adminPassword, setAdminPassword] = React.useState('')
   const [isSubmitting, setIsSubmitting] = React.useState(false)
   const [actionError, setActionError] = React.useState<string | null>(null)
 
@@ -227,10 +229,15 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     }
   }
 
-  const isDeleteMatch = activeCompany ? deleteConfirmationName.trim() === activeCompany.name.trim() : false
+  const isDeleteMatch = Boolean(
+    activeCompany &&
+    deleteConfirmationName.trim() === activeCompany.name.trim() &&
+    adminPassword.trim().length > 0
+  )
 
   const handleOpenDeleteConfirm = () => {
     setDeleteConfirmationName('')
+    setAdminPassword('')
     setActionError(null)
     setIsConfirmDeleteOpen(true)
   }
@@ -238,6 +245,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const handleDeleteOpenChange = (nextOpen: boolean) => {
     setIsConfirmDeleteOpen(nextOpen)
     setDeleteConfirmationName('')
+    setAdminPassword('')
     if (!nextOpen) {
       setActionError(null)
     }
@@ -246,19 +254,26 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const handleConfirmDelete = async () => {
     if (!activeCompany) return
     if (deleteConfirmationName.trim() !== activeCompany.name.trim()) return
+    if (!adminPassword.trim()) {
+      notifyError('Please enter your admin password to reauthenticate.')
+      return
+    }
 
     try {
       setIsSubmitting(true)
-      await employeeService.deleteCompany(activeCompany.id)
+      const reauthToken = await authService.reauthenticate(adminPassword.trim())
+      await employeeService.deleteCompany(activeCompany.id, reauthToken)
       onDelete?.(activeCompany.id)
       setIsConfirmDeleteOpen(false)
       setDeleteConfirmationName('')
+      setAdminPassword('')
       onOpenChange(false)
     } catch (error) {
-      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please try again.')
+      const errorMsg = formatUserFriendlyErrorMessage(error, 'Unable to delete company. Please check your password and try again.')
       setActionError(errorMsg)
       setIsConfirmDeleteOpen(false)
       setDeleteConfirmationName('')
+      setAdminPassword('')
       notifyError(errorMsg)
     } finally {
       setIsSubmitting(false)
@@ -268,7 +283,15 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   return (
     <>
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
-        <DialogContent className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto">
+        <DialogContent
+          onCloseAutoFocus={(e) => {
+            if (document.activeElement && e.currentTarget.contains(document.activeElement)) {
+              e.preventDefault()
+              ;(document.activeElement as HTMLElement)?.blur()
+            }
+          }}
+          className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto"
+        >
           <DialogTitle className="sr-only">
             {activeCompany.name} Details
           </DialogTitle>
@@ -310,6 +333,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   <img
                     src={profilePreview || logo2Url}
                     alt="Company Logo Preview"
+                    onError={(e) => {
+                      const target = e.currentTarget
+                      target.onerror = null
+                      target.src = logo2Url
+                    }}
                     className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white rounded-full">
@@ -319,6 +347,8 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                 </div>
 
                 <input
+                  id="view-company-logo"
+                  name="companyLogo"
                   type="file"
                   ref={fileInputRef}
                   onChange={handleImageFileChange}
@@ -552,6 +582,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                 <img
                   src={activeCompany.logoUrl || logo2Url}
                   alt={activeCompany.name}
+                  onError={(e) => {
+                    const target = e.currentTarget
+                    target.onerror = null
+                    target.src = logo2Url
+                  }}
                   className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
                 />
               </div>
@@ -694,6 +729,22 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               onChange={(e) => setDeleteConfirmationName(e.target.value)}
               placeholder={company.name}
               autoComplete="off"
+              className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="confirm-admin-password" className="text-xs sm:text-sm font-medium text-focus block">
+              Confirm Admin Password <span className="text-rose-600">*</span>
+            </Label>
+            <Input
+              id="confirm-admin-password"
+              name="adminPassword"
+              type="password"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              placeholder="Enter your current password"
+              autoComplete="current-password"
               className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
             />
           </div>
