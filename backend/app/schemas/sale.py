@@ -5,6 +5,18 @@ from decimal import Decimal
 
 from app.schemas.base import StrictBaseModel
 
+PETTY_CASH_NOT_ALLOWED_IN_SALES = "Petty Cash is for expenses only and cannot be used on a sale."
+
+
+def is_petty_cash(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() == "petty cash"
+
+
+def _reject_petty_cash(category: Optional[str], payment_method: Optional[str]) -> None:
+    if is_petty_cash(category) or is_petty_cash(payment_method):
+        raise ValueError(PETTY_CASH_NOT_ALLOWED_IN_SALES)
+
+
 class SaleBase(StrictBaseModel):
     company_id: Optional[int] = None
     category_id: Optional[int] = None
@@ -60,6 +72,8 @@ class SaleCreate(SaleBase):
             raise ValueError("Category is required and cannot be blank.")
         if self.category and self.category.strip():
             self.category = self.category.strip()
+
+        _reject_petty_cash(self.category, self.payment_method)
 
         if self.amount < Decimal("1.00"):
             raise ValueError("Amount must be at least 1.00 (cannot be 0 or less than 1).")
@@ -175,6 +189,8 @@ class SaleUpdate(StrictBaseModel):
             self.particulars = parts.strip()
         if self.category is not None and not self.category.strip():
             raise ValueError("Category cannot be blank.")
+
+        _reject_petty_cash(self.category, self.payment_method)
 
         if self.payment_status is not None:
             raw_ps = self.payment_status.strip().lower()

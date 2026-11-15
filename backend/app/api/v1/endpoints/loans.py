@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import or_, func
 
 from app.db.session import get_db
+from app.core.company_resolver import get_company_name_map
 from app.db.supabase import get_supabase_admin_client
 from app.models.loan import Loan, LoanRepayment
 from app.models.bank import BankAccount
@@ -272,7 +273,7 @@ def get_company_loans(
     if lender_id:
         check_company_access(current_user, lender_id)
 
-    company_names = {c.company_id: c.company_name for c in db.query(Company).all()}
+    company_names = get_company_name_map(db)
     query = _company_loan_query(
         db, borrower_id, lender_id, company_id, category, reference,
         particulars, payment_status, start_date, end_date,
@@ -332,7 +333,7 @@ def export_company_loans(
     if lender_id:
         check_company_access(current_user, lender_id)
 
-    company_names = {c.company_id: c.company_name for c in db.query(Company).all()}
+    company_names = get_company_name_map(db)
     query = _company_loan_query(
         db, borrower_id, lender_id, company_id, category, reference,
         particulars, payment_status, start_date, end_date,
@@ -1289,7 +1290,7 @@ def disburse_loan(
     lender_id = source.get("lender") or (sql_loan.lender if sql_loan else None)
 
     if not id_to_name:
-        id_to_name = {c.company_id: c.company_name for c in db.query(Company).all()}
+        id_to_name = get_company_name_map(db)
 
     p_amt = Decimal(str(source.get("principal_amount") or (sql_loan.principal_amount if sql_loan else 0) or 0))
     if p_amt > Decimal("0.00"):
