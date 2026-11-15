@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.company_resolver import get_company_name_map
 from app.core.cache import system_cache
 from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.core.websocket import ws_manager
@@ -444,7 +445,7 @@ class PettyCashService:
 
         comp_map = system_cache.get("comp_id_map")
         if not comp_map:
-            comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+            comp_map = get_company_name_map(self.db)
             system_cache.set("comp_id_map", comp_map, ttl=300, tags=["companies"])
 
         topups = self._topups(company_id)
@@ -820,7 +821,7 @@ class PettyCashService:
         if not topups:
             return []
 
-        comp_names = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_names = get_company_name_map(self.db)
         name_to_id = {(name or "").strip().lower(): cid for cid, name in comp_names.items()}
         user_names = {u.user_id: u.name for u in self.db.query(User.user_id, User.name).all()}
 
@@ -2295,7 +2296,7 @@ class PettyCashService:
         query = query.order_by(IntercompanyTransfer.initiated_at.desc())
         transfers = query.all()
 
-        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_map = get_company_name_map(self.db)
         bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
 
         results = []
@@ -2321,7 +2322,7 @@ class PettyCashService:
             raise HTTPException(status_code=404, detail="Intercompany transfer not found.")
 
         if transfer.settlement_status == "SETTLED":
-            comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+            comp_map = get_company_name_map(self.db)
             bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
             item = IntercompanyTransferOut.model_validate(transfer)
             item.source_company_name = comp_map.get(transfer.source_company_id)
@@ -2392,7 +2393,7 @@ class PettyCashService:
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
 
-        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_map = get_company_name_map(self.db)
         bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
         item = IntercompanyTransferOut.model_validate(transfer)
         item.source_company_name = comp_map.get(transfer.source_company_id)

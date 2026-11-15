@@ -76,41 +76,14 @@ KNOWN_COMPANY_ALIASES: dict[str, list[str]] = {}
 
 
 def _resolve_company(db: Session, company_id: Optional[int], company_name: Optional[str]) -> Company:
-    if company_id:
-        company = db.query(Company).filter(Company.company_id == company_id).first()
-        if company:
-            return company
+    # Delegates to the shared resolver, which matches names against a cached
+    # company directory instead of loading the full company table per request.
+    from app.core.company_resolver import resolve_company
 
-    all_companies = db.query(Company).all()
-
-    if not company_name or not company_name.strip() or company_name.strip().lower() == "all companies":
-        if all_companies:
-            return all_companies[0]
+    try:
+        return resolve_company(db, company_id=company_id, company_name=company_name)
+    except HTTPException:
         raise HTTPException(status_code=400, detail="A valid company_id or company name is required.")
-
-    clean_name = company_name.strip()
-    clean_lower = clean_name.lower()
-
-    company = db.query(Company).filter(Company.company_name.ilike(clean_name)).first()
-    if company:
-        return company
-
-    for c in all_companies:
-        if c.company_name.strip().lower() == clean_lower:
-            return c
-
-    for c in all_companies:
-        c_clean = c.company_name.strip().lower()
-        if clean_lower in c_clean or c_clean in clean_lower:
-            return c
-
-    words = [w for w in clean_lower.replace("&", " ").replace(".", " ").split() if len(w) >= 4]
-    for w in words:
-        for c in all_companies:
-            if w in c.company_name.lower():
-                return c
-
-    raise HTTPException(status_code=400, detail="A valid company_id or company name is required.")
 
 
 class BillsService:
