@@ -5,6 +5,7 @@ from decimal import Decimal
 from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from app.core.business_time import business_today
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
@@ -542,7 +543,7 @@ def create_sale(
     if sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
-    if sale_in.transaction_date > date.today():
+    if sale_in.transaction_date > business_today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     parts = (sale_in.particulars or sale_in.description or "").strip()
@@ -928,7 +929,7 @@ def update_sale(
     if sale_in.amount is not None and sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
-    if sale_in.transaction_date is not None and sale_in.transaction_date > date.today():
+    if sale_in.transaction_date is not None and sale_in.transaction_date > business_today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     existing_company_id = None
