@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
+from app.core.business_time import business_today
 from app.schemas.base import StrictBaseModel
 from app.core.ssrf import validate_safe_url
 
@@ -92,7 +93,7 @@ class PettyCashTopUpCreate(StrictBaseModel):
     def validate_fields(self):
         if not self.company_id and not self.company and not self.company_name:
             raise ValueError("Company identifier (company_id or company name) is required.")
-        if self.topup_date > date.today():
+        if self.topup_date > business_today():
             raise ValueError("Top-up date cannot be in the future.")
 
         req_type = (self.request_type or "topup").lower()
@@ -144,7 +145,7 @@ class PettyCashDisbursementCreate(StrictBaseModel):
             raise ValueError("Company identifier (company_id or company name) is required.")
         if self.amount <= Decimal("0.00"):
             raise ValueError("Disbursement amount must be greater than zero.")
-        if self.topup_date > date.today():
+        if self.topup_date > business_today():
             raise ValueError("Disbursement date cannot be in the future.")
         return self
 

@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.core.business_time import business_today
 from app.schemas.base import StrictBaseModel
 
 PETTY_CASH_NOT_ALLOWED_IN_SALES = "Petty Cash is for expenses only and cannot be used on a sale."
@@ -78,7 +79,7 @@ class SaleCreate(SaleBase):
         if self.amount < Decimal("1.00"):
             raise ValueError("Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
-        if self.transaction_date > date.today():
+        if self.transaction_date > business_today():
             raise ValueError("Transaction date cannot be in the future (maximum date is today).")
 
         if not self.company_id and not self.company:
@@ -180,7 +181,7 @@ class SaleUpdate(StrictBaseModel):
     def validate_update_fields(self):
         if self.amount is not None and self.amount < Decimal("1.00"):
             raise ValueError("Amount must be at least 1.00 (cannot be 0 or less than 1).")
-        if self.transaction_date is not None and self.transaction_date > date.today():
+        if self.transaction_date is not None and self.transaction_date > business_today():
             raise ValueError("Transaction date cannot be in the future (maximum date is today).")
         parts = self.particulars or self.description
         if parts is not None:

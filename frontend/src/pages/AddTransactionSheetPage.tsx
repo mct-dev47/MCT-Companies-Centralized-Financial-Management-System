@@ -1095,8 +1095,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const location = useLocation()
   const { user } = useSession()
   const { activeCompany } = useCompany()
-  const isAuditor = user?.role === 'Supervisor'
-  const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const isSupervisor = user?.role === 'Supervisor'
+  // A supervisor may be assigned several companies; `user.assignedCompany` is then a
+  // comma-joined display string, never a valid company to save against.
+  const supervisorCompanies = React.useMemo(() => {
+    if (!isSupervisor) return []
+    const list =
+      user?.assignedCompanies && user.assignedCompanies.length > 0
+        ? user.assignedCompanies
+        : (user?.assignedCompany || '').split(',')
+    return list.map((c) => c.trim()).filter((c) => c && c !== 'All Companies')
+  }, [isSupervisor, user?.assignedCompanies, user?.assignedCompany])
+  // Only a single-company supervisor is hard-locked to their company.
+  const isAuditor = isSupervisor && supervisorCompanies.length <= 1
+  const isMultiCompanySupervisor = isSupervisor && supervisorCompanies.length > 1
+  const assignedCompany = isSupervisor
+    ? supervisorCompanies[0] || user?.assignedCompany || 'MCT Kitchen'
+    : user?.assignedCompany || 'MCT Kitchen'
   const isCompanyLocked =
     isAuditor || Boolean(activeCompany && activeCompany !== 'All Companies')
 
@@ -1130,19 +1145,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     if (isAuditor) return assignedCompany
     if (editItem?.company) return editItem.company
     if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    if (isMultiCompanySupervisor) return assignedCompany
     return 'MCT Kitchen'
-  }, [isAuditor, assignedCompany, editItem?.company, activeCompany])
+  }, [isAuditor, isMultiCompanySupervisor, assignedCompany, editItem?.company, activeCompany])
 
   const [selectedCompany, setSelectedCompany] =
     React.useState<string>(initialCompany)
 
   React.useEffect(() => {
-    if (isAuditor && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
+    if (isAuditor && assignedCompany) {
+      setSelectedCompany(assignedCompany)
     } else if (activeCompany && activeCompany !== 'All Companies') {
       setSelectedCompany(activeCompany)
     }
-  }, [isAuditor, user?.assignedCompany, activeCompany])
+  }, [isAuditor, assignedCompany, activeCompany])
 
   // Companies loaded dynamically
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
@@ -1190,11 +1206,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const [isLoadingBanks, setIsLoadingBanks] = React.useState<boolean>(
     () => bankService.getCachedAccounts(initialCompany).length === 0
   )
-  const [selectedBankAccountId, setSelectedBankAccountId] =
-    React.useState<string>(() => {
-      const cached = bankService.getCachedAccounts(initialCompany)
-      return cached.length > 0 ? cached[0].id : ''
-    })
+  // Default bank = a bank the company owns alone (see availableBankAccounts ordering). Start empty
+  // and let the effect below pick it, so an unsorted cache can't pre-select a shared bank.
+  const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
+  // True once the user picks a bank by hand; until then the default keeps following the sorted list.
+  const userPickedBankRef = React.useRef(false)
 
   React.useEffect(() => {
     let mounted = true
@@ -1245,6 +1261,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   React.useEffect(() => {
     if (prevTargetCompRef.current !== targetCompany) {
       prevTargetCompRef.current = targetCompany
+      userPickedBankRef.current = false
       if (availableBankAccounts.length > 0) {
         setSelectedBankAccountId(availableBankAccounts[0].id)
         return
@@ -1254,8 +1271,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const exists = availableBankAccounts.some(
         (a) => a.id === selectedBankAccountId
       )
-      if (!exists) {
-        setSelectedBankAccountId(availableBankAccounts[0].id)
+      // availableBankAccounts lists sole-owned banks first, so [0] is the company's own bank.
+      if (!exists || !userPickedBankRef.current) {
+        if (selectedBankAccountId !== availableBankAccounts[0].id) {
+          setSelectedBankAccountId(availableBankAccounts[0].id)
+        }
       }
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
@@ -3265,7 +3285,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <Dropdown
                     value={selectedCompany}
                     onChange={(val) => setSelectedCompany(String(val))}
-                    options={dbCompanies.map((c) => ({ value: c, label: c }))}
+                    options={(isMultiCompanySupervisor ? supervisorCompanies : dbCompanies).map(
+                      (c) => ({ value: c, label: c })
+                    )}
                     aria-label="Company"
                   />
                 )}
@@ -3281,7 +3303,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 </label>
                 <Dropdown
                   value={selectedBankAccountId}
-                  onChange={(val) => setSelectedBankAccountId(String(val))}
+                  onChange={(val) => {
+                    userPickedBankRef.current = true
+                    setSelectedBankAccountId(String(val))
+                  }}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
                   placeholder={
                     availableBankAccounts.length === 0
@@ -4386,7 +4411,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 dayRemarkSkipRef.current = true
                 dayRemarkConfirmedRef.current = true
                 setIsDayRemarkOpen(false)
-                void handleSave()
+                // The batch was already confirmed before remarks; save now, don't re-open the review
+                void handleSave(true)
               }}
               className="h-9 px-4 text-xs font-medium rounded-xl cursor-pointer"
               variant="outline"
@@ -4398,7 +4424,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               onClick={() => {
                 dayRemarkConfirmedRef.current = true
                 setIsDayRemarkOpen(false)
-                void handleSave()
+                void handleSave(true)
               }}
               className="h-9 px-4 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
             >

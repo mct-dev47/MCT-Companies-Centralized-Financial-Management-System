@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import date, datetime
 from decimal import Decimal
 
+from app.core.business_time import business_today
 from app.schemas.base import StrictBaseModel
 
 class ExpenseBase(StrictBaseModel):
@@ -64,7 +65,7 @@ class ExpenseCreate(ExpenseBase):
         if self.amount < Decimal("1.00"):
             raise ValueError("Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
-        if self.expense_date > date.today():
+        if self.expense_date > business_today():
             raise ValueError("Expense date cannot be in the future (maximum date is today).")
 
         if not self.company_id and not self.company:
@@ -121,7 +122,7 @@ class ExpenseUpdate(StrictBaseModel):
                 raise ValueError("Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
             self.amount = target_amt
 
-        if self.expense_date is not None and self.expense_date > date.today():
+        if self.expense_date is not None and self.expense_date > business_today():
             raise ValueError("Expense date cannot be in the future (maximum date is today).")
 
         chq = self.cheque_no or self.chequeNo

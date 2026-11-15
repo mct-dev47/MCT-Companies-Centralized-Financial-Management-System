@@ -5,6 +5,7 @@ from decimal import Decimal
 from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from app.core.business_time import business_today
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Expense, Category
@@ -588,7 +589,7 @@ def create_expense(
     if expense_in.amount < Decimal("1.00"):
         raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
-    if expense_in.expense_date > date.today():
+    if expense_in.expense_date > business_today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")
 
     parts = (expense_in.particulars or expense_in.description or "").strip()
@@ -1004,7 +1005,7 @@ def update_expense(
     if target_amt is not None and target_amt < Decimal("1.00"):
         raise HTTPException(status_code=422, detail="Withdrawal amount must be at least 1.00 (cannot be 0 or negative).")
 
-    if expense_in.expense_date is not None and expense_in.expense_date > date.today():
+    if expense_in.expense_date is not None and expense_in.expense_date > business_today():
         raise HTTPException(status_code=400, detail="Expense date cannot be in the future (maximum date is today).")
 
     # Fetch existing expense to verify company access
