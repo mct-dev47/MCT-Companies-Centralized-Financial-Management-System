@@ -116,7 +116,9 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
   }, [open, isPettyCash, assignedCompany])
   const parsedAmountValue = parseFloat(amount.replace(/,/g, '')) || 0
-  const exceedsPettyCash = isPettyCash && pettyBalance !== null && parsedAmountValue > pettyBalance
+  const exceedsPettyCash = isPettyCash && pettyBalance !== null && parsedAmountValue > pettyBalance + 0.005
+  // Error modal shown when saving would take petty cash below zero
+  const [pettyCashErrorMessage, setPettyCashErrorMessage] = React.useState<string | null>(null)
 
   // Check if assigned company has any registered bank accounts
   const [hasBankAccounts, setHasBankAccounts] = React.useState<boolean | null>(null)
@@ -352,6 +354,14 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
     }
 
     setFieldErrors({})
+
+    if (exceedsPettyCash) {
+      setPettyCashErrorMessage(
+        `Only ${formatPHP(Math.max(pettyBalance ?? 0, 0))} is available in petty cash, but this expense is ${formatPHP(parsedAmountValue)}. Petty cash cannot go below ₱0.00. Top up petty cash first or lower the amount.`
+      )
+      return
+    }
+
     setIsReviewing(true)
   }
 
@@ -403,7 +413,12 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       onOpenChange(false)
       onSuccess(created)
     } catch (err: any) {
-      setError(formatUserFriendlyErrorMessage(err, 'Failed to record expense entry.'))
+      const message = formatUserFriendlyErrorMessage(err, 'Failed to record expense entry.')
+      if (/insufficient petty cash/i.test(message)) {
+        setPettyCashErrorMessage(message)
+      } else {
+        setError(message)
+      }
       setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
@@ -411,6 +426,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[540px] w-full max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto overflow-x-hidden rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl">
           <DialogHeader className="text-left pb-4 border-b border-stroke/20 pr-8">
@@ -656,7 +672,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     )}
                   >
                     Petty cash available: <span className="font-semibold">{formatPHP(pettyBalance)}</span>
-                    {exceedsPettyCash && ' (Wallet will show deficit until topped up)'}
+                    {exceedsPettyCash && ' (Not enough petty cash, top up first)'}
                   </p>
                 )}
               </div>
@@ -901,7 +917,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
             <Button
               type="submit"
               variant="primary"
-              disabled={isSubmitting || exceedsPettyCash}
+              disabled={isSubmitting}
               isLoading={isSubmitting}
               className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
@@ -911,5 +927,19 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         </form>
       </DialogContent>
     </Dialog>
+
+    <ConfirmModal
+      open={Boolean(pettyCashErrorMessage)}
+      onOpenChange={(isOpen) => {
+        if (!isOpen) setPettyCashErrorMessage(null)
+      }}
+      action="warning"
+      title="Insufficient Petty Cash"
+      description={pettyCashErrorMessage ?? ''}
+      cancelLabel=""
+      confirmLabel="Got it"
+      onConfirm={() => setPettyCashErrorMessage(null)}
+    />
+    </>
   )
 }

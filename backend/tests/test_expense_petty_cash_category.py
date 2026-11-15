@@ -14,6 +14,7 @@ from app.core.dependencies import get_current_user, get_db
 from app.db.session import Base
 from app.models.company import Company
 from app.models.finance import Category, Expense
+from app.models.petty_cash import PettyCashTopUp
 
 SUPERVISOR = {
     "auth_user_id": "sup1",
@@ -38,6 +39,8 @@ def env():
     with Session() as seed:
         seed.add(Company(company_id=1, company_name="Company One", location="Manila", starting_balance=0))
         seed.add(Category(name="Office Supplies"))
+        # Fund petty cash so petty cash expenses don't take the wallet below zero
+        seed.add(PettyCashTopUp(company_id=1, amount=1000, topup_date=date(2026, 1, 1), status="Approved"))
         seed.commit()
 
     def override_db():

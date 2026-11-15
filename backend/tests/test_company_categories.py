@@ -16,6 +16,7 @@ from app.db.session import Base, get_db
 from app.models.company import Company
 from app.models.bank import BankAccount
 from app.models.finance import CompanyCategory, Category, Sale, Expense
+from app.models.petty_cash import PettyCashTopUp
 
 FINANCE_USER = {
     "auth_user_id": "finance_1",
@@ -66,7 +67,9 @@ def client_and_db():
         starting_balance=Decimal("50000.00"),
         current_balance=Decimal("50000.00"),
     )
-    db.add_all([comp_a, comp_b, bank_a])
+    # Fund petty cash so petty cash expenses don't take the wallet below zero
+    topup_a = PettyCashTopUp(company_id=1, amount=Decimal("1000.00"), topup_date=date(2026, 1, 1), status="Approved")
+    db.add_all([comp_a, comp_b, bank_a, topup_a])
     db.commit()
     db.close()
 

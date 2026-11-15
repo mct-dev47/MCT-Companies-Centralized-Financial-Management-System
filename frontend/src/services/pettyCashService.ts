@@ -447,7 +447,9 @@ export interface EligibleExpense {
 }
 
 const pcCache = new Map<string, { data: any; timestamp: number }>()
-const receiptCache = new Map<number, PettyCashTopUpReceipts>()
+const receiptCache = new Map<number, PettyCashTopUpReceipts & { fetchedAt: number }>()
+// Receipt URLs are Supabase signed URLs valid for 1 hour; refresh before they expire.
+const RECEIPT_CACHE_TTL = 50 * 60 * 1000
 const PC_CACHE_TTL = 30000
 
 export const pettyCashService = {
@@ -465,7 +467,10 @@ export const pettyCashService = {
   ): Promise<PettyCashTopUpReceipts> {
     if (!options?.forceRefresh) {
       const cached = receiptCache.get(topupId)
-      if (cached) return cached
+      if (cached && Date.now() - cached.fetchedAt < RECEIPT_CACHE_TTL) {
+        const { fetchedAt: _fetchedAt, ...receipts } = cached
+        return receipts
+      }
     }
     const response = await fetch(`/api/v1/petty-cash/topups/${topupId}/receipts`, {
       headers: backendHeaders(),
@@ -477,7 +482,7 @@ export const pettyCashService = {
       receiptUrl: data.receipt_url ?? null,
       attachments: data.attachments ?? null,
     }
-    receiptCache.set(topupId, mapped)
+    receiptCache.set(topupId, { ...mapped, fetchedAt: Date.now() })
     return mapped
   },
 

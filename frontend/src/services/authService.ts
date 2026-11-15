@@ -42,7 +42,7 @@ const ACCESS_TOKEN_KEY = 'mct_access_token'
 const LAST_ACTIVITY_KEY = 'mct_last_activity'
 const REMEMBER_ME_KEY = 'mct_remember_me'
 const TAB_SESSION_KEY = 'mct_tab_session'
-const SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes idle timeout (AC-5)
+export const SESSION_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000 // 2 hours idle timeout (AC-5); keep in sync with backend SESSION_IDLE_TIMEOUT_SECONDS
 
 let inMemoryAccessToken: string | null = null
 let inMemorySessionUser: User | null = null

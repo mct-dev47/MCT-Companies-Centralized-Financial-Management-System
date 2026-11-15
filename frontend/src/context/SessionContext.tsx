@@ -1,6 +1,7 @@
 import * as React from 'react'
 import {
   authService,
+  SESSION_IDLE_TIMEOUT_MS,
   type User,
   type SignInResult,
   type Verify2FAResponse,
@@ -55,7 +56,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({
         if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
           window.location.href = '/login?reason=inactivity'
         }
-      }, 30 * 60 * 1000) // AC-5: 30 minutes idle timeout
+      }, SESSION_IDLE_TIMEOUT_MS) // AC-5: 2 hours idle timeout
     }
   }, [status])
 

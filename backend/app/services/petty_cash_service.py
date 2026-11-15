@@ -10,6 +10,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.company_resolver import get_company_name_map
+from app.services import receipt_storage
 from app.core.cache import system_cache
 from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.core.websocket import ws_manager
@@ -85,6 +86,15 @@ def _resolve_receipt_url(receipt_url: Optional[str], attachments: Optional[str])
     return None
 
 
+def _prepare_receipts(receipt_url: Optional[str], attachments: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Move any inline receipt bytes into the receipts bucket; return storage refs to persist."""
+    atts = receipt_storage.normalize_attachments(attachments)
+    rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    if not rurl:
+        rurl = receipt_storage.first_attachment_ref(atts) or _resolve_receipt_url(None, atts)
+    return rurl, atts
+
+
 def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[str]) -> tuple[bool, int]:
     """Compute receipt presence and count without forwarding large base64 blobs."""
     has_url = bool(receipt_url and str(receipt_url).strip())
@@ -96,7 +106,7 @@ def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[st
                 count = sum(
                     1
                     for item in parsed
-                    if isinstance(item, dict) and (item.get("file_url") or item.get("url"))
+                    if isinstance(item, dict) and (item.get("file_url") or item.get("url") or item.get("storage_path"))
                 )
         except (TypeError, ValueError):
             pass
@@ -350,8 +360,19 @@ class PettyCashService:
         exclude_expense_id: Optional[int] = None,
         category: Optional[str] = None,
     ) -> None:
-        """Allow petty cash expenses to be recorded; wallet displays low-balance alert if balance is in deficit."""
-        return
+        """Block a petty cash expense that would take the wallet below zero."""
+        if not company_id or not is_petty_cash(payment_method) or amount is None:
+            return
+        available = self.get_balance(company_id, exclude_expense_id=exclude_expense_id)
+        if Decimal(str(amount)) > available:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient petty cash balance (₱{max(available, ZERO):,.2f} available, "
+                    f"requested ₱{Decimal(str(amount)):,.2f}). Petty cash cannot go below ₱0.00. "
+                    "Top up petty cash first."
+                ),
+            )
 
     def _build_summary(
         self,
@@ -708,10 +729,14 @@ class PettyCashService:
             raise HTTPException(status_code=404, detail="Petty cash transaction not found.")
         if current_user is not None:
             check_company_access(current_user, topup.company_id)
+        receipt_url, attachments = receipt_storage.hydrate(
+            getattr(topup, "receipt_url", None),
+            getattr(topup, "attachments", None),
+        )
         return PettyCashTopUpReceiptsOut(
             topup_id=topup.topup_id,
-            receipt_url=getattr(topup, "receipt_url", None),
-            attachments=getattr(topup, "attachments", None),
+            receipt_url=receipt_url,
+            attachments=attachments,
         )
 
     def list_eligible_expenses(
@@ -828,6 +853,11 @@ class PettyCashService:
         bank_ids = {t.bank_account_id for t in topups if (t.bank_account_id or "").strip()}
         banks = self._banks_by_id(bank_ids)
 
+        # One batch signing call for every stored receipt in the list.
+        signed_receipts = receipt_storage.sign_paths(
+            p for t in topups for p in receipt_storage.collect_paths(t.receipt_url, t.attachments)
+        )
+
         movements: List[PettyCashMovementOut] = []
         for t in topups:
             requesting_name = comp_names.get(t.company_id) or f"Company #{t.company_id}"
@@ -896,8 +926,8 @@ class PettyCashService:
                     transfer_received_by=t.transfer_received_by,
                     transfer_received_at=t.transfer_received_at,
                     items=t.items,
-                    attachments=t.attachments,
-                    receipt_url=t.receipt_url,
+                    attachments=receipt_storage.hydrate(t.receipt_url, t.attachments, signed_receipts)[1],
+                    receipt_url=receipt_storage.hydrate(t.receipt_url, None, signed_receipts)[0],
                 )
             )
 
@@ -1278,7 +1308,7 @@ class PettyCashService:
                     detail="Please choose a funding bank account before submitting to Internal Audit.",
                 )
 
-        resolved_receipt_url = _resolve_receipt_url(topup_in.receipt_url, topup_in.attachments)
+        resolved_receipt_url, stored_attachments = _prepare_receipts(topup_in.receipt_url, topup_in.attachments)
         creator_uid = topup_in.created_by or (current_user.get("user_id") if current_user else None)
 
         topup = PettyCashTopUp(
@@ -1294,7 +1324,7 @@ class PettyCashService:
             request_type=req_type,
             paid_by=(topup_in.paid_by or "").strip() or None,
             receipt_url=resolved_receipt_url,
-            attachments=topup_in.attachments,
+            attachments=stored_attachments,
             items=topup_in.items,
             category=(topup_in.category or "").strip() or None,
             total_expenses=total_expenses,
@@ -1402,7 +1432,7 @@ class PettyCashService:
             )
 
         cat_name = (disb_in.category or "").strip() or None
-        resolved_receipt_url = _resolve_receipt_url(disb_in.receipt_url, disb_in.attachments)
+        resolved_receipt_url, stored_attachments = _prepare_receipts(disb_in.receipt_url, disb_in.attachments)
         creator_uid = disb_in.created_by or (current_user.get("user_id") if current_user else None)
         cleaned_desc = (disb_in.description or "").strip() or None
         cleaned_paid_by = (disb_in.paid_by or "").strip() or None
@@ -1417,7 +1447,7 @@ class PettyCashService:
             request_type="disbursement",
             paid_by=cleaned_paid_by,
             receipt_url=resolved_receipt_url,
-            attachments=disb_in.attachments,
+            attachments=stored_attachments,
             items=disb_in.items,
             category=cat_name,
             total_expenses=amt,
@@ -1497,10 +1527,10 @@ class PettyCashService:
             topup.paid_by = paid_by.strip() or None
         if category is not None:
             topup.category = category.strip() or None
-        if receipt_url is not None:
-            topup.receipt_url = receipt_url
         if attachments is not None:
-            topup.attachments = attachments
+            topup.attachments = receipt_storage.normalize_attachments(attachments)
+        if receipt_url is not None:
+            topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
         if items is not None:
             topup.items = items
 
