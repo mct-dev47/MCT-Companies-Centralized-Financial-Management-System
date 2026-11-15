@@ -179,7 +179,10 @@ class TestSpec0039SecureRememberMeAuth(unittest.TestCase):
             self.assertEqual(cm2.exception.status_code, 401)
 
     def test_ac5_idle_timeout_enforcement(self):
-        """AC-5: Inactivity past 30 minutes rejects with 401 and SESSION_EXPIRED_IDLE."""
+        """AC-5: Inactivity past 2 hours rejects with 401 and SESSION_EXPIRED_IDLE."""
+        from app.core.config import settings
+
+        self.assertEqual(settings.SESSION_IDLE_TIMEOUT_SECONDS, 7200)
         cookie_val, old_payload = create_refresh_cookie_payload(
             user_id=101,
             email="finance.test@mct.com",
@@ -187,9 +190,9 @@ class TestSpec0039SecureRememberMeAuth(unittest.TestCase):
             remember_me=True,
         )
 
-        # Fast forward past 30 minutes (1801 seconds) without qualifying activity
+        # Fast forward past 2 hours (7201+ seconds) without qualifying activity
         with patch("app.services.session_service._current_timestamp") as mock_time:
-            now_future = time.time() + 1850
+            now_future = time.time() + 7250
             mock_time.return_value = now_future
 
             with self.assertRaises(HTTPException) as cm:

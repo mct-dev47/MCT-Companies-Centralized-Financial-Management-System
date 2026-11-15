@@ -74,7 +74,7 @@ export const SignInForm: React.FC = () => {
 
   const expirationNotice = React.useMemo(() => {
     if (reasonParam === 'inactivity') {
-      return 'Your session has ended due to 30 minutes of inactivity. Please sign in again.'
+      return 'Your session has ended due to 2 hours of inactivity. Please sign in again.'
     }
     if (reasonParam === 'max_duration') {
       return 'Your session reached the maximum duration of 8 hours. Please sign in again.'

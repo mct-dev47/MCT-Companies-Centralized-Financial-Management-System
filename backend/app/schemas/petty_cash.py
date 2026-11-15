@@ -21,6 +21,12 @@ def _validate_receipt_or_data_url(v: Optional[str]) -> Optional[str]:
     trimmed = v.strip()
     if not trimmed:
         return None
+    if trimmed.startswith("storage://"):
+        from app.services.receipt_storage import path_from_ref
+
+        if not path_from_ref(trimmed):
+            raise ValueError("Invalid receipt storage reference.")
+        return trimmed
     if trimmed.lower().startswith("data:"):
         if not _SAFE_RECEIPT_DATA_URL_RE.match(trimmed):
             raise ValueError("Invalid receipt data URL. Only PNG, JPEG, WEBP, GIF, and PDF base64 uploads are allowed.")
@@ -44,6 +50,12 @@ def _validate_attachments_json(v: Optional[str]) -> Optional[str]:
     for item in parsed:
         if not isinstance(item, dict):
             raise ValueError("Each attachment item must be an object.")
+        storage_path = item.get("storage_path")
+        if storage_path is not None:
+            from app.services.receipt_storage import is_safe_storage_path
+
+            if not isinstance(storage_path, str) or not is_safe_storage_path(storage_path):
+                raise ValueError("Invalid attachment storage path.")
         url_val = item.get("file_url") or item.get("url")
         if isinstance(url_val, str) and url_val.strip():
             _validate_receipt_or_data_url(url_val)
@@ -424,6 +436,7 @@ class PettyCashCategoryOut(BaseModel):
 
 class ReceiptUploadOut(BaseModel):
     url: str
+    storage_path: Optional[str] = None
     filename: Optional[str] = None
     file_name: Optional[str] = None
     file_size: int
