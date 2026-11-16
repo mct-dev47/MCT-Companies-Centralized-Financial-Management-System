@@ -369,6 +369,17 @@ def init_db():
     except Exception as e:
         logger.warning(f"Bank integrity repair skipped on init: {e}")
 
+    try:
+        from app.services.company_service import CompanyService
+
+        _comp_db = SessionLocal()
+        try:
+            CompanyService(_comp_db).reconcile_existing_company_starting_balances()
+        finally:
+            _comp_db.close()
+    except Exception as e:
+        logger.warning(f"Company bank starting balance reconciliation skipped on init: {e}")
+
     import threading
 
     def _sync_companies_from_supabase():
@@ -413,6 +424,11 @@ def init_db():
                                     logo_url=sc.get("logo_url"),
                                 ))
                         db.commit()
+                        try:
+                            from app.services.company_service import CompanyService
+                            CompanyService(db).reconcile_existing_company_starting_balances()
+                        except Exception as rec_err:
+                            logger.warning(f"Could not reconcile company bank starting balances after supabase sync: {rec_err}")
                     finally:
                         db.close()
                 return

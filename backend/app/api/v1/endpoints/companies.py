@@ -18,6 +18,7 @@ from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLook
 from app.schemas.notification import CompanyNotificationSettingsOut, CompanyNotificationSettingsUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
+from app.core.websocket import ws_manager
 
 router = APIRouter()
 ALLOWED_COMPANY_PICTURE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -227,6 +228,14 @@ def create_company(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 
@@ -280,6 +289,14 @@ async def create_company_with_picture(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 
@@ -315,6 +332,14 @@ def update_company(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "updated"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 

@@ -54,10 +54,14 @@ export function useBankFilter(company: string, options?: { includePettyCash?: bo
     const unsubBank = websocketService.subscribe('BANK_UPDATED', () => {
       loadAccounts(true)
     })
+    const unsubCompany = websocketService.subscribe('COMPANY_UPDATED' as any, () => {
+      loadAccounts(true)
+    })
 
     return () => {
       mounted = false
       unsubBank()
+      unsubCompany()
     }
   }, [userId, userScopeKey])
 

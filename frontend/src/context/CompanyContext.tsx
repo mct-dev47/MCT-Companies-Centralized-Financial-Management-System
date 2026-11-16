@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useSession } from '@/hooks/useSession'
 import { isLendingEnabledCompany } from '@/config/companyFeatures'
 import { isCompanyMatch } from '@/utils/companyUtils'
+import { websocketService } from '@/services/websocketService'
 
 export interface CompanyOption {
   id: number
@@ -187,6 +188,12 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   React.useEffect(() => {
     if (user?.id) {
       void loadCompanies()
+    }
+    const unsub = websocketService.subscribe('COMPANY_UPDATED' as any, () => {
+      void loadCompanies()
+    })
+    return () => {
+      unsub()
     }
   }, [loadCompanies, user?.id])
 

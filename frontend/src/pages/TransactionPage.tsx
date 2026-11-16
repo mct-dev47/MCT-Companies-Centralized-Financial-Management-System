@@ -1141,6 +1141,7 @@ export const TransactionPage: React.FC = () => {
       websocketService.subscribe('EXPENSE_DELETED', reload),
       websocketService.subscribe('SALES_UPDATED', reload),
       websocketService.subscribe('BANK_UPDATED', reload),
+      websocketService.subscribe('COMPANY_UPDATED' as any, reload),
       websocketService.subscribe('LOANS_UPDATED', reload),
       websocketService.subscribe('PETTY_CASH_UPDATED', reload),
       websocketService.subscribe('AUDIT_UPDATED', reload),

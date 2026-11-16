@@ -397,6 +397,7 @@ export const BankManagementPage: React.FC = () => {
 
     const unsubs = [
       websocketService.subscribe('BANK_UPDATED', handleSync),
+      websocketService.subscribe('COMPANY_UPDATED' as any, handleSync),
       websocketService.subscribe('TRANSACTION_UPDATED', handleSync),
       websocketService.subscribe('EXPENSE_CREATED', handleSync),
       websocketService.subscribe('EXPENSE_UPDATED', handleSync),
