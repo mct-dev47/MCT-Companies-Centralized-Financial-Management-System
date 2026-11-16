@@ -75,6 +75,10 @@ class ReceiptStorageError(RuntimeError):
     pass
 
 
+class ReceiptTypeRejectedError(ReceiptStorageError):
+    """The bucket's own allowed file types refused the file (Supabase 415 invalid_mime_type)."""
+
+
 # ── Path helpers ─────────────────────────────────────────────────────────────
 
 def is_safe_storage_path(path: Optional[str]) -> bool:
@@ -133,6 +137,13 @@ def upload_receipt_bytes(data: bytes, mime_type: str, filename: Optional[str] = 
     except ReceiptStorageError:
         raise
     except Exception as exc:  # network / API errors
+        text = str(exc)
+        if "invalid_mime_type" in text or "'statusCode': 415" in text:
+            kind = _EXT_BY_MIME.get(mime_type, mime_type).lstrip(".").upper()
+            raise ReceiptTypeRejectedError(
+                f"The receipts storage bucket does not accept {kind} files yet. "
+                "Upload a JPG or PNG, or ask an admin to allow this file type on the bucket."
+            ) from exc
         raise ReceiptStorageError(f"Could not upload receipt to storage: {exc}") from exc
     return path
 

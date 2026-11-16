@@ -78,6 +78,8 @@ import { loanService } from '@/services/loanService'
 import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
 import {
   pettyCashService,
+  PETTY_CASH_FUNDING,
+  PETTY_CASH_FUNDING_LABEL,
   type PettyCashLedgerEntry,
 } from '@/services/pettyCashService'
 import { saveAuditReview, reportAuditSaveFailure } from '@/services/auditReviewApi'
@@ -92,6 +94,30 @@ function getAuditableExpenseId(entry: PettyCashTransaction | null | undefined): 
     return entry.recordId
   }
   return null
+}
+
+/** Reimbursement claims are still waiting for money after Audit approves them. */
+function isReimbursementEntry(entry: PettyCashTransaction | null | undefined): boolean {
+  return entry?.requestType === 'reimbursement' || entry?.requestType === 'replenishment'
+}
+
+/**
+ * Badge colors for the workflow status. Approved is yellow; only Reimbursed / Settled is green.
+ */
+function getPettyStatusTone(entry: PettyCashTransaction): string {
+  const s = entry.status
+  if (s === 'Reimbursed' || s === 'Settled') return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  if (s === 'Approved') return 'bg-amber-50 text-amber-700 border-amber-200'
+  if (s === 'Pending Finance Approval' || s === 'Pending Finance Endorsement' || s === 'Return Pending') {
+    return 'bg-amber-50 text-amber-700 border-amber-200'
+  }
+  if (s === 'Pending Audit Approval') return 'bg-indigo-50 text-indigo-700 border-indigo-200'
+  if (s === 'Disapproved' || s === 'Disapproved by Audit' || s === 'Rejected' || s === 'Rejected by Finance') {
+    return 'bg-rose-50 text-rose-700 border-rose-200'
+  }
+  if (s === 'Transfer In Transit') return 'bg-blue-50 text-blue-700 border-blue-200'
+  if (s === 'Transfer Received') return 'bg-teal-50 text-teal-700 border-teal-200'
+  return 'bg-slate-50 text-slate-700 border-slate-200'
 }
 
 function isBlankStatusEntry(entry: PettyCashTransaction | null | undefined): boolean {
@@ -641,15 +667,13 @@ export const PettyCashPage: React.FC = () => {
 
       return true
     })
-    // Most recent at the top: newest date first, then (same day) the most recently created first.
-    // Each row keeps the running balance the server worked out in chronological order.
+    // Most recent at the top: newest date first. Within a day keep the server's order (newest
+    // recorded first), the same order it used to work out each row's ending balance, so reading
+    // up the table every balance = the row below it + In − Out.
     .map((item, idx) => ({ item, idx }))
     .sort((a, b) => {
       const byDate = String(b.item.date || '').slice(0, 10).localeCompare(String(a.item.date || '').slice(0, 10))
       if (byDate !== 0) return byDate
-      const aTime = a.item.createdAt ? Date.parse(a.item.createdAt) : NaN
-      const bTime = b.item.createdAt ? Date.parse(b.item.createdAt) : NaN
-      if (!isNaN(aTime) && !isNaN(bTime) && aTime !== bTime) return bTime - aTime
       return a.idx - b.idx
     })
     .map(({ item }) => item)
@@ -737,7 +761,13 @@ export const PettyCashPage: React.FC = () => {
       if (!isReviewConfirmModalOpen) reviewAutoSelectedRef.current = false
       return
     }
-    if (reviewAutoSelectedRef.current || selectedFundingBankId || bankAccounts.length === 0) return
+    if (reviewAutoSelectedRef.current || selectedFundingBankId) return
+    if (isReimbursementEntry(targetEntry)) {
+      setSelectedFundingBankId(PETTY_CASH_FUNDING)
+      reviewAutoSelectedRef.current = true
+      return
+    }
+    if (bankAccounts.length === 0) return
     const ownAccount = preferSoleOwnedBanks(
       bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || '')),
       targetEntry?.companyName || ''
@@ -746,7 +776,7 @@ export const PettyCashPage: React.FC = () => {
       setSelectedFundingBankId(ownAccount.id)
     }
     reviewAutoSelectedRef.current = true
-  }, [isReviewConfirmModalOpen, reviewAction, selectedFundingBankId, bankAccounts, targetEntry?.companyName])
+  }, [isReviewConfirmModalOpen, reviewAction, selectedFundingBankId, bankAccounts, targetEntry])
 
   // Open Confirmation Modal for Endorse, Reject, Approve or Disapprove
   const handleOpenReviewConfirm = (action: 'endorse' | 'reject' | 'approve' | 'disapprove') => {
@@ -755,7 +785,11 @@ export const PettyCashPage: React.FC = () => {
     setReviewError('')
     // For a Finance endorsement, preselect the requesting company's own bank account when it
     // exists (Finance may change it to an outside funder). Otherwise leave it unchosen.
-    if (action === 'endorse') {
+    if (action === 'endorse' && isReimbursementEntry(targetEntry)) {
+      // Reimbursements are paid from the company's own petty cash unless Finance picks a bank.
+      setSelectedFundingBankId(PETTY_CASH_FUNDING)
+      reviewAutoSelectedRef.current = true
+    } else if (action === 'endorse') {
       // The company's own (sole-owner) bank first; a shared bank only if it has none of its own
       const ownAccount = preferSoleOwnedBanks(
         bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry?.companyName || '')),
@@ -787,7 +821,8 @@ export const PettyCashPage: React.FC = () => {
 
     // Spec 0012: Finance must choose a funding bank belonging to the company before endorsing (except float-only zero-excess settlements).
     const selectedBank = bankAccounts.find((acc) => String(acc.id) === String(selectedFundingBankId))
-    const isOwnCompanyBank = Boolean(
+    const isPettyCashChoice = selectedFundingBankId === PETTY_CASH_FUNDING && isReimbursementEntry(targetEntry)
+    const isOwnCompanyBank = isPettyCashChoice || Boolean(
       selectedBank && (!targetEntry.companyName || isAccountOwnedBy(selectedBank, targetEntry.companyName))
     )
 
@@ -1566,6 +1601,13 @@ export const PettyCashPage: React.FC = () => {
                           <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             Reimbursed
                           </span>
+                        ) : isApproved ? (
+                          <span
+                            className="text-xs font-semibold text-amber-700 whitespace-nowrap"
+                            title="Approved by Audit. Only Reimbursed is green."
+                          >
+                            Approved
+                          </span>
                         ) : (
                           <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             {entry.status}
@@ -1731,49 +1773,35 @@ export const PettyCashPage: React.FC = () => {
                       </span>
                     </div>
                   )}
-                  <div>
-                    <span className="text-xs font-medium text-muted-fg block">
-                      Running Balance
-                    </span>
-                    <span className="text-xl sm:text-2xl font-bold text-focus tabular-nums">
-                      {formatPHP(targetEntry.runningBalance)}
-                    </span>
-                  </div>
                 </div>
 
-                <div className="flex flex-col sm:items-end gap-1">
-                  <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex flex-col sm:items-end gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {!isBlankStatusEntry(targetEntry) && targetEntry.status && (
                       <span
                         className={cn(
-                          'text-xs font-bold uppercase tracking-wider whitespace-nowrap',
-                          targetEntry.status === 'Approved' && 'text-emerald-700',
-                          (targetEntry.status === 'Pending Finance Approval' || targetEntry.status === 'Pending Finance Endorsement') &&
-                            'text-amber-700',
-                          (targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' || targetEntry.status === 'Rejected' || targetEntry.status === 'Rejected by Finance') &&
-                            'text-rose-700',
-                          targetEntry.status === 'Settled' || targetEntry.status === 'Reimbursed'
-                            ? 'text-teal-700'
-                            : 'text-slate-700'
+                          'inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border shadow-2xs',
+                          getPettyStatusTone(targetEntry)
                         )}
                       >
                         {targetEntry.status}
                       </span>
                     )}
-                    {!isBlankStatusEntry(targetEntry) && targetEntry.status && targetEntry.auditStatus && (
-                      <span className="text-muted-fg/40 text-xs font-normal">·</span>
-                    )}
-                    {targetEntry.auditStatus === 'Verified' ? (
-                      <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
-                        Audited
+                    {/* The workflow badge already says Pending Audit Approval, so don't repeat it. */}
+                    {targetEntry.status === 'Pending Audit Approval' && targetEntry.auditStatus !== 'Verified' && targetEntry.auditStatus !== 'Flagged' ? null : targetEntry.auditStatus === 'Verified' ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs w-fit">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Audited</span>
                       </span>
                     ) : targetEntry.auditStatus === 'Flagged' ? (
-                      <span className="text-xs font-semibold text-rose-700 whitespace-nowrap">
-                        Discrepancy
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs w-fit">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Discrepancy</span>
                       </span>
                     ) : (
-                      <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
-                        Pending Audit
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs w-fit">
+                        <Clock className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Pending Audit</span>
                       </span>
                     )}
                   </div>
@@ -2330,7 +2358,7 @@ export const PettyCashPage: React.FC = () => {
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-semibold text-focus">
                               {targetEntry.status === 'Approved' ? (
-                                <span className="text-emerald-700 font-bold">
+                                <span className="font-bold text-amber-700">
                                   Audited & Approved
                                   {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
                                 </span>
@@ -2791,17 +2819,22 @@ export const PettyCashPage: React.FC = () => {
                       }}
                       placeholder="Choose the bank that funds this request..."
                       aria-label="Funding Bank"
-                      options={(targetEntry?.companyName
-                        ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || ''))
-                        : bankAccounts
-                      ).map((acc) => ({
-                        value: String(acc.id),
-                        label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
-                      }))}
+                      options={[
+                        ...(isReimbursementEntry(targetEntry)
+                          ? [{ value: PETTY_CASH_FUNDING, label: `${PETTY_CASH_FUNDING_LABEL}${targetEntry?.companyName ? ` [${targetEntry.companyName}]` : ''}` }]
+                          : []),
+                        ...(targetEntry?.companyName
+                          ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || ''))
+                          : bankAccounts
+                        ).map((acc) => ({
+                          value: String(acc.id),
+                          label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                        })),
+                      ]}
                     />
                   </div>
                   )}
-                  {!banksLoading && !banksError && (targetEntry?.companyName ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || '')).length === 0 : bankAccounts.length === 0) && (
+                  {!banksLoading && !banksError && !isReimbursementEntry(targetEntry) && (targetEntry?.companyName ? bankAccounts.filter((acc) => isAccountOwnedBy(acc, targetEntry.companyName || '')).length === 0 : bankAccounts.length === 0) && (
                     <p className="text-[11px] text-amber-700 font-medium">
                       {targetEntry?.companyName
                         ? `No bank accounts registered for ${targetEntry.companyName}. Add a bank account for this company before endorsing.`
