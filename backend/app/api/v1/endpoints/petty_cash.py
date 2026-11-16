@@ -578,6 +578,9 @@ async def upload_receipt(
         )
     try:
         path = receipt_storage.upload_receipt_bytes(data, final_mime, filename)
+    except receipt_storage.ReceiptTypeRejectedError as exc:
+        # The bucket refuses this file type: say so, instead of "try again" (retrying cannot help)
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=str(exc))
     except receipt_storage.ReceiptStorageError as exc:
         logger.warning("Receipt upload to storage failed: %s", exc)
         raise HTTPException(
