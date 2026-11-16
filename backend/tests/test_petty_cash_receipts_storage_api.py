@@ -157,6 +157,23 @@ def test_upload_returns_502_instead_of_base64_when_bucket_upload_fails(env):
     assert "data:" not in res.text
 
 
+def test_upload_explains_when_the_bucket_refuses_the_file_type(env):
+    # Exactly what Supabase answers when the bucket's allowed types exclude PDF
+    def refuse(path, data, options=None):
+        raise RuntimeError("{'statusCode': 415, 'error': invalid_mime_type, "
+                           "'message': mime type application/pdf is not supported}")
+
+    env["bucket"].upload = refuse
+    res = env["client"].post(
+        "/api/v1/petty-cash/receipts",
+        files={"file": ("or.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+    )
+
+    assert res.status_code == 415
+    assert "does not accept PDF files" in res.json()["detail"]
+    assert "data:" not in res.text
+
+
 def test_upload_refuses_instead_of_returning_base64_when_storage_is_not_configured(env, monkeypatch):
     # No inline base64 fallback: that is how receipt bytes used to end up in the database
     monkeypatch.setattr(env["endpoint_module"], "get_supabase_admin_client", lambda: None)

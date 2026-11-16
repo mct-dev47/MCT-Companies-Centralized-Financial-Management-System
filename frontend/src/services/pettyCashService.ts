@@ -8,7 +8,14 @@ import { notifyNotificationsUpdated } from './notificationService'
 
 export const PETTY_CASH_METHOD = 'Petty Cash'
 
-export const isPettyCashMethod = (method?: string | null): boolean =>
+/**
+ * Funding choice sent as `bank_account_id` when Finance pays a reimbursement out of the company's
+ * own petty cash instead of a bank (every company has one, it is not a bank account).
+ */
+export const PETTY_CASH_FUNDING = 'petty_cash'
+export const PETTY_CASH_FUNDING_LABEL = 'Company Petty Cash'
+
+export const isPettyCashMethod =(method?: string | null): boolean =>
   (method || '').trim().toLowerCase() === PETTY_CASH_METHOD.toLowerCase()
 
 export interface PettyCashSummary {
