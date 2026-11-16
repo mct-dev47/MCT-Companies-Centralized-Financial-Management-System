@@ -1849,7 +1849,7 @@ export const BankManagementPage: React.FC = () => {
                     setIsSortDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/50 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isBankStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -1903,7 +1903,7 @@ export const BankManagementPage: React.FC = () => {
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/50 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isSortDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                   aria-label="Sort transactions by date"
@@ -2027,14 +2027,14 @@ export const BankManagementPage: React.FC = () => {
                     setTableSearchQuery(e.target.value)
                     setCurrentPage(1)
                   }}
-                  className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+                  className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
                 />
               </div>
 
               {/* Company Dropdown (Finance/Admin only) */}
               {/* Active Company Locked Indicator */}
-              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs shrink-0 select-none">
-                <Building2 className="w-4 h-4 text-primary shrink-0" />
+              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-stroke/50 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs shrink-0 select-none">
+                <Building2 className="w-4 h-4 text-muted-fg shrink-0" />
                 <span className="truncate">{selectedCompany}</span>
               </div>
             </div>
@@ -3248,16 +3248,11 @@ export const BankManagementPage: React.FC = () => {
                       {tx.chequeNo || '—'}
                     </TableCell>
 
-                    {/* Particulars with Company Name below */}
+                    {/* Particulars */}
                     <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars}>
-                      <div className="flex flex-col min-w-0">
-                        <span className="font-semibold text-focus truncate">
-                          {getBankParticularsShortTitle(tx.particulars, tx.category)}
-                        </span>
-                        <span className="text-[11px] text-muted-fg font-normal truncate mt-0.5">
-                          {(tx as any).companyName || activeAccount?.companyName || selectedCompany || 'Corporate'}
-                        </span>
-                      </div>
+                      <span className="font-semibold text-focus truncate block">
+                        {getBankParticularsShortTitle(tx.particulars, tx.category)}
+                      </span>
                     </TableCell>
 
                     {/* Withdrawal */}
@@ -3272,7 +3267,7 @@ export const BankManagementPage: React.FC = () => {
 
                     {/* Category */}
                     <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-muted-fg truncate">
-                      <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-focus/80 truncate">
+                      <span className="truncate block font-medium text-xs text-focus/90">
                         {tx.category}
                       </span>
                     </TableCell>

@@ -353,10 +353,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     <div className="flex items-center gap-2 truncate">
                       <Building2 className="w-4 h-4 text-primary shrink-0" />
                       <span className="truncate font-semibold">{borrowerCompany}</span>
-                    </div>
-                    <span className="text-[11px] text-muted-fg font-normal px-2 py-0.5 rounded-md bg-white border border-stroke/30 shrink-0">
-                      Automatic (Account)
-                    </span>
+                    </div>  
                   </div>
                 )}
                 <FormFieldError error={fieldErrors.borrower} />
@@ -520,7 +517,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
               isLoading={isSubmitting}
               className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <span>{isReviewing ? 'Issue Loan' : 'Review Loan'}</span>
+              <span>{isReviewing ? 'Submit Loan' : 'Request Loan'}</span>
             </Button>
           </div>
         </form>

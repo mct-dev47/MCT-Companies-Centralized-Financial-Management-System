@@ -1050,27 +1050,15 @@ export const ReceivablesPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 2. Customer Type Badge */}
+                      {/* 2. Customer Type */}
                       <TableCell className="w-[12%] px-3.5 py-3.5 text-left whitespace-nowrap">
                         <span
                           className={cn(
-                            'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border',
-                            isStaff
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-sky-50 text-sky-700 border-sky-200'
+                            'text-xs font-medium',
+                            isStaff ? 'text-purple-700' : 'text-sky-700'
                           )}
                         >
-                          {isStaff ? (
-                            <>
-                              <User className="w-3 h-3 text-purple-600" />
-                              <span>Staff</span>
-                            </>
-                          ) : (
-                            <>
-                              <Building2 className="w-3 h-3 text-sky-600" />
-                              <span>External</span>
-                            </>
-                          )}
+                          {isStaff ? 'Staff' : 'External'}
                         </span>
                       </TableCell>
 
@@ -1096,9 +1084,20 @@ export const ReceivablesPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 6. Status Badge */}
+                      {/* 6. Status */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-left whitespace-nowrap">
-                        <StatusPill status={p.status} />
+                        <span
+                          className={cn(
+                            'text-xs font-semibold',
+                            p.status === 'Paid'
+                              ? 'text-emerald-600'
+                              : p.status === 'Partial'
+                              ? 'text-amber-600'
+                              : 'text-rose-600'
+                          )}
+                        >
+                          {p.status}
+                        </span>
                       </TableCell>
 
                       {/* 7. Actions (Standard 3-dots Menu matching system) */}

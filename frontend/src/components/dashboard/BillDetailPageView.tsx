@@ -605,7 +605,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
       {/* Top Action & Navigation Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
-          <BackButton onClick={onBack} label="Back to Bills" />
+          <BackButton onClick={onBack} label="Back to Bills" className="[&>svg]:text-[#960C01]" />
         </div>
       </div>
 
@@ -616,7 +616,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
             {bill.billerName}
           </h1>
           <div className="flex items-center gap-1.5 text-xs text-muted-fg font-medium">
-            <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
+            <Building2 className="w-3.5 h-3.5 text-[#960C01] shrink-0" />
             <span className="font-semibold text-focus/90">{bill.company}</span>
           </div>
         </div>
@@ -633,7 +633,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
               <span>Export</span>
               <ChevronDown
                 className={cn(
-                  'h-3.5 w-3.5 text-muted-fg transition-transform duration-200',
+                  'h-3.5 w-3.5 text-[#960C01] transition-transform duration-200',
                   isExportDropdownOpen && 'rotate-180'
                 )}
               />
@@ -648,7 +648,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                   }}
                   className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-focus hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-muted-fg" />
+                  <FileSpreadsheet className="h-3.5 w-3.5 text-[#960C01]" />
                   <span>Export as CSV</span>
                 </button>
                 <button
@@ -659,7 +659,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                   }}
                   className="w-full text-left px-3 py-2 rounded-xl text-xs font-medium text-focus hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors"
                 >
-                  <FileText className="h-3.5 w-3.5 text-muted-fg" />
+                  <FileText className="h-3.5 w-3.5 text-[#960C01]" />
                   <span>Export as PDF</span>
                 </button>
               </div>
@@ -682,7 +682,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                 onClick={onEdit}
                 className="h-10 px-4 rounded-xl border-stroke/60 bg-white hover:bg-slate-50 text-focus font-semibold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
               >
-                <Pencil className="h-3.5 w-3.5" />
+                <Pencil className="h-3.5 w-3.5 text-[#960C01]" />
                 <span>Edit Terms</span>
               </Button>
             </>
@@ -847,7 +847,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-3">
               <div>
                 <h2 className="text-sm font-bold text-focus flex items-center gap-2">
-                  <Coins className="h-4 w-4 text-emerald-600" />
+                  <Coins className="h-4 w-4 text-[#960C01]" />
                   <span>Payment Schedule & History</span>
                 </h2>
                 <p className="text-[11px] text-muted-fg mt-0.5">
@@ -917,13 +917,6 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                     />
                   ) : (
                     paginatedLedger.map((entry) => {
-                      const badgeStyle =
-                        entry.status === 'Paid'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : entry.status === 'Partially Paid'
-                          ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          : 'bg-slate-100 text-slate-600 border-slate-200'
-
                       return (
                         <TableRow key={entry.id} className="hover:bg-slate-50/60 border-b border-slate-100">
                           <TableCell className="py-3 px-3 text-xs font-semibold text-focus whitespace-nowrap">
@@ -935,8 +928,12 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                           <TableCell className="py-3 px-3 text-center whitespace-nowrap">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider',
-                                badgeStyle
+                                'text-xs font-semibold',
+                                entry.status === 'Paid'
+                                  ? 'text-emerald-600'
+                                  : entry.status === 'Partially Paid'
+                                  ? 'text-amber-600'
+                                  : 'text-slate-600'
                               )}
                             >
                               {entry.status}

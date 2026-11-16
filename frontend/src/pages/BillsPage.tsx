@@ -920,13 +920,10 @@ export const BillsPage: React.FC = () => {
                         className="w-[22%] px-3 py-3.5 text-xs font-semibold text-focus truncate text-left"
                         title={bill.company}
                       >
-                        <div className="flex items-center justify-start gap-1.5 min-w-0 truncate">
-                          <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span className="truncate">{bill.company}</span>
-                        </div>
+                        <span className="truncate block">{bill.company}</span>
                       </TableCell>
 
-                      {/* Latest Billed / Paid Amount & Recurrence */}
+                      {/* Latest Billed / Paid Amount */}
                       <TableCell className="w-[18%] px-3 py-3.5 text-xs font-bold text-focus tabular-nums text-left truncate">
                         <div className="truncate text-left">
                           {bill.latestAmount && bill.latestAmount > 0
@@ -935,43 +932,30 @@ export const BillsPage: React.FC = () => {
                             ? formatPHP(bill.amount)
                             : '—'}
                         </div>
-                        <div className="text-[10px] font-normal truncate mt-0.5 flex justify-start">
-                          {bill.billingCycle === 'Daily' ? (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
-                              Daily
-                            </span>
-                          ) : bill.billingCycle === 'Yearly' ? (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-50 text-purple-700 border border-purple-200/60">
-                              Yearly (Annual)
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
-                              Monthly (Every {bill.dueDayOfMonth || (bill.dueDate ? parseInt(bill.dueDate.slice(8, 10), 10) : 1)})
-                            </span>
-                          )}
-                        </div>
                       </TableCell>
 
-                      {/* Due Date & Reminder */}
+                      {/* Due Date */}
                       <TableCell className="w-[16%] px-3 py-3.5 text-xs text-left truncate">
                         <div className="flex flex-col items-start justify-center min-w-0">
                           <span className="font-semibold text-focus truncate">{formatDisplayDate(bill.dueDate)}</span>
-                          <span className="text-[11px] text-amber-600 flex items-center justify-start gap-1 truncate font-medium">
-                            <BellRing className="w-2.5 h-2.5 shrink-0" />
-                            <span className="truncate">
-                              {bill.billingCycle === 'Daily' ? 'Daily Alert' : `Remind ${bill.reminderDaysBefore}d`}
-                            </span>
-                          </span>
                         </div>
                       </TableCell>
 
                       {/* Status */}
                       <TableCell className="w-[11%] px-2.5 py-3.5 text-center truncate">
                         <div className="flex flex-col gap-1 items-center justify-center">
-                          <StatusPill
-                            status={isPaid ? 'Paid' : isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Unpaid'}
-                            label={isPaid ? 'Paid' : isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Unpaid'}
-                          />
+                          <span
+                            className={cn(
+                              'text-xs font-semibold',
+                              isPaid
+                                ? 'text-emerald-600'
+                                : isOverdue
+                                ? 'text-rose-600'
+                                : 'text-amber-600'
+                            )}
+                          >
+                            {isPaid ? 'Paid' : isOverdue ? 'Overdue' : isDueSoon ? 'Due Soon' : 'Unpaid'}
+                          </span>
                           {bill.auditDate && (
                             <span className="text-[10px] text-slate-500 font-normal flex items-center justify-center gap-1" title={`Audited at: ${bill.auditDate}`}>
                               <Clock className="w-2.5 h-2.5 text-slate-400 shrink-0" />
@@ -980,8 +964,8 @@ export const BillsPage: React.FC = () => {
                           )}
                           {bill.auditStatus && (
                             <span className={cn(
-                              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold w-fit",
-                              bill.auditStatus === 'Verified' ? "bg-emerald-50 text-emerald-700 border border-emerald-200/80" : "bg-amber-50 text-amber-700 border border-amber-200/80"
+                              "text-[10px] font-semibold",
+                              bill.auditStatus === 'Verified' ? "text-emerald-600" : "text-amber-600"
                             )}>
                               {bill.auditStatus === 'Verified' ? 'Audited' : 'Discrepancy'}
                             </span>

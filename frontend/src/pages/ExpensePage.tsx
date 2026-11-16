@@ -1020,10 +1020,10 @@ export const ExpensePage: React.FC = () => {
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Active Company Locked Indicator */}
               <div
-                className="inline-flex items-center gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                className="inline-flex items-center gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/50 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                 title={selectedCompany}
               >
-                <Building2 className="w-4 h-4 text-primary shrink-0" />
+                <Building2 className="w-4 h-4 text-muted-fg shrink-0" />
                 <span className="truncate min-w-0">{selectedCompany}</span>
               </div>
 
@@ -1344,12 +1344,12 @@ export const ExpensePage: React.FC = () => {
                           <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                'text-xs font-semibold',
                                 group.auditStatus === 'All Verified'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  ? 'text-emerald-600'
                                   : group.auditStatus === 'Discrepancy'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  ? 'text-rose-600'
+                                  : 'text-amber-600'
                               )}
                             >
                               {group.auditStatus}
