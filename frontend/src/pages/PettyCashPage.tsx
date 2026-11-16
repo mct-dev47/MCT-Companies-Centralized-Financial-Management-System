@@ -1528,7 +1528,7 @@ export const PettyCashPage: React.FC = () => {
                   title="No petty cash transactions found"
                   description="No transactions match your active company or filter criteria."
                   action={
-                    canTransact ? (
+                    canRequestTopUp ? (
                       <Button
                         type="button"
                         variant="primary"
