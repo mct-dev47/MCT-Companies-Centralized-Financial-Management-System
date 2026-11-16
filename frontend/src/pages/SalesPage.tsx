@@ -374,6 +374,10 @@ export const SalesPage: React.FC = () => {
       showToast('This sale has been Verified by an Auditor and is locked as read-only.', 'error')
       return
     }
+    if (sale.sourceModule) {
+      showToast(`This sale was recorded from ${sale.sourceModule}. Change it on the ${sale.sourceModule} page.`, 'error')
+      return
+    }
 
     const st = (sale as any).payment_status || (sale.status === 'Overdue' ? 'Unpaid' : sale.status)
     if (newStatus === 'Deposited') {
@@ -2904,8 +2908,15 @@ export const SalesPage: React.FC = () => {
               </>
             )}
 
+            {/* Made by Tenants or Lending: changed only on that page */}
+            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && activeMenuSale?.sourceModule && (
+              <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg">
+                Recorded from {activeMenuSale.sourceModule}. Edit or remove it there.
+              </p>
+            )}
+
             {/* 2. Supervisor / Admin: Edit */}
-            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && (
+            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && !activeMenuSale?.sourceModule && (
               <button
                 type="button"
                 onClick={() => {
@@ -2925,7 +2936,7 @@ export const SalesPage: React.FC = () => {
             )}
 
             {/* 3. Supervisor / Admin: Delete */}
-            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && (
+            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && !activeMenuSale?.sourceModule && (
               <div className="border-t border-slate-100 mt-1 pt-1">
                 <button
                   type="button"
@@ -3009,12 +3020,21 @@ export const SalesPage: React.FC = () => {
               <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
             </button>
 
-            {isCompanyUser && !isOwner && (
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => i.sourceModule) && (
+              <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
+                {dayMenu.items.every((i) => i.sourceModule) ? 'These records come' : 'Some records come'} from{' '}
+                {Array.from(new Set(dayMenu.items.map((i) => i.sourceModule).filter(Boolean))).join(' / ')}. Edit or
+                remove them there.
+              </p>
+            )}
+
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => !i.sourceModule) && (
               <>
                 <button
                   type="button"
                   onClick={() => {
-                    const target = dayMenu.items[0]
+                    // Records made by Tenants or Lending are changed only on their own page
+                    const target = dayMenu.items.find((i) => !i.sourceModule)
                     setDayMenu(null)
                     if (target) {
                       navigate('/sales/add', {
@@ -3031,7 +3051,7 @@ export const SalesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const items = dayMenu.items
+                    const items = dayMenu.items.filter((i) => !i.sourceModule)
                     const date = dayMenu.date
                     setDayMenu(null)
                     if (items && items.length > 0) {

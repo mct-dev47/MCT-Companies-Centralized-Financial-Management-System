@@ -161,7 +161,7 @@ export const DashboardPage: React.FC = () => {
         }
       }, 400)
     }
-    const unsubs = (['AUDIT_UPDATED', 'LOANS_UPDATED', 'PETTY_CASH_UPDATED', 'BANK_UPDATED', 'TENANTS_UPDATED', 'SALES_UPDATED', 'EXPENSES_UPDATED'] as const).map(
+    const unsubs = (['AUDIT_UPDATED', 'LOANS_UPDATED', 'PETTY_CASH_UPDATED', 'BANK_UPDATED', 'TENANTS_UPDATED', 'LENDING_UPDATED', 'SALES_UPDATED', 'EXPENSES_UPDATED'] as const).map(
       (event) => websocketService.subscribe(event, reload)
     )
     return () => {

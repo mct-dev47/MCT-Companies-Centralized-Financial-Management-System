@@ -411,6 +411,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
       websocketService.subscribe('LOANS_UPDATED', handleRefresh),
       websocketService.subscribe('PETTY_CASH_UPDATED', handleRefresh),
       websocketService.subscribe('TENANTS_UPDATED', handleRefresh),
+      websocketService.subscribe('LENDING_UPDATED', handleRefresh),
       websocketService.subscribe('AUDIT_UPDATED', handleRefresh),
       websocketService.subscribe('SALES_UPDATED', handleRefresh),
     ]

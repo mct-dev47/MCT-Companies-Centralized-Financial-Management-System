@@ -90,10 +90,19 @@ import { cn } from '@/lib/utils'
 const LEDGER_LOAN_STATUSES = new Set([
   'pending audit approval',
   'approved',
+  'disbursed',
   'paid',
   'partially paid',
+  'fully paid',
   'overdue',
 ])
+
+/**
+ * Statuses where the money has actually left the lender's bank (spec 0046), the same rule the bank uses.
+ * "Approved" means Audit approved but Finance has not disbursed yet, so it shows as Pending and is not
+ * counted in the totals.
+ */
+const DISBURSED_LOAN_STATUSES = new Set(['disbursed', 'paid', 'partially paid', 'fully paid', 'overdue'])
 
 /**
  * The day a sale's money was deposited, as MM/DD/YY (same format as the row date).
@@ -127,12 +136,14 @@ const loanHasLender = (l: LoanItem): boolean => {
  * One loan becomes up to two rows: a Deposit for the borrower, a Withdrawal for the lender.
  */
 const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
-  if (!LEDGER_LOAN_STATUSES.has((l.status || '').trim().toLowerCase())) return []
+  const statusLower = (l.status || '').trim().toLowerCase()
+  if (!LEDGER_LOAN_STATUSES.has(statusLower)) return []
 
-  const awaitingAudit = isAwaitingAudit(l.status)
+  // Not money yet: waiting for Audit, or approved but not disbursed. Shown as Pending, left out of totals.
+  const awaitingAudit = isAwaitingAudit(l.status) || !DISBURSED_LOAN_STATUSES.has(statusLower)
   const status: DashboardTransactionItem['status'] = awaitingAudit
     ? 'Pending'
-    : (l.status || '').trim().toLowerCase() === 'overdue'
+    : statusLower === 'overdue'
     ? 'Overdue'
     : 'Paid'
   const amount = l.amount || 0
@@ -1002,6 +1013,7 @@ export const TransactionPage: React.FC = () => {
         depositStatus: s.depositStatus || (s as any).deposit_status || 'Pending',
         deposit_status: s.depositStatus || (s as any).deposit_status || 'Pending',
         remarks: s.remarks || '',
+        sourceModule: s.sourceModule,
         bankAccountId: (s as any).bankAccountId || (s as any).bank_account_id,
         bankName: (s as any).bankName || (s as any).bank_name,
         // The row stays on the sale date for auditing; the bank deposit date rides along
@@ -1036,6 +1048,7 @@ export const TransactionPage: React.FC = () => {
         items: e.items,
         paidAmount: getPaidDisbursementForExpense(e),
         remarks: e.remarks || '',
+        sourceModule: e.sourceModule,
         bankAccountId: (e as any).bankAccountId || (e as any).bank_account_id,
         bankName: (e as any).bankName || (e as any).bank_name,
       }))
@@ -1145,6 +1158,7 @@ export const TransactionPage: React.FC = () => {
       websocketService.subscribe('PETTY_CASH_UPDATED', reload),
       websocketService.subscribe('AUDIT_UPDATED', reload),
       websocketService.subscribe('TENANTS_UPDATED', reload),
+      websocketService.subscribe('LENDING_UPDATED', reload),
     ]
     return () => {
       if (timer) window.clearTimeout(timer)
@@ -2096,6 +2110,7 @@ export const TransactionPage: React.FC = () => {
     !isFinanceOnly &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
+    !tx.sourceModule &&
     tx.auditStatus !== 'Verified'
 
   // Unaudited Sales/Expenses can be deleted by Finance/Supervisors (never audited/verified or deposited sales)
@@ -2103,10 +2118,12 @@ export const TransactionPage: React.FC = () => {
     isBusinessWriter &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
+    !tx.sourceModule &&
     tx.auditStatus !== 'Verified'
 
   const getDeleteBlockedReason = (tx: DashboardTransactionItem): string | null => {
     if (tx.auditStatus === 'Verified') return 'Audited records cannot be deleted'
+    if (tx.sourceModule) return `Recorded from ${tx.sourceModule}. Remove it on the ${tx.sourceModule} page`
     if (tx.type === 'Sales' && (tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited')) {
       return 'Deposited sales cannot be deleted'
     }

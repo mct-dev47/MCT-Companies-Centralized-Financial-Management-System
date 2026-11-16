@@ -1,4 +1,12 @@
 import { formatUserFriendlyErrorMessage } from '../utils/errorUtils'
+import { notifyNotificationsUpdated } from './notificationService'
+
+/** fetch for lending writes: a successful save refreshes the notification bell right away. */
+async function mutate(input: RequestInfo, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, init)
+  if (res.ok) notifyNotificationsUpdated()
+  return res
+}
 
 function getAuthToken(): string | null {
   if (typeof window === 'undefined') return null
@@ -369,7 +377,7 @@ class LendingServiceGateway {
   async createFacility(payload: LendingCreateFacilityPayload): Promise<LendingFacility> {
     const termDays = payload.termDays || (payload.paymentFrequency === 'Daily' ? 40 : 2)
     try {
-      const res = await fetch('/api/v1/lending/borrowers', {
+      const res = await mutate('/api/v1/lending/borrowers', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -423,7 +431,7 @@ class LendingServiceGateway {
   ): Promise<LendingFacility> {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
     try {
-      const res = await fetch('/api/v1/lending/borrowers/' + numId, {
+      const res = await mutate('/api/v1/lending/borrowers/' + numId, {
         method: 'PUT',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -462,7 +470,7 @@ class LendingServiceGateway {
   async deleteBorrower(borrowerId: string | number): Promise<{ success: boolean; message: string }> {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
     try {
-      const res = await fetch('/api/v1/lending/borrowers/' + numId, {
+      const res = await mutate('/api/v1/lending/borrowers/' + numId, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       })
@@ -494,7 +502,7 @@ class LendingServiceGateway {
   ): Promise<LendingFacility> {
     const numId = typeof borrowerId === 'number' ? borrowerId : parseInt(String(borrowerId).replace(/\D/g, ''), 10)
     try {
-      const res = await fetch(`/api/v1/lending/borrowers/${numId}/audit`, {
+      const res = await mutate(`/api/v1/lending/borrowers/${numId}/audit`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -547,7 +555,7 @@ class LendingServiceGateway {
     }
 
     try {
-      const res = await fetch('/api/v1/lending/payments', {
+      const res = await mutate('/api/v1/lending/payments', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -607,7 +615,7 @@ class LendingServiceGateway {
   ): Promise<LendingFacility> {
     const numId = typeof paymentId === 'number' ? paymentId : parseInt(String(paymentId).replace(/\D/g, ''), 10)
     try {
-      const res = await fetch(`/api/v1/lending/payments/${numId}`, {
+      const res = await mutate(`/api/v1/lending/payments/${numId}`, {
         method: 'PATCH',
         headers: getAuthHeaders(),
         body: JSON.stringify({
@@ -645,7 +653,7 @@ class LendingServiceGateway {
   async deletePayment(paymentId: string | number): Promise<LendingFacility> {
     const numId = typeof paymentId === 'number' ? paymentId : parseInt(String(paymentId).replace(/\D/g, ''), 10)
     try {
-      const res = await fetch(`/api/v1/lending/payments/${numId}`, {
+      const res = await mutate(`/api/v1/lending/payments/${numId}`, {
         method: 'DELETE',
         headers: getAuthHeaders(),
       })

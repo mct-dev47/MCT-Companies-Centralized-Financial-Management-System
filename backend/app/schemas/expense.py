@@ -169,6 +169,8 @@ class ExpenseOut(BaseModel):
     audit_remarks: Optional[str] = None
     remarks: Optional[str] = None
     bank_account_id: Optional[str] = None
+    # "Tenants" / "Lending" when the record was created there; it can only be edited or removed on that page.
+    source_module: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

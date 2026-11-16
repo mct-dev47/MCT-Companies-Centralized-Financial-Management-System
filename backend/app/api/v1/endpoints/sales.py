@@ -95,6 +95,11 @@ def _with_paid_amounts(db: Session, outs: List[SaleOut]) -> List[SaleOut]:
             o.paid_amount = paid.get(o.sales_id)
     except Exception as e:
         print(f"Paid amount computation skipped: {e}")
+    from app.services.income_bank_links import sale_sources
+
+    sources = sale_sources(db, [o.sales_id for o in outs])
+    for o in outs:
+        o.source_module = sources.get(o.sales_id)
     return outs
 
 
@@ -943,6 +948,8 @@ def update_sale(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     if sale_in.amount is not None and sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
@@ -1318,6 +1325,8 @@ def update_sale_deposit_status(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     target_deposit_status = deposit_in.deposit_status
 
     existing_company_id = None
@@ -1556,6 +1565,8 @@ def delete_sale(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     deleted_from_supabase = False
     deleted_company_id = None
     deleted_tx_date = None

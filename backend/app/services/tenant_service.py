@@ -673,15 +673,59 @@ class TenantService:
         if "notes" in provided:
             update["notes"] = (provided["notes"] or "").strip() or None
         if "bank_account_id" in provided:
-            # New payments go to the new bank; payments already recorded keep the sale (and bank) they have.
+            # The lease's bank is where its payments sit: payments already recorded move with it.
             raw_bank = (provided["bank_account_id"] or "").strip()
             update["bank_account_id"] = (
                 links.validate_company_bank(self.db, old["company_id"], raw_bank).id if raw_bank else None
             )
+        new_lease = {**old, **update}
+        plan = self._payment_sale_plan(old.get("payments") or [], new_lease)
         update.update(self._audit_reset(old))
         row = self._run("update_lease", lease_id, update)
+        if plan:
+            self._apply_payment_sale_plan(new_lease, plan)
+            if hasattr(self.db, "expire_all"):
+                self.db.expire_all()
+            row = self._run("get_lease", lease_id)
         system_cache.invalidate_tag("notifications")
         return self.to_out(row)
+
+    def _payment_sale_plan(self, payments: List[Dict[str, Any]], new_lease: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Which recorded payments need their sale (and bank) patched after a lease edit: a new bank, or a
+        new tenant/unit name in the sale text. A payment whose sale an Auditor has Verified is locked, so an
+        edit that would change it is refused before anything is saved."""
+        from app.models.finance import Sale
+
+        new_bank = new_lease.get("bank_account_id")
+        plan = []
+        for p in payments:
+            if p.get("status") == "Missed" or float(p.get("amount") or 0) <= 0:
+                continue
+            sale_id = p.get("sale_id")
+            sale = self.db.query(Sale).filter(Sale.sales_id == sale_id).first() if sale_id else None
+            if sale is None and not new_bank:
+                continue
+            text = self._sale_text(new_lease, p)
+            if sale is not None and sale.bank_account_id == new_bank and (sale.particulars or "") == links._plain(text):
+                continue
+            if sale is not None and links.is_verified(sale.audit_status):
+                raise HTTPException(
+                    status_code=409,
+                    detail="A payment on this lease is already in Sales and has been Verified by an Auditor, "
+                           "so the lease's bank, tenant or unit can no longer be changed.",
+                )
+            plan.append(p)
+        return plan
+
+    def _apply_payment_sale_plan(self, lease: Dict[str, Any], plan: List[Dict[str, Any]]) -> None:
+        """Patch each payment's sale to the lease as it is now, then move the bank to match."""
+        for p in plan:
+            data = {k: p.get(k) for k in ("payment_date", "amount", "method", "reference_no", "status", "period_index")}
+            old_sale_id = p.get("sale_id")
+            sale_id = self._save_sale(lease, data, old_sale_id, lease.get("bank_account_id"))
+            if sale_id != old_sale_id:
+                self._run("update_payment", p["payment_id"], {"sale_id": sale_id})
+            links.reconcile_sale(self.db, sale_id)
 
     def delete_lease(self, lease_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         row = self.get_row(lease_id, user)
@@ -813,7 +857,9 @@ class TenantService:
         old = self._find_payment(lease, payment_id)
         links.assert_sale_editable(self.db, old.get("sale_id"))
         data = self._payment_data(lease, body, payment_id)
-        sale_id = self._save_sale(lease, data, old.get("sale_id"), self._sale_bank(old.get("sale_id"), lease))
+        # The sale follows the lease's bank; an older lease with no bank keeps the sale where it is.
+        bank = lease.get("bank_account_id") or self._sale_bank(old.get("sale_id"), lease)
+        sale_id = self._save_sale(lease, data, old.get("sale_id"), bank)
         data["sale_id"] = sale_id
         self._run("update_payment", payment_id, data)
         links.reconcile_sale(self.db, sale_id)
