@@ -25,6 +25,9 @@ class BankTransactionOut(BankTransactionBase):
     bank_account_id: str
     # Read via entry_source_safe so serializing never queries a column that may not exist yet
     entry_source: Optional[str] = Field(None, validation_alias=AliasChoices("entry_source_safe", "entry_source"))
+    # The sale / expense this entry was posted for (None = typed directly in Bank Management)
+    source_sale_id: Optional[int] = None
+    source_expense_id: Optional[int] = None
     created_at: Optional[datetime] = None
 
 
