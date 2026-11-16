@@ -684,29 +684,16 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         )
       )
     } catch (err: any) {
-      // Fallback: convert file to local data URL so submission isn't broken
-      try {
-        const reader = new FileReader()
-        reader.onload = (e) => {
-          const dataUrl = e.target?.result as string
-          setAttachments((prev) =>
-            prev.map((att) =>
-              att.id === item.id
-                ? { ...att, status: 'uploaded', url: dataUrl, error: undefined }
-                : att
-            )
-          )
-        }
-        reader.readAsDataURL(item.file)
-      } catch {
-        setAttachments((prev) =>
-          prev.map((att) =>
-            att.id === item.id
-              ? { ...att, status: 'failed', error: 'Upload failed. Click retry or remove.' }
-              : att
-          )
+      // Receipts only ever go to the storage bucket. (This used to fall back to an inline base64
+      // copy, which is how receipt files ended up saved in the database.) Show why, and let them retry.
+      const reason = err instanceof Error && err.message ? err.message : 'Upload failed.'
+      setAttachments((prev) =>
+        prev.map((att) =>
+          att.id === item.id
+            ? { ...att, status: 'failed', error: `${reason} Click retry or remove.` }
+            : att
         )
-      }
+      )
     }
   }
 
@@ -838,6 +825,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const isFileUploading = attachments.some((att) => att.status === 'uploading')
     if (isFileUploading) {
       setGeneralError('Please wait for files to finish uploading before submitting.')
+      return
+    }
+    // A failed upload is never sent (it would just vanish from the request), so ask to fix it first
+    if (attachments.some((att) => att.status === 'failed')) {
+      setGeneralError('A receipt did not upload. Retry it or remove it before submitting.')
       return
     }
 

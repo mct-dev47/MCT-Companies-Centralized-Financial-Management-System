@@ -94,10 +94,22 @@ def _resolve_receipt_url(receipt_url: Optional[str], attachments: Optional[str])
     return None
 
 
+def _receipt_storage_failed(exc: Exception) -> HTTPException:
+    """A receipt that cannot go to the bucket stops the save (its bytes are never kept in the database)."""
+    logger.warning("Receipt could not be stored in the bucket: %s", exc)
+    return HTTPException(
+        status_code=502,
+        detail=f"The receipt could not be saved to storage, so nothing was saved. {exc} Please try again.",
+    )
+
+
 def _prepare_receipts(receipt_url: Optional[str], attachments: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Move any inline receipt bytes into the receipts bucket; return storage refs to persist."""
-    atts = receipt_storage.normalize_attachments(attachments)
-    rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    try:
+        atts = receipt_storage.normalize_attachments(attachments)
+        rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    except receipt_storage.ReceiptStorageError as exc:
+        raise _receipt_storage_failed(exc)
     if not rurl:
         rurl = receipt_storage.first_attachment_ref(atts) or _resolve_receipt_url(None, atts)
     return rurl, atts
@@ -1516,10 +1528,14 @@ class PettyCashService:
             topup.paid_by = paid_by.strip() or None
         if category is not None:
             topup.category = category.strip() or None
-        if attachments is not None:
-            topup.attachments = receipt_storage.normalize_attachments(attachments)
-        if receipt_url is not None:
-            topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        try:
+            if attachments is not None:
+                topup.attachments = receipt_storage.normalize_attachments(attachments)
+            if receipt_url is not None:
+                topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        except receipt_storage.ReceiptStorageError as exc:
+            self.db.rollback()
+            raise _receipt_storage_failed(exc)
         if items is not None:
             topup.items = items
 

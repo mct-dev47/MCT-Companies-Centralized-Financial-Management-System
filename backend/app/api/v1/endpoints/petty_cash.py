@@ -1,4 +1,3 @@
-import base64
 import logging
 import mimetypes
 from datetime import date
@@ -571,21 +570,22 @@ async def upload_receipt(
     }
 
     # Store the file in the Supabase "receipts" bucket; the DB keeps only the path.
-    if get_supabase_admin_client() is not None:
-        try:
-            path = receipt_storage.upload_receipt_bytes(data, final_mime, filename)
-        except receipt_storage.ReceiptStorageError as exc:
-            logger.warning("Receipt upload to storage failed: %s", exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Could not upload the receipt right now. Please try again.",
-            )
-        signed = receipt_storage.sign_paths([path]).get(path)
-        return {**base, "url": signed or receipt_storage.storage_ref(path), "storage_path": path}
-
-    # Local dev / tests without Supabase: keep the legacy inline data URL.
-    encoded = base64.b64encode(data).decode("utf-8")
-    return {**base, "url": f"data:{final_mime};base64,{encoded}", "storage_path": None}
+    # There is no inline base64 fallback any more: that is how receipt bytes ended up in the database.
+    if get_supabase_admin_client() is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Receipt storage is not configured on the server, so the receipt was not uploaded.",
+        )
+    try:
+        path = receipt_storage.upload_receipt_bytes(data, final_mime, filename)
+    except receipt_storage.ReceiptStorageError as exc:
+        logger.warning("Receipt upload to storage failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Could not upload the receipt right now. Please try again.",
+        )
+    signed = receipt_storage.sign_paths([path]).get(path)
+    return {**base, "url": signed or receipt_storage.storage_ref(path), "storage_path": path}
 
 
 @router.get("/categories", response_model=List[PettyCashCategoryOut], summary="List configurable categories for a company")
