@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { AlertCircle, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface ReviewItem {
@@ -16,6 +16,8 @@ export interface ModalReviewStepProps {
   warningNotice?: string
   errorMessage?: string | null
   className?: string
+  variant?: 'warning' | 'neutral' | 'info'
+  icon?: React.ReactNode
 }
 
 export const ModalReviewStep: React.FC<ModalReviewStepProps> = ({
@@ -25,14 +27,51 @@ export const ModalReviewStep: React.FC<ModalReviewStepProps> = ({
   warningNotice,
   errorMessage,
   className,
+  variant = 'warning',
+  icon,
 }) => {
+  const renderBannerIcon = () => {
+    if (icon !== undefined) return icon
+    if (variant === 'neutral') {
+      return <Info className="h-4 w-4 text-slate-500 mt-0.5 shrink-0" aria-hidden="true" />
+    }
+    if (variant === 'info') {
+      return <Info className="h-4 w-4 text-sky-600 mt-0.5 shrink-0" aria-hidden="true" />
+    }
+    return <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden="true" />
+  }
+
+  const getBannerStyles = () => {
+    if (variant === 'neutral') {
+      return {
+        wrapper: 'rounded-[12px] bg-slate-100/90 border border-slate-200 p-3.5 flex items-start gap-2.5',
+        title: 'font-semibold text-slate-800',
+        subtitle: 'text-slate-600 mt-0.5',
+      }
+    }
+    if (variant === 'info') {
+      return {
+        wrapper: 'rounded-[12px] bg-sky-500/10 border border-sky-500/20 p-3.5 flex items-start gap-2.5',
+        title: 'font-semibold text-sky-950',
+        subtitle: 'text-sky-800/90 mt-0.5',
+      }
+    }
+    return {
+      wrapper: 'rounded-[12px] bg-amber-500/10 border border-amber-500/20 p-3.5 flex items-start gap-2.5',
+      title: 'font-semibold text-amber-900',
+      subtitle: 'text-amber-800/90 mt-0.5',
+    }
+  }
+
+  const bannerStyles = getBannerStyles()
+
   return (
     <div className={cn('space-y-4 py-2', className)}>
-      <div className="rounded-[12px] bg-amber-500/10 border border-amber-500/20 p-3.5 flex items-start gap-2.5">
-        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" aria-hidden="true" />
-        <div className="text-xs text-amber-900 leading-relaxed">
-          <p className="font-semibold">{title}</p>
-          <p className="text-amber-800/90 mt-0.5">{subtitle}</p>
+      <div className={bannerStyles.wrapper}>
+        {renderBannerIcon()}
+        <div className="text-xs leading-relaxed">
+          <p className={bannerStyles.title}>{title}</p>
+          <p className={bannerStyles.subtitle}>{subtitle}</p>
         </div>
       </div>
 
