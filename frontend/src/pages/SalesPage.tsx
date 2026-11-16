@@ -1748,7 +1748,7 @@ export const SalesPage: React.FC = () => {
 
                             {/* 2. TRANSACTIONS */}
                             <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-focus border border-slate-200">
+                              <span className="text-xs font-medium text-focus">
                                 {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
                               </span>
                             </TableCell>
@@ -1776,12 +1776,12 @@ export const SalesPage: React.FC = () => {
                             <TableCell className="px-2.5 sm:px-3 py-3 text-center text-xs whitespace-nowrap">
                               <span
                                 className={cn(
-                                  'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border',
+                                  'text-xs font-semibold',
                                   hasDiscrepancy
-                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    ? 'text-rose-700'
                                     : pendingCount > 0
-                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    ? 'text-amber-700'
+                                    : 'text-emerald-700'
                                 )}
                               >
                                 {hasDiscrepancy ? 'Discrepancy' : pendingCount > 0 ? `${pendingCount} pending` : 'All audited'}
@@ -1940,12 +1940,12 @@ export const SalesPage: React.FC = () => {
                                                 <td className="px-2.5 py-2.5 align-top text-center whitespace-nowrap">
                                                   <span
                                                     className={cn(
-                                                      'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+                                                      'text-[10px] font-semibold',
                                                       sale.auditStatus === 'Verified'
-                                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                        ? 'text-emerald-700'
                                                         : sale.auditStatus === 'Flagged'
-                                                        ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                                                        ? 'text-rose-700'
+                                                        : 'text-amber-700'
                                                     )}
                                                   >
                                                     {sale.auditStatus === 'Verified' ? 'Audited' : sale.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
@@ -2045,7 +2045,7 @@ export const SalesPage: React.FC = () => {
                             </div>
                           </TableCell>
                           <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-slate-100 text-focus border border-slate-200">
+                            <span className="text-xs font-medium text-focus">
                               {group.transactionCount} {group.transactionCount === 1 ? 'record' : 'records'}
                             </span>
                           </TableCell>
@@ -2077,12 +2077,12 @@ export const SalesPage: React.FC = () => {
                           <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                'text-xs font-semibold',
                                 group.auditStatus === 'All Verified'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  ? 'text-emerald-700'
                                   : group.auditStatus === 'Discrepancy'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  ? 'text-rose-700'
+                                  : 'text-amber-700'
                               )}
                             >
                               {group.auditStatus}
@@ -2118,47 +2118,6 @@ export const SalesPage: React.FC = () => {
                           <TableRow className="bg-slate-50/40 border-b border-slate-200">
                             <TableCell colSpan={7} className="p-3 sm:p-4">
                               <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
-                                <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold text-focus">
-                                      Transactions on {group.formattedDate}
-                                    </span>
-                                    <span className="text-2xs text-muted-fg font-medium">
-                                      ({group.items.length} total)
-                                    </span>
-                                  </div>
-                                  <div className="text-2xs text-muted-fg">
-                                    Inspect, edit, delete, or audit individual day records
-                                  </div>
-                                </div>
-                                {(() => {
-                                  const byBank = new Map<string, { count: number; total: number }>()
-                                  group.items.forEach((it) => {
-                                    const key = String(it.bankAccountId || '')
-                                    const entry = byBank.get(key) || { count: 0, total: 0 }
-                                    entry.count += 1
-                                    entry.total += (tableTab === 'Deposit' ? getRealizedCashForSale(it) : it.deposit)
-                                    byBank.set(key, entry)
-                                  })
-                                  return (
-                                    <div className="px-4 py-3 border-b border-slate-200 bg-white">
-                                      <p className="text-2xs font-bold uppercase tracking-wider text-muted-fg mb-2">By bank</p>
-                                      <div className="flex flex-wrap gap-2">
-                                        {Array.from(byBank.entries()).map(([key, v]) => (
-                                          <div
-                                            key={key || 'none'}
-                                            className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs"
-                                          >
-                                            <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
-                                            <span className="font-semibold text-focus">{bankLabel(key)}</span>
-                                            <span className="text-muted-fg">{v.count} {v.count === 1 ? 'record' : 'records'}</span>
-                                            <span className="font-bold tabular-nums text-focus">{formatPHP(v.total)}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )
-                                })()}
                                 <div className="overflow-x-auto">
                                   <table className="w-full text-left text-xs">
                                     <colgroup>
@@ -2514,12 +2473,12 @@ export const SalesPage: React.FC = () => {
                           <TableCell className="px-2 py-3 text-center whitespace-nowrap">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                'text-xs font-semibold',
                                 sale.auditStatus === 'Verified'
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  ? 'text-emerald-700'
                                   : sale.auditStatus === 'Flagged'
-                                  ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                                  ? 'text-rose-700'
+                                  : 'text-amber-700'
                               )}
                             >
                               {sale.auditStatus === 'Verified' ? 'Audited' : sale.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}

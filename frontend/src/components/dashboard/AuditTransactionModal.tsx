@@ -1537,19 +1537,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                   <span className="text-xs font-medium text-muted-fg block mb-1">
                     Category
                   </span>
-                  <span
-                    className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold select-none max-w-full truncate"
-                    style={{
-                      backgroundColor: `${categoryColor}15`,
-                      color: categoryColor,
-                      border: `1px solid ${categoryColor}35`,
-                    }}
-                  >
-                    <span
-                      className="w-1.5 h-1.5 rounded-full shrink-0"
-                      style={{ backgroundColor: categoryColor }}
-                    />
-                    <span className="truncate">{displayCategory}</span>
+                  <span className="text-xs font-semibold text-focus block truncate">
+                    {displayCategory}
                   </span>
                 </div>
               )}

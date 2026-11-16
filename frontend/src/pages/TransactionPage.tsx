@@ -437,16 +437,15 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus border-stroke/60',
           fullWidth && 'w-full',
-          selectedAcc ? 'border-primary/50 bg-primary/5' : 'border-stroke/60',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'
         )}
         aria-label={`Filter by bank account: ${triggerLabel}`}
         aria-expanded={isOpen}
       >
         <span className="inline-flex items-center gap-2 min-w-0 flex-1">
-          <Landmark className={cn('h-4 w-4 shrink-0', selectedAcc ? 'text-primary' : 'text-muted-fg')} />
+          <Landmark className={cn('h-4 w-4 shrink-0', selectedAcc ? 'text-focus' : 'text-muted-fg')} />
           <span className="font-semibold text-focus truncate text-left">
             {triggerLabel}
           </span>
@@ -3263,7 +3262,7 @@ export const TransactionPage: React.FC = () => {
                                               >
                                                 {/* 1. TYPE */}
                                                 <td className="px-2.5 py-2.5 align-top whitespace-nowrap">
-                                                  <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+                                                  <span className="text-xs font-medium text-focus">
                                                     {displayType}
                                                   </span>
                                                 </td>
@@ -3282,9 +3281,6 @@ export const TransactionPage: React.FC = () => {
                                                 <td className="px-2.5 py-2.5 align-top text-xs">
                                                   <div className="font-semibold text-focus leading-snug">
                                                     {ledgerTitle}
-                                                  </div>
-                                                  <div className="mt-0.5 text-[11px] text-muted-fg truncate">
-                                                    {subtitle}
                                                   </div>
                                                   {isSalesRow && depositDiff !== 0 && (
                                                     <div className="mt-0.5 text-[10px] font-medium text-amber-700">
@@ -3588,22 +3584,7 @@ export const TransactionPage: React.FC = () => {
                                         >
                                           {/* 1. TYPE */}
                                           <td className="px-2.5 sm:px-3 py-2.5 align-top whitespace-nowrap">
-                                            <span
-                                              className={cn(
-                                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
-                                                displayType === 'Sales'
-                                                  ? 'bg-blue-50 text-blue-800 border-blue-200'
-                                                  : displayType === 'Petty Cash'
-                                                  ? 'bg-purple-50 text-purple-800 border-purple-200'
-                                                  : displayType === 'Expense'
-                                                  ? 'bg-orange-50 text-orange-800 border-orange-200'
-                                                  : displayType === 'Bill'
-                                                  ? 'bg-slate-100 text-slate-800 border-slate-300'
-                                                  : displayType === 'Income'
-                                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                                  : 'bg-slate-100 text-slate-700 border-slate-200'
-                                              )}
-                                            >
+                                            <span className="text-xs font-medium text-focus">
                                               {displayType}
                                             </span>
                                           </td>
@@ -3622,9 +3603,6 @@ export const TransactionPage: React.FC = () => {
                                           <td className="px-2.5 sm:px-3 py-2.5 align-top text-xs">
                                             <div className="font-semibold text-focus leading-snug">
                                               {ledgerTitle}
-                                            </div>
-                                            <div className="mt-0.5 text-[11px] text-muted-fg truncate">
-                                              {subtitle}
                                             </div>
                                           </td>
 
@@ -3673,12 +3651,12 @@ export const TransactionPage: React.FC = () => {
                                           <td className="px-2 py-2.5 align-top text-center whitespace-nowrap">
                                             <span
                                               className={cn(
-                                                'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border',
+                                                'text-xs font-semibold whitespace-nowrap',
                                                 tx.auditStatus === 'Verified'
-                                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                                  ? 'text-emerald-700'
                                                   : tx.auditStatus === 'Flagged'
-                                                  ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                                                  ? 'text-rose-700'
+                                                  : 'text-amber-700'
                                               )}
                                             >
                                               {tx.auditStatus === 'Verified' ? 'Audited' : tx.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
@@ -3945,9 +3923,9 @@ export const TransactionPage: React.FC = () => {
                             </div>
                           </TableCell>
 
-                          {/* 2. TYPE badge */}
+                          {/* 2. TYPE */}
                           <TableCell className="px-2.5 sm:px-3 py-3 text-xs">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200/60">
+                            <span className="text-xs font-medium text-focus">
                               {displayType}
                             </span>
                           </TableCell>
@@ -3962,9 +3940,6 @@ export const TransactionPage: React.FC = () => {
                             <div className="font-semibold text-focus leading-snug truncate">
                               {ledgerTitle}
                             </div>
-                            <div className="mt-0.5 text-[11px] text-muted-fg truncate">
-                              {subtitle}
-                            </div>
                           </TableCell>
 
                           {/* 5. DEPOSIT */}
@@ -3972,16 +3947,9 @@ export const TransactionPage: React.FC = () => {
                             {depositAmt > 0 ? (
                               <div>
                                 <div className="font-bold text-emerald-700">+{formatPHP(depositAmt)}</div>
-                                {isSalesRow && (
-                                  <div
-                                    className={cn(
-                                      'text-[11px] font-medium leading-tight',
-                                      depositDiff === 0 ? 'text-emerald-700' : 'text-amber-700'
-                                    )}
-                                  >
-                                    {depositDiff === 0
-                                      ? '✓ matches the bank'
-                                      : `⚠ bank ${formatPHP(Math.abs(depositDiff))} ${depositDiff < 0 ? 'short' : 'over'}`}
+                                {isSalesRow && depositDiff !== 0 && (
+                                  <div className="text-[11px] font-medium leading-tight text-amber-700">
+                                    ⚠ bank {formatPHP(Math.abs(depositDiff))} {depositDiff < 0 ? 'short' : 'over'}
                                   </div>
                                 )}
                               </div>
@@ -4020,12 +3988,12 @@ export const TransactionPage: React.FC = () => {
                           <TableCell className="px-2 py-3 text-center whitespace-nowrap">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                'text-xs font-semibold whitespace-nowrap',
                                 tx.auditStatus === 'Verified'
-                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  ? 'text-emerald-700'
                                   : tx.auditStatus === 'Flagged'
-                                  ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                                  ? 'text-rose-700'
+                                  : 'text-amber-700'
                               )}
                             >
                               {tx.auditStatus === 'Verified' ? 'Audited' : tx.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
@@ -4111,9 +4079,7 @@ export const TransactionPage: React.FC = () => {
                                         {depositSalesItems.length} {depositSalesItems.length === 1 ? 'sale' : 'sales'} = {formatPHP(totalSalesAmt)}
                                       </td>
                                       <td colSpan={3} className="px-2.5 py-2.5 text-right font-bold">
-                                        {depositDiff === 0 ? (
-                                          <span className="text-emerald-700">✓ Deposit matches the bank</span>
-                                        ) : depositDiff < 0 ? (
+                                        {depositDiff === 0 ? null : depositDiff < 0 ? (
                                           <span className="text-amber-700">⚠ Bank is {formatPHP(Math.abs(depositDiff))} short of this deposit</span>
                                         ) : (
                                           <span className="text-amber-700">⚠ Bank holds {formatPHP(depositDiff)} more than this deposit</span>
@@ -4142,7 +4108,7 @@ export const TransactionPage: React.FC = () => {
                         {saleDateShort}
                       </TableCell>
 
-                      {/* 2. Particulars: Title on Line 1, Company on Line 2, Ref on Line 3 (No cheque, no badge) */}
+                      {/* 2. Particulars (No company, no ref, clean particulars) */}
                       <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-focus/90 align-top" title={tx.particulars || tx.description}>
                         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                           <span className="font-semibold text-focus break-words leading-snug">
@@ -4158,14 +4124,6 @@ export const TransactionPage: React.FC = () => {
                               {lifecycle.overdueLabel}
                             </span>
                           )}
-                        </div>
-                        {tx.company && (
-                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
-                            {tx.company}
-                          </div>
-                        )}
-                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                          {tx.refNo || '—'}
                         </div>
                       </TableCell>
 

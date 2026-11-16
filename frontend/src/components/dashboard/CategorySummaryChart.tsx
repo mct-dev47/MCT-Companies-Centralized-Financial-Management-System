@@ -216,7 +216,6 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
       ? 'Deposit amounts broken down by category'
       : 'Withdrawal amounts broken down by category'
   const Icon = type === 'income' ? TrendingUp : RotateCw
-  const iconBg = type === 'income' ? 'bg-primary' : 'bg-[#0B0F2B]'
 
   const hasData = totalAmount > 0
 
@@ -230,12 +229,7 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
       {/* 1. Header with Icon, Title, and Independent Chart Type Dropdown */}
       <div className="flex items-start sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              'w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-xs',
-              iconBg
-            )}
-          >
+          <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/80 text-focus flex items-center justify-center shrink-0 shadow-xs">
             <Icon className="w-5 h-5" />
           </div>
           <div>

@@ -170,14 +170,13 @@ export const LendingRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chi
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
   const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (isJKPropertyCompany(targetCompany) || (!isAudit && !isLendingEnabledCompany(targetCompany))) {
+  if (!isLendingEnabledCompany(targetCompany)) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -188,14 +187,13 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
   const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (isFilCapCompany(targetCompany) || (!isAudit && !isTenantEnabledCompany(targetCompany))) {
+  if (!isTenantEnabledCompany(targetCompany)) {
     return <Navigate to="/dashboard" replace />
   }
 

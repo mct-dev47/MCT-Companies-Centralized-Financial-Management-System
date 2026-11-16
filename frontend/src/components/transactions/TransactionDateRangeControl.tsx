@@ -205,7 +205,7 @@ export const TransactionDateRangeControl: React.FC<TransactionDateRangeControlPr
         )}
       >
         <span className={cn('inline-flex items-center gap-2 min-w-0', fullWidth && 'flex-1 text-left')}>
-          <CalendarIcon className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-fg')} />
+          <CalendarIcon className={cn('h-4 w-4 shrink-0', isActive ? 'text-focus' : 'text-muted-fg')} />
           <span className={cn('font-semibold text-focus truncate', fullWidth ? 'w-full' : 'max-w-[190px]')}>{triggerLabel}</span>
         </span>
         <ChevronDown

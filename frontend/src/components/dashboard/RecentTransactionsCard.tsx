@@ -229,14 +229,6 @@ export const RecentTransactionsCard: React.FC<RecentTransactionsCardProps> = ({
                           </span>
                         )}
                       </div>
-                      {tx.company && (
-                        <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate">
-                          {tx.company}
-                        </div>
-                      )}
-                      <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                        {tx.refNo || '—'}
-                      </div>
                     </TableCell>
 
                     {/* 3. Method */}

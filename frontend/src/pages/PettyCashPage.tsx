@@ -1526,56 +1526,48 @@ export const PettyCashPage: React.FC = () => {
                             </div>
                           )
                         })()}
-                        {entry.companyName && (
-                          <div className="mt-0.5 text-[11px] font-medium text-focus/70 truncate" title={entry.companyName}>
-                            {entry.companyName}
-                          </div>
-                        )}
-                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                          {entry.referenceNo || `PC-${entry.recordId || entry.id}`}
-                        </div>
                       </TableCell>
 
-                      {/* 4. Status (Beside Particulars - No icon) */}
+                      {/* 4. Status */}
                       <TableCell className="px-3 py-3.5 text-center whitespace-nowrap">
                         {isBlankStatusEntry(entry) ? null : isPendingFinance ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
                             Pending Finance
                           </span>
                         ) : isPendingAudit ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-indigo-500/10 text-indigo-700 border border-indigo-500/20 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
                             Pending Audit
                           </span>
                         ) : isRejectedFinance ? (
-                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-rose-700 whitespace-nowrap">
                             Rejected (Finance)
                           </span>
                         ) : isDisapprovedAudit ? (
-                          <span className="inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-rose-700 whitespace-nowrap">
                             Disapproved (Audit)
                           </span>
                         ) : entry.status === 'Transfer In Transit' ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/10 text-blue-700 border border-blue-500/20 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-blue-700 whitespace-nowrap">
                             Transfer In Transit
                           </span>
                         ) : entry.status === 'Return Pending' ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
                             Return Pending
                           </span>
                         ) : entry.status === 'Transfer Received' ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-teal-500/10 text-teal-700 border border-teal-500/20 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-teal-700 whitespace-nowrap">
                             Transfer Received
                           </span>
                         ) : entry.status === 'Settled' ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             Settled
                           </span>
                         ) : entry.status === 'Reimbursed' ? (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             Reimbursed
                           </span>
                         ) : (
-                          <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                          <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
                             {entry.status}
                           </span>
                         )}
@@ -1609,26 +1601,24 @@ export const PettyCashPage: React.FC = () => {
                         {formatPHP(entry.runningBalance)}
                       </TableCell>
 
-                      {/* 9. Audit Status (No icon) */}
+                      {/* 9. Audit Status */}
                       <TableCell className="px-2 py-3.5 text-center whitespace-nowrap">
                         {entry.auditStatus === 'Verified' ? (
                           <span
-                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap"
+                            className="text-xs font-semibold text-emerald-700 whitespace-nowrap"
                             title={entry.auditedBy ? `Audited by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Audited'}
                           >
                             Audited
                           </span>
                         ) : entry.auditStatus === 'Flagged' ? (
                           <span
-                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-50 text-rose-700 border border-rose-200 whitespace-nowrap"
+                            className="text-xs font-semibold text-rose-700 whitespace-nowrap"
                             title={entry.auditedBy ? `Flagged by ${formatRealName(entry.auditedBy, 'Audit Officer')}` : 'Discrepancy'}
                           >
                             Discrepancy
                           </span>
                         ) : entry.auditStatus === 'Pending Audit' ? (
-                          <span
-                            className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap"
-                          >
+                          <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
                             Pending Audit
                           </span>
                         ) : null}
@@ -1751,39 +1741,39 @@ export const PettyCashPage: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:items-end gap-1.5">
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex flex-col sm:items-end gap-1">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {!isBlankStatusEntry(targetEntry) && targetEntry.status && (
                       <span
                         className={cn(
-                          'inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider border shadow-2xs',
-                          targetEntry.status === 'Approved' && 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                          'text-xs font-bold uppercase tracking-wider whitespace-nowrap',
+                          targetEntry.status === 'Approved' && 'text-emerald-700',
                           (targetEntry.status === 'Pending Finance Approval' || targetEntry.status === 'Pending Finance Endorsement') &&
-                            'bg-amber-50 text-amber-700 border-amber-200',
+                            'text-amber-700',
                           (targetEntry.status === 'Disapproved' || targetEntry.status === 'Disapproved by Audit' || targetEntry.status === 'Rejected' || targetEntry.status === 'Rejected by Finance') &&
-                            'bg-rose-50 text-rose-700 border-rose-200',
+                            'text-rose-700',
                           targetEntry.status === 'Settled' || targetEntry.status === 'Reimbursed'
-                            ? 'bg-teal-50 text-teal-700 border-teal-200'
-                            : 'bg-slate-50 text-slate-700 border-slate-200'
+                            ? 'text-teal-700'
+                            : 'text-slate-700'
                         )}
                       >
                         {targetEntry.status}
                       </span>
                     )}
+                    {!isBlankStatusEntry(targetEntry) && targetEntry.status && targetEntry.auditStatus && (
+                      <span className="text-muted-fg/40 text-xs font-normal">·</span>
+                    )}
                     {targetEntry.auditStatus === 'Verified' ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs w-fit">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Audited</span>
+                      <span className="text-xs font-semibold text-emerald-700 whitespace-nowrap">
+                        Audited
                       </span>
                     ) : targetEntry.auditStatus === 'Flagged' ? (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200 shadow-2xs w-fit">
-                        <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
-                        <span>Discrepancy</span>
+                      <span className="text-xs font-semibold text-rose-700 whitespace-nowrap">
+                        Discrepancy
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs w-fit">
-                        <Clock className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Pending Audit</span>
+                      <span className="text-xs font-semibold text-amber-700 whitespace-nowrap">
+                        Pending Audit
                       </span>
                     )}
                   </div>

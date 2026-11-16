@@ -62,18 +62,18 @@ export const TransactionStatusBadge: React.FC<{
   className?: string
 }> = ({ lifecycle, className }) => {
   const { shortStatusLabel, label, tone, steps } = lifecycle
-  const badgeToneClasses =
+  const toneClasses =
     tone === 'problem'
-      ? 'bg-rose-50 text-rose-800 border-rose-200'
+      ? 'text-rose-700'
       : tone === 'done'
-        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-        : 'bg-amber-50 text-amber-800 border-amber-200'
+        ? 'text-emerald-700'
+        : 'text-amber-700'
 
   return (
     <span
       className={cn(
-        'inline-flex items-center justify-center px-2.5 py-1 rounded-full text-[11px] font-semibold border whitespace-nowrap leading-none',
-        badgeToneClasses,
+        'text-xs font-semibold whitespace-nowrap leading-tight inline-block',
+        toneClasses,
         className
       )}
       aria-label={`Status: ${label}`}

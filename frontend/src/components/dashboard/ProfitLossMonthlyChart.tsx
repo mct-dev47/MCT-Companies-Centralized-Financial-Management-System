@@ -177,7 +177,7 @@ export const ProfitLossMonthlyChart: React.FC<ProfitLossMonthlyChartProps> = ({
       {/* Header */}
       <div className="flex items-start sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+          <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/80 text-focus flex items-center justify-center shrink-0 shadow-xs">
             <Scale className="w-5 h-5" />
           </div>
           <div>

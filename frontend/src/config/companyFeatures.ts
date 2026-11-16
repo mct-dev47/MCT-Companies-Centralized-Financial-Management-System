@@ -31,7 +31,8 @@ export function isJKPropertyCompany(companyName?: string | null): boolean {
     normalized.includes('jkpropertyandventures') ||
     normalized.includes('jkpropertyventures') ||
     normalized.includes('jkventures') ||
-    (normalized.includes('jk') && normalized.includes('property'))
+    normalized.includes('vertures') ||
+    (normalized.includes('jk') && (normalized.includes('property') || normalized.includes('vertures') || normalized.includes('ventures')))
   )
 }
 
