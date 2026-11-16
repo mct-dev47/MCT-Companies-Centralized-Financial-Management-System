@@ -179,19 +179,8 @@ export const PettyCashPage: React.FC = () => {
   const canExecuteFinancialActions = (isFinance || isAdmin) && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
-  // Selected company filter
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-    if (isCompanyScoped && assignedCompany) return assignedCompany
-    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-    return activeCompany || 'All Companies'
-  })
-
-  // Synchronize with activeCompany
-  React.useEffect(() => {
-    if (activeCompany) {
-      setSelectedCompany(activeCompany)
-    }
-  }, [activeCompany])
+  // Selected company filter: strictly locked to activeCompany chosen in Centralized Auth
+  const selectedCompany = activeCompany || assignedCompany
 
   // Dynamic company options from backend
   const [companyList, setCompanyList] = React.useState<string[]>(COMPANY_LIST)
@@ -244,12 +233,10 @@ export const PettyCashPage: React.FC = () => {
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
   const [isAuditStatusDropdownOpen, setIsAuditStatusDropdownOpen] = React.useState(false)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const auditStatusDropdownRef = React.useRef<HTMLDivElement>(null)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const requestDropdownRef = React.useRef<HTMLDivElement>(null)
   const typeDropdownRef = React.useRef<HTMLDivElement>(null)
   const [isRequestDropdownOpen, setIsRequestDropdownOpen] = React.useState(false)
@@ -534,9 +521,6 @@ export const PettyCashPage: React.FC = () => {
       }
       if (auditStatusDropdownRef.current && !auditStatusDropdownRef.current.contains(target)) {
         setIsAuditStatusDropdownOpen(false)
-      }
-      if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
-        setIsCompanyDropdownOpen(false)
       }
       if (requestDropdownRef.current && !requestDropdownRef.current.contains(target)) {
         setIsRequestDropdownOpen(false)
@@ -1181,61 +1165,11 @@ export const PettyCashPage: React.FC = () => {
         <div className="flex flex-col gap-3 pt-1">
           {/* Row 1: All Companies + Type + Status + Audit Status + Date Range */}
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 w-full">
-            {/* 1. All Companies Dropdown (or Assigned Company for scoped roles) */}
-            {!isCompanyScoped ? (
-              <div ref={companyDropdownRef} className="relative flex-[2] min-w-[220px] sm:min-w-[260px]">
-                <button
-                  type="button"
-                  onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-                  className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                    isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                  )}
-                >
-                  <span className="font-medium text-focus/90 truncate flex-1 text-left">
-                    {selectedCompany}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      'h-3.5 w-3.5 text-muted-fg shrink-0 transition-transform duration-200',
-                      isCompanyDropdownOpen && 'transform rotate-180'
-                    )}
-                  />
-                </button>
-
-                {isCompanyDropdownOpen && (
-                  <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150 max-h-64 overflow-y-auto">
-                    {companyList.map((comp) => (
-                      <button
-                        key={comp}
-                        type="button"
-                        onClick={() => {
-                          setSelectedCompany(comp)
-                          setActiveCompany(comp)
-                          setIsCompanyDropdownOpen(false)
-                          setCurrentPage(1)
-                        }}
-                        className={cn(
-                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                          selectedCompany === comp
-                            ? 'bg-primary/10 text-primary font-semibold'
-                            : 'text-focus/80 hover:bg-slate-50'
-                        )}
-                      >
-                        <span className="truncate">{comp}</span>
-                        {selectedCompany === comp && (
-                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="inline-flex items-center justify-between gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs select-none">
-                <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
-              </div>
-            )}
+            {/* 1. Active Company Locked Indicator */}
+            <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
+              <Building2 className="w-4 h-4 text-primary shrink-0" />
+              <span className="truncate">{selectedCompany}</span>
+            </div>
 
             {/* 2. Type Filter Dropdown Button */}
             <div ref={typeDropdownRef} className="relative flex-1 min-w-[110px] sm:min-w-[130px]">

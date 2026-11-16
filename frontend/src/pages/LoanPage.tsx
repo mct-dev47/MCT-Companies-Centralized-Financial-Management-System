@@ -139,26 +139,8 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const [loans, setLoans] = React.useState<LoanItem[]>([])
   const [loading, setLoading] = React.useState(true)
 
-  // Filter state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-    if (isCompanyScoped && assignedCompany) return assignedCompany
-    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-    return activeCompany || 'All Companies'
-  })
-
-  // Keep selectedCompany in sync if user profile loads after initial render (strictly scoped only)
-  React.useEffect(() => {
-    if (isCompanyScoped && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
-    }
-  }, [isCompanyScoped, user?.assignedCompany])
-
-  // Keep selectedCompany in sync with global activeCompany from context
-  React.useEffect(() => {
-    if (activeCompany) {
-      setSelectedCompany(activeCompany)
-    }
-  }, [activeCompany])
+  // Filter state: strictly locked to activeCompany chosen in Centralized Auth
+  const selectedCompany = activeCompany || assignedCompany
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
   const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
@@ -173,13 +155,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
   // Dropdown menus
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
   const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
-  const [companySearch, setCompanySearch] = React.useState('')
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const tableCardRef = React.useRef<HTMLDivElement>(null)
@@ -415,9 +394,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
-      }
-      if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
-        setIsCompanyDropdownOpen(false)
       }
       if (periodDropdownRef.current && !periodDropdownRef.current.contains(target)) {
         setIsPeriodDropdownOpen(false)
@@ -772,7 +748,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   setIsExportDropdownOpen((prev) => !prev)
                   setIsPeriodDropdownOpen(false)
                   setIsStatusDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
                 }}
                 className={cn(
                   'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
@@ -828,114 +803,11 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           {/* Row 1: All Companies + Periods + Status + Date Range + Approve/Pending Toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 sm:gap-3 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 min-w-0">
-              {/* Company Scope: Dropdown for Admin/Finance only */}
-              {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-[2] min-w-[220px] sm:min-w-[260px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsCompanyDropdownOpen((prev) => !prev)
-                      setIsPeriodDropdownOpen(false)
-                      setIsStatusDropdownOpen(false)
-                      setIsExportDropdownOpen(false)
-                    }}
-                    className={cn(
-                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                    )}
-                  >
-                    <span className="font-medium text-focus/90 truncate flex-1 text-left">
-                      {selectedCompany}
-                    </span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {selectedCompany !== 'All Companies' && (
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedCompany('All Companies')
-                            setActiveCompany('All Companies')
-                          }}
-                          className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
-                          title="Reset to All Companies"
-                        >
-                          <X className="h-3 w-3" />
-                        </span>
-                      )}
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                    </div>
-                  </button>
-
-                  {isCompanyDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                          Filter By Company
-                        </span>
-                        {selectedCompany !== 'All Companies' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCompany('All Companies')
-                              setActiveCompany('All Companies')
-                              setIsCompanyDropdownOpen(false)
-                            }}
-                            className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                          >
-                            Clear Filter
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="px-1 mb-2">
-                        <Input
-                          type="text"
-                          placeholder="Search company…"
-                          value={companySearch}
-                          onChange={(e) => setCompanySearch(e.target.value)}
-                          className="h-8 text-xs rounded-lg"
-                          autoFocus
-                        />
-                      </div>
-
-                      <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                        {filteredCompanyList.length === 0 ? (
-                          <div className="py-4 text-center text-xs text-muted-fg">
-                            No matching companies
-                          </div>
-                        ) : (
-                          filteredCompanyList.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                setSelectedCompany(c)
-                                setActiveCompany(c)
-                                setIsCompanyDropdownOpen(false)
-                                setCompanySearch('')
-                              }}
-                              className={cn(
-                                'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                                selectedCompany === c
-                                  ? 'bg-primary/10 text-primary font-semibold'
-                                  : 'text-focus/80 hover:bg-slate-50'
-                              )}
-                            >
-                              <span className="truncate">{c}</span>
-                              {selectedCompany === c && (
-                                <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                              )}
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 select-none">
-                  <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
-                </div>
-              )}
+              {/* Active Company Locked Indicator */}
+              <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs shrink-0 select-none">
+                <Building2 className="w-4 h-4 text-primary shrink-0" />
+                <span className="truncate">{selectedCompany}</span>
+              </div>
 
               {/* Period Dropdown */}
               <div ref={periodDropdownRef} className="relative flex-1 min-w-[120px] sm:min-w-[140px]">
@@ -944,7 +816,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   onClick={() => {
                     setIsPeriodDropdownOpen((prev) => !prev)
                     setIsStatusDropdownOpen(false)
-                    setIsCompanyDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
@@ -992,7 +863,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   onClick={() => {
                     setIsStatusDropdownOpen((prev) => !prev)
                     setIsPeriodDropdownOpen(false)
-                    setIsCompanyDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(

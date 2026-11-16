@@ -75,10 +75,10 @@ def list_bank_accounts(
         return service.list_accounts(company_name=comp.company_name, company_id=comp.company_id)
 
     accounts = service.list_accounts()
-    if user_role in ("finance", "audit", "auditor", "owner"):
+    if user_role in ("audit", "auditor", "owner"):
         return accounts
 
-    # For supervisor, filter to their assigned companies (including shared-owner and alias-matched banks)
+    # For finance, supervisor, and company users, filter to their assigned companies (including shared-owner and alias-matched banks)
     from app.core.company_resolver import normalize_company_id
 
     raw_ids = list(current_user.get("company_ids") or [])

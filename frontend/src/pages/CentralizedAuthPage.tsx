@@ -64,7 +64,7 @@ export const CentralizedAuthPage: React.FC = () => {
         commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
       }
       const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
-      if (role === 'supervisor' && assignedCount <= 1) {
+      if ((role === 'supervisor' || role === 'finance') && assignedCount <= 1) {
         navigate('/dashboard', { replace: true })
       }
     }
@@ -92,14 +92,16 @@ export const CentralizedAuthPage: React.FC = () => {
       const userAssignedIds = user?.companyIds || []
       const role = (user?.role || '').toLowerCase()
 
-      // Supervisor is strictly filtered to their assigned companies
-      if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
+      // Finance and Supervisor are strictly filtered to their assigned companies
+      if ((role === 'supervisor' || role === 'finance') && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
         const filtered = data.filter((comp) => {
           const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
           const nameMatch = userAssignedNames.some((cname) => isCompanyMatch(cname, comp.name))
           return idMatch || nameMatch
         })
         setCompanies(filtered)
+      } else if (role === 'finance') {
+        setCompanies([])
       } else {
         setCompanies(data)
       }

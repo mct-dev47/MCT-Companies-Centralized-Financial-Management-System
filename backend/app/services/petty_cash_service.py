@@ -53,6 +53,14 @@ LEDGER_MOVEMENT_STATUSES = {
 DEFAULT_LOW_BALANCE_THRESHOLD = Decimal("1000.00")
 ZERO = Decimal("0.00")
 
+# Opening float set on the company profile. It funds the wallet balance but is
+# not a transaction, so it is hidden from the ledger and Transactions lists.
+INITIAL_PETTY_CASH_REF = "INITIAL-PC"
+
+
+def _is_initial_petty_cash(topup) -> bool:
+    return (getattr(topup, "reference_no", None) or "").strip().upper() == INITIAL_PETTY_CASH_REF
+
 ACTIVE_RESERVATION_STATUSES = (
     "pending finance endorsement",
     "pending finance approval",
@@ -650,6 +658,7 @@ class PettyCashService:
                 default_desc = "Top-up from sales" if is_approved else "Petty cash reimbursement request"
                 entries.append({
                     **common_data,
+                    "is_initial": _is_initial_petty_cash(t),
                     "entry_id": f"topup-{t.topup_id}",
                     "entry_type": "topup" if is_approved else "request",
                     "description": t.description or default_desc,
@@ -710,10 +719,11 @@ class PettyCashService:
             running += entry["amount_in"] - entry["amount_out"]
             entry["running_balance"] = running
 
+        # The opening float still seeds the running balance above, but is not listed as a row.
         result = [
-            PettyCashLedgerEntry(**entry)
+            PettyCashLedgerEntry(**{k: v for k, v in entry.items() if k != "is_initial"})
             for entry in reversed(entries)
-            if _in_period(entry["entry_date"], start, end)
+            if not entry.get("is_initial") and _in_period(entry["entry_date"], start, end)
         ]
         system_cache.set(cache_key, result, ttl=60, tags=["petty_cash"])
         return result
@@ -842,6 +852,7 @@ class PettyCashService:
         topups = [
             t for t in self._topups(None)
             if (t.status or "").strip().lower() in LEDGER_MOVEMENT_STATUSES
+            and not _is_initial_petty_cash(t)
         ]
         if not topups:
             return []

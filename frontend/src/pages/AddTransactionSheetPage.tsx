@@ -222,21 +222,29 @@ const linkPettyCash = (
     }
   }
 
-  if (changed === 'category') {
-    if (catPetty) return { ...row, paymentMethod: PETTY_CASH, serviceFee: 0 }
-    if (pmPetty && isPettyCash(prev?.category)) return { ...row, paymentMethod: 'Cash' }
+  const linked = ((): SpreadsheetRow => {
+    if (changed === 'category') {
+      if (catPetty) return { ...row, paymentMethod: PETTY_CASH, serviceFee: 0 }
+      if (pmPetty && isPettyCash(prev?.category)) return { ...row, paymentMethod: 'Cash' }
+      return row
+    }
+    if (changed === 'paymentMethod') {
+      if (pmPetty) return { ...row, category: PETTY_CASH }
+      if (catPetty && isPettyCash(prev?.paymentMethod)) return { ...row, category: fallbackCategory }
+      return row
+    }
+    if (catPetty || pmPetty) {
+      return { ...row, category: PETTY_CASH, paymentMethod: PETTY_CASH, serviceFee: 0 }
+    }
     return row
-  }
-  if (changed === 'paymentMethod') {
-    if (pmPetty) return { ...row, category: PETTY_CASH }
-    if (catPetty && isPettyCash(prev?.paymentMethod)) return { ...row, category: fallbackCategory }
-    return row
-  }
-  if (catPetty || pmPetty) {
-    return { ...row, category: PETTY_CASH, paymentMethod: PETTY_CASH, serviceFee: 0 }
-  }
-  return row
+  })()
+  // Petty cash leaves the box the moment it is spent, so a petty cash expense is always Paid
+  return isPettyCash(linked.paymentMethod) ? forcePettyCashPaid(linked) : linked
 }
+
+/** A petty cash expense row is always Paid (and counted as already out), never Pending or Unpaid. */
+const forcePettyCashPaid = (row: SpreadsheetRow): SpreadsheetRow =>
+  row.status === 'Paid' && row.depositStatus === 'Deposited' ? row : { ...row, status: 'Paid', depositStatus: 'Deposited' }
 
 interface AddTransactionSheetPageProps {
   initialType?: 'Sales' | 'Expense'
@@ -2564,7 +2572,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Calculations & Validation
   const calculatedRows = React.useMemo(() => {
-    return rows.map((r) => {
+    return rows.map((raw) => {
+      // Every save reads these rows: a petty cash expense always goes out as Paid
+      const r = !isSales && isPettyCash(raw.paymentMethod) ? forcePettyCashPaid(raw) : raw
       const price = typeof r.unitPrice === 'number' ? r.unitPrice : parseFloat(String(r.unitPrice || '')) || 0
       const qty = typeof r.quantity === 'number' ? r.quantity : parseInt(String(r.quantity || '1'), 10) || 1
       const pmLower = (r.paymentMethod || '').trim().toLowerCase()
@@ -4162,6 +4172,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 : 'bg-amber-50 text-amber-800'
                           )}
                         >
+                          {!isSales && isPettyCash(row.paymentMethod) ? (
+                            // Petty cash is spent on the spot, so the row is Paid and cannot be changed
+                            <div
+                              title="Petty cash expenses are paid immediately, so the status is always Paid"
+                              className="w-full h-11 px-2 text-xs font-bold flex items-center select-none truncate cursor-not-allowed"
+                            >
+                              Paid
+                            </div>
+                          ) : (
                           <div className="relative w-full flex items-center">
                             <select
                               ref={(el) => {
@@ -4185,6 +4204,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-60" />
                           </div>
+                          )}
                           {row.status === 'Unpaid' && isSales && (() => {
                             const assign =
                               unpaidAssignments.find((u) => u.rowId === row.id) ||

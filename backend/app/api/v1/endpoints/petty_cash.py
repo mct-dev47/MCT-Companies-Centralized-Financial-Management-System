@@ -82,7 +82,7 @@ def list_summaries(
 ):
     summaries = PettyCashService(db).list_summaries(start_date, end_date)
     role = (current_user.get("role") or "").lower()
-    if role in ("finance", "audit", "auditor"):
+    if role in ("audit", "auditor", "owner"):
         return summaries
 
     user_company_ids = current_user.get("company_ids") or []
@@ -108,7 +108,7 @@ def get_ledger(
         check_company_access(current_user, company.company_id)
     else:
         role = (current_user.get("role") or "").lower()
-        if role not in ("finance", "audit", "auditor"):
+        if role not in ("audit", "auditor", "owner"):
             user_company_ids = current_user.get("company_ids") or []
             if user_company_ids:
                 company = service.resolve_company(user_company_ids[0], None)

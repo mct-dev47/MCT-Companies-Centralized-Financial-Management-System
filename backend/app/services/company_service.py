@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from decimal import Decimal
 from pathlib import PurePosixPath
-from typing import List, Optional
+from typing import List, Optional, Iterable
 from uuid import uuid4
 
 from sqlalchemy import text
@@ -91,15 +91,17 @@ class CompanyService:
         except Exception as exc:
             logger.debug("Supabase company sync skipped: %s", exc)
 
-    #list_companies retrieves all companies from the database, orders them by company_id in ascending order, and returns a list of CompanyOut objects.
-    def list_companies(self) -> List[CompanyOut]:
+    #list_companies retrieves companies from the database, orders them by company_id in ascending order, and returns a list of CompanyOut objects.
+    def list_companies(self, company_ids: Optional[Iterable[int]] = None) -> List[CompanyOut]:
         try:
             self._sync_from_supabase_if_fallback()
-            companies = (
-                self.db.query(Company)
-                .order_by(Company.company_id.asc())
-                .all()
-            )
+            query = self.db.query(Company)
+            if company_ids is not None:
+                id_filter = [int(cid) for cid in company_ids if cid is not None]
+                if not id_filter:
+                    return []
+                query = query.filter(Company.company_id.in_(id_filter))
+            companies = query.order_by(Company.company_id.asc()).all()
             # Fetch revenue/expense/net-profit for every company in two grouped
 
             summaries = self.finance_service.get_list_summaries_for_companies(
@@ -118,14 +120,16 @@ class CompanyService:
             raise self._database_error("list companies", error)
 
     # list_companies_lookup retrieves only company_id and company_name without heavy financial aggregation
-    def list_companies_lookup(self) -> List[dict]:
+    def list_companies_lookup(self, company_ids: Optional[Iterable[int]] = None) -> List[dict]:
         try:
             self._sync_from_supabase_if_fallback()
-            companies = (
-                self.db.query(Company.company_id, Company.company_name)
-                .order_by(Company.company_id.asc())
-                .all()
-            )
+            query = self.db.query(Company.company_id, Company.company_name)
+            if company_ids is not None:
+                id_filter = [int(cid) for cid in company_ids if cid is not None]
+                if not id_filter:
+                    return []
+                query = query.filter(Company.company_id.in_(id_filter))
+            companies = query.order_by(Company.company_id.asc()).all()
             return [
                 {
                     "company_id": c.company_id,

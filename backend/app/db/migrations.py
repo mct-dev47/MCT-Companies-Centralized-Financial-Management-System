@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -573,6 +574,24 @@ def _run_postgresql_migrations(conn) -> list[str]:
             logger.info("Migration 0064_company_categories applied successfully.")
         except Exception as exc:
             logger.error("Migration 0064_company_categories failed and was skipped: %s", exc)
+
+    # 31. 0065: dashboard and multi-tenant performance indexes
+    result_0065 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0065_dashboard_and_multi_tenant_indexes'")
+    ).first()
+
+    if not result_0065:
+        script_0065 = MIGRATIONS_DIR / "0065_dashboard_and_multi_tenant_indexes.postgres.sql"
+        try:
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0065.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0065_dashboard_and_multi_tenant_indexes')"))
+            applied.append("0065_dashboard_and_multi_tenant_indexes")
+            logger.info("Migration 0065_dashboard_and_multi_tenant_indexes applied successfully.")
+        except Exception as exc:
+            logger.error("Migration 0065_dashboard_and_multi_tenant_indexes failed and was skipped: %s", exc)
 
     conn.commit()
     return applied
@@ -1349,6 +1368,61 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 conn.execute(text(stmt))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0064_company_categories')"))
         applied.append("0064_company_categories")
+
+    # Ensure SQLite sales and expenses have audit columns in sync with SQLAlchemy models
+    sales_exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='sales'")).first()
+    if sales_exists:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(sales)")).fetchall()}
+        if "cheque_number" not in cols:
+            conn.execute(text("ALTER TABLE sales ADD COLUMN cheque_number VARCHAR(100) NULL"))
+            if "cheque_no" in cols:
+                conn.execute(text("UPDATE sales SET cheque_number = cheque_no WHERE cheque_number IS NULL"))
+        for col_name, col_def in (
+            ("audit_status", "VARCHAR(20) DEFAULT 'Pending Audit'"),
+            ("audited_by", "VARCHAR(100) NULL"),
+            ("audited_at", "DATETIME NULL"),
+            ("audit_remarks", "TEXT NULL"),
+        ):
+            if col_name not in cols:
+                conn.execute(text(f"ALTER TABLE sales ADD COLUMN {col_name} {col_def}"))
+
+    expenses_exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='expenses'")).first()
+    if expenses_exists:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(expenses)")).fetchall()}
+        if "cheque_number" not in cols:
+            conn.execute(text("ALTER TABLE expenses ADD COLUMN cheque_number VARCHAR(100) NULL"))
+            if "cheque_no" in cols:
+                conn.execute(text("UPDATE expenses SET cheque_number = cheque_no WHERE cheque_number IS NULL"))
+        for col_name, col_def in (
+            ("audit_status", "VARCHAR(20) DEFAULT 'Pending Audit'"),
+            ("audited_by", "VARCHAR(100) NULL"),
+            ("audited_at", "DATETIME NULL"),
+            ("audit_remarks", "TEXT NULL"),
+        ):
+            if col_name not in cols:
+                conn.execute(text(f"ALTER TABLE expenses ADD COLUMN {col_name} {col_def}"))
+
+    # 30. 0065: dashboard and multi-tenant performance indexes
+    result_0065 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0065_dashboard_and_multi_tenant_indexes'")
+    ).first()
+    if not result_0065:
+        script_0065 = MIGRATIONS_DIR / "0065_dashboard_and_multi_tenant_indexes.sqlite.sql"
+        if script_0065.exists():
+            existing_tables = {
+                row[0].lower()
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            }
+            for stmt in _sql_statements(script_0065.read_text(encoding="utf-8")):
+                match = re.search(r"\bON\s+([a-zA-Z0-9_]+)", stmt, re.IGNORECASE)
+                if match and match.group(1).lower() not in existing_tables:
+                    continue
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite index migration 0065 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0065_dashboard_and_multi_tenant_indexes')"))
+        applied.append("0065_dashboard_and_multi_tenant_indexes")
 
     conn.commit()
     return applied
