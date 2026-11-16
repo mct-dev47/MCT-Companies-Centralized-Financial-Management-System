@@ -202,25 +202,28 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
 
 export const SalesRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useSession()
+  const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
-  const isCompanyScoped = Boolean(
-    user?.assignedCompany &&
-      user.assignedCompany !== 'All Companies' &&
-      userRole !== 'admin' &&
-      userRole !== 'finance' &&
-      userRole !== 'audit' &&
-      !userRole.includes('auditor')
-  )
+  // Determine current active or assigned company
+  const targetCompany = (activeCompany && activeCompany !== 'All Companies')
+    ? activeCompany
+    : (user?.assignedCompany && user.assignedCompany !== 'All Companies' && !user.assignedCompany.includes(','))
+      ? user.assignedCompany
+      : ''
 
-  // Company-scoped users assigned to Filcap or JK are blocked from Sales
+  // Only block company-scoped users when their active target company is strictly FilCap or JK
   if (
-    isCompanyScoped &&
-    (isFilCapCompany(user?.assignedCompany) || isJKPropertyCompany(user?.assignedCompany))
+    targetCompany &&
+    userRole !== 'finance' &&
+    userRole !== 'audit' &&
+    !userRole.includes('auditor') &&
+    userRole !== 'owner' &&
+    (isFilCapCompany(targetCompany) || isJKPropertyCompany(targetCompany))
   ) {
     return <Navigate to="/dashboard" replace />
   }

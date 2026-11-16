@@ -33,7 +33,6 @@ import { Card } from '@/components/ui/card'
 import { TablePagination, ConfirmModal } from '@/components/common'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
 import { TableErrorState } from '@/components/common/TableErrorState'
-import { StatusPill } from '@/components/common/StatusPill'
 import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
@@ -1202,30 +1201,30 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 8. Status */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                        <StatusPill
-                          status={
-                            isPendingFinance
-                              ? 'Pending Finance'
-                              : isPendingAudit
-                              ? 'Pending Audit'
-                              : isRejectedFinance
-                              ? 'Rejected'
-                              : isDisapprovedAudit
-                              ? 'Disapproved'
-                              : loan.status || 'Pending'
-                          }
-                          label={
-                            isPendingFinance
-                              ? 'Pending Finance'
-                              : isPendingAudit
-                              ? 'Pending Audit'
-                              : isRejectedFinance
-                              ? 'Rejected'
-                              : isDisapprovedAudit
-                              ? 'Disapproved'
-                              : loan.status || 'Pending'
-                          }
-                        />
+                        <span
+                          className={cn(
+                            'text-xs font-semibold whitespace-nowrap',
+                            isPendingFinance || isPendingAudit
+                              ? 'text-amber-700'
+                              : isRejectedFinance || isDisapprovedAudit || loan.status === 'Overdue'
+                              ? 'text-rose-700'
+                              : loan.status === 'Partially Paid'
+                              ? 'text-blue-700'
+                              : loan.status === 'Disbursed' || loan.status === 'Paid' || loan.status === 'Approved'
+                              ? 'text-emerald-700'
+                              : 'text-slate-700'
+                          )}
+                        >
+                          {isPendingFinance
+                            ? 'Pending Finance'
+                            : isPendingAudit
+                            ? 'Pending Audit'
+                            : isRejectedFinance
+                            ? 'Rejected'
+                            : isDisapprovedAudit
+                            ? 'Disapproved'
+                            : loan.status || 'Pending'}
+                        </span>
                       </TableCell>
 
                       {/* 9. Actions (3 Dots Menu) */}
