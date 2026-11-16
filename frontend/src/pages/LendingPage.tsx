@@ -3,6 +3,7 @@ import { formatCreatedAt } from '@/utils/dateUtils'
 import * as React from 'react'
 import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import type { BankAccount } from '@/services/bankService'
+import { websocketService } from '@/services/websocketService'
 import { createPortal } from 'react-dom'
 import {
   ShieldCheck,
@@ -180,6 +181,30 @@ export const LendingPage: React.FC = () => {
     lendingService.clearStorage()
     fetchFacilities()
   }, [fetchFacilities])
+
+  // Realtime: a lending change made anywhere refreshes the list in the background (no loading state)
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const quietReload = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        try {
+          const data = await lendingService.getFacilities()
+          if (Array.isArray(data)) setFacilities(data)
+        } catch {
+          /* the next event or a manual refresh will catch up */
+        }
+      }, 300)
+    }
+    const unsubs = [
+      websocketService.subscribe('LENDING_UPDATED', quietReload),
+      websocketService.subscribe('AUDIT_UPDATED', quietReload),
+    ]
+    return () => {
+      if (timer) clearTimeout(timer)
+      unsubs.forEach((off) => off())
+    }
+  }, [])
 
   const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
     setFacilities(newFacilities)

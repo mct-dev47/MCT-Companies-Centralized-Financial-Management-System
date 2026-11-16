@@ -49,6 +49,8 @@ export interface DashboardTransactionItem {
   bankAccountId?: string
   bankName?: string
   remarks?: string
+  /** 'Tenants' | 'Lending' when that page created this record; it is read-only everywhere else. */
+  sourceModule?: string
   depositStatus?: 'Deposited' | 'Not Deposited'
   deposit_status?: 'Deposited' | 'Not Deposited'
   deposit_date?: string | null

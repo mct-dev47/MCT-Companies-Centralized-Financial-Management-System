@@ -43,6 +43,8 @@ export interface SalesItem {
   remarks?: string
   /** Money collected so far from the server: [Paid] lines plus linked receivable payments (partial too). */
   paidAmount?: number
+  /** 'Tenants' | 'Lending' when that page created this record; it is read-only everywhere else. */
+  sourceModule?: string
   type: 'Sales'
 }
 
@@ -164,6 +166,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
     remarks: b.remarks || undefined,
     paidAmount:
       b.paid_amount !== undefined && b.paid_amount !== null ? Number(b.paid_amount) || 0 : undefined,
+    sourceModule: b.source_module || undefined,
     type: 'Sales',
   }
 }

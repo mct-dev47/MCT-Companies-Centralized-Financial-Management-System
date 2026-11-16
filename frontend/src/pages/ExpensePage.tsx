@@ -1990,12 +1990,21 @@ export const ExpensePage: React.FC = () => {
               <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
             </button>
 
-            {isCompanyUser && !isOwner && (
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => i.sourceModule) && (
+              <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
+                {dayMenu.items.every((i) => i.sourceModule) ? 'These records come' : 'Some records come'} from{' '}
+                {Array.from(new Set(dayMenu.items.map((i) => i.sourceModule).filter(Boolean))).join(' / ')}. Edit or
+                remove them there.
+              </p>
+            )}
+
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => !i.sourceModule) && (
               <>
                 <button
                   type="button"
                   onClick={() => {
-                    const target = dayMenu.items[0]
+                    // Records made by Tenants or Lending are changed only on their own page
+                    const target = dayMenu.items.find((i) => !i.sourceModule)
                     setDayMenu(null)
                     if (target) {
                       navigate('/expense/add', {
@@ -2012,7 +2021,7 @@ export const ExpensePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const items = dayMenu.items
+                    const items = dayMenu.items.filter((i) => !i.sourceModule)
                     const date = dayMenu.date
                     setDayMenu(null)
                     if (items && items.length > 0) {

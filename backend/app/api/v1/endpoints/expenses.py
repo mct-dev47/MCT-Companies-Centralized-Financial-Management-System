@@ -215,7 +215,7 @@ def get_expenses(
         res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
-        return [
+        return _with_sources(db, [
             ExpenseOut(
                 expense_id=row["expense_id"],
                 company_id=row.get("company_id"),
@@ -238,7 +238,7 @@ def get_expenses(
                 **audit_fields(row)
             )
             for row in rows
-        ]
+        ])
     except HTTPException:
         raise
     except Exception as e:
@@ -281,7 +281,7 @@ def get_expenses(
 
         rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
-        return [
+        return _with_sources(db, [
             ExpenseOut(
                 expense_id=exp.expense_id,
                 company_id=exp.company_id,
@@ -304,7 +304,17 @@ def get_expenses(
                 **audit_fields(exp)
             )
             for exp, c_name, cat_name in rows
-        ]
+        ])
+
+
+def _with_sources(db: Session, outs: List[ExpenseOut]) -> List[ExpenseOut]:
+    """Mark expenses that Lending created, so the Expenses page shows them read-only."""
+    from app.services.income_bank_links import expense_sources
+
+    sources = expense_sources(db, [o.expense_id for o in outs])
+    for o in outs:
+        o.source_module = sources.get(o.expense_id)
+    return outs
 
 
 def _to_date(val) -> Optional[date]:
@@ -997,6 +1007,8 @@ def update_expense(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_expense
+    assert_not_linked_expense(db, expense_id)
 
     target_amt = expense_in.amount if expense_in.amount is not None else expense_in.withdrawal
     if target_amt is not None and target_amt < Decimal("1.00"):
@@ -1310,6 +1322,8 @@ def delete_expense(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_expense
+    assert_not_linked_expense(db, expense_id)
 
     deleted_from_supabase = False
     deleted_company_id = None

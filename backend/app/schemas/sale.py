@@ -271,6 +271,8 @@ class SaleOut(BaseModel):
     # Money collected so far: [Paid] lines plus payments on linked receivables (partial ones too).
     # The ledger counts it only while the sale is Deposited.
     paid_amount: Optional[Decimal] = None
+    # "Tenants" / "Lending" when the record was created there; it can only be edited or removed on that page.
+    source_module: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
