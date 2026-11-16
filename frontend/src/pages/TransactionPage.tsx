@@ -165,12 +165,17 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
     createdAt: l.createdAt || l.rawDate,
     updatedAt: l.updatedAt,
     attachments: [],
-    bankAccountId: l.bankAccountId,
   }
+
+  const sameCompany =
+    (!!l.lenderId && !!l.borrowerId && l.lenderId === l.borrowerId) ||
+    (l.lender || '').trim().toLowerCase() === (l.borrower || '').trim().toLowerCase()
 
   const rows: DashboardTransactionItem[] = [
     {
       ...base,
+      // The borrower's row sits on the bank that received the money; the lender's on the funding bank
+      bankAccountId: sameCompany ? l.bankAccountId : l.borrowerBankAccountId,
       id: l.id,
       company: l.borrower || l.company,
       description: l.particulars,
@@ -180,13 +185,11 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
     },
   ]
 
-  const sameCompany =
-    (!!l.lenderId && !!l.borrowerId && l.lenderId === l.borrowerId) ||
-    (l.lender || '').trim().toLowerCase() === (l.borrower || '').trim().toLowerCase()
   if (loanHasLender(l) && !sameCompany) {
     const particulars = `Loan disbursed to ${l.borrower}${l.particulars ? `: ${l.particulars}` : ''}`
     rows.push({
       ...base,
+      bankAccountId: l.bankAccountId,
       id: `${l.id}:lender`,
       company: l.lender,
       description: particulars,
