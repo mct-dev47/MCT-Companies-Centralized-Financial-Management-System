@@ -226,7 +226,7 @@ export function Dropdown<T extends string | number = string>({
             ? 'h-full px-2 py-1 bg-transparent border-0 rounded-none text-xs hover:bg-black/5 focus:bg-white focus:ring-1 focus:ring-primary'
             : cn(
                 'bg-white border text-focus text-xs sm:text-sm font-normal shadow-2xs',
-                'rounded-full',
+                'rounded-[10px]',
                 size === 'sm' ? 'h-9 min-h-[36px] px-3.5' : 'h-11 min-h-[44px] px-4',
                 hasError
                   ? 'border-rose-500 focus-visible:ring-2 focus-visible:ring-rose-500/30'

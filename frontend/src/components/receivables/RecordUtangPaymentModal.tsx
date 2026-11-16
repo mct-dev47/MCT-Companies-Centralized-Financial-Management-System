@@ -307,7 +307,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
         <form onSubmit={handleSubmit} className="space-y-5 mt-2">
           {isReviewing ? (
             <ModalReviewStep
-              title="Review Utang Payment"
+              title="Review Payment Remittance"
               subtitle="Please verify the repayment remittance before recording."
               errorMessage={error}
               items={[

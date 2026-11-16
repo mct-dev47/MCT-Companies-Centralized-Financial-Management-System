@@ -231,7 +231,7 @@ export const CompanyLoansPage: React.FC = () => {
             onChange={(val) => updateFilter('paymentStatus', val)}
           />
           <Input
-            className="w-44 h-11 rounded-full border-stroke/60 px-4 text-xs sm:text-sm"
+            className="w-44 h-11 rounded-[10px] border-stroke/60 px-4 text-xs sm:text-sm"
             type="date"
             value={filters.date}
             onChange={(e) => updateFilter('date', e.target.value)}

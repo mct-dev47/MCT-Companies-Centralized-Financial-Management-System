@@ -278,7 +278,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
               setIsCalendarOpen(false)
             }}
             className={cn(
-              'inline-flex items-center rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
+              'inline-flex items-center rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
               compact
                 ? 'h-9 px-2.5 sm:px-3 text-xs gap-1.5'
                 : 'h-10 sm:h-11 px-3 sm:px-4 text-xs sm:text-sm gap-2',
@@ -357,7 +357,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
             setIsPresetOpen(false)
           }}
           className={cn(
-            'inline-flex items-center rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
+            'inline-flex items-center rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0 whitespace-nowrap',
             compact
               ? 'h-9 px-2.5 sm:px-3 text-xs gap-1.5'
               : 'h-10 sm:h-11 px-3 sm:px-4 text-xs sm:text-sm gap-2',

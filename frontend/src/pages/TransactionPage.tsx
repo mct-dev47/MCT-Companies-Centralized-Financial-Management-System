@@ -437,7 +437,7 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
           fullWidth && 'w-full',
           selectedAcc ? 'border-primary/50 bg-primary/5' : 'border-stroke/60',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'
@@ -799,6 +799,9 @@ export const TransactionPage: React.FC = () => {
   } | null>(null)
   const [activeMenuTx, setActiveMenuTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  // The row being flagged. Kept apart from activeMenuTx: the click-outside handler clears activeMenuTx
+  // on every click (including typing in the remarks box), which made Flag Discrepancy silently do nothing.
+  const [discrepancyTargetTx, setDiscrepancyTargetTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
   const [markAuditTargetTx, setMarkAuditTargetTx] = React.useState<DashboardTransactionItem | null>(null)
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
@@ -1909,7 +1912,7 @@ export const TransactionPage: React.FC = () => {
     <div
       role="group"
       aria-label="Group transactions"
-      className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+      className="inline-flex items-center rounded-[10px] border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
     >
       {(
         [
@@ -1923,7 +1926,7 @@ export const TransactionPage: React.FC = () => {
           aria-pressed={salesViewMode === opt.value}
           onClick={() => setSalesViewMode(opt.value)}
           className={cn(
-            'min-h-[44px] px-3.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+            'min-h-[44px] px-3.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
             salesViewMode === opt.value
               ? 'bg-[#960C01] text-white shadow-xs'
               : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -2277,15 +2280,16 @@ export const TransactionPage: React.FC = () => {
   const handleMenuOpenDiscrepancy = (tx: DashboardTransactionItem) => {
     setOpenMenuTxId(null)
     setMenuPosition(null)
-    setActiveMenuTx(tx)
+    setActiveMenuTx(null)
+    setDiscrepancyTargetTx(tx)
     setDiscrepancyReason(tx.auditNotes || '')
     setIsDiscrepancyModalOpen(true)
   }
 
   const handleConfirmQuickDiscrepancy = async () => {
-    if (!activeMenuTx || !discrepancyReason.trim()) return
+    if (!discrepancyTargetTx || !discrepancyReason.trim()) return
     setIsSubmittingAudit(true)
-    const tx = activeMenuTx
+    const tx = discrepancyTargetTx
     const trimmed = discrepancyReason.trim()
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
@@ -2317,8 +2321,10 @@ export const TransactionPage: React.FC = () => {
       }
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')
-      setActiveMenuTx(null)
+      setDiscrepancyTargetTx(null)
     } catch (err: any) {
+      // Put the real status back on screen, since the server did not save the flag
+      setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? tx : t)))
       notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
@@ -2758,7 +2764,7 @@ export const TransactionPage: React.FC = () => {
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Active Company Locked Indicator */}
               <div
-                className="inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                className="inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                 title={effectiveTargetCompany}
               >
                 <Landmark className="w-4 h-4 text-primary shrink-0" />
@@ -2827,7 +2833,7 @@ export const TransactionPage: React.FC = () => {
                       disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
                       title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
-                      className="min-h-[44px] h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="min-h-[44px] h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-4 h-4 shrink-0" />
                       <span>Mark as Audited{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
@@ -2838,7 +2844,7 @@ export const TransactionPage: React.FC = () => {
                       disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
                       title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
-                      className="min-h-[44px] h-11 px-4 rounded-full border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="min-h-[44px] h-11 px-4 rounded-[10px] border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <AlertCircle className="w-4 h-4 shrink-0" />
                       <span>Flag Discrepancy</span>
@@ -2866,7 +2872,7 @@ export const TransactionPage: React.FC = () => {
                 setDepositCurrentPage(1)
                 setSalesCurrentPage(1)
               }}
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
 
@@ -4476,7 +4482,13 @@ export const TransactionPage: React.FC = () => {
       />
 
       {/* 8. Quick Discrepancy Modal from Action Menu */}
-      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+      <Dialog
+        open={isDiscrepancyModalOpen}
+        onOpenChange={(open) => {
+          setIsDiscrepancyModalOpen(open)
+          if (!open && !isSubmittingAudit) setDiscrepancyTargetTx(null)
+        }}
+      >
         <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
             <div className="flex items-center gap-3">
@@ -4521,7 +4533,7 @@ export const TransactionPage: React.FC = () => {
                 onClick={() => {
                   setIsDiscrepancyModalOpen(false)
                   setDiscrepancyReason('')
-                  setActiveMenuTx(null)
+                  setDiscrepancyTargetTx(null)
                 }}
                 className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
               >

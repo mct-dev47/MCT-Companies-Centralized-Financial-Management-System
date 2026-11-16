@@ -414,14 +414,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   }
 
 
-  // Filter company list for dropdown search
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyNamesList
-    return companyNamesList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyNamesList])
-
   // Filtered Groups
   const filteredGroups = React.useMemo(() => {
     return groups.filter((group) => {
@@ -613,7 +605,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -652,7 +644,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
             </div>
 
             {/* 2. Active Company Locked Indicator */}
-            <div className="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white text-focus text-xs font-semibold shadow-xs select-none shrink-0">
+            <div className="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs font-semibold shadow-xs select-none shrink-0">
               <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
               <span className="truncate max-w-[120px] sm:max-w-[140px]">
                 {selectedCompany}
@@ -669,7 +661,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isCategoryDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -764,7 +756,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsCategoryDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -917,7 +909,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                 setCurrentPage(1)
               }}
               placeholder="Search by company, category, status…"
-              className="w-full h-10 pl-9 pr-8 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/70 shadow-xs box-border focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus transition-all"
+              className="w-full h-10 pl-9 pr-8 rounded-[10px] border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/70 shadow-xs box-border focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus transition-all"
             />
             {searchQuery && (
               <button

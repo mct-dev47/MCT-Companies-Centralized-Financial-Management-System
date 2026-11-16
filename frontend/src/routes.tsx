@@ -438,7 +438,12 @@ export const router = createBrowserRouter([
       },
       {
         path: '/settings',
-        element: <SettingsPage />,
+        // System configuration: Admin only (everyone else is sent to the dashboard)
+        element: (
+          <AdminOnlyRoute>
+            <SettingsPage />
+          </AdminOnlyRoute>
+        ),
       },
     ],
   },

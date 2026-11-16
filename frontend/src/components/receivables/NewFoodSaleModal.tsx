@@ -173,7 +173,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
             <span>New Food Sale</span>
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-fg mt-0.5">
-            Record a daily food sale with instant payment or credit (utang) options.
+            Record a daily food sale with instant payment or credit options.
           </DialogDescription>
         </DialogHeader>
 
@@ -263,7 +263,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                   options={[
                     ...filteredPeople.map((p) => ({
                       value: p.name,
-                      label: `${p.name} ${p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No utang)'}`,
+                      label: `${p.name} ${p.total_owed > 0 ? `(Owes ₱${p.total_owed.toLocaleString()})` : '(No balance)'}`,
                     })),
                     { value: '__NEW__', label: `+ Enter new ${customerType.toLowerCase()} name...` },
                   ]}
@@ -368,7 +368,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                   >
                     <span>{opt}</span>
                     <span className="text-[10px] font-normal opacity-75">
-                      {opt === 'Paid in full' ? 'Paid now' : opt === 'Partial' ? 'Deposit' : 'Utang'}
+                      {opt === 'Paid in full' ? 'Paid now' : opt === 'Partial' ? 'Deposit' : 'Pay later'}
                     </span>
                   </button>
                 ))}
@@ -412,7 +412,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between text-xs pt-1 border-t border-amber-200/80">
-                  <span className="text-amber-800">Remaining Balance (Utang):</span>
+                  <span className="text-amber-800">Remaining Balance (Receivable):</span>
                   <span className="font-bold text-amber-950 text-sm tabular-nums">
                     {formatPHP(computedBalance)}
                   </span>
@@ -445,7 +445,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
 
             {paymentOption === 'Pay Later' && (
               <div className="p-3 bg-rose-50/80 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-900">
-                <span>Total amount will be recorded as Unpaid credit (Utang):</span>
+                <span>Total amount will be recorded as Unpaid Credit (Receivable):</span>
                 <span className="font-bold text-sm tabular-nums">{formatPHP(totalAmount)}</span>
               </div>
             )}

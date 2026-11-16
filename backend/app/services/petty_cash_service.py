@@ -94,10 +94,22 @@ def _resolve_receipt_url(receipt_url: Optional[str], attachments: Optional[str])
     return None
 
 
+def _receipt_storage_failed(exc: Exception) -> HTTPException:
+    """A receipt that cannot go to the bucket stops the save (its bytes are never kept in the database)."""
+    logger.warning("Receipt could not be stored in the bucket: %s", exc)
+    return HTTPException(
+        status_code=502,
+        detail=f"The receipt could not be saved to storage, so nothing was saved. {exc} Please try again.",
+    )
+
+
 def _prepare_receipts(receipt_url: Optional[str], attachments: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Move any inline receipt bytes into the receipts bucket; return storage refs to persist."""
-    atts = receipt_storage.normalize_attachments(attachments)
-    rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    try:
+        atts = receipt_storage.normalize_attachments(attachments)
+        rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    except receipt_storage.ReceiptStorageError as exc:
+        raise _receipt_storage_failed(exc)
     if not rurl:
         rurl = receipt_storage.first_attachment_ref(atts) or _resolve_receipt_url(None, atts)
     return rurl, atts
@@ -359,28 +371,6 @@ class PettyCashService:
             ZERO,
         ) + reimbursed
         return topped_up - spent
-
-    def ensure_sufficient_balance(
-        self,
-        company_id: Optional[int],
-        payment_method: Optional[str],
-        amount: Optional[Decimal],
-        exclude_expense_id: Optional[int] = None,
-        category: Optional[str] = None,
-    ) -> None:
-        """Block a petty cash expense that would take the wallet below zero."""
-        if not company_id or not is_petty_cash(payment_method) or amount is None:
-            return
-        available = self.get_balance(company_id, exclude_expense_id=exclude_expense_id)
-        if Decimal(str(amount)) > available:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Insufficient petty cash balance (₱{max(available, ZERO):,.2f} available, "
-                    f"requested ₱{Decimal(str(amount)):,.2f}). Petty cash cannot go below ₱0.00. "
-                    "Top up petty cash first."
-                ),
-            )
 
     def _build_summary(
         self,
@@ -1538,10 +1528,14 @@ class PettyCashService:
             topup.paid_by = paid_by.strip() or None
         if category is not None:
             topup.category = category.strip() or None
-        if attachments is not None:
-            topup.attachments = receipt_storage.normalize_attachments(attachments)
-        if receipt_url is not None:
-            topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        try:
+            if attachments is not None:
+                topup.attachments = receipt_storage.normalize_attachments(attachments)
+            if receipt_url is not None:
+                topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        except receipt_storage.ReceiptStorageError as exc:
+            self.db.rollback()
+            raise _receipt_storage_failed(exc)
         if items is not None:
             topup.items = items
 

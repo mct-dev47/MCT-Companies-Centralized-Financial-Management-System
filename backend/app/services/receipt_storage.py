@@ -168,25 +168,26 @@ def delete_paths(paths: Iterable[str]) -> None:
 
 # ── Normalize (client input -> stored refs) ─────────────────────────────────
 
-def _upload_data_url(data_url: str, filename: Optional[str]) -> Optional[str]:
+def _upload_data_url(data_url: str, filename: Optional[str]) -> str:
     m = _DATA_URL_RE.match(data_url.strip())
     if not m:
-        return None
+        raise ReceiptStorageError("The receipt file could not be read.")
     mime = m.group(1).lower()
     if mime not in ALLOWED_MIME_TYPES:
-        return None
+        raise ReceiptStorageError("Unsupported receipt file type. Use JPG, PNG, HEIC, WEBP, GIF, or PDF.")
     try:
         raw = base64.b64decode(re.sub(r"\s+", "", m.group(2)), validate=True)
     except (binascii.Error, ValueError):
-        return None
+        raise ReceiptStorageError("The receipt file could not be read.")
     return upload_receipt_bytes(raw, mime, filename)
 
 
 def _to_path(value: Optional[str], filename: Optional[str] = None) -> Optional[str]:
     """Resolve a client-supplied URL into a bucket path, uploading data URLs.
 
-    Returns None when the value is not something we store in the bucket
-    (e.g. an external https URL), or if a data-URL upload failed.
+    Returns None when the value is not something we store in the bucket (an external https URL).
+    A base64 data URL is ALWAYS moved to the bucket; if that fails, ReceiptStorageError is raised.
+    Receipt bytes are never kept in the database (they used to be, silently, when an upload failed).
     """
     if not value or not isinstance(value, str):
         return None
@@ -194,11 +195,7 @@ def _to_path(value: Optional[str], filename: Optional[str] = None) -> Optional[s
     if path:
         return path
     if value.strip().lower().startswith("data:"):
-        try:
-            return _upload_data_url(value, filename)
-        except ReceiptStorageError as exc:
-            # Never lose the user's receipt: caller keeps the data URL.
-            logger.warning("Receipt data URL upload failed, keeping inline copy: %s", exc)
+        return _upload_data_url(value, filename)
     return None
 
 
@@ -215,26 +212,35 @@ def normalize_attachments(attachments: Optional[str]) -> Optional[str]:
 
     changed = False
     out = []
-    for item in items:
-        if not isinstance(item, dict):
-            out.append(item)
-            continue
-        new_item = dict(item)
-        existing = new_item.get("storage_path")
-        if existing and is_safe_storage_path(existing):
-            new_item.pop("file_url", None)
-            new_item.pop("url", None)
-        else:
-            new_item.pop("storage_path", None)
-            src = new_item.get("file_url") or new_item.get("url")
-            path = _to_path(src, new_item.get("file_name") or new_item.get("filename"))
-            if path:
-                new_item["storage_path"] = path
+    uploaded_now: list[str] = []
+    try:
+        for item in items:
+            if not isinstance(item, dict):
+                out.append(item)
+                continue
+            new_item = dict(item)
+            existing = new_item.get("storage_path")
+            if existing and is_safe_storage_path(existing):
                 new_item.pop("file_url", None)
                 new_item.pop("url", None)
-        if new_item != item:
-            changed = True
-        out.append(new_item)
+            else:
+                new_item.pop("storage_path", None)
+                src = new_item.get("file_url") or new_item.get("url")
+                is_inline = isinstance(src, str) and src.strip().lower().startswith("data:")
+                path = _to_path(src, new_item.get("file_name") or new_item.get("filename"))
+                if path:
+                    if is_inline:
+                        uploaded_now.append(path)
+                    new_item["storage_path"] = path
+                    new_item.pop("file_url", None)
+                    new_item.pop("url", None)
+            if new_item != item:
+                changed = True
+            out.append(new_item)
+    except ReceiptStorageError:
+        # Nothing is saved when one file fails, so remove the files this call already uploaded
+        delete_paths(uploaded_now)
+        raise
     return json.dumps(out) if changed else attachments
 
 

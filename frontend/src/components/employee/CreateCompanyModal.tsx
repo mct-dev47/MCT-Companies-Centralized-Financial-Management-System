@@ -169,7 +169,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl sm:max-w-[780px] w-full">
+        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-2xl p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl sm:max-w-[780px] w-full">
           <DialogHeader className="text-left sm:text-left pb-3 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
@@ -211,13 +211,13 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                       fileInputRef.current?.click()
                     }
                   }}
-                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-3 bg-white shadow-xs cursor-pointer transition-all overflow-hidden"
+                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-0 bg-white shadow-xs cursor-pointer transition-all overflow-hidden"
                   title={profilePreview ? 'Click to crop / adjust logo' : 'Click to upload company logo'}
                 >
                   <img
                     src={profilePreview || logo2Url}
                     alt="Company Logo Preview"
-                    className="h-16 w-16 sm:h-20 sm:w-20 object-contain rounded-full"
+                    className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white rounded-full">
                     {profilePreview ? (

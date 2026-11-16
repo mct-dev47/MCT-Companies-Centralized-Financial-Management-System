@@ -198,7 +198,7 @@ export const TransactionDateRangeControl: React.FC<TransactionDateRangeControlPr
         aria-haspopup="dialog"
         aria-label={`Filter by date range: ${triggerLabel}`}
         className={cn(
-          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
           fullWidth && 'w-full justify-between',
           isActive ? 'border-primary/50 bg-primary/5 text-focus' : 'border-stroke/60',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'

@@ -1107,6 +1107,16 @@ def update_sale(
     if sale_in.remarks is not None:
         update_payload["remarks"] = sale_in.remarks.strip() if sale_in.remarks else None
 
+    # A newly chosen bank is saved on the sale (it used to be dropped, so an edit fell back to the old bank).
+    # It must belong to, or be shared with, the sale's company.
+    new_bank_id = (sale_in.bank_account_id or "").strip() or None
+    if new_bank_id:
+        from app.services.income_bank_links import validate_company_bank
+
+        if existing_company_id:
+            validate_company_bank(db, int(existing_company_id), new_bank_id)
+        update_payload["bank_account_id"] = new_bank_id
+
     # Update in Supabase
     updated_row = None
     if use_sb:
@@ -1171,6 +1181,8 @@ def update_sale(
             sale.deposit_date = date.fromisoformat(dd) if dd else None
         if "remarks" in update_payload:
             sale.remarks = update_payload["remarks"]
+        if "bank_account_id" in update_payload:
+            sale.bank_account_id = update_payload["bank_account_id"]
         db.commit()
         db.refresh(sale)
 
@@ -1221,7 +1233,7 @@ def update_sale(
     reconcile_sale_bank(
         db,
         sale_id=sales_id,
-        bank_account_id=getattr(sale_in, "bank_account_id", None),
+        bank_account_id=new_bank_id,
         reference_no=new_cheque_no or None,
         legacy_particulars=old_particulars,
     )

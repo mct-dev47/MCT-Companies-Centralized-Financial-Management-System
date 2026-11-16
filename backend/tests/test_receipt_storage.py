@@ -85,13 +85,16 @@ def test_external_urls_and_unsafe_paths_are_left_alone(bucket):
     assert rs.path_from_ref("storage://receipts/other-folder/x.png") is None
 
 
-def test_upload_failure_keeps_inline_copy(monkeypatch):
+def test_upload_failure_raises_instead_of_keeping_base64(monkeypatch):
     def boom():
         raise rs.ReceiptStorageError("down")
 
     monkeypatch.setattr(rs, "_bucket", boom)
     atts = json.dumps([{"file_url": PNG_DATA_URL}])
-    assert rs.normalize_attachments(atts) == atts
+    with pytest.raises(rs.ReceiptStorageError):
+        rs.normalize_attachments(atts)
+    with pytest.raises(rs.ReceiptStorageError):
+        rs.normalize_receipt_url(PNG_DATA_URL)
 
 
 def test_collect_paths_for_cleanup(bucket):
@@ -112,10 +115,12 @@ def test_collect_paths_for_cleanup(bucket):
         "data:image/png;base64,!!!not-base64!!!",
     ],
 )
-def test_unsafe_or_corrupt_data_urls_are_not_uploaded(bucket, bad_data_url):
+def test_unsafe_or_corrupt_data_urls_are_rejected_not_stored(bucket, bad_data_url):
+    # Neither uploaded nor kept inline: the save is refused, so the bytes never reach the database
     atts = json.dumps([{"file_url": bad_data_url}])
 
-    assert rs.normalize_attachments(atts) == atts
+    with pytest.raises(rs.ReceiptStorageError):
+        rs.normalize_attachments(atts)
     assert bucket.files == {}
 
 
