@@ -42,7 +42,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
         />
 
         {activeCompanyName && (
-          <div className="inline-flex items-center gap-1.5 h-10 sm:h-11 px-3.5 rounded-full border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none shrink-0">
+          <div className="inline-flex items-center gap-1.5 h-10 sm:h-11 px-3.5 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none shrink-0">
             <Building2 className="w-3.5 h-3.5 text-primary shrink-0" />
             <span className="truncate max-w-[180px] sm:max-w-[220px]">{activeCompanyName}</span>
           </div>

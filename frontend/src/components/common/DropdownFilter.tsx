@@ -207,7 +207,7 @@ export function DropdownFilter<T extends string = string>({
         aria-label={ariaLabel || effectivePlaceholder || effectiveMenuTitle}
         aria-expanded={open}
         className={cn(
-          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
+          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
           fullWidth && 'w-full justify-between',
           !isDefault && selectedOption?.activePillClassName
             ? selectedOption.activePillClassName
@@ -250,7 +250,7 @@ export function DropdownFilter<T extends string = string>({
         <div
           style={pos.isMobile ? pos.style : undefined}
           className={cn(
-            'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
+            'bg-white rounded-xl border border-stroke/30 shadow-soft p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
             pos.isMobile
               ? 'w-[min(calc(100vw-32px),320px)] overflow-y-auto'
               : cn(

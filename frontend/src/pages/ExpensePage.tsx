@@ -858,7 +858,7 @@ export const ExpensePage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-full font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -906,7 +906,7 @@ export const ExpensePage: React.FC = () => {
               <Button
                 type="button"
                 onClick={() => navigate('/expense/add')}
-                className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                className="h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
               >
                 <Plus className="h-4 w-4 shrink-0" />
                 <span>Add Expense</span>
@@ -995,7 +995,7 @@ export const ExpensePage: React.FC = () => {
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
               {/* Active Company Locked Indicator */}
               <div
-                className="inline-flex items-center gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                className="inline-flex items-center gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                 title={selectedCompany}
               >
                 <Building2 className="w-4 h-4 text-primary shrink-0" />
@@ -1047,14 +1047,14 @@ export const ExpensePage: React.FC = () => {
               <div
                 role="group"
                 aria-label="Group records"
-                className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+                className="inline-flex items-center rounded-[10px] border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
               >
                 <button
                   type="button"
                   aria-pressed={subTab === 'All Transactions'}
                   onClick={() => setSubTab('All Transactions')}
                   className={cn(
-                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'min-h-[44px] px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     subTab === 'All Transactions'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -1067,7 +1067,7 @@ export const ExpensePage: React.FC = () => {
                   aria-pressed={subTab === 'Daily Summary'}
                   onClick={() => setSubTab('Daily Summary')}
                   className={cn(
-                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'min-h-[44px] px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     subTab === 'Daily Summary'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -1087,7 +1087,7 @@ export const ExpensePage: React.FC = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search particulars, Ref No., Cheque No., company, method…"
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
         </div>
@@ -1195,7 +1195,7 @@ export const ExpensePage: React.FC = () => {
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-[10px] border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailyExpenseGroups.length} days</span>

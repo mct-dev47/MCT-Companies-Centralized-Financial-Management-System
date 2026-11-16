@@ -145,7 +145,7 @@ export const ActivityLogDetailDrawer: React.FC<ActivityLogDetailDrawerProps> = (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="w-full sm:max-w-xl md:max-w-2xl bg-white p-6 sm:p-8 overflow-y-auto space-y-6 flex flex-col justify-between"
+        className="w-full sm:max-w-xl md:max-w-2xl bg-white p-6 sm:p-8 overflow-y-auto space-y-6"
       >
         <div className="space-y-6">
           {/* Drawer Header */}
@@ -330,18 +330,6 @@ export const ActivityLogDetailDrawer: React.FC<ActivityLogDetailDrawerProps> = (
               </div>
             )}
           </div>
-        </div>
-
-        {/* Drawer Footer */}
-        <div className="pt-4 border-t border-stroke/30 flex justify-end">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-            className="rounded-xl px-4 text-xs font-semibold"
-          >
-            Close
-          </Button>
         </div>
       </SheetContent>
     </Sheet>

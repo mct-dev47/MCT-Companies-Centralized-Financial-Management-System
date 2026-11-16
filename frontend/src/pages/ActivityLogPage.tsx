@@ -446,7 +446,7 @@ export const ActivityLogPage: React.FC = () => {
               setSearchQuery(e.target.value)
               setCurrentPage(1)
             }}
-            className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+            className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
           />
         </div>
 
@@ -468,7 +468,7 @@ export const ActivityLogPage: React.FC = () => {
               variant="ghost"
               size="sm"
               onClick={handleClearFilters}
-              className="h-10 sm:h-11 px-3 rounded-full text-xs font-semibold text-muted-fg hover:text-focus hover:bg-surface flex items-center gap-1.5 cursor-pointer"
+              className="h-10 sm:h-11 px-3 rounded-[10px] text-xs font-semibold text-muted-fg hover:text-focus hover:bg-surface flex items-center gap-1.5 cursor-pointer"
             >
               <FilterX className="h-3.5 w-3.5" />
               <span>Clear</span>
@@ -593,20 +593,19 @@ export const ActivityLogPage: React.FC = () => {
                       {log.time}
                     </TableCell>
                     <TableCell className="py-4 px-4 text-right whitespace-nowrap">
-                      <Button
+                      <button
                         type="button"
-                        variant="ghost"
-                        size="sm"
                         onClick={(e) => {
                           e.stopPropagation()
                           setSelectedLog(log)
                           setIsDrawerOpen(true)
                         }}
-                        className="h-8 px-2.5 rounded-lg text-xs font-semibold text-focus/80 hover:text-focus hover:bg-surface border border-stroke/30 inline-flex items-center gap-1.5"
+                        className="p-1.5 rounded-lg text-primary hover:text-primary-hover hover:bg-primary/10 transition-colors cursor-pointer inline-flex items-center justify-center"
+                        aria-label="Inspect activity details"
+                        title="Inspect activity details"
                       >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Inspect</span>
-                      </Button>
+                        <Eye className="w-4 h-4" />
+                      </button>
                     </TableCell>
                   </TableRow>
                 ))

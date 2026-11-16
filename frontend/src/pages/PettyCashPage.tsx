@@ -1061,7 +1061,7 @@ export const PettyCashPage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -1101,7 +1101,7 @@ export const PettyCashPage: React.FC = () => {
                 <Button
                   type="button"
                   onClick={() => setIsRequestDropdownOpen((prev) => !prev)}
-                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                  className="h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
                   aria-haspopup="true"
                   aria-expanded={isRequestDropdownOpen}
                 >
@@ -1166,7 +1166,7 @@ export const PettyCashPage: React.FC = () => {
           {/* Row 1: All Companies + Type + Status + Audit Status + Date Range */}
           <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 w-full">
             {/* 1. Active Company Locked Indicator */}
-            <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
+            <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none">
               <Building2 className="w-4 h-4 text-primary shrink-0" />
               <span className="truncate">{selectedCompany}</span>
             </div>
@@ -1177,7 +1177,7 @@ export const PettyCashPage: React.FC = () => {
                 type="button"
                 onClick={() => setIsTypeDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   typeFilter !== 'All' && 'bg-[#960C01]/5 border-[#960C01]/40 text-[#960C01] font-semibold',
                   isTypeDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
@@ -1233,7 +1233,7 @@ export const PettyCashPage: React.FC = () => {
                 type="button"
                 onClick={() => setIsStatusDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -1294,7 +1294,7 @@ export const PettyCashPage: React.FC = () => {
                 type="button"
                 onClick={() => setIsAuditStatusDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isAuditStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -1373,7 +1373,7 @@ export const PettyCashPage: React.FC = () => {
                 setSearchQuery(e.target.value)
                 setCurrentPage(1)
               }}
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
         </div>
