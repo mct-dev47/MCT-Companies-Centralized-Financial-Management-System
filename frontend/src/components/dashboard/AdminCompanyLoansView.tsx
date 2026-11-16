@@ -414,14 +414,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   }
 
 
-  // Filter company list for dropdown search
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyNamesList
-    return companyNamesList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyNamesList])
-
   // Filtered Groups
   const filteredGroups = React.useMemo(() => {
     return groups.filter((group) => {

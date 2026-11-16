@@ -398,6 +398,10 @@ export const salesService = {
     if (input.remarks !== undefined) {
       payload.remarks = input.remarks
     }
+    // The bank picked in the edit form (it was never sent, so the sale kept its old bank)
+    if (input.bankAccountId) {
+      payload.bank_account_id = input.bankAccountId
+    }
 
     try {
       const token =

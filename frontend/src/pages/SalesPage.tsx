@@ -57,6 +57,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
 import {
   DateRangePicker,
   type DateRange,
@@ -306,12 +307,6 @@ export const SalesPage: React.FC = () => {
   const periodPos = useDropdownPosition(periodDropdownRef, isPeriodDropdownOpen)
   const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
 
-  const filteredCompanyList = React.useMemo(() => {
-    const q = companySearch.toLowerCase().trim()
-    if (!q) return companyList
-    return companyList.filter((c) => c.toLowerCase().includes(q))
-  }, [companySearch, companyList])
-
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
   const [selectedSale, setSelectedSale] = React.useState<SalesItem | null>(null)
@@ -536,10 +531,14 @@ export const SalesPage: React.FC = () => {
     }
   }, [openMenuSaleId])
 
+  // Sales waiting for a discrepancy reason (Flag Discrepancy always asks why before saving)
+  const [flagTargets, setFlagTargets] = React.useState<SalesItem[]>([])
+
   const handleMarkSaleAudit = (
     sale: SalesItem,
     status: 'Verified' | 'Flagged',
-    e?: React.MouseEvent
+    e?: React.MouseEvent,
+    remarks?: string
   ) => {
     e?.stopPropagation()
     const timestamp = new Date().toLocaleString('en-US', {
@@ -556,9 +555,10 @@ export const SalesPage: React.FC = () => {
       auditStatus: status,
       auditedBy: auditorName,
       auditDate: timestamp,
+      ...(remarks !== undefined ? { auditNotes: remarks } : {}),
     }
     setSales((prev) => prev.map((s) => (s.id === sale.id ? updated : s)))
-    salesService.updateSaleAuditStatus(sale.id, status, auditorName).catch((err) => {
+    salesService.updateSaleAuditStatus(sale.id, status, auditorName, remarks).catch((err) => {
       // Spec 0014: show the real status again when the server did not save it.
       reportAuditSaveFailure(err)
       loadSales()
@@ -2838,6 +2838,17 @@ export const SalesPage: React.FC = () => {
       )}
 
       {/* Transaction Details & Audit Modal */}
+      <FlagDiscrepancyDialog
+        open={flagTargets.length > 0}
+        count={flagTargets.length}
+        initialReason={flagTargets.length === 1 ? flagTargets[0].auditNotes || '' : ''}
+        onCancel={() => setFlagTargets([])}
+        onConfirm={(reason) => {
+          flagTargets.forEach((s) => handleMarkSaleAudit(s, 'Flagged', undefined, reason))
+          setFlagTargets([])
+        }}
+      />
+
       <AuditTransactionModal
         open={isAuditModalOpen}
         onOpenChange={(open) => {
@@ -2896,7 +2907,8 @@ export const SalesPage: React.FC = () => {
                       setOpenMenuSaleId(null)
                       setMenuPosition(null)
                       setActiveMenuSale(null)
-                      handleMarkSaleAudit(s, 'Flagged', e)
+                      e.stopPropagation()
+                      if (s) setFlagTargets([s]) // ask for the reason first
                     }}
                     className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                   >
@@ -3071,9 +3083,7 @@ export const SalesPage: React.FC = () => {
                     type="button"
                     disabled={pending.length === 0}
                     onClick={() => {
-                      pending.forEach((s) => {
-                        handleMarkSaleAudit(s, 'Flagged')
-                      })
+                      setFlagTargets(pending) // one reason for the whole day, asked first
                       setDayMenu(null)
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"

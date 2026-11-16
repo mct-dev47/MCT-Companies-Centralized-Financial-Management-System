@@ -653,13 +653,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }
 
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyNamesList
-    return companyNamesList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyNamesList])
-
   const displayedCompanyTitle = isCompanyScoped
     ? assignedCompany
     : selectedCompany === 'All Companies'
@@ -1103,6 +1096,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 />
               ) : (
                 paginatedLoans.map((loan) => {
+                  // Used by the status pill below (removed by mistake in 45e8245, which crashed the loan table)
+                  const isPendingFinance =
+                    loan.status === 'Pending Finance Endorsement' || loan.status === 'Pending Approval'
+                  const isPendingAudit = loan.status === 'Pending Audit Approval'
                   const isRejectedFinance = loan.status === 'Rejected by Finance'
                   const isDisapprovedAudit = loan.status === 'Disapproved by Audit'
                   const statusDisplay = getLoanStatusDisplay(loan.status)

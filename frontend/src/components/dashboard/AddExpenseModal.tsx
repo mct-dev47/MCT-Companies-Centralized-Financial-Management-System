@@ -355,9 +355,13 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
 
     setFieldErrors({})
 
+    // Petty cash may go negative (the supervisor sometimes pays from her own pocket), but warn first
     if (exceedsPettyCash) {
+      const available = pettyBalance ?? 0
       setPettyCashErrorMessage(
-        `Only ${formatPHP(Math.max(pettyBalance ?? 0, 0))} is available in petty cash, but this expense is ${formatPHP(parsedAmountValue)}. Petty cash cannot go below ₱0.00. Top up petty cash first or lower the amount.`
+        `Petty cash has ${formatPHP(available)}, but this expense is ${formatPHP(parsedAmountValue)}. ` +
+          `Saving will leave petty cash at −${formatPHP(parsedAmountValue - available)}. ` +
+          'Continue if the difference was paid out of pocket.'
       )
       return
     }
@@ -672,7 +676,8 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
                     )}
                   >
                     Petty cash available: <span className="font-semibold">{formatPHP(pettyBalance)}</span>
-                    {exceedsPettyCash && ' (Not enough petty cash, top up first)'}
+                    {exceedsPettyCash &&
+                      ` (petty cash will be −${formatPHP(parsedAmountValue - (pettyBalance ?? 0))} after this; allowed if paid out of pocket)`}
                   </p>
                 )}
               </div>
@@ -934,11 +939,14 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
         if (!isOpen) setPettyCashErrorMessage(null)
       }}
       action="warning"
-      title="Insufficient Petty Cash"
+      title="Petty Cash Will Go Negative"
       description={pettyCashErrorMessage ?? ''}
-      cancelLabel=""
-      confirmLabel="Got it"
-      onConfirm={() => setPettyCashErrorMessage(null)}
+      cancelLabel="Cancel"
+      confirmLabel="Continue"
+      onConfirm={() => {
+        setPettyCashErrorMessage(null)
+        setIsReviewing(true)
+      }}
     />
     </>
   )

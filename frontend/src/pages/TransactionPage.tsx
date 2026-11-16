@@ -799,6 +799,9 @@ export const TransactionPage: React.FC = () => {
   } | null>(null)
   const [activeMenuTx, setActiveMenuTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
+  // The row being flagged. Kept apart from activeMenuTx: the click-outside handler clears activeMenuTx
+  // on every click (including typing in the remarks box), which made Flag Discrepancy silently do nothing.
+  const [discrepancyTargetTx, setDiscrepancyTargetTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
   const [markAuditTargetTx, setMarkAuditTargetTx] = React.useState<DashboardTransactionItem | null>(null)
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
@@ -2277,15 +2280,16 @@ export const TransactionPage: React.FC = () => {
   const handleMenuOpenDiscrepancy = (tx: DashboardTransactionItem) => {
     setOpenMenuTxId(null)
     setMenuPosition(null)
-    setActiveMenuTx(tx)
+    setActiveMenuTx(null)
+    setDiscrepancyTargetTx(tx)
     setDiscrepancyReason(tx.auditNotes || '')
     setIsDiscrepancyModalOpen(true)
   }
 
   const handleConfirmQuickDiscrepancy = async () => {
-    if (!activeMenuTx || !discrepancyReason.trim()) return
+    if (!discrepancyTargetTx || !discrepancyReason.trim()) return
     setIsSubmittingAudit(true)
-    const tx = activeMenuTx
+    const tx = discrepancyTargetTx
     const trimmed = discrepancyReason.trim()
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
@@ -2317,8 +2321,10 @@ export const TransactionPage: React.FC = () => {
       }
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')
-      setActiveMenuTx(null)
+      setDiscrepancyTargetTx(null)
     } catch (err: any) {
+      // Put the real status back on screen, since the server did not save the flag
+      setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? tx : t)))
       notifyError(err, 'Failed to flag audit discrepancy. Please try again.')
     } finally {
       setIsSubmittingAudit(false)
@@ -4485,7 +4491,13 @@ export const TransactionPage: React.FC = () => {
       />
 
       {/* 8. Quick Discrepancy Modal from Action Menu */}
-      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
+      <Dialog
+        open={isDiscrepancyModalOpen}
+        onOpenChange={(open) => {
+          setIsDiscrepancyModalOpen(open)
+          if (!open && !isSubmittingAudit) setDiscrepancyTargetTx(null)
+        }}
+      >
         <DialogContent className="max-w-[440px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
             <div className="flex items-center gap-3">
@@ -4530,7 +4542,7 @@ export const TransactionPage: React.FC = () => {
                 onClick={() => {
                   setIsDiscrepancyModalOpen(false)
                   setDiscrepancyReason('')
-                  setActiveMenuTx(null)
+                  setDiscrepancyTargetTx(null)
                 }}
                 className="h-10 px-4 text-xs font-semibold rounded-xl border-stroke/50 cursor-pointer"
               >

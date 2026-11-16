@@ -172,9 +172,10 @@ export const BillsPage: React.FC = () => {
   // Sync assigned company if scoped
   React.useEffect(() => {
     if (isCompanyScoped && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
+      // selectedCompany is derived from the shared active company (it is no longer its own state)
+      setActiveCompany(user.assignedCompany)
     }
-  }, [isCompanyScoped, user?.assignedCompany])
+  }, [isCompanyScoped, user?.assignedCompany, setActiveCompany])
 
   // Load companies
   React.useEffect(() => {
@@ -332,7 +333,6 @@ export const BillsPage: React.FC = () => {
 
     // If active company filter doesn't match the new bill, reset to All Companies so it is immediately visible
     if (selectedCompany !== 'All Companies' && !isCompanyMatch(newBill.company, selectedCompany)) {
-      setSelectedCompany('All Companies')
       setActiveCompany('All Companies')
     }
     // Clear filters that could hide the newly created bill
@@ -474,13 +474,6 @@ export const BillsPage: React.FC = () => {
       notifyError(err, 'Unable to generate Bills PDF report. Please try again.')
     }
   }
-
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyList
-    return companyList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyList])
 
   const displayedCompanyTitle = isCompanyScoped
     ? assignedCompany

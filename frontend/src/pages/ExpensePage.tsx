@@ -95,6 +95,7 @@ import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError } from '@/utils/errorUtils'
+import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
 
 const ITEMS_PER_PAGE = 10
 
@@ -781,10 +782,14 @@ export const ExpensePage: React.FC = () => {
     }
   }, [openMenuExpenseId])
 
+  // Expenses waiting for a discrepancy reason (Flag Discrepancy always asks why before saving)
+  const [flagTargets, setFlagTargets] = React.useState<ExpenseItem[]>([])
+
   const handleMarkExpenseAudit = (
     expense: ExpenseItem,
     status: 'Verified' | 'Flagged',
-    e?: React.MouseEvent
+    e?: React.MouseEvent,
+    remarks?: string
   ) => {
     e?.stopPropagation()
     const timestamp = new Date().toLocaleString('en-US', {
@@ -801,11 +806,12 @@ export const ExpensePage: React.FC = () => {
       auditStatus: status,
       auditedBy: auditorName,
       auditDate: timestamp,
+      ...(remarks !== undefined ? { auditNotes: remarks } : {}),
     }
     setExpenses((prev) =>
       prev.map((item) => (item.id === expense.id ? updated : item))
     )
-    expenseService.updateExpenseAuditStatus(expense.id, status, auditorName).catch((err) => {
+    expenseService.updateExpenseAuditStatus(expense.id, status, auditorName, remarks).catch((err) => {
       // Spec 0014: show the real status again when the server did not save it.
       reportAuditSaveFailure(err)
       loadExpenses()
@@ -814,13 +820,6 @@ export const ExpensePage: React.FC = () => {
     setMenuPosition(null)
     setActiveMenuExpense(null)
   }
-
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyList
-    return companyList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyList])
 
   const displayedCompanyTitle = isCompanyScoped
     ? assignedCompany
@@ -1777,6 +1776,17 @@ export const ExpensePage: React.FC = () => {
       </Card>
 
       {/* Add Expense Modal */}
+      <FlagDiscrepancyDialog
+        open={flagTargets.length > 0}
+        count={flagTargets.length}
+        initialReason={flagTargets.length === 1 ? flagTargets[0].auditNotes || '' : ''}
+        onCancel={() => setFlagTargets([])}
+        onConfirm={(reason) => {
+          flagTargets.forEach((exp) => handleMarkExpenseAudit(exp, 'Flagged', undefined, reason))
+          setFlagTargets([])
+        }}
+      />
+
       <AddExpenseModal
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
@@ -1909,9 +1919,14 @@ export const ExpensePage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={(e) =>
-                    handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
-                  }
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const exp = activeMenuExpense
+                    setOpenMenuExpenseId(null)
+                    setMenuPosition(null)
+                    setActiveMenuExpense(null)
+                    if (exp) setFlagTargets([exp]) // ask for the reason first
+                  }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                 >
                   <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
@@ -2008,9 +2023,7 @@ export const ExpensePage: React.FC = () => {
                     type="button"
                     disabled={pending.length === 0}
                     onClick={() => {
-                      pending.forEach((e) => {
-                        handleMarkExpenseAudit(e, 'Flagged')
-                      })
+                      setFlagTargets(pending) // one reason for the whole day, asked first
                       setDayMenu(null)
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"

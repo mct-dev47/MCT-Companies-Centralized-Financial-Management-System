@@ -1266,7 +1266,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   }, [bankAccounts, targetCompany])
 
   const prevTargetCompRef = React.useRef(targetCompany)
+  // Editing: open on the bank the record was saved with (not the company default), once the list has it
+  const savedEditBankId = String((editItem as any)?.bankAccountId || (editItem as any)?.bank_account_id || '')
+  const editBankAppliedRef = React.useRef(false)
   React.useEffect(() => {
+    if (
+      isEditMode &&
+      savedEditBankId &&
+      !editBankAppliedRef.current &&
+      availableBankAccounts.some((a) => String(a.id) === savedEditBankId)
+    ) {
+      editBankAppliedRef.current = true
+      userPickedBankRef.current = true // treat it like a choice, so the default never replaces it
+      if (selectedBankAccountId !== savedEditBankId) setSelectedBankAccountId(savedEditBankId)
+      return
+    }
     if (prevTargetCompRef.current !== targetCompany) {
       prevTargetCompRef.current = targetCompany
       userPickedBankRef.current = false
@@ -1288,7 +1302,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
     }
-  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks, targetCompany])
+  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks, targetCompany, isEditMode, savedEditBankId])
 
   // Company Particulars List (per company)
   const [savedParticulars, setSavedParticulars] = React.useState<
@@ -2403,8 +2417,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     availablePettyCash !== null &&
     pettyCashTotal > availablePettyCash + 0.005
 
-  // Error modal shown when saving would take petty cash below zero
+  // Warning shown when saving would take petty cash below zero (allowed after the user confirms)
   const [pettyCashErrorMessage, setPettyCashErrorMessage] = React.useState<string | null>(null)
+  const pettyShortfallOkRef = React.useRef(false)
+  // The one-shot day remark flags handleSave consumed, restored when the user continues
+  const pettyResumeRef = React.useRef<{ remarkPromptConfirmed: boolean; skipDayRemarks: boolean } | null>(null)
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false)
@@ -2500,12 +2517,18 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
 
-    if (exceedsPettyCash) {
+    // Petty cash may go negative (the supervisor sometimes pays from her own pocket), but warn first
+    if (exceedsPettyCash && !pettyShortfallOkRef.current) {
+      const available = availablePettyCash ?? 0
+      pettyResumeRef.current = { remarkPromptConfirmed, skipDayRemarks }
       setPettyCashErrorMessage(
-        `Only ${formatPHP(Math.max(availablePettyCash ?? 0, 0))} is available in petty cash, but these entries total ${formatPHP(pettyCashTotal)}. Petty cash cannot go below ₱0.00. Top up petty cash first or lower the amount.`
+        `Petty cash has ${formatPHP(available)}, but these entries total ${formatPHP(pettyCashTotal)}. ` +
+          `Saving will leave petty cash at −${formatPHP(pettyCashTotal - available)}. ` +
+          'Continue if the difference was paid out of pocket.'
       )
       return
     }
+    pettyShortfallOkRef.current = false
 
     // Step 1: Check if there are unpaid items in Sales
     const unpaidRows = validRows.filter((r) => r.status === 'Unpaid')
@@ -4680,11 +4703,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           if (!open) setPettyCashErrorMessage(null)
         }}
         action="warning"
-        title="Insufficient Petty Cash"
+        title="Petty Cash Will Go Negative"
         description={pettyCashErrorMessage ?? ''}
-        cancelLabel=""
-        confirmLabel="Got it"
-        onConfirm={() => setPettyCashErrorMessage(null)}
+        cancelLabel="Cancel"
+        confirmLabel="Continue"
+        onConfirm={() => {
+          setPettyCashErrorMessage(null)
+          const resume = pettyResumeRef.current
+          pettyResumeRef.current = null
+          if (resume) {
+            dayRemarkConfirmedRef.current = resume.remarkPromptConfirmed
+            dayRemarkSkipRef.current = resume.skipDayRemarks
+          }
+          pettyShortfallOkRef.current = true
+          void handleSave(true)
+        }}
       />
     </div>
   )

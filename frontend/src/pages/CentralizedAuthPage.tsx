@@ -298,14 +298,17 @@ export const CentralizedAuthPage: React.FC = () => {
                     </button>
                   )}
 
-                  <Link
-                    to="/settings"
-                    onClick={() => setIsUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer"
-                  >
-                    <Settings className="h-4 w-4 text-muted-fg shrink-0" />
-                    <span>Settings</span>
-                  </Link>
+                  {/* Settings is system configuration, so only Admin sees it */}
+                  {(user?.role || '').toLowerCase() === 'admin' && (
+                    <Link
+                      to="/settings"
+                      onClick={() => setIsUserMenuOpen(false)}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer"
+                    >
+                      <Settings className="h-4 w-4 text-muted-fg shrink-0" />
+                      <span>Settings</span>
+                    </Link>
+                  )}
 
                   <div className="h-px bg-stroke/20 my-1" />
 

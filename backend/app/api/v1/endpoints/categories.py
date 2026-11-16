@@ -2,6 +2,7 @@ from typing import Any, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.core.company_resolver import resolve_company
@@ -235,6 +236,15 @@ def create_category(
             except Exception as e:
                 print(f"Supabase create company_category failed, falling back to local: {e}")
 
+        # When the local engine IS the Supabase Postgres, the insert above already wrote this row.
+        # Inserting it again hit the unique constraint and was reported as "already exists" even
+        # though the category had just been created. Reuse the row if it is already there.
+        if created_id is not None:
+            db.expire_all()
+            just_created = db.query(CompanyCategory).filter(CompanyCategory.category_id == created_id).first()
+            if just_created is not None:
+                return just_created
+
         new_cat = CompanyCategory(
             category_id=created_id,
             company_id=target_company_id,
@@ -247,11 +257,18 @@ def create_category(
             db.add(new_cat)
             db.commit()
             db.refresh(new_cat)
-        except Exception:
+        except IntegrityError:
+            # A real duplicate (e.g. two people adding the same name at once)
             db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Category '{cleaned_name}' already exists for {target_company_name}."
+            )
+        except SQLAlchemyError:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The category could not be saved. Please try again.",
             )
         return new_cat
 

@@ -360,28 +360,6 @@ class PettyCashService:
         ) + reimbursed
         return topped_up - spent
 
-    def ensure_sufficient_balance(
-        self,
-        company_id: Optional[int],
-        payment_method: Optional[str],
-        amount: Optional[Decimal],
-        exclude_expense_id: Optional[int] = None,
-        category: Optional[str] = None,
-    ) -> None:
-        """Block a petty cash expense that would take the wallet below zero."""
-        if not company_id or not is_petty_cash(payment_method) or amount is None:
-            return
-        available = self.get_balance(company_id, exclude_expense_id=exclude_expense_id)
-        if Decimal(str(amount)) > available:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Insufficient petty cash balance (₱{max(available, ZERO):,.2f} available, "
-                    f"requested ₱{Decimal(str(amount)):,.2f}). Petty cash cannot go below ₱0.00. "
-                    "Top up petty cash first."
-                ),
-            )
-
     def _build_summary(
         self,
         company: Company,

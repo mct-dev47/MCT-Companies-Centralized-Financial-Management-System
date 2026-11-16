@@ -14,7 +14,6 @@ from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyE
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
-from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
@@ -620,8 +619,8 @@ def create_expense(
 
         check_company_access(current_user, target_company_id)
 
-        # Petty cash expenses are paid from the company's petty cash wallet, not sales
-        PettyCashService(db).ensure_sufficient_balance(target_company_id, expense_in.payment_method, expense_in.amount)
+        # Petty cash expenses are paid from the company's petty cash wallet, not sales. The wallet may
+        # go negative (a supervisor can pay from her own pocket); the form warns before saving.
 
         # 2. Resolve Category in Supabase
         resolved_category_id = expense_in.category_id
@@ -811,8 +810,6 @@ def create_expense(
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)
         check_company_access(current_user, target_company.company_id)
-
-        PettyCashService(db).ensure_sufficient_balance(target_company.company_id, expense_in.payment_method, expense_in.amount)
 
         if _is_petty_cash_payment(expense_in.payment_method):
             effective_bank_id = None
@@ -1022,14 +1019,7 @@ def update_expense(
         expense_in.category = PETTY_CASH_CATEGORY
         expense_in.category_id = None
 
-    # Re-check the petty cash wallet with this expense's old amount added back
-    if current:
-        PettyCashService(db).ensure_sufficient_balance(
-            current.get("company_id"),
-            expense_in.payment_method if expense_in.payment_method is not None else current.get("payment_method"),
-            target_amt if target_amt is not None else current.get("amount"),
-            exclude_expense_id=expense_id,
-        )
+    # No petty cash balance block on edit either: the wallet may go negative (paid out of pocket).
 
     update_payload = {}
     if expense_in.expense_date:

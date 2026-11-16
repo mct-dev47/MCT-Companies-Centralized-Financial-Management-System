@@ -1238,7 +1238,7 @@ export const BankManagementPage: React.FC = () => {
 
       ) {
 
-        setSelectedCompany(newAccount.companyName)
+        setActiveCompany(newAccount.companyName)
 
       }
 
