@@ -102,18 +102,12 @@ function isReimbursementEntry(entry: PettyCashTransaction | null | undefined): b
 }
 
 /**
- * Badge colors for the workflow status. Green means the money has moved: an approved top up, or a
- * reimbursement once it is Reimbursed / Settled. An Audit-approved reimbursement stays yellow until
- * Finance disburses it.
+ * Badge colors for the workflow status. Approved is yellow; only Reimbursed / Settled is green.
  */
 function getPettyStatusTone(entry: PettyCashTransaction): string {
   const s = entry.status
   if (s === 'Reimbursed' || s === 'Settled') return 'bg-emerald-50 text-emerald-700 border-emerald-200'
-  if (s === 'Approved') {
-    return isReimbursementEntry(entry)
-      ? 'bg-amber-50 text-amber-700 border-amber-200'
-      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-  }
+  if (s === 'Approved') return 'bg-amber-50 text-amber-700 border-amber-200'
   if (s === 'Pending Finance Approval' || s === 'Pending Finance Endorsement' || s === 'Return Pending') {
     return 'bg-amber-50 text-amber-700 border-amber-200'
   }
@@ -1615,10 +1609,10 @@ export const PettyCashPage: React.FC = () => {
                           <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
                             Reimbursed
                           </span>
-                        ) : isApproved && isReimbursementEntry(entry) ? (
+                        ) : isApproved ? (
                           <span
                             className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/10 text-amber-700 border border-amber-500/20 whitespace-nowrap"
-                            title="Approved by Audit. Turns green once Finance disburses the reimbursement."
+                            title="Approved by Audit. Only Reimbursed is green."
                           >
                             Approved
                           </span>
@@ -2374,7 +2368,7 @@ export const PettyCashPage: React.FC = () => {
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-semibold text-focus">
                               {targetEntry.status === 'Approved' ? (
-                                <span className={cn('font-bold', isReimbursementEntry(targetEntry) ? 'text-amber-700' : 'text-emerald-700')}>
+                                <span className="font-bold text-amber-700">
                                   Audited & Approved
                                   {targetEntry.reviewedBy ? ` by ${formatRealName(targetEntry.reviewedBy, 'Audit Officer')}` : ''}
                                 </span>
