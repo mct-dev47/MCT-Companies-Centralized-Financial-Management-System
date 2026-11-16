@@ -201,6 +201,16 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
  *  - for reimbursement: a Withdrawal for the company/funder reflecting employee payout or float disbursement
  * Every petty cash row is a read only mirror (petty cash is audited on its own page).
  */
+/**
+ * Money that moves through the company's petty cash box, never a bank: petty cash expenses, and
+ * petty cash top ups / payouts with no funding bank. Listed under All Banks, but kept out of every
+ * bank balance, day total and passbook check, because the bank never held it.
+ */
+const isPettyCashLedgerRow = (t: DashboardTransactionItem): boolean => {
+  if (t.type === 'Expense') return (t.paymentMethod || '').trim().toLowerCase().includes('petty cash')
+  return t.type === 'Petty Cash' && !t.bankAccountId
+}
+
 const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] => {
   const reqType = (m.requestType || '').trim().toLowerCase()
   const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
@@ -632,18 +642,23 @@ export const TransactionPage: React.FC = () => {
   }, [activeCompany, selectedCompany, defaultSupervisorCompany])
 
   const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
+  // True once the user picks a bank themselves (including "All banks"), so the default never overrides them.
+  // Reset when the company changes, so the new company's own bank is picked.
+  const [bankChosenByUser, setBankChosenByUser] = React.useState(false)
   const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
   const [salesCurrentPage, setSalesCurrentPage] = React.useState(1)
 
   const handleSelectCompany = (c: string) => {
     setActiveCompany(c)
     setSelectedBankAccountId('')
+    setBankChosenByUser(false)
     setDepositCurrentPage(1)
     setSalesCurrentPage(1)
   }
 
   const handleResetCompany = React.useCallback(() => {
     setSelectedBankAccountId('')
+    setBankChosenByUser(false)
     setDepositCurrentPage(1)
     setSalesCurrentPage(1)
   }, [])
@@ -671,6 +686,27 @@ export const TransactionPage: React.FC = () => {
       setSelectedBankAccountId('')
     }
   }, [availableBankAccounts, selectedBankAccountId])
+
+  // Default bank = the company's OWN account (it is the only owner), not a bank shared with other
+  // companies, so the ledger opens on the bank the company actually uses. With several own banks,
+  // the oldest one. "All Banks" stays available in the dropdown. Skipped when no single company is
+  // in view, when the company has no bank of its own, or once the user has chosen.
+  const ownBankId = React.useMemo(() => {
+    if (!effectiveTargetCompany) return ''
+    const own = availableBankAccounts
+      .filter((a) => !isSharedAccount(a) && isCompanyMatch(a.companyName, effectiveTargetCompany))
+      .sort(
+        (a, b) =>
+          (a.createdAt || '').localeCompare(b.createdAt || '') ||
+          String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+      )
+    return own.length > 0 ? String(own[0].id) : ''
+  }, [availableBankAccounts, effectiveTargetCompany])
+
+  React.useEffect(() => {
+    if (bankChosenByUser || selectedBankAccountId || !ownBankId) return
+    setSelectedBankAccountId(ownBankId)
+  }, [bankChosenByUser, selectedBankAccountId, ownBankId])
 
   const selectedBankAccount = React.useMemo(
     () =>
@@ -1174,11 +1210,43 @@ export const TransactionPage: React.FC = () => {
 
     // Bank scope: only this bank's records (and so only this bank's running balance)
     if (selectedBankAccount) {
-      list = list.filter((t) => resolveTxBank(t)?.id === selectedBankAccount.id)
+      // Petty cash is not in any bank, so it shows only under All Banks
+      list = list.filter((t) => !isPettyCashLedgerRow(t) && resolveTxBank(t)?.id === selectedBankAccount.id)
     }
 
     return list
   }, [transactions, effectiveTargetCompany, selectedBankAccount, resolveTxBank])
+
+  // When each sale / expense actually reached the bank: the newest bank entry posted for it.
+  // A sale created early but marked Paid/Deposited later gets the later time, so it sorts as the newest.
+  const bankPostedAt = React.useMemo(() => {
+    const posted = new Map<string, number>()
+    bankAccounts.forEach((acc) =>
+      (acc.transactions || []).forEach((bt) => {
+        const key = bt.sourceSaleId != null ? String(bt.sourceSaleId) : bt.sourceExpenseId != null ? `exp_${bt.sourceExpenseId}` : null
+        const at = Date.parse(bt.createdAt || '')
+        if (!key || isNaN(at)) return
+        if (at > (posted.get(key) ?? 0)) posted.set(key, at)
+      })
+    )
+    return posted
+  }, [bankAccounts])
+
+  /** Order within one bank ledger day: when the money moved (bank posting time), oldest first. */
+  const compareLedgerTime = React.useCallback(
+    (a: DashboardTransactionItem, b: DashboardTransactionItem) => {
+      const time = (t: DashboardTransactionItem) => {
+        const posted = bankPostedAt.get(String(t.id))
+        if (posted !== undefined) return posted
+        // No bank entry: the last update (e.g. when it was marked Paid), else when it was created
+        const fallback = Date.parse((t.type === 'Sales' && t.updatedAt) || t.createdAt || '')
+        return isNaN(fallback) ? 0 : fallback
+      }
+      const diff = time(a) - time(b)
+      return diff !== 0 ? diff : String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+    },
+    [bankPostedAt]
+  )
 
   // Running balance per company or selected bank account (deposits minus withdrawals, oldest first, seeded from bank starting balances).
   // It is worked out over the whole company scoped ledger, before the search, direction and date filters,
@@ -1187,11 +1255,12 @@ export const TransactionPage: React.FC = () => {
     const ordered = [...depositBaseList].sort((a, b) => {
       const byDate = normalizeDateToYYYYMMDD(a.date).localeCompare(normalizeDateToYYYYMMDD(b.date))
       if (byDate !== 0) return byDate
-      return (a.createdAt || a.id).localeCompare(b.createdAt || b.id)
+      return compareLedgerTime(a, b)
     })
     const running = new Map<string, number>()
     const balances = new Map<string, number>()
     ordered.forEach((t) => {
+      if (isPettyCashLedgerRow(t)) return // petty cash never moves the bank balance
       const groupKey = selectedBankAccount
         ? String(selectedBankAccount.id)
         : (t.company || '').toLowerCase().trim()
@@ -1208,18 +1277,19 @@ export const TransactionPage: React.FC = () => {
       balances.set(`${t.type}:${t.id}`, next)
     })
     return balances
-  }, [depositBaseList, selectedBankAccount, getStartingBalanceForCompany])
+  }, [depositBaseList, selectedBankAccount, getStartingBalanceForCompany, compareLedgerTime])
 
   // Total bank balance at the close of each day (sum of the per-company/bank running balances above).
   const closingBalanceDates = React.useMemo(() => {
     const ordered = [...depositBaseList].sort((a, b) => {
       const byDate = normalizeDateToYYYYMMDD(a.date).localeCompare(normalizeDateToYYYYMMDD(b.date))
       if (byDate !== 0) return byDate
-      return (a.createdAt || a.id).localeCompare(b.createdAt || b.id)
+      return compareLedgerTime(a, b)
     })
     const latest = new Map<string, number>()
     const closing = new Map<string, number>()
     ordered.forEach((t) => {
+      if (isPettyCashLedgerRow(t)) return
       const groupKey = selectedBankAccount ? String(selectedBankAccount.id) : (t.company || '').toLowerCase().trim()
       latest.set(groupKey, depositBalanceByKey.get(`${t.type}:${t.id}`) ?? latest.get(groupKey) ?? 0)
       let total = 0
@@ -1227,7 +1297,7 @@ export const TransactionPage: React.FC = () => {
       closing.set(normalizeDateToYYYYMMDD(t.date), Math.round(total * 100) / 100)
     })
     return Array.from(closing.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  }, [depositBaseList, depositBalanceByKey, selectedBankAccount])
+  }, [depositBaseList, depositBalanceByKey, selectedBankAccount, compareLedgerTime])
 
   // Balance as of the end of `date`: the latest ledger close on or before that day (falls back to the starting balance).
   const getClosingBalance = React.useCallback(
@@ -1288,6 +1358,7 @@ export const TransactionPage: React.FC = () => {
 
     const ledgerByDay = new Map<string, { deposit: number; withdrawal: number }>()
     depositBaseList.forEach((t) => {
+      if (isPettyCashLedgerRow(t)) return // not bank money, so not part of the passbook
       const day = normalizeDateToYYYYMMDD(t.date)
       if (!day) return
       const slot = ledgerByDay.get(day) || { deposit: 0, withdrawal: 0 }
@@ -1341,6 +1412,7 @@ export const TransactionPage: React.FC = () => {
         // Each sale / expense on this day against what its linked bank entries hold
         const linkedEntryIds = new Set<string>()
         dayTxs.forEach((t) => {
+          if (isPettyCashLedgerRow(t)) return
           const isSale = t.type === 'Sales'
           const isExpense = t.type === 'Expense' && String(t.id).startsWith('exp_')
           if (!isSale && !isExpense) return
@@ -1570,12 +1642,14 @@ export const TransactionPage: React.FC = () => {
       if (cmp !== 0) {
         return sortOrder === 'desc' ? cmp : -cmp
       }
-      const timeCmp = (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
+      // Same deposit day: the one that reached the bank last (e.g. just marked Paid) comes first
+      const timeCmp = compareLedgerTime(b, a)
       return sortOrder === 'desc' ? timeCmp : -timeCmp
     })
 
     return list
   }, [
+    compareLedgerTime,
     depositBaseList,
     typeFilter,
     matchesTypeFilter,
@@ -1607,7 +1681,8 @@ export const TransactionPage: React.FC = () => {
 
     // Bank scope
     if (selectedBankAccount) {
-      list = list.filter((t) => resolveTxBank(t)?.id === selectedBankAccount.id)
+      // Petty cash is not in any bank, so it shows only under All Banks
+      list = list.filter((t) => !isPettyCashLedgerRow(t) && resolveTxBank(t)?.id === selectedBankAccount.id)
     }
 
     // Type filter (All | Sales | Expenses)
@@ -1747,9 +1822,10 @@ export const TransactionPage: React.FC = () => {
       }
       const banksMap = groupsMap.get(groupId)!
 
-      const bankKey = matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
-      const bankName = matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
-      const accountNumber = matchedBank?.accountNumber
+      const isPetty = isPettyCashLedgerRow(tx)
+      const bankKey = isPetty ? '__petty_cash__' : matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
+      const bankName = isPetty ? 'Petty Cash' : matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
+      const accountNumber = isPetty ? undefined : matchedBank?.accountNumber
 
       if (!banksMap.has(bankKey)) {
         banksMap.set(bankKey, {
@@ -1766,7 +1842,9 @@ export const TransactionPage: React.FC = () => {
       }
 
       const item = banksMap.get(bankKey)!
-      const { deposit, withdrawal } = getRowAmounts(tx)
+      // Bank Ledger day totals are bank money only; petty cash rows are listed but not added
+      const { deposit, withdrawal } =
+        activeTab === 'deposit' && isPetty ? { deposit: 0, withdrawal: 0 } : getRowAmounts(tx)
       item.totalDeposit = Math.round((item.totalDeposit + deposit) * 100) / 100
       item.totalWithdrawal = Math.round((item.totalWithdrawal + withdrawal) * 100) / 100
       item.netMovement = Math.round((item.totalDeposit - item.totalWithdrawal) * 100) / 100
@@ -1890,6 +1968,7 @@ export const TransactionPage: React.FC = () => {
         label: `Bank: ${selectedBankAccount.bankName}${selectedBankAccount.accountName ? ` – ${selectedBankAccount.accountName}` : ''}`,
         onClear: () => {
           setSelectedBankAccountId('')
+          setBankChosenByUser(true)
           setDepositCurrentPage(1)
           setSalesCurrentPage(1)
         },
@@ -2299,7 +2378,7 @@ export const TransactionPage: React.FC = () => {
           csvCell(t.category),
           deposit || 0,
           withdrawal || 0,
-          depositBalanceByKey.get(`${t.type}:${t.id}`) ?? 0,
+          isPettyCashLedgerRow(t) ? csvCell('Petty cash') : depositBalanceByKey.get(`${t.type}:${t.id}`) ?? 0,
           csvCell(t.auditStatus || 'Pending Audit'),
         ]
       }
@@ -2366,7 +2445,7 @@ export const TransactionPage: React.FC = () => {
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.category)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #16a34a; font-weight: 700;">${fmtAmt(deposit)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #dc2626; font-weight: 700;">${fmtAmt(withdrawal)}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${fmtSigned(depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; font-weight: 700;">${isPettyCashLedgerRow(tx) ? 'Petty cash' : fmtSigned(depositBalanceByKey.get(`${escapeHtml(tx.type)}:${tx.id}`) ?? 0)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${tx.auditStatus === 'Verified' ? 'Audited' : 'Pending Audit'}</td>
         </tr>
       `
@@ -2697,6 +2776,7 @@ export const TransactionPage: React.FC = () => {
                   className="flex-1 min-w-[190px] sm:min-w-[220px]"
                   onSelectAccount={(id) => {
                     setSelectedBankAccountId(id)
+                    setBankChosenByUser(true)
                     setDepositCurrentPage(1)
                     setSalesCurrentPage(1)
                   }}
@@ -3785,8 +3865,9 @@ export const TransactionPage: React.FC = () => {
                   const depDateShort = lifecycle.effectiveDepositDate
                     ? toLedgerDate(lifecycle.effectiveDepositDate)
                     : getDepositDayShort(tx)
+                  const isPettyRow = isPettyCashLedgerRow(tx)
                   const rowBalance =
-                    activeTab === 'deposit'
+                    activeTab === 'deposit' && !isPettyRow
                       ? depositBalanceByKey.get(`${tx.type}:${tx.id}`) ?? 0
                       : null
 
@@ -3922,9 +4003,15 @@ export const TransactionPage: React.FC = () => {
                               'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
                               (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
                             )}
-                            title="Balance of the bank"
+                            title={isPettyRow ? 'Paid from petty cash, so the bank balance does not change' : 'Balance of the bank'}
                           >
-                            {(rowBalance ?? 0) < 0 ? `−${formatPHP(Math.abs(rowBalance ?? 0))}` : formatPHP(rowBalance ?? 0)}
+                            {isPettyRow ? (
+                              <span className="font-medium text-muted-fg">— Petty cash</span>
+                            ) : (rowBalance ?? 0) < 0 ? (
+                              `−${formatPHP(Math.abs(rowBalance ?? 0))}`
+                            ) : (
+                              formatPHP(rowBalance ?? 0)
+                            )}
                           </TableCell>
 
                           {/* 8. AUDIT STATUS */}
