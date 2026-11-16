@@ -619,7 +619,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -668,7 +668,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -780,7 +780,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isCategoryDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -876,7 +876,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                   setIsCategoryDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
+                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -1029,7 +1029,7 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                 setCurrentPage(1)
               }}
               placeholder="Search by company, category, status…"
-              className="w-full h-10 pl-9 pr-8 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/70 shadow-xs box-border focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus transition-all"
+              className="w-full h-10 pl-9 pr-8 rounded-[10px] border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/70 shadow-xs box-border focus:outline-none focus:ring-2 focus:ring-focus/20 focus:border-focus transition-all"
             />
             {searchQuery && (
               <button

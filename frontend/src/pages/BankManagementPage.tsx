@@ -45,6 +45,7 @@ import {
 
   Plus,
   RefreshCw,
+  ArrowUpDown,
 
 } from 'lucide-react'
 
@@ -396,8 +397,8 @@ export const BankManagementPage: React.FC = () => {
       const targetComp = isCompanyScoped
         ? assignedCompany
         : selectedCompany !== 'All Companies'
-        ? selectedCompany
-        : undefined
+          ? selectedCompany
+          : undefined
       const data = await bankService.getAccounts(targetComp, { forceRefresh })
       setAccounts(data || [])
       setLoadError(null)
@@ -538,13 +539,14 @@ export const BankManagementPage: React.FC = () => {
 
   const [bankStatusFilter, setBankStatusFilter] = React.useState<string>('All')
   const [isBankStatusDropdownOpen, setIsBankStatusDropdownOpen] = React.useState(false)
+  const [sortOrder, setSortOrder] = React.useState<'desc' | 'asc'>('desc')
+  const [isSortDropdownOpen, setIsSortDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-
   const companyDropdownRef = React.useRef<HTMLDivElement>(null)
-
   const txTypeDropdownRef = React.useRef<HTMLDivElement>(null)
   const bankStatusDropdownRef = React.useRef<HTMLDivElement>(null)
+  const sortDropdownRef = React.useRef<HTMLDivElement>(null)
 
   // Modals state
 
@@ -667,6 +669,10 @@ export const BankManagementPage: React.FC = () => {
 
       if (bankStatusDropdownRef.current && !bankStatusDropdownRef.current.contains(target)) {
         setIsBankStatusDropdownOpen(false)
+      }
+
+      if (sortDropdownRef.current && !sortDropdownRef.current.contains(target)) {
+        setIsSortDropdownOpen(false)
       }
 
     }
@@ -1100,30 +1106,31 @@ export const BankManagementPage: React.FC = () => {
     const q = tableSearchQuery.toLowerCase().trim()
 
     if (q) {
-
       list = list.filter((t) => {
-
         const matchParticulars = t.particulars.toLowerCase().includes(q)
-
         const matchCheque = (t.chequeNo || '').toLowerCase().includes(q)
-
         const matchCategory = t.category.toLowerCase().includes(q)
-
         const matchDate = t.date.toLowerCase().includes(q)
-
         const matchBal = t.runningBalance.toString().includes(q)
-
         const matchComp = ((t as any).companyName || '').toLowerCase().includes(q)
-
         return matchParticulars || matchCheque || matchCategory || matchDate || matchBal || matchComp
-
       })
-
     }
+
+    list.sort((a, b) => {
+      const timeA = new Date(a.date).getTime() || 0
+      const timeB = new Date(b.date).getTime() || 0
+      if (timeA !== timeB) {
+        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
+      }
+      return sortOrder === 'asc'
+        ? (a.id || '').localeCompare(b.id || '')
+        : (b.id || '').localeCompare(a.id || '')
+    })
 
     return list
 
-  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter, bankStatusFilter])
+  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter, bankStatusFilter, sortOrder])
 
   // Pagination
 
@@ -1143,7 +1150,7 @@ export const BankManagementPage: React.FC = () => {
 
     setCurrentPage(1)
 
-  }, [selectedAccountId, tableSearchQuery, txTypeFilter, bankStatusFilter])
+  }, [selectedAccountId, tableSearchQuery, txTypeFilter, bankStatusFilter, sortOrder])
 
   // Distinct company list from database and bank accounts for filter dropdown
 
@@ -1870,8 +1877,8 @@ export const BankManagementPage: React.FC = () => {
                 />
               </div>
 
-              {/* 2. Status Dropdown Filter with increased width matching Row 2 */}
-              <div ref={bankStatusDropdownRef} className="relative inline-block flex-1 min-w-[150px]">
+              {/* 2. Status Dropdown Filter (reduced width to make room for sort button) */}
+              <div ref={bankStatusDropdownRef} className="relative inline-block w-[115px] sm:w-[125px] shrink-0">
                 <button
                   type="button"
                   onClick={() => {
@@ -1879,9 +1886,10 @@ export const BankManagementPage: React.FC = () => {
                     setIsCompanyDropdownOpen(false)
                     setIsTxTypeDropdownOpen(false)
                     setIsExportDropdownOpen(false)
+                    setIsSortDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isBankStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -1892,7 +1900,7 @@ export const BankManagementPage: React.FC = () => {
                 </button>
 
                 {isBankStatusDropdownOpen && (
-                  <div className="absolute left-0 top-full mt-2 w-52 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                  <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
                     {[
                       { label: 'All Statuses', value: 'All' },
                       { label: 'Audited', value: 'Audited' },
@@ -1923,13 +1931,69 @@ export const BankManagementPage: React.FC = () => {
                 )}
               </div>
 
+              {/* 3. Ascending / Descending Filter Button */}
+              <div ref={sortDropdownRef} className="relative inline-block w-[130px] sm:w-[145px] shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSortDropdownOpen((prev) => !prev)
+                    setIsBankStatusDropdownOpen(false)
+                    setIsCompanyDropdownOpen(false)
+                    setIsTxTypeDropdownOpen(false)
+                    setIsExportDropdownOpen(false)
+                  }}
+                  className={cn(
+                    'inline-flex items-center justify-between gap-1.5 h-11 w-full px-3 sm:px-3.5 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    isSortDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
+                  )}
+                  aria-label="Sort transactions by date"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0 flex-1 truncate">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                    <span className="font-medium text-focus/90 truncate text-left">
+                      {sortOrder === 'asc' ? 'Ascending' : 'Descending'}
+                    </span>
+                  </div>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
+                </button>
+
+                {isSortDropdownOpen && (
+                  <div className="absolute left-0 top-full mt-2 w-48 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
+                    {[
+                      { label: 'Descending (Newest)', value: 'desc' },
+                      { label: 'Ascending (Oldest)', value: 'asc' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => {
+                          setSortOrder(opt.value as 'asc' | 'desc')
+                          setIsSortDropdownOpen(false)
+                        }}
+                        className={cn(
+                          'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
+                          sortOrder === opt.value
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-focus/80 hover:bg-slate-50'
+                        )}
+                      >
+                        <span>{opt.label}</span>
+                        {sortOrder === opt.value && (
+                          <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* 3. Deposit / Withdrawal Toggle Button (Red active state for All) */}
-              <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
+              <div className="flex items-center bg-slate-100 rounded-[10px] border border-stroke/30 p-1 gap-1 shrink-0">
                 <button
                   type="button"
                   onClick={() => setTxTypeFilter('All')}
                   className={cn(
-                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    'inline-flex items-center justify-center h-9 px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                     txTypeFilter === 'All'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:bg-white hover:text-focus'
@@ -1941,7 +2005,7 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   onClick={() => setTxTypeFilter('Deposit')}
                   className={cn(
-                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    'inline-flex items-center justify-center h-9 px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                     txTypeFilter === 'Deposit'
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'text-focus/70 hover:bg-white hover:text-focus'
@@ -1953,7 +2017,7 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   onClick={() => setTxTypeFilter('Withdrawal')}
                   className={cn(
-                    'inline-flex items-center justify-center h-9 px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                    'inline-flex items-center justify-center h-9 px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                     txTypeFilter === 'Withdrawal'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:bg-white hover:text-focus'
@@ -1971,7 +2035,7 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   disabled={!activeAccount}
                   onClick={() => setIsDepositModalOpen(true)}
-                  className="h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                  className="h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
                 >
                   <ArrowDownLeft className="h-4 w-4 shrink-0" />
                   <span>Deposit</span>
@@ -1980,7 +2044,7 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   disabled={!activeAccount}
                   onClick={() => setIsWithdrawModalOpen(true)}
-                  className="h-11 px-4 rounded-full bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                  className="h-11 px-4 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] disabled:opacity-50 text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
                 >
                   <ArrowUpRight className="h-4 w-4 shrink-0" />
                   <span>Withdraw</span>
@@ -2003,7 +2067,7 @@ export const BankManagementPage: React.FC = () => {
                     setTableSearchQuery(e.target.value)
                     setCurrentPage(1)
                   }}
-                  className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+                  className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
                 />
               </div>
 
@@ -2019,7 +2083,7 @@ export const BankManagementPage: React.FC = () => {
                       setIsExportDropdownOpen(false)
                     }}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                   >
@@ -2066,7 +2130,7 @@ export const BankManagementPage: React.FC = () => {
                   )}
                 </div>
               ) : (
-                <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0">
+                <div className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0">
                   <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
                 </div>
               )}
@@ -2074,7 +2138,7 @@ export const BankManagementPage: React.FC = () => {
           </div>
         </div>
 
-        </div>
+      </div>
 
       {/* 2. Bank Cards Hero Section: Skeleton when loading, Empty State if 0 accounts, Full-Width for Single Account, Grid for Multi Accounts */}
 
@@ -2111,7 +2175,7 @@ export const BankManagementPage: React.FC = () => {
               bankService.invalidateCache()
               void fetchAccounts(true)
             }}
-            className="rounded-full bg-[#960C01] hover:bg-[#800a01] text-white px-5 py-2 text-xs font-semibold cursor-pointer shadow-sm"
+            className="rounded-[10px] bg-[#960C01] hover:bg-[#800a01] text-white px-5 py-2 text-xs font-semibold cursor-pointer shadow-sm"
           >
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Retry
           </Button>
@@ -2151,7 +2215,7 @@ export const BankManagementPage: React.FC = () => {
 
               onClick={openAddBankModal}
 
-              className="rounded-full bg-[#960C01] hover:bg-[#800a01] text-white px-5 py-2 text-xs font-semibold cursor-pointer shadow-sm"
+              className="rounded-[10px] bg-[#960C01] hover:bg-[#800a01] text-white px-5 py-2 text-xs font-semibold cursor-pointer shadow-sm"
 
             >
 
@@ -2349,29 +2413,29 @@ export const BankManagementPage: React.FC = () => {
 
                 {activeAccount && (
 
-                <button
+                  <button
 
-                  type="button"
+                    type="button"
 
-                  onClick={(e) => {
+                    onClick={(e) => {
 
-                    e.stopPropagation()
+                      e.stopPropagation()
 
-                    setIsEditModalOpen(true)
+                      setIsEditModalOpen(true)
 
-                  }}
+                    }}
 
-                  className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-white text-[#960C01] hover:bg-slate-100 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer ml-auto"
+                    className="h-9 w-9 sm:h-10 sm:w-10 rounded-full bg-white text-[#960C01] hover:bg-slate-100 flex items-center justify-center shadow-lg transition-transform hover:scale-105 active:scale-95 cursor-pointer ml-auto"
 
-                  title="Edit Bank Details"
+                    title="Edit Bank Details"
 
-                  aria-label="Edit Bank Details"
+                    aria-label="Edit Bank Details"
 
-                >
+                  >
 
-                  <Pencil className="h-4 w-4" />
+                    <Pencil className="h-4 w-4" />
 
-                </button>
+                  </button>
 
                 )}
 
@@ -4552,7 +4616,7 @@ export const BankManagementPage: React.FC = () => {
 
       <Dialog open={isCardDetailsModalOpen} onOpenChange={setIsCardDetailsModalOpen}>
 
-        <DialogContent hideCloseButton className="sm:max-w-[720px] bg-white rounded-[24px] p-6 shadow-modal overflow-hidden max-h-[85vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[720px] bg-white rounded-2xl p-6 shadow-modal overflow-hidden max-h-[85vh] overflow-y-auto">
 
           <DialogHeader className="space-y-1.5 pb-2 border-b border-slate-100">
 

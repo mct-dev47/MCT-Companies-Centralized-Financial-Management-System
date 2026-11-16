@@ -4,6 +4,10 @@ import {
   Building2,
   X,
   ArrowUpDown,
+  MapPin,
+  Phone,
+  PhoneCall,
+  ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -161,7 +165,7 @@ export const EmployeePage: React.FC = () => {
           <Button
             type="button"
             onClick={() => setIsCreateCompanyOpen(true)}
-            className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+            className="h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer"
           >
             <Building2 className="h-4 w-4 shrink-0" />
             <span>Create Company</span>
@@ -192,7 +196,7 @@ export const EmployeePage: React.FC = () => {
             placeholder="Search companies by name, address, or contact number..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-11 sm:h-12 pl-11 pr-10 rounded-2xl border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full transition-all"
+            className="h-11 sm:h-12 pl-11 pr-10 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full transition-all"
           />
           {searchQuery && (
             <button
@@ -213,41 +217,40 @@ export const EmployeePage: React.FC = () => {
             onChange={(val) => setSortBy(val as SortOption)}
             icon={ArrowUpDown}
             menuTitle="Sort By"
-            className="h-11 sm:h-12 rounded-2xl bg-white border border-stroke/50 shadow-xs"
+            className="h-11 sm:h-12 rounded-[10px] bg-white border border-stroke/50 shadow-xs"
             ariaLabel="Sort companies"
           />
         </div>
       </div>
 
-      {/* Company Grid */}
+      {/* Company List (Single Column Per Row) */}
       <div className="space-y-4">
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {Array.from({ length: 9 }).map((_, i) => (
+          <div className="flex flex-col gap-3.5">
+            {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="bg-white rounded-2xl border border-rose-200/60 p-4 sm:p-5 flex items-center gap-4 shadow-xs"
+                className="bg-white rounded-xl border border-rose-200/60 p-3.5 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xs"
               >
-                <Skeleton className="h-16 w-16 sm:h-20 sm:w-20 rounded-full shrink-0" />
-                <div className="min-w-0 flex-1 space-y-2.5">
-                  <Skeleton className="h-5 w-3/4 rounded-md" />
-                  <Skeleton className="h-3.5 w-full rounded-md" />
-                  <Skeleton className="h-3.5 w-2/3 rounded-md" />
+                <Skeleton className="h-14 w-14 sm:h-18 sm:w-18 md:h-20 md:w-20 rounded-full shrink-0" />
+                <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
+                  <Skeleton className="h-4 sm:h-5 w-1/3 rounded-md" />
+                  <Skeleton className="h-3 sm:h-3.5 w-2/3 rounded-md" />
                 </div>
               </div>
             ))}
           </div>
         ) : filteredCompanies.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-stroke/30 p-12 text-center text-muted-fg text-sm">
+          <div className="bg-white rounded-xl border border-stroke/30 p-8 sm:p-12 text-center text-muted-fg text-sm">
             No companies found matching your search.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="flex flex-col gap-3.5">
             {filteredCompanies.map((comp) => (
               <div
                 key={comp.id}
                 onClick={() => handleCardClickCompany(comp)}
-                className="bg-white rounded-2xl border border-rose-200/90 hover:border-primary/80 hover:shadow-md p-4 sm:p-5 transition-all duration-200 cursor-pointer flex items-center gap-4 group shadow-xs select-none"
+                className="bg-white rounded-xl border border-rose-200/90 hover:border-primary/80 hover:shadow-md p-3.5 sm:p-5 transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 sm:gap-4 group shadow-xs select-none"
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
@@ -258,28 +261,57 @@ export const EmployeePage: React.FC = () => {
                 }}
                 aria-label={`View details for ${comp.name}`}
               >
-                {/* Left circular badge */}
-                <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full border-2 border-primary/90 flex items-center justify-center p-2.5 shrink-0 bg-white shadow-xs group-hover:scale-105 transition-transform duration-200">
-                  <img
-                    src={comp.logoUrl || logo2Url}
-                    alt={comp.name}
-                    onError={(e) => {
-                      const target = e.currentTarget
-                      target.onerror = null
-                      target.src = logo2Url
-                    }}
-                    className="h-9 w-9 sm:h-12 sm:w-12 object-contain"
-                  />
+                {/* Left side: Logo + Information */}
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+                  {/* Left circular badge - fully maximized */}
+                  <div className="h-14 w-14 sm:h-18 sm:w-18 md:h-20 md:w-20 rounded-full border-2 border-primary/80 flex items-center justify-center shrink-0 bg-white shadow-xs group-hover:scale-105 transition-transform duration-200 overflow-hidden">
+                    <img
+                      src={comp.logoUrl || logo2Url}
+                      alt={comp.name}
+                      onError={(e) => {
+                        const target = e.currentTarget
+                        target.onerror = null
+                        target.src = logo2Url
+                      }}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+
+                  {/* Middle: Company Name & Address */}
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm sm:text-base md:text-lg font-bold text-focus group-hover:text-primary transition-colors leading-snug break-words">
+                      {comp.name}
+                    </h3>
+                    <p className="text-xs sm:text-sm text-muted-fg flex items-start gap-1.5 mt-1 leading-relaxed break-words">
+                      <MapPin className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary shrink-0 mt-0.5" />
+                      <span>{comp.address || 'Blk 43, Lot 24 Regalado Highway, Fairview, Quezon City, Metro Manila'}</span>
+                    </p>
+                    {(comp.contactNumber || comp.telephoneNumber) && (
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 mt-2">
+                        {comp.contactNumber && (
+                          <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs text-muted-fg font-medium bg-slate-50 border border-slate-200/80 px-2 sm:px-2.5 py-0.5 rounded-full">
+                            <Phone className="h-3 w-3 text-muted-fg/80 shrink-0" />
+                            <span>{comp.contactNumber}</span>
+                          </span>
+                        )}
+                        {comp.telephoneNumber && (
+                          <span className="inline-flex items-center gap-1 text-[11px] sm:text-xs text-muted-fg font-medium bg-slate-50 border border-slate-200/80 px-2 sm:px-2.5 py-0.5 rounded-full">
+                            <PhoneCall className="h-3 w-3 text-muted-fg/80 shrink-0" />
+                            <span>{comp.telephoneNumber}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Right side: Company Name & Address */}
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-base sm:text-lg font-bold text-focus transition-colors truncate">
-                    {comp.name}
-                  </h3>
-                  <p className="text-xs text-muted-fg leading-relaxed mt-1 line-clamp-2">
-                    {comp.address || 'Blk 43, Lot 24 Regalado Highway, Fairview, Quezon City, Metro Manila'}
-                  </p>
+                {/* Right side: View Details Pill */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-primary bg-rose-50/80 border border-rose-200/70 px-3.5 py-2 rounded-xl group-hover:bg-primary group-hover:text-white transition-all">
+                    <span>View Company</span>
+                    <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                  </div>
+                  <ChevronRight className="h-5 w-5 text-muted-fg/50 group-hover:text-primary sm:hidden shrink-0" />
                 </div>
               </div>
             ))}

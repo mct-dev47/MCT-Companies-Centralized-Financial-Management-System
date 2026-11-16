@@ -8,6 +8,8 @@ import {
   User as UserIcon,
   ArrowUpDown,
   HelpCircle,
+  Mail,
+  ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -271,7 +273,7 @@ export const UserManagementPage: React.FC = () => {
           <Button
             type="button"
             onClick={() => setIsCreateUserOpen(true)}
-            className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+            className="h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer"
           >
             <UserPlus className="h-4 w-4 shrink-0" />
             <span>Create User</span>
@@ -302,7 +304,7 @@ export const UserManagementPage: React.FC = () => {
             placeholder="Search users by name, email, company, or role..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-11 sm:h-12 pl-11 pr-10 rounded-2xl border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full transition-all"
+            className="h-11 sm:h-12 pl-11 pr-10 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full transition-all"
           />
           {searchQuery && (
             <button
@@ -323,36 +325,39 @@ export const UserManagementPage: React.FC = () => {
             onChange={(val) => setSortBy(val as SortOption)}
             icon={ArrowUpDown}
             menuTitle="Sort By"
-            className="h-11 sm:h-12 rounded-2xl bg-white border border-stroke/50 shadow-xs"
+            className="h-11 sm:h-12 rounded-[10px] bg-white border border-stroke/50 shadow-xs"
             ariaLabel="Sort users"
           />
         </div>
       </div>
 
-      {/* User Grid */}
+      {/* User List (Single Column Per Row) */}
       <div className="space-y-4">
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {Array.from({ length: 9 }).map((_, i) => (
+          <div className="flex flex-col gap-3.5">
+            {Array.from({ length: 6 }).map((_, i) => (
               <div
                 key={i}
-                className="bg-white rounded-2xl border border-rose-200/60 p-4 sm:p-5 flex items-center gap-4 shadow-xs"
+                className="bg-white rounded-xl border border-rose-200/60 p-3.5 sm:p-5 flex items-center gap-3 sm:gap-4 shadow-xs"
               >
-                <Skeleton className="h-16 w-16 sm:h-20 sm:w-20 rounded-full shrink-0" />
-                <div className="min-w-0 flex-1 space-y-2.5">
-                  <Skeleton className="h-5 w-3/4 rounded-md" />
-                  <Skeleton className="h-3.5 w-full rounded-md" />
-                  <Skeleton className="h-3.5 w-2/3 rounded-md" />
+                <Skeleton className="h-14 w-14 sm:h-18 sm:w-18 md:h-20 md:w-20 rounded-full shrink-0" />
+                <div className="min-w-0 flex-1 space-y-2 sm:space-y-2.5">
+                  <Skeleton className="h-4 sm:h-5 w-1/3 rounded-md" />
+                  <Skeleton className="h-3 sm:h-3.5 w-1/2 rounded-md" />
+                  <div className="flex gap-2">
+                    <Skeleton className="h-5 sm:h-6 w-20 sm:w-24 rounded-full" />
+                    <Skeleton className="h-5 sm:h-6 w-16 sm:w-20 rounded-full" />
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         ) : filteredUsers.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-stroke/30 p-12 text-center text-muted-fg text-sm">
+          <div className="bg-white rounded-xl border border-stroke/30 p-8 sm:p-12 text-center text-muted-fg text-sm">
             No users found matching your search.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          <div className="flex flex-col gap-3.5">
             {filteredUsers.map((usr) => {
               const initials = usr.fullName
                 .split(' ')
@@ -368,7 +373,7 @@ export const UserManagementPage: React.FC = () => {
                 <div
                   key={usr.id}
                   onClick={() => handleCardClickUser(usr)}
-                  className="bg-white rounded-2xl border border-rose-200/90 hover:border-primary/80 hover:shadow-md p-4 sm:p-5 transition-all duration-200 cursor-pointer flex items-center gap-4 group shadow-xs select-none"
+                  className="bg-white rounded-xl border border-rose-200/90 hover:border-primary/80 hover:shadow-md p-3.5 sm:p-5 transition-all duration-200 cursor-pointer flex items-center justify-between gap-3 sm:gap-4 group shadow-xs select-none"
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
@@ -379,58 +384,83 @@ export const UserManagementPage: React.FC = () => {
                   }}
                   aria-label={`View details for ${usr.fullName}`}
                 >
-                  {/* Left circular badge */}
-                  <div className="h-16 w-16 sm:h-20 sm:w-20 rounded-full border-2 border-primary/90 flex items-center justify-center shrink-0 bg-red-50 text-primary font-bold text-lg sm:text-xl shadow-xs group-hover:scale-105 transition-transform duration-200 overflow-hidden">
-                    {usr.avatarUrl ? (
-                      <img
-                        src={usr.avatarUrl}
-                        alt={usr.fullName}
-                        className="h-full w-full object-cover"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none'
-                          if (e.currentTarget.parentElement) {
-                            e.currentTarget.parentElement.innerText = initials || 'U'
-                          }
-                        }}
-                      />
-                    ) : (
-                      initials || <UserIcon className="h-7 w-7 text-primary" />
-                    )}
-                  </div>
-
-                  {/* Right side: User Name, Email, Badges */}
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-base sm:text-lg font-bold text-focus transition-colors truncate">
-                      {usr.fullName}
-                    </h3>
-                    <p className="text-xs text-muted-fg truncate mt-0.5">
-                      {usr.email}
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-                      <span
-                        className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-focus/90 border border-slate-200/60 max-w-[150px] truncate"
-                        title={usr.companyNames && usr.companyNames.length > 0 ? usr.companyNames.join(', ') : (usr.companyName || 'MCT Group')}
-                      >
-                        <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
-                        <span className="truncate">
-                          {usr.companyNames && usr.companyNames.length > 1
-                            ? `${usr.companyNames.length} Companies`
-                            : (usr.companyNames?.[0] || usr.companyName || 'MCT Group')}
-                        </span>
-                      </span>
-
-                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                        <Shield className="h-3 w-3 text-primary shrink-0" />
-                        <span>{roleDisplay}</span>
-                      </span>
-
-                      {(usr.isProtected || usr.isAdmin || usr.id === '1' || usr.role?.toLowerCase() === 'admin') && (
-                        <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-                          Protected
-                        </span>
+                  {/* Left side: Avatar + User Info */}
+                  <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
+                    {/* Left circular avatar badge - fully maximized */}
+                    <div className="h-14 w-14 sm:h-18 sm:w-18 md:h-20 md:w-20 rounded-full border-2 border-primary/80 flex items-center justify-center shrink-0 bg-red-50 text-primary font-bold text-base sm:text-lg md:text-xl shadow-xs group-hover:scale-105 transition-transform duration-200 overflow-hidden">
+                      {usr.avatarUrl ? (
+                        <img
+                          src={usr.avatarUrl}
+                          alt={usr.fullName}
+                          className="h-full w-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none'
+                            if (e.currentTarget.parentElement) {
+                              e.currentTarget.parentElement.innerText = initials || 'U'
+                            }
+                          }}
+                        />
+                      ) : (
+                        initials || <UserIcon className="h-6 w-6 sm:h-7 sm:w-7 text-primary" />
                       )}
                     </div>
+
+                    {/* Middle: Full Name, Email, Badges */}
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm sm:text-base md:text-lg font-bold text-focus group-hover:text-primary transition-colors leading-snug break-words">
+                        {usr.fullName}
+                      </h3>
+                      <p className="text-xs sm:text-sm text-muted-fg flex items-center gap-1.5 mt-0.5 break-all">
+                        <Mail className="h-3.5 w-3.5 text-muted-fg/80 shrink-0" />
+                        <span>{usr.email}</span>
+                      </p>
+
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                        <span
+                          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 sm:px-2.5 py-0.5 rounded-full bg-slate-100 text-focus/90 border border-slate-200/60"
+                          title={usr.companyNames && usr.companyNames.length > 0 ? usr.companyNames.join(', ') : (usr.companyName || 'MCT Group')}
+                        >
+                          <Building2 className="h-3 w-3 text-muted-fg shrink-0" />
+                          <span>
+                            {usr.companyNames && usr.companyNames.length > 1
+                              ? `${usr.companyNames.length} Companies`
+                              : (usr.companyNames?.[0] || usr.companyName || 'MCT Group')}
+                          </span>
+                        </span>
+
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 sm:px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                          <Shield className="h-3 w-3 text-primary shrink-0" />
+                          <span>{roleDisplay}</span>
+                        </span>
+
+                        {usr.status && (
+                          <span
+                            className={`inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                              usr.status === 'Active'
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-sky-50 text-sky-700 border-sky-200'
+                            }`}
+                          >
+                            {usr.status}
+                          </span>
+                        )}
+
+                        {(usr.isProtected || usr.isAdmin || usr.id === '1' || usr.role?.toLowerCase() === 'admin') && (
+                          <span className="inline-flex items-center text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                            Protected
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right side: View Details Pill */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="hidden sm:flex items-center gap-1.5 text-xs font-semibold text-primary bg-rose-50/80 border border-rose-200/70 px-3.5 py-2 rounded-xl group-hover:bg-primary group-hover:text-white transition-all">
+                      <span>View User</span>
+                      <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                    </div>
+                    <ChevronRight className="h-5 w-5 text-muted-fg/50 group-hover:text-primary sm:hidden shrink-0" />
                   </div>
                 </div>
               )

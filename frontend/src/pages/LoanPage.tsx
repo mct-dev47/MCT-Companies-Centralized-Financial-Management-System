@@ -840,7 +840,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                       setIsExportDropdownOpen(false)
                     }}
                     className={cn(
-                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                       isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                     )}
                   >
@@ -932,7 +932,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   )}
                 </div>
               ) : (
-                <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 select-none">
+                <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 select-none">
                   <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
                 </div>
               )}
@@ -948,7 +948,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -996,7 +996,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap',
                     isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -1053,13 +1053,13 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             <div
               role="group"
               aria-label="Filter loans by approval status"
-              className="inline-flex items-center rounded-full border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
+              className="inline-flex items-center rounded-[10px] border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
             >
               <button
                 type="button"
                 onClick={() => setApprovalTab('Approve')}
                 className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Approve'
                     ? 'bg-[#960C01] text-white shadow-xs'
                     : 'text-focus/70 hover:bg-white/60 hover:text-focus'
@@ -1071,7 +1071,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 type="button"
                 onClick={() => setApprovalTab('Pending')}
                 className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Pending'
                     ? 'bg-[#960C01] text-white shadow-xs'
                     : 'text-focus/70 hover:bg-white/60 hover:text-focus'
@@ -1090,7 +1090,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               placeholder="Search ref no, company, purpose…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
         </div>

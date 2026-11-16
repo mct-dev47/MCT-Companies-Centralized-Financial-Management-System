@@ -698,7 +698,7 @@ export const BillsPage: React.FC = () => {
               placeholder="Search by biller, company, or notes…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+              className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
             />
           </div>
 
@@ -714,7 +714,7 @@ export const BillsPage: React.FC = () => {
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -808,7 +808,7 @@ export const BillsPage: React.FC = () => {
                   setIsExportDropdownOpen(false)
                 }}
                 className={cn(
-                  'inline-flex items-center justify-between gap-2 h-11 min-w-[130px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                  'inline-flex items-center justify-between gap-2 h-11 min-w-[130px] px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >

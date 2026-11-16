@@ -50,7 +50,7 @@ export const BackButton: React.FC<BackButtonProps> = ({
       type="button"
       onClick={handleClick}
       className={cn(
-        'inline-flex items-center gap-2 h-9 px-3.5 rounded-full border border-stroke/50 bg-white hover:bg-surface text-focus text-xs font-semibold shadow-2xs transition-colors cursor-pointer select-none self-start',
+        'inline-flex items-center gap-2 h-9 px-3.5 rounded-[10px] border border-stroke/50 bg-white hover:bg-surface text-focus text-xs font-semibold shadow-2xs transition-colors cursor-pointer select-none self-start',
         className
       )}
     >

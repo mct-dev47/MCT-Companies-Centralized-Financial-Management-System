@@ -186,7 +186,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               onClick={() => setIsOpen((prev) => !prev)}
               title={buttonTooltip}
               className={cn(
-                'inline-flex items-center justify-between gap-2 h-10 sm:h-11 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0',
+                'inline-flex items-center justify-between gap-2 h-10 sm:h-11 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus shrink-0',
                 isOpen && 'ring-2 ring-slate-100 border-slate-300',
                 !isAllCompanies && 'border-primary/40 bg-primary/5 text-primary'
               )}

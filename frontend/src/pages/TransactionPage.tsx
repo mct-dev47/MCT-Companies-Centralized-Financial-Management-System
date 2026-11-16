@@ -362,7 +362,7 @@ const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 min-w-[200px] sm:min-w-[220px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 min-w-[200px] sm:min-w-[220px] px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
           fullWidth && 'w-full',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'
         )}
@@ -561,7 +561,7 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
         className={cn(
-          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
           fullWidth && 'w-full',
           selectedAcc ? 'border-primary/50 bg-primary/5' : 'border-stroke/60',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'
@@ -1867,7 +1867,7 @@ export const TransactionPage: React.FC = () => {
     <div
       role="group"
       aria-label="Group transactions"
-      className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+      className="inline-flex items-center rounded-[10px] border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
     >
       {(
         [
@@ -1881,7 +1881,7 @@ export const TransactionPage: React.FC = () => {
           aria-pressed={salesViewMode === opt.value}
           onClick={() => setSalesViewMode(opt.value)}
           className={cn(
-            'min-h-[44px] px-3.5 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+            'min-h-[44px] px-3.5 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
             salesViewMode === opt.value
               ? 'bg-[#960C01] text-white shadow-xs'
               : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -2742,7 +2742,7 @@ export const TransactionPage: React.FC = () => {
                 />
               ) : (
                 <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
                   title={effectiveTargetCompany}
                 >
                   <span className="truncate min-w-0">{effectiveTargetCompany}</span>
@@ -2808,7 +2808,7 @@ export const TransactionPage: React.FC = () => {
                       disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
                       title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
-                      className="min-h-[44px] h-11 px-4 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="min-h-[44px] h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-4 h-4 shrink-0" />
                       <span>Mark as Audited{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
@@ -2819,7 +2819,7 @@ export const TransactionPage: React.FC = () => {
                       disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
                       title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
-                      className="min-h-[44px] h-11 px-4 rounded-full border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="min-h-[44px] h-11 px-4 rounded-[10px] border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <AlertCircle className="w-4 h-4 shrink-0" />
                       <span>Flag Discrepancy</span>
@@ -2847,7 +2847,7 @@ export const TransactionPage: React.FC = () => {
                 setDepositCurrentPage(1)
                 setSalesCurrentPage(1)
               }}
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
 
