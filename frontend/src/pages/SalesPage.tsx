@@ -76,6 +76,7 @@ import {
   salesService,
   type SalesItem,
 } from '@/services/salesService'
+import { categoryService } from '@/services/categoryService'
 import { bankService } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
@@ -171,6 +172,30 @@ export const SalesPage: React.FC = () => {
 
   // Filter state: strictly locked to activeCompany chosen in Centralized Auth
   const selectedCompany = activeCompany || assignedCompany
+
+  const [companySalesCategories, setCompanySalesCategories] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    let mounted = true
+    const targetComp = isCompanyScoped ? assignedCompany : selectedCompany
+    if (!targetComp || targetComp === 'All Companies') {
+      setCompanySalesCategories([])
+      return
+    }
+    categoryService
+      .getCompanyCategories(targetComp, 'sales')
+      .then((cats) => {
+        if (mounted) {
+          setCompanySalesCategories(cats.map((c) => c.name))
+        }
+      })
+      .catch(() => {
+        if (mounted) setCompanySalesCategories([])
+      })
+    return () => {
+      mounted = false
+    }
+  }, [isCompanyScoped, assignedCompany, selectedCompany])
 
   // Prefetch bank accounts so /sales/add has Deposit Bank ready in 0ms
   React.useEffect(() => {
@@ -1562,6 +1587,7 @@ export const SalesPage: React.FC = () => {
         ) : (
           <IncomeSummaryChart
             transactions={mappedTransactions}
+            companyCategories={companySalesCategories}
             className="w-full"
           />
         )}

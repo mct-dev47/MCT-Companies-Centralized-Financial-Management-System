@@ -49,7 +49,20 @@ from app.core.dependencies import (
 )
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.pagination import PaginationParams
-from app.core.cache import get_cached, set_cached
+from app.core.cache import get_cached, set_cached, system_cache
+
+
+def _local_category_id(db: Session, name: str) -> Optional[int]:
+    """Local category id for a name (created when missing), for the local-database paths."""
+    cleaned = (name or "").strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    cat = db.query(Category).filter(func.lower(Category.name) == cleaned.lower()).first()
+    if cat is None:
+        cat = Category(name=cleaned)
+        db.add(cat)
+        db.flush()
+    return cat.category_id
 
 
 def reconcile_sale_bank(
@@ -761,7 +774,7 @@ def create_sale(
 
         sale = Sale(
             company_id=target_company.company_id,
-            category_id=sale_in.category_id,
+            category_id=sale_in.category_id or _local_category_id(db, sale_in.category or ""),
             payment_method=(sale_in.payment_method or "").strip() or None,
             payment_status=sale_in.payment_status or "Paid",
             deposit_status=sale_in.deposit_status or "Not Deposited",
@@ -781,6 +794,8 @@ def create_sale(
         db.add(sale)
         db.commit()
         db.refresh(sale)
+        system_cache.invalidate_tag("dashboard")
+        system_cache.invalidate_tag("sales")
 
         # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
         reconcile_sale_bank(
@@ -807,6 +822,8 @@ def create_sale(
         except Exception:
             pass
 
+        cat = db.query(Category).filter(Category.category_id == sale.category_id).first() if sale.category_id else None
+
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
@@ -827,7 +844,7 @@ def create_sale(
             company_id=sale.company_id,
             company_name=target_company.company_name,
             category_id=sale.category_id,
-            category_name="None",
+            category_name=cat.name if cat else "None",
             payment_method=sale.payment_method,
             payment_status=sale.payment_status or "Paid",
             deposit_status=sale.deposit_status or "Not Deposited",

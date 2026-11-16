@@ -325,11 +325,11 @@ export const DashboardPage: React.FC = () => {
           */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <IncomeSummaryChart
-              categories={data?.income_categories}
+              categories={data?.income_categories ?? []}
               transactions={recentTransactions}
             />
             <ExpenseSummaryChart
-              categories={data?.expense_categories}
+              categories={data?.expense_categories ?? []}
               transactions={recentTransactions}
             />
           </div>

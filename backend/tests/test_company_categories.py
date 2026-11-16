@@ -11,6 +11,7 @@ import app.models  # noqa: F401
 from app.api.v1.endpoints import categories as categories_endpoints
 from app.api.v1.endpoints import sales as sales_endpoints
 from app.api.v1.endpoints import expenses as expenses_endpoints
+from app.api.v1.endpoints import dashboard as dashboard_endpoints
 from app.core.dependencies import get_current_user
 from app.db.session import Base, get_db
 from app.models.company import Company
@@ -39,6 +40,7 @@ def client_and_db():
     app.include_router(categories_endpoints.router, prefix="/api/v1/categories")
     app.include_router(sales_endpoints.router, prefix="/api/v1/sales")
     app.include_router(expenses_endpoints.router, prefix="/api/v1/expenses")
+    app.include_router(dashboard_endpoints.router, prefix="/api/v1/dashboard")
 
     def override_get_db():
         db = TestingSessionLocal()
@@ -276,3 +278,106 @@ def test_sales_and_expenses_bank_resolution(client_and_db):
     assert petty_exp is not None
     assert petty_exp.bank_account_id is None
     db.close()
+
+
+def test_dashboard_summary_uses_company_categories_and_invalidates_cache(client_and_db, monkeypatch):
+    client, _ = client_and_db
+    monkeypatch.setattr(categories_endpoints, "get_supabase_admin_client", lambda: None)
+
+    # 1. Company Alpha has NO categories in company_categories yet -> legends must be empty
+    summary_empty = client.get("/api/v1/dashboard/summary?company_name=Company Alpha")
+    assert summary_empty.status_code == 200
+    data_empty = summary_empty.json()
+    assert data_empty["income_categories"] == []
+    assert data_empty["expense_categories"] == []
+
+    # 2. Create 2 income (sales) categories and 2 expense categories for Company Alpha
+    c_sales_1 = client.post(
+        "/api/v1/categories",
+        json={"company_name": "Company Alpha", "category_type": "sales", "name": "Room Booking"},
+    )
+    assert c_sales_1.status_code in [200, 201]
+    room_cat_id = c_sales_1.json()["category_id"]
+
+    c_sales_2 = client.post(
+        "/api/v1/categories",
+        json={"company_name": "Company Alpha", "category_type": "sales", "name": "Banquet Events"},
+    )
+    assert c_sales_2.status_code in [200, 201]
+
+    c_exp_1 = client.post(
+        "/api/v1/categories",
+        json={"company_name": "Company Alpha", "category_type": "expense", "name": "Utilities"},
+    )
+    assert c_exp_1.status_code in [200, 201]
+
+    c_exp_2 = client.post(
+        "/api/v1/categories",
+        json={"company_name": "Company Alpha", "category_type": "expense", "name": "Housekeeping"},
+    )
+    assert c_exp_2.status_code in [200, 201]
+
+    # 3. Before any transactions are recorded, Dashboard summary returns the company's categories with 0.0
+    summary_zero = client.get("/api/v1/dashboard/summary?company_name=Company Alpha")
+    assert summary_zero.status_code == 200
+    data_zero = summary_zero.json()
+    assert [c["category"] for c in data_zero["income_categories"]] == ["Banquet Events", "Room Booking"]
+    assert all(c["amount"] == 0.0 for c in data_zero["income_categories"])
+    assert [c["category"] for c in data_zero["expense_categories"]] == ["Housekeeping", "Utilities"]
+    assert all(c["amount"] == 0.0 for c in data_zero["expense_categories"])
+
+    # 4. Record a sale for "Room Booking" and an expense for "Utilities"
+    sale_resp = client.post(
+        "/api/v1/sales",
+        json={
+            "company": "Company Alpha",
+            "transaction_date": "2026-11-15",
+            "particulars": "Deluxe Suite 3 Nights",
+            "amount": 5000.0,
+            "category": "Room Booking",
+            "payment_method": "Cash",
+            "payment_status": "Paid",
+        },
+    )
+    assert sale_resp.status_code in [200, 201]
+
+    exp_resp = client.post(
+        "/api/v1/expenses",
+        json={
+            "company": "Company Alpha",
+            "expense_date": "2026-11-15",
+            "particulars": "Electric Bill",
+            "amount": 1800.0,
+            "category": "Utilities",
+            "payment_method": "Cash",
+        },
+    )
+    assert exp_resp.status_code in [200, 201]
+
+    # 5. Dashboard summary reflects the amounts, sorted highest first, while keeping ₱0 categories
+    summary_with_tx = client.get("/api/v1/dashboard/summary?company_name=Company Alpha")
+    assert summary_with_tx.status_code == 200
+    data_tx = summary_with_tx.json()
+    assert data_tx["income_categories"] == [
+        {"category": "Room Booking", "amount": 5000.0, "percentage": 100.0, "color": None},
+        {"category": "Banquet Events", "amount": 0.0, "percentage": 0.0, "color": None},
+    ]
+    assert data_tx["expense_categories"] == [
+        {"category": "Utilities", "amount": 1800.0, "percentage": 100.0, "color": None},
+        {"category": "Housekeeping", "amount": 0.0, "percentage": 0.0, "color": None},
+    ]
+
+    # 6. Rename "Room Booking" -> "VIP Room Booking" and verify cache invalidation + transaction alignment
+    rename_resp = client.put(
+        f"/api/v1/categories/{room_cat_id}",
+        json={"name": "VIP Room Booking"},
+    )
+    assert rename_resp.status_code == 200
+
+    summary_renamed = client.get("/api/v1/dashboard/summary?company_name=Company Alpha")
+    assert summary_renamed.status_code == 200
+    assert summary_renamed.json()["income_categories"] == [
+        {"category": "VIP Room Booking", "amount": 5000.0, "percentage": 100.0, "color": None},
+        {"category": "Banquet Events", "amount": 0.0, "percentage": 0.0, "color": None},
+    ]
+

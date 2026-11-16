@@ -278,7 +278,7 @@ export const PettyCashPage: React.FC = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
-  const [itemsPerPage, setItemsPerPage] = React.useState(10)
+  const itemsPerPage = 10
 
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)
@@ -1723,32 +1723,16 @@ export const PettyCashPage: React.FC = () => {
           </Table>
         </div>
 
-        {/* Pagination Toolbar */}
-        <div className="pt-4 mt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs text-muted-fg">
-            <span>Rows per page:</span>
-            <div className="w-20">
-              <Dropdown
-                value={itemsPerPage}
-                size="sm"
-                onChange={(val) => {
-                  setItemsPerPage(Number(val))
-                  setCurrentPage(1)
-                }}
-                options={[5, 10, 20, 50]}
-                aria-label="Rows per page"
-              />
-            </div>
-          </div>
-          <TablePagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            totalRecords={filteredLedger.length}
-            pageSize={itemsPerPage}
-            onPageChange={setCurrentPage}
-            itemLabel="entries"
-          />
-        </div>
+        {/* Pagination Footer */}
+        <TablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          totalRecords={filteredLedger.length}
+          startIndex={(currentPage - 1) * itemsPerPage}
+          endIndex={Math.min(currentPage * itemsPerPage, filteredLedger.length)}
+          onPageChange={setCurrentPage}
+          itemLabel="records"
+        />
       </Card>
 
       {/* MODAL 1: Transaction Detail & Action Dialog on Row Click */}
