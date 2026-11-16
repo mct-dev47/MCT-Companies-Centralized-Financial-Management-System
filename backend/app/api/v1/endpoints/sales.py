@@ -5,11 +5,15 @@ from decimal import Decimal
 from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+from app.core.business_time import business_today
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
 from app.models.finance import Sale, Category
 from app.models.company import Company
-from app.schemas.sale import SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate, RemarksUpdate
+from app.schemas.sale import (
+    SaleCreate, SaleOut, SaleUpdate, DailySalesSummaryOut, DepositStatusUpdate, RemarksUpdate,
+    PETTY_CASH_NOT_ALLOWED_IN_SALES, is_petty_cash,
+)
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
@@ -485,6 +489,28 @@ def get_sales_daily_summary(
 
 
 
+def _reject_petty_cash_category_id(db: Session, category_id: Optional[int], use_supabase: bool) -> None:
+    """Petty Cash is expense-only: refuse a sale whose category_id points at the Petty Cash category."""
+    if not category_id:
+        return
+    name = None
+    if use_supabase:
+        try:
+            res = (
+                get_supabase_admin_client().table("category")
+                .select("name").eq("category_id", category_id).limit(1).execute()
+            )
+            if res.data:
+                name = res.data[0].get("name")
+        except Exception:
+            name = None
+    if name is None:
+        cat = db.query(Category).filter(Category.category_id == category_id).first()
+        name = cat.name if cat else None
+    if is_petty_cash(name):
+        raise HTTPException(status_code=422, detail=PETTY_CASH_NOT_ALLOWED_IN_SALES)
+
+
 def _find_sale_by_client_ref(db: Session, client_ref: Optional[str]) -> Optional[ExistingRecord]:
     """The sale already created with this client_ref, if any (spec 0038)."""
     if not client_ref:
@@ -517,7 +543,7 @@ def create_sale(
     if sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
-    if sale_in.transaction_date > date.today():
+    if sale_in.transaction_date > business_today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     parts = (sale_in.particulars or sale_in.description or "").strip()
@@ -530,6 +556,8 @@ def create_sale(
 
     cheque = (sale_in.cheque_no or sale_in.chequeNo or "").strip() or None
     use_sb = SalesReceivablesSyncService(db)._use_supabase()
+    if not cat_str:
+        _reject_petty_cash_category_id(db, sale_in.category_id, use_sb)
     effective_bank_id = getattr(sale_in, "bank_account_id", None)
 
     try:
@@ -901,7 +929,7 @@ def update_sale(
     if sale_in.amount is not None and sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
-    if sale_in.transaction_date is not None and sale_in.transaction_date > date.today():
+    if sale_in.transaction_date is not None and sale_in.transaction_date > business_today():
         raise HTTPException(status_code=400, detail="Transaction date cannot be in the future (maximum date is today).")
 
     existing_company_id = None
@@ -915,6 +943,10 @@ def update_sale(
     sync_svc = SalesReceivablesSyncService(db)
     use_sb = sync_svc._use_supabase()
     client = None
+
+    # Checked up front: the Supabase update block below swallows exceptions
+    if not (sale_in.category or "").strip():
+        _reject_petty_cash_category_id(db, sale_in.category_id, use_sb)
 
     if use_sb:
         try:

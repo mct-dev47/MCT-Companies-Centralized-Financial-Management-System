@@ -591,12 +591,36 @@ class ActivityLogService:
         timeline: List[TimelineEventOut] = []
 
         try:
-            # 1. Fetch relevant audit logs from local DB / Supabase
-            local_logs = (
-                db.query(AuditLog)
-                .order_by(AuditLog.created_at.asc())
-                .all()
-            )
+            # 1. Fetch candidate audit logs for this entity.
+     
+            local_logs = []
+            id_needles: List[str] = []
+            if parsed_id is not None:
+                id_needles.append(str(parsed_id))
+            if ref_no and ref_no.strip():
+                id_needles.append(ref_no.strip().lower())
+
+            if id_needles:
+                from sqlalchemy import func as sa_func, or_
+
+                details_lower = sa_func.lower(AuditLog.details)
+                action_prefix = {
+                    "sale": "SALE_",
+                    "expense": "EXPENSE_",
+                    "petty_cash": "PETTY_CASH_",
+                    "loan": "LOAN_",
+                    "tenant": "TENANT_",
+                }.get(norm_type)
+                type_clauses = [details_lower.contains(norm_type, autoescape=True)] if norm_type else []
+                if action_prefix:
+                    type_clauses.append(AuditLog.action.startswith(action_prefix, autoescape=True))
+
+                q = db.query(AuditLog).filter(
+                    or_(*[details_lower.contains(n, autoescape=True) for n in id_needles])
+                )
+                if type_clauses:
+                    q = q.filter(or_(*type_clauses))
+                local_logs = q.order_by(AuditLog.created_at.asc()).all()
 
             # Filter relevant logs for this entity
             matched_audit_rows = []

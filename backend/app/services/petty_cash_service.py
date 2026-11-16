@@ -9,6 +9,8 @@ from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.company_resolver import get_company_name_map
+from app.services import receipt_storage
 from app.core.cache import system_cache
 from app.core.dependencies import AuthenticatedUser, check_company_access
 from app.core.websocket import ws_manager
@@ -51,6 +53,14 @@ LEDGER_MOVEMENT_STATUSES = {
 DEFAULT_LOW_BALANCE_THRESHOLD = Decimal("1000.00")
 ZERO = Decimal("0.00")
 
+# Opening float set on the company profile. It funds the wallet balance but is
+# not a transaction, so it is hidden from the ledger and Transactions lists.
+INITIAL_PETTY_CASH_REF = "INITIAL-PC"
+
+
+def _is_initial_petty_cash(topup) -> bool:
+    return (getattr(topup, "reference_no", None) or "").strip().upper() == INITIAL_PETTY_CASH_REF
+
 ACTIVE_RESERVATION_STATUSES = (
     "pending finance endorsement",
     "pending finance approval",
@@ -84,6 +94,15 @@ def _resolve_receipt_url(receipt_url: Optional[str], attachments: Optional[str])
     return None
 
 
+def _prepare_receipts(receipt_url: Optional[str], attachments: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Move any inline receipt bytes into the receipts bucket; return storage refs to persist."""
+    atts = receipt_storage.normalize_attachments(attachments)
+    rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    if not rurl:
+        rurl = receipt_storage.first_attachment_ref(atts) or _resolve_receipt_url(None, atts)
+    return rurl, atts
+
+
 def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[str]) -> tuple[bool, int]:
     """Compute receipt presence and count without forwarding large base64 blobs."""
     has_url = bool(receipt_url and str(receipt_url).strip())
@@ -95,7 +114,7 @@ def _summarize_receipts(receipt_url: Optional[str], attachments_raw: Optional[st
                 count = sum(
                     1
                     for item in parsed
-                    if isinstance(item, dict) and (item.get("file_url") or item.get("url"))
+                    if isinstance(item, dict) and (item.get("file_url") or item.get("url") or item.get("storage_path"))
                 )
         except (TypeError, ValueError):
             pass
@@ -349,8 +368,19 @@ class PettyCashService:
         exclude_expense_id: Optional[int] = None,
         category: Optional[str] = None,
     ) -> None:
-        """Allow petty cash expenses to be recorded; wallet displays low-balance alert if balance is in deficit."""
-        return
+        """Block a petty cash expense that would take the wallet below zero."""
+        if not company_id or not is_petty_cash(payment_method) or amount is None:
+            return
+        available = self.get_balance(company_id, exclude_expense_id=exclude_expense_id)
+        if Decimal(str(amount)) > available:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient petty cash balance (₱{max(available, ZERO):,.2f} available, "
+                    f"requested ₱{Decimal(str(amount)):,.2f}). Petty cash cannot go below ₱0.00. "
+                    "Top up petty cash first."
+                ),
+            )
 
     def _build_summary(
         self,
@@ -444,7 +474,7 @@ class PettyCashService:
 
         comp_map = system_cache.get("comp_id_map")
         if not comp_map:
-            comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+            comp_map = get_company_name_map(self.db)
             system_cache.set("comp_id_map", comp_map, ttl=300, tags=["companies"])
 
         topups = self._topups(company_id)
@@ -628,6 +658,7 @@ class PettyCashService:
                 default_desc = "Top-up from sales" if is_approved else "Petty cash reimbursement request"
                 entries.append({
                     **common_data,
+                    "is_initial": _is_initial_petty_cash(t),
                     "entry_id": f"topup-{t.topup_id}",
                     "entry_type": "topup" if is_approved else "request",
                     "description": t.description or default_desc,
@@ -688,10 +719,11 @@ class PettyCashService:
             running += entry["amount_in"] - entry["amount_out"]
             entry["running_balance"] = running
 
+        # The opening float still seeds the running balance above, but is not listed as a row.
         result = [
-            PettyCashLedgerEntry(**entry)
+            PettyCashLedgerEntry(**{k: v for k, v in entry.items() if k != "is_initial"})
             for entry in reversed(entries)
-            if _in_period(entry["entry_date"], start, end)
+            if not entry.get("is_initial") and _in_period(entry["entry_date"], start, end)
         ]
         system_cache.set(cache_key, result, ttl=60, tags=["petty_cash"])
         return result
@@ -707,10 +739,14 @@ class PettyCashService:
             raise HTTPException(status_code=404, detail="Petty cash transaction not found.")
         if current_user is not None:
             check_company_access(current_user, topup.company_id)
+        receipt_url, attachments = receipt_storage.hydrate(
+            getattr(topup, "receipt_url", None),
+            getattr(topup, "attachments", None),
+        )
         return PettyCashTopUpReceiptsOut(
             topup_id=topup.topup_id,
-            receipt_url=getattr(topup, "receipt_url", None),
-            attachments=getattr(topup, "attachments", None),
+            receipt_url=receipt_url,
+            attachments=attachments,
         )
 
     def list_eligible_expenses(
@@ -816,16 +852,22 @@ class PettyCashService:
         topups = [
             t for t in self._topups(None)
             if (t.status or "").strip().lower() in LEDGER_MOVEMENT_STATUSES
+            and not _is_initial_petty_cash(t)
         ]
         if not topups:
             return []
 
-        comp_names = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_names = get_company_name_map(self.db)
         name_to_id = {(name or "").strip().lower(): cid for cid, name in comp_names.items()}
         user_names = {u.user_id: u.name for u in self.db.query(User.user_id, User.name).all()}
 
         bank_ids = {t.bank_account_id for t in topups if (t.bank_account_id or "").strip()}
         banks = self._banks_by_id(bank_ids)
+
+        # One batch signing call for every stored receipt in the list.
+        signed_receipts = receipt_storage.sign_paths(
+            p for t in topups for p in receipt_storage.collect_paths(t.receipt_url, t.attachments)
+        )
 
         movements: List[PettyCashMovementOut] = []
         for t in topups:
@@ -895,8 +937,8 @@ class PettyCashService:
                     transfer_received_by=t.transfer_received_by,
                     transfer_received_at=t.transfer_received_at,
                     items=t.items,
-                    attachments=t.attachments,
-                    receipt_url=t.receipt_url,
+                    attachments=receipt_storage.hydrate(t.receipt_url, t.attachments, signed_receipts)[1],
+                    receipt_url=receipt_storage.hydrate(t.receipt_url, None, signed_receipts)[0],
                 )
             )
 
@@ -1277,7 +1319,7 @@ class PettyCashService:
                     detail="Please choose a funding bank account before submitting to Internal Audit.",
                 )
 
-        resolved_receipt_url = _resolve_receipt_url(topup_in.receipt_url, topup_in.attachments)
+        resolved_receipt_url, stored_attachments = _prepare_receipts(topup_in.receipt_url, topup_in.attachments)
         creator_uid = topup_in.created_by or (current_user.get("user_id") if current_user else None)
 
         topup = PettyCashTopUp(
@@ -1293,7 +1335,7 @@ class PettyCashService:
             request_type=req_type,
             paid_by=(topup_in.paid_by or "").strip() or None,
             receipt_url=resolved_receipt_url,
-            attachments=topup_in.attachments,
+            attachments=stored_attachments,
             items=topup_in.items,
             category=(topup_in.category or "").strip() or None,
             total_expenses=total_expenses,
@@ -1401,7 +1443,7 @@ class PettyCashService:
             )
 
         cat_name = (disb_in.category or "").strip() or None
-        resolved_receipt_url = _resolve_receipt_url(disb_in.receipt_url, disb_in.attachments)
+        resolved_receipt_url, stored_attachments = _prepare_receipts(disb_in.receipt_url, disb_in.attachments)
         creator_uid = disb_in.created_by or (current_user.get("user_id") if current_user else None)
         cleaned_desc = (disb_in.description or "").strip() or None
         cleaned_paid_by = (disb_in.paid_by or "").strip() or None
@@ -1416,7 +1458,7 @@ class PettyCashService:
             request_type="disbursement",
             paid_by=cleaned_paid_by,
             receipt_url=resolved_receipt_url,
-            attachments=disb_in.attachments,
+            attachments=stored_attachments,
             items=disb_in.items,
             category=cat_name,
             total_expenses=amt,
@@ -1496,10 +1538,10 @@ class PettyCashService:
             topup.paid_by = paid_by.strip() or None
         if category is not None:
             topup.category = category.strip() or None
-        if receipt_url is not None:
-            topup.receipt_url = receipt_url
         if attachments is not None:
-            topup.attachments = attachments
+            topup.attachments = receipt_storage.normalize_attachments(attachments)
+        if receipt_url is not None:
+            topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
         if items is not None:
             topup.items = items
 
@@ -2295,7 +2337,7 @@ class PettyCashService:
         query = query.order_by(IntercompanyTransfer.initiated_at.desc())
         transfers = query.all()
 
-        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_map = get_company_name_map(self.db)
         bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
 
         results = []
@@ -2321,7 +2363,7 @@ class PettyCashService:
             raise HTTPException(status_code=404, detail="Intercompany transfer not found.")
 
         if transfer.settlement_status == "SETTLED":
-            comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+            comp_map = get_company_name_map(self.db)
             bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
             item = IntercompanyTransferOut.model_validate(transfer)
             item.source_company_name = comp_map.get(transfer.source_company_id)
@@ -2392,7 +2434,7 @@ class PettyCashService:
         system_cache.invalidate_tag("notifications")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
 
-        comp_map = {c.company_id: c.company_name for c in self.db.query(Company).all()}
+        comp_map = get_company_name_map(self.db)
         bank_map = {b.id: b.bank_name for b in self.db.query(BankAccount).all()}
         item = IntercompanyTransferOut.model_validate(transfer)
         item.source_company_name = comp_map.get(transfer.source_company_id)

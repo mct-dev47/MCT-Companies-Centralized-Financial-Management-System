@@ -254,7 +254,9 @@ class NotificationService:
 
     def _get_company_names_map(self) -> dict[int, str]:
         try:
-            return dict(self.db.query(Company.company_id, Company.company_name).all())
+            from app.core.company_resolver import get_company_name_map
+
+            return get_company_name_map(self.db)
         except Exception:
             return {}
 

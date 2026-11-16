@@ -16,6 +16,9 @@ export interface BankTransaction {
   companyName?: string
   /** 'manual' = typed directly in Bank Management */
   entrySource?: string
+  /** Sale / expense this entry was posted for (absent = typed directly in Bank Management) */
+  sourceSaleId?: number
+  sourceExpenseId?: number
   timestamp?: string
   createdAt?: string
 }
@@ -183,6 +186,8 @@ function mapAccountFromBackend(raw: any): BankAccount {
         netAmount: Number(t.net_amount || 0),
         companyName: t.company_name || undefined,
         entrySource: t.entry_source || undefined,
+        sourceSaleId: t.source_sale_id ?? undefined,
+        sourceExpenseId: t.source_expense_id ?? undefined,
         createdAt: t.created_at,
       }))
     : []
@@ -298,11 +303,9 @@ export const bankService = {
     const key = normalizeCacheKey(companyName)
     if (!options?.forceRefresh) {
       const mem = memoryBankCache.get(key)
-      if (mem && Array.isArray(mem.data) && mem.data.length > 0) {
-        // If still fresh, return immediately; if stale, revalidate in background and return cached immediately
-        if (Date.now() - mem.timestamp >= BANK_CACHE_TTL_MS) {
-          fetchAccountsFromNetwork(companyName).catch(() => {})
-        }
+      // Only a fresh copy is served from memory. An expired one is refetched and awaited, so balances
+      // and passbook checks never run on bank entries that have since been changed or removed.
+      if (mem && Array.isArray(mem.data) && mem.data.length > 0 && Date.now() - mem.timestamp < BANK_CACHE_TTL_MS) {
         return mem.data
       }
     }

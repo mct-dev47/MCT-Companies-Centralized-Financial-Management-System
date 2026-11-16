@@ -119,17 +119,32 @@ const COMPANY_LIST = [
   'All Companies',
 ]
 
+function isSafeDownloadUrl(url: string): boolean {
+  const trimmed = url.trim()
+  if (/^https?:\/\//i.test(trimmed)) return true
+  return /^data:(image\/(jpeg|jpg|png|webp|gif|heic|heif)|application\/pdf);base64,/i.test(trimmed)
+}
+
 function downloadReceipt(url: string, name?: string) {
-  if (!url) return
+  if (!url || !isSafeDownloadUrl(url)) return
   try {
     const a = document.createElement('a')
-    a.href = url
+    // Supabase Storage signed URLs are cross-origin, so the `download` attribute is
+    // ignored; the `download` query param makes Storage send it as an attachment.
+    const isStorageUrl = url.includes('/storage/v1/object/sign/')
+    a.href = isStorageUrl
+      ? `${url}${url.includes('?') ? '&' : '?'}download=${encodeURIComponent(name || 'official_receipt')}`
+      : url
+    if (isStorageUrl) {
+      a.target = '_blank'
+      a.rel = 'noopener noreferrer'
+    }
     a.download = name || 'official_receipt'
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
   } catch {
-    window.open(url, '_blank')
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
 
@@ -1447,7 +1462,7 @@ export const PettyCashPage: React.FC = () => {
                   title="No petty cash transactions found"
                   description="No transactions match your active company or filter criteria."
                   action={
-                    canTransact ? (
+                    canRequestTopUp ? (
                       <Button
                         type="button"
                         variant="primary"

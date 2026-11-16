@@ -1,4 +1,6 @@
 import base64
+import logging
+import mimetypes
 from datetime import date
 from typing import List, Optional
 
@@ -6,6 +8,8 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Requ
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.db.supabase import get_supabase_admin_client
+from app.services import receipt_storage
 from app.core.dependencies import (
     AuditorUser,
     AuthenticatedUser,
@@ -46,6 +50,7 @@ from app.services.audit_service import AuditAction, log_transaction
 from app.services.petty_cash_service import PettyCashService
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -495,8 +500,11 @@ def delete_topup(
     if not topup_record:
         raise HTTPException(status_code=404, detail="Petty cash request not found.")
     check_company_access(current_user, topup_record.company_id)
+    receipt_paths = receipt_storage.collect_paths(topup_record.receipt_url, topup_record.attachments)
 
     topup = PettyCashService(db).delete_topup(topup_id)
+    # Row is gone — clean up its receipt files from the bucket (best effort).
+    receipt_storage.delete_paths(receipt_paths)
     log_transaction(
         db, AuditAction.PETTY_CASH_TOPUP_DELETED,
         user_id=current_user.get("user_id"), company_id=topup.company_id,
@@ -534,17 +542,17 @@ async def upload_receipt(
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(require_business_writer),
 ):
-    content_type = (file.content_type or "").lower()
+    content_type = (file.content_type or "").lower().split(";")[0].strip()
     fname = (file.filename or "").lower()
-    is_valid_type = (
-        content_type.startswith("image/")
-        or content_type == "application/pdf"
-        or fname.endswith((".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".pdf"))
-    )
-    if not is_valid_type:
+    guessed_mime = mimetypes.guess_type(fname)[0] if fname else None
+    final_mime = content_type if content_type in receipt_storage.ALLOWED_MIME_TYPES else None
+    if final_mime is None and (not content_type or content_type == "application/octet-stream"):
+        if guessed_mime in receipt_storage.ALLOWED_MIME_TYPES:
+            final_mime = guessed_mime
+    if final_mime is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid file format. Acceptable formats are JPG, PNG, HEIC, and PDF."
+            detail="Invalid file format. Acceptable formats are JPG, PNG, HEIC, WEBP, GIF, and PDF."
         )
     data = await file.read()
     file_size = len(data)
@@ -553,17 +561,31 @@ async def upload_receipt(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File size exceeds the 5 MB limit."
         )
-    encoded = base64.b64encode(data).decode("utf-8")
-    final_mime = content_type if content_type.startswith("image/") or content_type == "application/pdf" else "application/octet-stream"
-    data_url = f"data:{final_mime};base64,{encoded}"
-    return {
-        "url": data_url,
-        "filename": file.filename or "receipt",
-        "file_name": file.filename or "receipt",
+    filename = file.filename or "receipt"
+    base = {
+        "filename": filename,
+        "file_name": filename,
         "file_size": file_size,
         "mime_type": final_mime,
-        "content_type": final_mime
+        "content_type": final_mime,
     }
+
+    # Store the file in the Supabase "receipts" bucket; the DB keeps only the path.
+    if get_supabase_admin_client() is not None:
+        try:
+            path = receipt_storage.upload_receipt_bytes(data, final_mime, filename)
+        except receipt_storage.ReceiptStorageError as exc:
+            logger.warning("Receipt upload to storage failed: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Could not upload the receipt right now. Please try again.",
+            )
+        signed = receipt_storage.sign_paths([path]).get(path)
+        return {**base, "url": signed or receipt_storage.storage_ref(path), "storage_path": path}
+
+    # Local dev / tests without Supabase: keep the legacy inline data URL.
+    encoded = base64.b64encode(data).decode("utf-8")
+    return {**base, "url": f"data:{final_mime};base64,{encoded}", "storage_path": None}
 
 
 @router.get("/categories", response_model=List[PettyCashCategoryOut], summary="List configurable categories for a company")

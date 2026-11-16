@@ -188,6 +188,54 @@ const DEPRECATED_OLD_CATEGORIES = new Set([
   'petty cash replenishment',
 ])
 
+const PETTY_CASH = 'Petty Cash'
+
+const isPettyCash = (value?: string | null) =>
+  (value || '').trim().toLowerCase() === 'petty cash'
+
+/**
+ * Keeps the Petty Cash category and payment method in lockstep.
+ * - Sales: Petty Cash is never allowed in either field.
+ * - Expense: picking Petty Cash in one field sets it in the other; moving
+ *   one field off Petty Cash moves the other off it too.
+ * `changed` is the field the user just edited; omit it to only link forward
+ * (used for paste / fill-down where both fields may change at once).
+ */
+const linkPettyCash = (
+  row: SpreadsheetRow,
+  isSales: boolean,
+  fallbackCategory: string,
+  changed?: 'category' | 'paymentMethod',
+  prev?: SpreadsheetRow
+): SpreadsheetRow => {
+  const catPetty = isPettyCash(row.category)
+  const pmPetty = isPettyCash(row.paymentMethod)
+
+  if (isSales) {
+    if (!catPetty && !pmPetty) return row
+    return {
+      ...row,
+      category: catPetty ? fallbackCategory : row.category,
+      paymentMethod: pmPetty ? 'Cash' : row.paymentMethod,
+    }
+  }
+
+  if (changed === 'category') {
+    if (catPetty) return { ...row, paymentMethod: PETTY_CASH, serviceFee: 0 }
+    if (pmPetty && isPettyCash(prev?.category)) return { ...row, paymentMethod: 'Cash' }
+    return row
+  }
+  if (changed === 'paymentMethod') {
+    if (pmPetty) return { ...row, category: PETTY_CASH }
+    if (catPetty && isPettyCash(prev?.paymentMethod)) return { ...row, category: fallbackCategory }
+    return row
+  }
+  if (catPetty || pmPetty) {
+    return { ...row, category: PETTY_CASH, paymentMethod: PETTY_CASH, serviceFee: 0 }
+  }
+  return row
+}
+
 interface AddTransactionSheetPageProps {
   initialType?: 'Sales' | 'Expense'
 }
@@ -1047,8 +1095,23 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const location = useLocation()
   const { user } = useSession()
   const { activeCompany } = useCompany()
-  const isAuditor = user?.role === 'Supervisor'
-  const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
+  const isSupervisor = user?.role === 'Supervisor'
+  // A supervisor may be assigned several companies; `user.assignedCompany` is then a
+  // comma-joined display string, never a valid company to save against.
+  const supervisorCompanies = React.useMemo(() => {
+    if (!isSupervisor) return []
+    const list =
+      user?.assignedCompanies && user.assignedCompanies.length > 0
+        ? user.assignedCompanies
+        : (user?.assignedCompany || '').split(',')
+    return list.map((c) => c.trim()).filter((c) => c && c !== 'All Companies')
+  }, [isSupervisor, user?.assignedCompanies, user?.assignedCompany])
+  // Only a single-company supervisor is hard-locked to their company.
+  const isAuditor = isSupervisor && supervisorCompanies.length <= 1
+  const isMultiCompanySupervisor = isSupervisor && supervisorCompanies.length > 1
+  const assignedCompany = isSupervisor
+    ? supervisorCompanies[0] || user?.assignedCompany || 'MCT Kitchen'
+    : user?.assignedCompany || 'MCT Kitchen'
   const isCompanyLocked =
     isAuditor || Boolean(activeCompany && activeCompany !== 'All Companies')
 
@@ -1082,19 +1145,20 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     if (isAuditor) return assignedCompany
     if (editItem?.company) return editItem.company
     if (activeCompany && activeCompany !== 'All Companies') return activeCompany
+    if (isMultiCompanySupervisor) return assignedCompany
     return 'MCT Kitchen'
-  }, [isAuditor, assignedCompany, editItem?.company, activeCompany])
+  }, [isAuditor, isMultiCompanySupervisor, assignedCompany, editItem?.company, activeCompany])
 
   const [selectedCompany, setSelectedCompany] =
     React.useState<string>(initialCompany)
 
   React.useEffect(() => {
-    if (isAuditor && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
+    if (isAuditor && assignedCompany) {
+      setSelectedCompany(assignedCompany)
     } else if (activeCompany && activeCompany !== 'All Companies') {
       setSelectedCompany(activeCompany)
     }
-  }, [isAuditor, user?.assignedCompany, activeCompany])
+  }, [isAuditor, assignedCompany, activeCompany])
 
   // Companies loaded dynamically
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
@@ -1142,11 +1206,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const [isLoadingBanks, setIsLoadingBanks] = React.useState<boolean>(
     () => bankService.getCachedAccounts(initialCompany).length === 0
   )
-  const [selectedBankAccountId, setSelectedBankAccountId] =
-    React.useState<string>(() => {
-      const cached = bankService.getCachedAccounts(initialCompany)
-      return cached.length > 0 ? cached[0].id : ''
-    })
+  // Default bank = a bank the company owns alone (see availableBankAccounts ordering). Start empty
+  // and let the effect below pick it, so an unsorted cache can't pre-select a shared bank.
+  const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
+  // True once the user picks a bank by hand; until then the default keeps following the sorted list.
+  const userPickedBankRef = React.useRef(false)
 
   React.useEffect(() => {
     let mounted = true
@@ -1197,6 +1261,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   React.useEffect(() => {
     if (prevTargetCompRef.current !== targetCompany) {
       prevTargetCompRef.current = targetCompany
+      userPickedBankRef.current = false
       if (availableBankAccounts.length > 0) {
         setSelectedBankAccountId(availableBankAccounts[0].id)
         return
@@ -1206,8 +1271,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const exists = availableBankAccounts.some(
         (a) => a.id === selectedBankAccountId
       )
-      if (!exists) {
-        setSelectedBankAccountId(availableBankAccounts[0].id)
+      // availableBankAccounts lists sole-owned banks first, so [0] is the company's own bank.
+      if (!exists || !userPickedBankRef.current) {
+        if (selectedBankAccountId !== availableBankAccounts[0].id) {
+          setSelectedBankAccountId(availableBankAccounts[0].id)
+        }
       }
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
@@ -1378,8 +1446,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         isSales ? 'sales' : 'expense',
         { forceRefresh: true }
       )
-      setCompanyCategories(cats)
-      setCategories(cats.map((c) => c.name))
+      // Petty Cash is expense-only: never offer it as a Sales category
+      const visible = isSales ? cats.filter((c) => !isPettyCash(c.name)) : cats
+      setCompanyCategories(visible)
+      setCategories(visible.map((c) => c.name))
     } catch (e) {
       console.warn('Could not load company categories:', e)
       setCompanyCategories([])
@@ -1396,6 +1466,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const handleSaveCategory = async (name: string) => {
     const trimmed = name.trim()
     if (!trimmed || !targetCompany) return
+    if (isSales && isPettyCash(trimmed)) return
 
     try {
       const created = await categoryService.createCompanyCategory(
@@ -1490,7 +1561,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   }
 
   const todayIso = formatToYYYYMMDD(new Date())
-  const defaultCategory = categories[0] || ''
+  // Never default a new row to Petty Cash: it would be out of sync with the
+  // default 'Cash' payment method (and is not allowed at all in Sales).
+  const defaultCategory = categories.find((c) => !isPettyCash(c)) || ''
 
   const [rows, setRows] = React.useState<SpreadsheetRow[]>([
     {
@@ -1508,18 +1581,12 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     },
   ])
 
-  // If sales mode, ensure rows never use Petty Cash as payment method
+  // If sales mode, ensure rows never use Petty Cash as category or payment method
   React.useEffect(() => {
     if (isSales) {
-      setRows((prev) =>
-        prev.map((r) =>
-          (r.paymentMethod || '').toLowerCase() === 'petty cash'
-            ? { ...r, paymentMethod: 'Cash' }
-            : r
-        )
-      )
+      setRows((prev) => prev.map((r) => linkPettyCash(r, true, defaultCategory)))
     }
-  }, [isSales])
+  }, [isSales, defaultCategory])
 
   const paymentOptions = React.useMemo(() => {
     const base = isSales
@@ -1587,6 +1654,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       rows.forEach((r, idx) => {
         if (idx === currentRowIdx) return
         const trimmed = r.category?.trim()
+        if (isSales && isPettyCash(trimmed)) return
         if (trimmed && !seen.has(trimmed.toLowerCase())) {
           seen.add(trimmed.toLowerCase())
           list.push(trimmed)
@@ -1595,7 +1663,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
       return list
     },
-    [categories, rows]
+    [categories, rows, isSales]
   )
 
   // Pre-fill when editing
@@ -1983,12 +2051,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         }
         // New paid rows keep depositDate empty, so the deposit day follows the sales date
 
-        return {
+        const updated: SpreadsheetRow = {
           ...r,
           [field]: value,
           depositStatus: finalDepositStatus,
           depositDate,
         }
+        return field === 'category' || field === 'paymentMethod'
+          ? linkPettyCash(updated, isSales, defaultCategory, field, r)
+          : updated
       })
     )
 
@@ -2044,9 +2115,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               case 1:
                 return { ...r, particulars: prev.particulars }
               case 2:
-                return { ...r, category: prev.category }
+                return linkPettyCash({ ...r, category: prev.category }, isSales, defaultCategory, 'category', r)
               case 3:
-                return { ...r, paymentMethod: prev.paymentMethod }
+                return linkPettyCash({ ...r, paymentMethod: prev.paymentMethod }, isSales, defaultCategory, 'paymentMethod', r)
               case 4:
                 return { ...r, chequeNo: prev.chequeNo }
               case 5:
@@ -2151,6 +2222,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
             unitPrice: '',
             quantity: 1,
             status: 'Paid',
+            depositStatus: 'Deposited',
           })
         }
 
@@ -2202,7 +2274,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           }
         })
 
-        newRows[targetRowIdx] = currentRow
+        newRows[targetRowIdx] = linkPettyCash(currentRow, isSales, defaultCategory)
       })
 
       return newRows
@@ -2308,10 +2380,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       .reduce((sum, r) => sum + r.rowTotal, 0)
   }, [transactionType, validRows])
 
+  // When editing a petty cash expense, its saved amount is already deducted from the balance
+  const originalPettyCashAmount =
+    isEditMode && !isSales && isPettyCash(editItem?.paymentMethod)
+      ? Number(editItem?.amount || editItem?.withdrawal || editItem?.netAmount || 0)
+      : 0
+  const availablePettyCash =
+    pettyBalance !== null ? pettyBalance + originalPettyCashAmount : null
+
   const exceedsPettyCash =
     hasPettyCashRow &&
-    pettyBalance !== null &&
-    pettyCashTotal > pettyBalance
+    availablePettyCash !== null &&
+    pettyCashTotal > availablePettyCash + 0.005
+
+  // Error modal shown when saving would take petty cash below zero
+  const [pettyCashErrorMessage, setPettyCashErrorMessage] = React.useState<string | null>(null)
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false)
@@ -2408,8 +2491,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
 
     if (exceedsPettyCash) {
-      setErrorMessage(
-        `Insufficient petty cash (${formatPHP(pettyBalance ?? 0)} available, requested ${formatPHP(pettyCashTotal)}). Top up petty cash first.`
+      setPettyCashErrorMessage(
+        `Only ${formatPHP(Math.max(availablePettyCash ?? 0, 0))} is available in petty cash, but these entries total ${formatPHP(pettyCashTotal)}. Petty cash cannot go below ₱0.00. Top up petty cash first or lower the amount.`
       )
       return
     }
@@ -2848,7 +2931,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
         err,
         'Failed to save transactions. Please check your entries and try again.'
       )
-      setErrorMessage(userMessage)
+      if (/insufficient petty cash/i.test(userMessage)) {
+        setPettyCashErrorMessage(userMessage)
+      } else {
+        setErrorMessage(userMessage)
+      }
     } finally {
       setIsSubmitting(false)
     }
@@ -3198,7 +3285,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <Dropdown
                     value={selectedCompany}
                     onChange={(val) => setSelectedCompany(String(val))}
-                    options={dbCompanies.map((c) => ({ value: c, label: c }))}
+                    options={(isMultiCompanySupervisor ? supervisorCompanies : dbCompanies).map(
+                      (c) => ({ value: c, label: c })
+                    )}
                     aria-label="Company"
                   />
                 )}
@@ -3214,7 +3303,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 </label>
                 <Dropdown
                   value={selectedBankAccountId}
-                  onChange={(val) => setSelectedBankAccountId(String(val))}
+                  onChange={(val) => {
+                    userPickedBankRef.current = true
+                    setSelectedBankAccountId(String(val))
+                  }}
                   disabled={isLoadingBanks && availableBankAccounts.length === 0}
                   placeholder={
                     availableBankAccounts.length === 0
@@ -4168,7 +4260,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               <Button
                 type="button"
                 onClick={() => void handleSave()}
-                disabled={isSubmitting || exceedsPettyCash}
+                disabled={isSubmitting}
                 className={cn(
                   'h-11 px-6 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all',
                   'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white disabled:opacity-40'
@@ -4319,7 +4411,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                 dayRemarkSkipRef.current = true
                 dayRemarkConfirmedRef.current = true
                 setIsDayRemarkOpen(false)
-                void handleSave()
+                // The batch was already confirmed before remarks; save now, don't re-open the review
+                void handleSave(true)
               }}
               className="h-9 px-4 text-xs font-medium rounded-xl cursor-pointer"
               variant="outline"
@@ -4331,7 +4424,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               onClick={() => {
                 dayRemarkConfirmedRef.current = true
                 setIsDayRemarkOpen(false)
-                void handleSave()
+                void handleSave(true)
               }}
               className="h-9 px-4 text-xs font-semibold rounded-xl bg-[#960C01] hover:bg-[#800a01] text-white cursor-pointer"
             >
@@ -4560,6 +4653,19 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={Boolean(pettyCashErrorMessage)}
+        onOpenChange={(open) => {
+          if (!open) setPettyCashErrorMessage(null)
+        }}
+        action="warning"
+        title="Insufficient Petty Cash"
+        description={pettyCashErrorMessage ?? ''}
+        cancelLabel=""
+        confirmLabel="Got it"
+        onConfirm={() => setPettyCashErrorMessage(null)}
+      />
     </div>
   )
 }
