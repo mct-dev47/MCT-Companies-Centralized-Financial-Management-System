@@ -155,10 +155,12 @@ def get_dashboard_summary(
         expense_filters.append(Expense.expense_date <= end_date)
 
     # Aggregate: Total Cash Inflow (Sales)
-    total_sales_val = db.query(func.coalesce(func.sum(Sale.amount), 0.0)).filter(*sales_filters).scalar() or 0.0
+    # float() at the source: PostgreSQL returns SUM(Numeric) as Decimal (SQLite returns float), and the
+    # category percentages below divide a float by these totals, which raised TypeError on Postgres.
+    total_sales_val = float(db.query(func.coalesce(func.sum(Sale.amount), 0.0)).filter(*sales_filters).scalar() or 0.0)
 
     # Aggregate: Total Cash Outflow (Expenses)
-    total_expense_val = db.query(func.coalesce(func.sum(Expense.amount), 0.0)).filter(*expense_filters).scalar() or 0.0
+    total_expense_val = float(db.query(func.coalesce(func.sum(Expense.amount), 0.0)).filter(*expense_filters).scalar() or 0.0)
 
     # Aggregate: Overdue & Due Soon
     # Overdue: flagged in audit, overdue bills, overdue loans
