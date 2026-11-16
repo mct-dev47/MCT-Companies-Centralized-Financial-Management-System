@@ -175,7 +175,7 @@ def get_expenses(
     if not hasattr(pagination, "offset"):
         pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -353,7 +353,7 @@ def get_expenses_daily_summary(
     if not hasattr(pagination, "offset"):
         pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]

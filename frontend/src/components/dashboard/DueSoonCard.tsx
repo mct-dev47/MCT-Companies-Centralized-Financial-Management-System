@@ -10,7 +10,7 @@ interface DueSoonCardProps {
 }
 
 export const DueSoonCard: React.FC<DueSoonCardProps> = ({
-  count = 3,
+  count = 0,
   className,
   onClick,
 }) => {

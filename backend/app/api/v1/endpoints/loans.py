@@ -260,7 +260,7 @@ def get_company_loans(
     db: Session = Depends(get_db),
 ):
     role = (current_user.get("role") or "").lower()
-    is_privileged = role in ("finance", "audit", "auditor")
+    is_privileged = role in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -320,7 +320,7 @@ def export_company_loans(
     import io
 
     role = (current_user.get("role") or "").lower()
-    is_privileged = role in ("finance", "audit", "auditor")
+    is_privileged = role in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -396,7 +396,7 @@ def get_loans(
     role = (current_user.get("role") or "").strip().lower()
     is_auditor = role in {"audit", "auditor"}
 
-    is_privileged = role in ("finance", "audit", "auditor")
+    is_privileged = role in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]

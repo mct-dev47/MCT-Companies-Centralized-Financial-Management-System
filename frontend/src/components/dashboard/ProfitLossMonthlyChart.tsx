@@ -15,13 +15,17 @@ import { Card } from '@/components/ui/card'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import type { DashboardTransactionItem } from '@/services/dashboardService'
+import type {
+  DashboardTransactionItem,
+  MonthlyProfitLossItem,
+} from '@/services/dashboardService'
 
 const PROFIT_COLOR = '#16A34A'
 const LOSS_COLOR = '#DC2626'
 const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 interface ProfitLossMonthlyChartProps {
+  monthlyData?: MonthlyProfitLossItem[]
   transactions?: DashboardTransactionItem[]
   className?: string
 }
@@ -91,10 +95,26 @@ const CustomBar = (props: any) => {
 }
 
 export const ProfitLossMonthlyChart: React.FC<ProfitLossMonthlyChartProps> = ({
+  monthlyData,
   transactions = [],
   className,
 }) => {
   const { monthData, netTotal } = React.useMemo(() => {
+    if (monthlyData && monthlyData.length > 0) {
+      const data: MonthPoint[] = monthlyData.map((m) => ({
+        key: m.key,
+        label: m.label,
+        shortLabel: m.short_label,
+        income: m.income,
+        expenses: m.expenses,
+        profit: m.profit,
+      }))
+      return {
+        monthData: data,
+        netTotal: data.reduce((sum, d) => sum + d.profit, 0),
+      }
+    }
+
     const sums: Record<string, { income: number; expenses: number }> = {}
 
     transactions.forEach((tx) => {
@@ -162,7 +182,7 @@ export const ProfitLossMonthlyChart: React.FC<ProfitLossMonthlyChartProps> = ({
           </div>
           <div>
             <h3 className="text-sm sm:text-base font-semibold text-focus leading-tight">
-              Monthly Profit / Loss
+              Monthly Profit & Loss
             </h3>
             <p className="text-xs text-muted-fg font-normal mt-0.5 line-clamp-1">
               Income minus expenses per month {hasData && `(${monthData.length} months)`}

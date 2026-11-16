@@ -61,14 +61,15 @@ export const PublicOnlyRoute: React.FC<{ children: React.ReactNode }> = ({
     if (role === 'admin') {
       return <Navigate to="/employee" replace />
     }
-    if (role === 'finance') {
-      return <Navigate to="/centralized-auth" replace />
-    }
-    if (role === 'supervisor') {
-      const cids = user?.companyIds || []
-      if (cids.length > 1) {
+    if (role === 'finance' || role === 'supervisor') {
+      const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
+      const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
+      const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
+      const count = Math.max(namesCount, idsCount, assignedList)
+      if (count > 1) {
         return <Navigate to="/centralized-auth" replace />
       }
+      return <Navigate to="/dashboard" replace />
     }
     return <Navigate to="/dashboard" replace />
   }
@@ -156,7 +157,7 @@ export const CentralizedAuthRouteGuard: React.FC<{ children: React.ReactNode }> 
   }
   const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
 
-  if (role === 'supervisor' && assignedCount <= 1) {
+  if ((role === 'supervisor' || role === 'finance') && assignedCount <= 1) {
     return <Navigate to="/dashboard" replace />
   }
 

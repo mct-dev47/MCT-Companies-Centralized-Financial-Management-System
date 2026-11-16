@@ -24,18 +24,8 @@ interface LoanTrendChartProps {
   data?: LoanTrendPoint[]
 }
 
-const DEFAULT_LOAN_DATA: LoanTrendPoint[] = [
-  { period: 'Mon', disbursements: 120000, repayments: 90000 },
-  { period: 'Tue', disbursements: 190000, repayments: 140000 },
-  { period: 'Wed', disbursements: 150000, repayments: 130000 },
-  { period: 'Thu', disbursements: 220000, repayments: 200000 },
-  { period: 'Fri', disbursements: 180000, repayments: 160000 },
-  { period: 'Sat', disbursements: 80000, repayments: 70000 },
-  { period: 'Sun', disbursements: 50000, repayments: 40000 },
-]
-
 export const LoanTrendChart: React.FC<LoanTrendChartProps> = ({
-  data = DEFAULT_LOAN_DATA,
+  data = [],
   className,
 }) => {
   return (

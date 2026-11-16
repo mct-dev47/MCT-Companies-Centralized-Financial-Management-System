@@ -313,140 +313,6 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   ]
 }
 
-interface CompanyFilterDropdownProps {
-  selectedCompany: string
-  companyList: string[]
-  onSelectCompany: (company: string) => void
-  fullWidth?: boolean
-  className?: string
-}
-
-const CompanyFilterDropdown: React.FC<CompanyFilterDropdownProps> = ({
-  selectedCompany,
-  companyList,
-  onSelectCompany,
-  fullWidth = false,
-  className,
-}) => {
-  const [isOpen, setIsOpen] = React.useState(false)
-  const [search, setSearch] = React.useState('')
-  const dropdownRef = React.useRef<HTMLDivElement>(null)
-  const pos = useDropdownPosition(dropdownRef, isOpen)
-
-  React.useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsOpen(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleEsc)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleEsc)
-    }
-  }, [])
-
-  const filteredList = React.useMemo(() => {
-    const q = search.toLowerCase().trim()
-    if (!q) return companyList
-    return companyList.filter((c) => c.toLowerCase().includes(q))
-  }, [search, companyList])
-
-  return (
-    <div ref={dropdownRef} className={cn('relative', fullWidth ? 'block w-full' : 'inline-block', className)}>
-      <button
-        type="button"
-        onClick={() => setIsOpen((prev) => !prev)}
-        className={cn(
-          'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 min-w-[200px] sm:min-w-[220px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-          fullWidth && 'w-full',
-          isOpen && 'ring-2 ring-focus/20 border-focus/50'
-        )}
-        aria-label="Filter transactions by company"
-        aria-expanded={isOpen}
-      >
-        <span className="font-semibold text-focus truncate min-w-0 flex-1 text-left">
-          {selectedCompany}
-        </span>
-        <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-      </button>
-
-      {isOpen && (
-        <div
-          style={pos.isMobile ? pos.style : undefined}
-          className={cn(
-            'bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-            pos.isMobile
-              ? 'w-[min(calc(100vw-32px),340px)]'
-              : 'absolute right-0 top-full mt-2 w-80'
-          )}
-        >
-          <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-              Filter By Company
-            </span>
-          </div>
-
-          <div className="relative mb-2 px-1">
-            <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search company…"
-              className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-            {filteredList.length === 0 ? (
-              <div className="py-4 text-center text-xs text-muted-fg">
-                No matching companies
-              </div>
-            ) : (
-              filteredList.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    onSelectCompany(c)
-                    setIsOpen(false)
-                    setSearch('')
-                  }}
-                  className={cn(
-                    'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                    selectedCompany === c
-                      ? 'bg-primary/10 text-primary font-semibold'
-                      : 'text-focus/80 hover:bg-slate-50'
-                  )}
-                >
-                  <span className="truncate">{c}</span>
-                  {selectedCompany === c && (
-                    <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                  )}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAccount): boolean => {
   // 1. Direct bankAccountId match
   if (tx.bankAccountId && String(tx.bankAccountId) === String(account.id)) {
@@ -757,56 +623,19 @@ export const TransactionPage: React.FC = () => {
     return ['All Companies', ...list]
   }, [canSelectAllCompanies, supervisorCompanies, defaultSupervisorCompany, companyList])
 
-  // Selected company state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-    if (!canSelectAllCompanies) {
-      if (activeCompany && activeCompany !== 'All Companies' && supervisorCompanies.includes(activeCompany)) {
-        return activeCompany
-      }
-      return defaultSupervisorCompany
-    }
-    if (activeCompany) return activeCompany
-    return 'All Companies'
-  })
+  // Selected company state: strictly locked to activeCompany chosen in centralized auth
+  const selectedCompany = activeCompany || defaultSupervisorCompany
 
-  // Ensure supervisor NEVER gets stuck on 'All Companies'
-  React.useEffect(() => {
-    if (!canSelectAllCompanies) {
-      if (
-        !selectedCompany ||
-        selectedCompany === 'All Companies' ||
-        (supervisorCompanies.length > 0 && !supervisorCompanies.includes(selectedCompany))
-      ) {
-        setSelectedCompany(defaultSupervisorCompany)
-      }
-    }
-  }, [canSelectAllCompanies, selectedCompany, supervisorCompanies, defaultSupervisorCompany])
-
-  React.useEffect(() => {
-    if (activeCompany) {
-      if (canSelectAllCompanies || (supervisorCompanies.includes(activeCompany) && activeCompany !== 'All Companies')) {
-        setSelectedCompany(activeCompany)
-      }
-    }
-  }, [activeCompany, canSelectAllCompanies, supervisorCompanies])
-
-  // Effective company for data fetching and filtering:
-  // - For Audit/Finance: specific company name, or undefined for "All Companies"
-  // - For Supervisor: always their specific selected/assigned company, NEVER undefined!
+  // Effective company for data fetching and filtering
   const effectiveTargetCompany = React.useMemo(() => {
-    if (!canSelectAllCompanies) {
-      return selectedCompany && selectedCompany !== 'All Companies' ? selectedCompany : defaultSupervisorCompany
-    }
-    return selectedCompany !== 'All Companies' ? selectedCompany : undefined
-  }, [canSelectAllCompanies, selectedCompany, defaultSupervisorCompany])
+    return activeCompany || selectedCompany || defaultSupervisorCompany
+  }, [activeCompany, selectedCompany, defaultSupervisorCompany])
 
   const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
   const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
   const [salesCurrentPage, setSalesCurrentPage] = React.useState(1)
 
   const handleSelectCompany = (c: string) => {
-    if (!canSelectAllCompanies && c === 'All Companies') return
-    setSelectedCompany(c)
     setActiveCompany(c)
     setSelectedBankAccountId('')
     setDepositCurrentPage(1)
@@ -814,17 +643,10 @@ export const TransactionPage: React.FC = () => {
   }
 
   const handleResetCompany = React.useCallback(() => {
-    if (!canSelectAllCompanies) {
-      setSelectedCompany(defaultSupervisorCompany)
-      setActiveCompany(defaultSupervisorCompany)
-    } else {
-      setSelectedCompany('All Companies')
-      setActiveCompany('All Companies')
-    }
     setSelectedBankAccountId('')
     setDepositCurrentPage(1)
     setSalesCurrentPage(1)
-  }, [canSelectAllCompanies, defaultSupervisorCompany, setActiveCompany])
+  }, [])
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
@@ -1920,24 +1742,6 @@ export const TransactionPage: React.FC = () => {
       })
     }
 
-    if (canSelectAllCompanies && selectedCompany !== 'All Companies') {
-      chips.push({
-        key: 'company',
-        label: `Company: ${selectedCompany}`,
-        onClear: handleResetCompany,
-      })
-    } else if (
-      !canSelectAllCompanies &&
-      supervisorCompanies.length > 1 &&
-      selectedCompany !== defaultSupervisorCompany
-    ) {
-      chips.push({
-        key: 'company',
-        label: `Company: ${selectedCompany}`,
-        onClear: handleResetCompany,
-      })
-    }
-
     if (selectedBankAccount) {
       chips.push({
         key: 'bank',
@@ -2731,23 +2535,16 @@ export const TransactionPage: React.FC = () => {
         {/* Row 1: Company + Bank + Status + Date Range + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row lg:flex-wrap items-stretch lg:items-center justify-between gap-2.5 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
-              {/* Company */}
-              {canSelectAllCompanies || supervisorCompanies.length > 1 ? (
-                <CompanyFilterDropdown
-                  selectedCompany={selectedCompany}
-                  companyList={availableCompanyOptions}
-                  onSelectCompany={handleSelectCompany}
-                  fullWidth
-                  className="flex-1 min-w-[200px] sm:min-w-[240px]"
-                />
-              ) : (
-                <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
-                  title={effectiveTargetCompany}
-                >
-                  <span className="truncate min-w-0">{effectiveTargetCompany}</span>
-                </div>
-              )}
+              {/* Active Company Locked Indicator */}
+              <div
+                className="inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                title={effectiveTargetCompany}
+              >
+                <Landmark className="w-4 h-4 text-primary shrink-0" />
+                <span className="truncate min-w-0 max-w-[200px] sm:max-w-[240px] font-medium">
+                  {effectiveTargetCompany}
+                </span>
+              </div>
 
               {/* Bank */}
               {availableBankAccounts.length > 0 && (

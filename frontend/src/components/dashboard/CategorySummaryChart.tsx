@@ -22,7 +22,10 @@ import {
 import { Card } from '@/components/ui/card'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { DashboardTransactionItem } from '@/services/dashboardService'
+import type {
+  DashboardTransactionItem,
+  CategoryBreakdownItem,
+} from '@/services/dashboardService'
 
 import {
   CATEGORY_COLORS,
@@ -34,6 +37,7 @@ export { CATEGORY_COLORS, CATEGORY_LIST }
 
 interface CategorySummaryChartProps {
   type: 'income' | 'expense'
+  categories?: CategoryBreakdownItem[]
   transactions?: DashboardTransactionItem[]
   className?: string
   defaultChartType?: 'bar' | 'pie'
@@ -45,6 +49,7 @@ const OTHERS_COLOR = '#94A3B8'
 
 export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
   type,
+  categories,
   transactions = [],
   className,
   defaultChartType,
@@ -84,6 +89,27 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
   // Aggregate by category
   // Income uses Deposit amounts; Expense uses Withdrawal amounts
   const { categoryData, totalAmount } = React.useMemo(() => {
+    const extraColors: Record<string, string> = {
+      General: '#64748B',
+      Other: '#767B89',
+      Uncategorized: '#64748B',
+    }
+
+    if (categories && categories.length > 0) {
+      const total = categories.reduce((sum, c) => sum + (c.amount || 0), 0)
+      const data = categories.map((c) => ({
+        category: c.category,
+        amount: c.amount || 0,
+        color:
+          c.color ||
+          (CATEGORY_COLORS as Record<string, string>)[c.category] ||
+          extraColors[c.category] ||
+          '#6366F1',
+        percentage: total > 0 ? ((c.amount || 0) / total) * 100 : 0,
+      }))
+      return { categoryData: data, totalAmount: total }
+    }
+
     const sums: Record<string, number> = {}
 
     transactions.forEach((tx) => {
@@ -93,12 +119,6 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
     })
 
     const total = Object.values(sums).reduce((a, b) => a + b, 0)
-
-    const extraColors: Record<string, string> = {
-      General: '#64748B',
-      Other: '#767B89',
-      Uncategorized: '#64748B',
-    }
 
     // Categories with a value, largest first, padded with the standard list so at least 5 always show
     const withValue = Object.keys(sums)

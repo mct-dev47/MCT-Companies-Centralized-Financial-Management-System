@@ -141,7 +141,7 @@ def get_sales(
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
 
-    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -325,7 +325,7 @@ def get_sales_daily_summary(
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
 
-    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]

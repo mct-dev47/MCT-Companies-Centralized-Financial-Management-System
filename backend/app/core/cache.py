@@ -11,11 +11,12 @@ class CacheItem:
         self.tags = tags
 
 class FastMemoryCache:
-    """Thread-safe in-memory cache with TTL and tag-based invalidation."""
-    def __init__(self) -> None:
+    """Thread-safe in-memory cache with TTL, max size bound, and tag-based invalidation."""
+    def __init__(self, max_entries: int = 1000) -> None:
         self._store: dict[str, CacheItem] = {}
         self._tags: dict[str, set[str]] = {}
         self._lock = threading.Lock()
+        self.max_entries = max_entries
 
     def get(self, key: str) -> Optional[Any]:
         now = time.time()
@@ -35,6 +36,17 @@ class FastMemoryCache:
             # Clean old tags if key already existed
             if key in self._store:
                 self._delete_key(key)
+            elif len(self._store) >= self.max_entries:
+                # Evict expired entries first
+                now = time.time()
+                expired = [k for k, v in self._store.items() if v.expires_at <= now]
+                for exp_k in expired:
+                    self._delete_key(exp_k)
+                # If still at capacity, evict oldest entries
+                if len(self._store) >= self.max_entries:
+                    excess = len(self._store) - self.max_entries + 1
+                    for oldest_k in list(self._store.keys())[:excess]:
+                        self._delete_key(oldest_k)
 
             self._store[key] = CacheItem(value, expires_at, tag_set)
             for tag in tag_set:

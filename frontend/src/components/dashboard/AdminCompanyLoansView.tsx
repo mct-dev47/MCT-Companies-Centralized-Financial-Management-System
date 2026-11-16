@@ -81,6 +81,7 @@ interface AdminCompanyLoansViewProps {
 }
 
 export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
+  assignedCompany,
   companyNamesList,
   dbCompanies,
   onRequestLoan,
@@ -90,8 +91,8 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   const [groups, setGroups] = React.useState<CompanyLoanGroup[]>([])
   const [loading, setLoading] = React.useState(true)
 
-  // Filters
-  const [selectedCompany, setSelectedCompany] = React.useState<string>('All Companies')
+  // Filters: strictly locked to assignedCompany chosen in Centralized Auth
+  const selectedCompany = assignedCompany || 'All Companies'
   const [selectedCategory, setSelectedCategory] = React.useState<string>('All')
   const [selectedPaymentStatus, setSelectedPaymentStatus] = React.useState<string>('All')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
@@ -109,15 +110,12 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
 
   // Dropdown states
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
   const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
-  const [companySearch, setCompanySearch] = React.useState('')
 
   // Refs
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const categoryDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
@@ -164,9 +162,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
       const target = e.target as Node
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
-      }
-      if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
-        setIsCompanyDropdownOpen(false)
       }
       if (periodDropdownRef.current && !periodDropdownRef.current.contains(target)) {
         setIsPeriodDropdownOpen(false)
@@ -614,7 +609,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                 type="button"
                 onClick={() => {
                   setIsPeriodDropdownOpen((prev) => !prev)
-                  setIsCompanyDropdownOpen(false)
                   setIsCategoryDropdownOpen(false)
                   setIsStatusDropdownOpen(false)
                 }}
@@ -657,116 +651,12 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
               )}
             </div>
 
-            {/* 2. Company Scope Dropdown */}
-            <div ref={companyDropdownRef} className="relative inline-block shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCompanyDropdownOpen((prev) => !prev)
-                  setIsPeriodDropdownOpen(false)
-                  setIsCategoryDropdownOpen(false)
-                  setIsStatusDropdownOpen(false)
-                }}
-                className={cn(
-                  'inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap shrink-0',
-                  isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                )}
-              >
-                <Building2 className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                <span className="font-medium text-focus/90 truncate max-w-[120px] sm:max-w-[140px]">
-                  {selectedCompany}
-                </span>
-                <ChevronDown className="h-3 w-3 text-muted-fg shrink-0" />
-                {selectedCompany !== 'All Companies' && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedCompany('All Companies')
-                      setCurrentPage(1)
-                    }}
-                    className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors ml-0.5 inline-flex items-center justify-center cursor-pointer"
-                    title="Reset to All Companies"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </span>
-                )}
-              </button>
-
-              {isCompanyDropdownOpen && (
-                <div className="absolute right-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                      Filter By Company
-                    </span>
-                    {selectedCompany !== 'All Companies' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCompany('All Companies')
-                          setIsCompanyDropdownOpen(false)
-                          setCurrentPage(1)
-                        }}
-                        className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                      >
-                        Clear Filter
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="relative mb-2 px-1">
-                    <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={companySearch}
-                      onChange={(e) => setCompanySearch(e.target.value)}
-                      placeholder="Search company…"
-                      className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
-                      autoFocus
-                    />
-                    {companySearch && (
-                      <button
-                        type="button"
-                        onClick={() => setCompanySearch('')}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                    {filteredCompanyList.length === 0 ? (
-                      <div className="py-4 text-center text-xs text-muted-fg">
-                        No matching companies
-                      </div>
-                    ) : (
-                      filteredCompanyList.map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => {
-                            setSelectedCompany(c)
-                            setIsCompanyDropdownOpen(false)
-                            setCompanySearch('')
-                            setCurrentPage(1)
-                          }}
-                          className={cn(
-                            'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                            selectedCompany === c
-                              ? 'bg-primary/10 text-primary font-semibold'
-                              : 'text-focus/80 hover:bg-slate-50'
-                          )}
-                        >
-                          <span className="truncate">{c}</span>
-                          {selectedCompany === c && (
-                            <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                          )}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
+            {/* 2. Active Company Locked Indicator */}
+            <div className="inline-flex items-center gap-1.5 h-9 px-2.5 sm:px-3 rounded-full border border-stroke/60 bg-white text-focus text-xs font-semibold shadow-xs select-none shrink-0">
+              <Building2 className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="truncate max-w-[120px] sm:max-w-[140px]">
+                {selectedCompany}
+              </span>
             </div>
 
             {/* 3. Category Dropdown */}
@@ -776,7 +666,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                 onClick={() => {
                   setIsCategoryDropdownOpen((prev) => !prev)
                   setIsPeriodDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
                   setIsStatusDropdownOpen(false)
                 }}
                 className={cn(
@@ -872,7 +761,6 @@ export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
                 onClick={() => {
                   setIsStatusDropdownOpen((prev) => !prev)
                   setIsPeriodDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
                   setIsCategoryDropdownOpen(false)
                 }}
                 className={cn(

@@ -121,14 +121,13 @@ export const SignInForm: React.FC = () => {
 
         if (role === 'admin') {
           navigate('/employee', { replace: true })
-        } else if (assignedCount >= 2) {
-          navigate('/centralized-auth', { replace: true })
-        } else if (role === 'finance' || role === 'audit' || role.includes('audit')) {
+        } else if (assignedCount >= 2 || role === 'audit' || role.includes('audit') || role === 'owner') {
           navigate('/centralized-auth', { replace: true })
         } else {
           const singleComp = response.user.companyNames?.[0] || response.user.companyName
           if (singleComp && typeof window !== 'undefined') {
             sessionStorage.setItem('mct_selected_company', singleComp)
+            sessionStorage.setItem('mct_active_company_session', singleComp)
           }
           navigate('/dashboard', { replace: true })
         }

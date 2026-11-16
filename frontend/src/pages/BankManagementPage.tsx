@@ -295,37 +295,8 @@ export const BankManagementPage: React.FC = () => {
 
   }, [])
 
-  // Company filtering state
-
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-
-    if (isCompanyScoped && assignedCompany) return assignedCompany
-
-    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-
-    return activeCompany || 'All Companies'
-
-  })
-
-  React.useEffect(() => {
-
-    if (isCompanyScoped && user?.assignedCompany) {
-
-      setSelectedCompany(user.assignedCompany)
-
-    }
-
-  }, [isCompanyScoped, user?.assignedCompany])
-
-  React.useEffect(() => {
-
-    if (activeCompany) {
-
-      setSelectedCompany(activeCompany)
-
-    }
-
-  }, [activeCompany])
+  // Company filtering state: strictly locked to activeCompany chosen in Centralized Auth
+  const selectedCompany = activeCompany || assignedCompany
 
   // Dynamic companies fetched directly from database
 
@@ -531,18 +502,12 @@ export const BankManagementPage: React.FC = () => {
   // Dropdown states
 
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
-
   const [isTxTypeDropdownOpen, setIsTxTypeDropdownOpen] = React.useState(false)
 
   const [bankStatusFilter, setBankStatusFilter] = React.useState<string>('All')
   const [isBankStatusDropdownOpen, setIsBankStatusDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
-
   const txTypeDropdownRef = React.useRef<HTMLDivElement>(null)
   const bankStatusDropdownRef = React.useRef<HTMLDivElement>(null)
 
@@ -650,12 +615,6 @@ export const BankManagementPage: React.FC = () => {
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
 
         setIsExportDropdownOpen(false)
-
-      }
-
-      if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
-
-        setIsCompanyDropdownOpen(false)
 
       }
 
@@ -1876,7 +1835,6 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setIsBankStatusDropdownOpen((prev) => !prev)
-                    setIsCompanyDropdownOpen(false)
                     setIsTxTypeDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
@@ -2008,68 +1966,11 @@ export const BankManagementPage: React.FC = () => {
               </div>
 
               {/* Company Dropdown (Finance/Admin only) */}
-              {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative inline-block shrink-0 min-w-[220px] sm:min-w-[260px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsCompanyDropdownOpen((prev) => !prev)
-                      setIsBankStatusDropdownOpen(false)
-                      setIsTxTypeDropdownOpen(false)
-                      setIsExportDropdownOpen(false)
-                    }}
-                    className={cn(
-                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
-                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                    )}
-                  >
-                    <span className="font-semibold text-focus/90 truncate flex-1 text-left">
-                      {selectedCompany === 'All Companies' ? 'All Companies' : selectedCompany}
-                    </span>
-                    <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                  </button>
-
-                  {isCompanyDropdownOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150 max-h-72 overflow-y-auto">
-                      <div className="space-y-1">
-                        {companyOptions.map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() => {
-                              setSelectedCompany(c)
-                              setIsCompanyDropdownOpen(false)
-                              if (c === 'All Companies') {
-                                setSelectedAccountId('all')
-                              } else {
-                                const matched = preferSoleOwnedBanks(accounts.filter((a) => isAccountOwnedBy(a, c)), c)
-                                if (matched.length > 0) {
-                                  setSelectedAccountId(matched[0].id)
-                                }
-                              }
-                            }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                              selectedCompany === c
-                                ? 'bg-primary/10 text-primary font-semibold'
-                                : 'text-focus/80 hover:bg-slate-50'
-                            )}
-                          >
-                            <span className="truncate">{c}</span>
-                            {selectedCompany === c && (
-                              <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0">
-                  <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
-                </div>
-              )}
+              {/* Active Company Locked Indicator */}
+              <div className="inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs shrink-0 select-none">
+                <Building2 className="w-4 h-4 text-primary shrink-0" />
+                <span className="truncate">{selectedCompany}</span>
+              </div>
             </div>
           </div>
         </div>

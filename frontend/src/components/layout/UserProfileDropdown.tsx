@@ -24,11 +24,10 @@ export const UserProfileDropdown: React.FC = () => {
   const hasMultipleCompanies = assignedCount >= 2
 
   const canAccessCentralized =
-    userRole === 'finance' ||
     userRole === 'audit' ||
     userRole.includes('auditor') ||
     userRole === 'owner' ||
-    (userRole === 'supervisor' && hasMultipleCompanies)
+    ((userRole === 'finance' || userRole === 'supervisor') && hasMultipleCompanies)
   const navigate = useNavigate()
   const [isOpen, setIsOpen] = React.useState(false)
   const [isLoggingOut, setIsLoggingOut] = React.useState(false)
