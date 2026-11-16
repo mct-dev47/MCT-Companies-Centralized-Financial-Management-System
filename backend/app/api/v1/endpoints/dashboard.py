@@ -17,7 +17,7 @@ from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.cache import system_cache
 from app.db.session import get_db
 from app.models.company import Company
-from app.models.finance import Sale, Expense, Category
+from app.models.finance import Sale, Expense, Category, CompanyCategory
 from app.models.bills import Bill
 from app.models.loan import Loan
 from app.schemas.dashboard import (
@@ -241,45 +241,95 @@ def get_dashboard_summary(
             )
         )
 
-    # Category summaries: Income
-    cat_sales_rows = db.query(
-        func.coalesce(Category.name, "Uncategorized").label("cat_name"),
-        func.coalesce(func.sum(Sale.amount), 0.0).label("cat_total")
-    ).outerjoin(Category, Sale.category_id == Category.category_id).filter(
-        *sales_filters
-    ).group_by(Category.name).order_by(desc("cat_total")).all()
+    # Category summaries: strictly scoped to the company's real categories in company_categories
+    comp_cat_query = db.query(
+        CompanyCategory.category_type,
+        CompanyCategory.name,
+    )
+    if scoped_ids:
+        comp_cat_query = comp_cat_query.filter(CompanyCategory.company_id.in_(scoped_ids))
+    comp_cat_rows = comp_cat_query.order_by(CompanyCategory.name).all()
 
+    valid_sales_cats: Dict[str, str] = {}
+    valid_expense_cats: Dict[str, str] = {}
+    for ctype, cname in comp_cat_rows:
+        cleaned_name = (cname or "").strip()
+        if not cleaned_name:
+            continue
+        norm_type = (ctype or "").strip().lower()
+        key = cleaned_name.lower()
+        if norm_type == "sales" and key not in valid_sales_cats:
+            valid_sales_cats[key] = cleaned_name
+        elif norm_type == "expense" and key not in valid_expense_cats:
+            valid_expense_cats[key] = cleaned_name
+
+    # Income category breakdown (only if company has created sales categories)
     income_categories: List[CategoryBreakdownItem] = []
-    for r in cat_sales_rows:
-        amount = float(r.cat_total)
-        pct = (amount / total_sales_val * 100.0) if total_sales_val > 0 else 0.0
-        income_categories.append(
-            CategoryBreakdownItem(
-                category=r.cat_name,
-                amount=amount,
-                percentage=round(pct, 1),
+    if valid_sales_cats:
+        cat_sales_rows = (
+            db.query(
+                Category.name.label("cat_name"),
+                func.coalesce(func.sum(Sale.amount), 0.0).label("cat_total"),
             )
+            .join(Category, Sale.category_id == Category.category_id)
+            .filter(*sales_filters)
+            .group_by(Category.name)
+            .all()
         )
+        sales_totals_by_key: Dict[str, float] = {}
+        for r in cat_sales_rows:
+            if r.cat_name:
+                k = r.cat_name.strip().lower()
+                sales_totals_by_key[k] = sales_totals_by_key.get(k, 0.0) + float(r.cat_total or 0.0)
 
-    # Category summaries: Expenses
-    cat_exp_rows = db.query(
-        func.coalesce(Category.name, "Other").label("cat_name"),
-        func.coalesce(func.sum(Expense.amount), 0.0).label("cat_total")
-    ).outerjoin(Category, Expense.category_id == Category.category_id).filter(
-        *expense_filters
-    ).group_by(Category.name).order_by(desc("cat_total")).all()
+        categorized_sales_total = sum(
+            sales_totals_by_key.get(k, 0.0) for k in valid_sales_cats
+        )
+        for k, canonical_name in valid_sales_cats.items():
+            amount = sales_totals_by_key.get(k, 0.0)
+            pct = (amount / categorized_sales_total * 100.0) if categorized_sales_total > 0 else 0.0
+            income_categories.append(
+                CategoryBreakdownItem(
+                    category=canonical_name,
+                    amount=amount,
+                    percentage=round(pct, 1),
+                )
+            )
+        income_categories.sort(key=lambda item: (-item.amount, item.category.lower()))
 
+    # Expense category breakdown (only if company has created expense categories)
     expense_categories: List[CategoryBreakdownItem] = []
-    for r in cat_exp_rows:
-        amount = float(r.cat_total)
-        pct = (amount / total_expense_val * 100.0) if total_expense_val > 0 else 0.0
-        expense_categories.append(
-            CategoryBreakdownItem(
-                category=r.cat_name,
-                amount=amount,
-                percentage=round(pct, 1),
+    if valid_expense_cats:
+        cat_exp_rows = (
+            db.query(
+                Category.name.label("cat_name"),
+                func.coalesce(func.sum(Expense.amount), 0.0).label("cat_total"),
             )
+            .join(Category, Expense.category_id == Category.category_id)
+            .filter(*expense_filters)
+            .group_by(Category.name)
+            .all()
         )
+        expense_totals_by_key: Dict[str, float] = {}
+        for r in cat_exp_rows:
+            if r.cat_name:
+                k = r.cat_name.strip().lower()
+                expense_totals_by_key[k] = expense_totals_by_key.get(k, 0.0) + float(r.cat_total or 0.0)
+
+        categorized_expense_total = sum(
+            expense_totals_by_key.get(k, 0.0) for k in valid_expense_cats
+        )
+        for k, canonical_name in valid_expense_cats.items():
+            amount = expense_totals_by_key.get(k, 0.0)
+            pct = (amount / categorized_expense_total * 100.0) if categorized_expense_total > 0 else 0.0
+            expense_categories.append(
+                CategoryBreakdownItem(
+                    category=canonical_name,
+                    amount=amount,
+                    percentage=round(pct, 1),
+                )
+            )
+        expense_categories.sort(key=lambda item: (-item.amount, item.category.lower()))
 
     # Recent 10 Transactions
     company_name_map = {c.company_id: c.company_name for c in db.query(Company).all()}
@@ -373,6 +423,6 @@ def get_dashboard_summary(
         cache_key,
         response_payload,
         ttl=CACHE_TTL_SECONDS,
-        tags=["dashboard", "sales", "expenses", "petty_cash", "loans", "bills"],
+        tags=["dashboard", "categories", "sales", "expenses", "petty_cash", "loans", "bills"],
     )
     return response_payload

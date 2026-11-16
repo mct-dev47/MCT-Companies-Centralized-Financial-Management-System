@@ -4,14 +4,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
+from app.core.cache import system_cache
 from app.core.company_resolver import resolve_company
+from app.core.post_save import rest_and_orm_share_database
 from app.core.dependencies import (
     AuthenticatedUser,
     check_company_access,
     require_business_reader,
     require_business_writer,
 )
-from app.models.finance import Category, CompanyCategory
+from app.models.finance import Category, CompanyCategory, Sale, Expense
 from app.schemas.category import (
     CategoryCreate,
     CategoryOut,
@@ -45,8 +47,8 @@ def get_categories(
     if target_company_id:
         norm_type = (category_type or "").strip().lower()
 
-        # Try Supabase if available
-        client = get_supabase_admin_client()
+        # Try Supabase if available and not sharing the exact same database as SQLAlchemy
+        client = None if rest_and_orm_share_database() else get_supabase_admin_client()
         if client:
             try:
                 sb_query = client.table("company_categories").select("*").eq("company_id", target_company_id)
@@ -253,6 +255,8 @@ def create_category(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Category '{cleaned_name}' already exists for {target_company_name}."
             )
+        system_cache.invalidate_tag("dashboard")
+        system_cache.invalidate_tag("categories")
         return new_cat
 
     # Legacy global category creation
@@ -318,6 +322,7 @@ def update_category(
         check_company_access(current_user, comp_cat.company_id)
 
         # Check for duplicate within the same company and category_type
+        old_name = comp_cat.name
         if cleaned_name:
             dup = (
                 db.query(CompanyCategory)
@@ -336,10 +341,30 @@ def update_category(
                 )
             comp_cat.name = cleaned_name
 
+            # Keep transaction category_id references for this company aligned with the renamed category
+            if old_name and old_name.strip().lower() != cleaned_name.lower():
+                old_global = db.query(Category).filter(func.lower(Category.name) == old_name.strip().lower()).first()
+                if old_global:
+                    target_global = db.query(Category).filter(func.lower(Category.name) == cleaned_name.lower()).first()
+                    if not target_global:
+                        target_global = Category(name=cleaned_name)
+                        db.add(target_global)
+                        db.flush()
+                    if (comp_cat.category_type or "").lower() == "sales":
+                        db.query(Sale).filter(
+                            Sale.company_id == comp_cat.company_id,
+                            Sale.category_id == old_global.category_id,
+                        ).update({Sale.category_id: target_global.category_id}, synchronize_session=False)
+                    else:
+                        db.query(Expense).filter(
+                            Expense.company_id == comp_cat.company_id,
+                            Expense.category_id == old_global.category_id,
+                        ).update({Expense.category_id: target_global.category_id}, synchronize_session=False)
+
         if category_in.description is not None:
             comp_cat.description = category_in.description
 
-        client = get_supabase_admin_client()
+        client = None if rest_and_orm_share_database() else get_supabase_admin_client()
         if client:
             try:
                 update_data = {}
@@ -354,6 +379,8 @@ def update_category(
 
         db.commit()
         db.refresh(comp_cat)
+        system_cache.invalidate_tag("dashboard")
+        system_cache.invalidate_tag("categories")
         return comp_cat
 
     # Fallback to legacy global category
@@ -403,6 +430,8 @@ def delete_category(
 
         db.delete(comp_cat)
         db.commit()
+        system_cache.invalidate_tag("dashboard")
+        system_cache.invalidate_tag("categories")
         return {"status": "success", "id": category_id}
 
     # Fallback to legacy global category

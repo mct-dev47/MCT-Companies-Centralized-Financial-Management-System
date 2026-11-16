@@ -21,6 +21,42 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Rental Income': '#059669',
 }
 
+export const CATEGORY_COLOR_PALETTE: string[] = [
+  '#2563EB', // Blue
+  '#0D9488', // Teal
+  '#7C3AED', // Violet
+  '#F59E0B', // Amber
+  '#10B981', // Emerald
+  '#EC4899', // Pink
+  '#EF4444', // Red
+  '#6366F1', // Indigo
+  '#06B6D4', // Cyan
+  '#F97316', // Orange
+  '#84CC16', // Lime
+  '#8B5CF6', // Purple
+]
+
+export function getCategoryColor(categoryName: string, index?: number): string {
+  const trimmed = (categoryName || '').trim()
+  if (CATEGORY_COLORS[trimmed]) {
+    return CATEGORY_COLORS[trimmed]
+  }
+  const lower = trimmed.toLowerCase()
+  for (const [key, val] of Object.entries(CATEGORY_COLORS)) {
+    if (key.toLowerCase() === lower) {
+      return val
+    }
+  }
+  if (typeof index === 'number' && index >= 0) {
+    return CATEGORY_COLOR_PALETTE[index % CATEGORY_COLOR_PALETTE.length]
+  }
+  let hash = 0
+  for (let i = 0; i < lower.length; i++) {
+    hash = (hash * 31 + lower.charCodeAt(i)) >>> 0
+  }
+  return CATEGORY_COLOR_PALETTE[hash % CATEGORY_COLOR_PALETTE.length]
+}
+
 export const CATEGORY_LIST: TransactionCategory[] = [
   'Petty Cash',
   'Rendered Fee',

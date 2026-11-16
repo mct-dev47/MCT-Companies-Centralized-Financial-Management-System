@@ -2907,8 +2907,8 @@ export const TransactionPage: React.FC = () => {
       {/* 4. Main Table Card */}
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs space-y-4">
         {/* Summary meta bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
-          {salesViewMode === 'daily_summary' && hasFocusedDay ? (
+        {salesViewMode === 'daily_summary' && hasFocusedDay && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
@@ -2917,12 +2917,8 @@ export const TransactionPage: React.FC = () => {
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailySummaryGroups.length} days</span>
             </button>
-          ) : (
-            <span className="text-xs text-muted-fg font-medium">
-              Sorted by {activeTab === 'deposit' ? 'Deposit / ledger date' : typeFilter === 'Sales' ? 'Sales date' : typeFilter === 'Expenses' ? 'Expense date' : 'Transaction date'}, {sortOrder === 'desc' ? 'latest first' : 'oldest first'}
-            </span>
-          )}
-        </div>
+          </div>
+        )}
         {salesViewMode === 'daily_summary' ? (
           <div className="overflow-x-auto">
             <Table className="w-full min-w-[760px] lg:min-w-0 table-fixed">
@@ -4254,11 +4250,6 @@ export const TransactionPage: React.FC = () => {
               )}
             </TableBody>
           </Table>
-          {activeTab === 'deposit' && (
-            <p className="mt-2.5 text-[11px] text-muted-fg leading-relaxed">
-              Sorted by bank date, latest first. Each deposit opens to the sales in it, and the check compares the deposit with the bank entries posted for it. Audit status is set by the auditor and is read-only here.
-            </p>
-          )}
         </div>
       )}
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Text, Numeric, Date, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, Text, Numeric, Date, DateTime, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship, synonym
 from app.db.session import Base
@@ -7,7 +7,7 @@ class Category(Base):
     __tablename__ = "category"
 
     category_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    name = Column(String(255), nullable=False)
+    name = Column(String(255), nullable=False, index=True)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -31,6 +31,7 @@ class CompanyCategory(Base):
 
     __table_args__ = (
         UniqueConstraint("company_id", "category_type", "name", name="uq_company_category_type_name"),
+        Index("idx_company_categories_company_type_name", "company_id", "category_type", "name"),
     )
 
     company = relationship("Company", backref="company_categories")
@@ -81,6 +82,10 @@ class Sale(Base):
 
     category = relationship("Category", back_populates="sales")
 
+    __table_args__ = (
+        Index("idx_sales_company_category_date", "company_id", "category_id", "transaction_date"),
+    )
+
 
 
 class Expense(Base):
@@ -112,6 +117,10 @@ class Expense(Base):
     # Bank account this expense is paid from (spec 0042)
     bank_account_id = Column(String(100), nullable=True, index=True)
     linked_topup_id = Column(Integer, ForeignKey("petty_cash_topups.topup_id", ondelete="SET NULL"), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("idx_expenses_company_category_date", "company_id", "category_id", "expense_date"),
+    )
 
     def __init__(self, **kwargs):
         if "particulars" in kwargs and "description" not in kwargs:
