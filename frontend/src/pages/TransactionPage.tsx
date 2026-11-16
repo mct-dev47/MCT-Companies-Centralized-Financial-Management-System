@@ -1052,6 +1052,8 @@ export const TransactionPage: React.FC = () => {
         if (lease.dailyPayments && lease.dailyPayments.length > 0) {
           lease.dailyPayments.forEach((p) => {
             if (p.status === "Missed" || (p.amount || 0) <= 0) return
+            // A payment credited to a bank already shows as its Rental Income sale; adding it here too doubled it.
+            if (p.saleId) return
             unifiedTenants.push({
               id: `tenant_pmt_${p.id}`,
               refNo: p.referenceNo || lease.tenantId,
