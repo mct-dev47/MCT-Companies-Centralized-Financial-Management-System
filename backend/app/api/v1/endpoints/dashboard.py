@@ -343,7 +343,7 @@ def get_dashboard_summary(
         recent_txs.append(
             DashboardTransactionOut(
                 id=f"sale_{s.sales_id}",
-                ref_no=s.cheque_no or f"SL-{s.sales_id}",
+                ref_no=s.cheque_no or "",
                 cheque_no=s.cheque_no,
                 date=s.transaction_date.isoformat() if s.transaction_date else "",
                 type="Sales",
@@ -366,7 +366,7 @@ def get_dashboard_summary(
         recent_txs.append(
             DashboardTransactionOut(
                 id=f"expense_{e.expense_id}",
-                ref_no=e.reference_no or e.cheque_no or f"EXP-{e.expense_id}",
+                ref_no=e.cheque_no or "",
                 cheque_no=e.cheque_no,
                 date=e.expense_date.isoformat() if e.expense_date else "",
                 type="Expense",

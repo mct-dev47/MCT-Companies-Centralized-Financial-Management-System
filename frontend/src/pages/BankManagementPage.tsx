@@ -117,7 +117,7 @@ import { Link } from 'react-router-dom'
 
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
-import { getParticularsSummary } from '@/utils/particularsUtils'
+import { getParticularsSummary, stripBankSystemPrefix } from '@/utils/particularsUtils'
 import { formatToMMDDYYYY } from '@/utils/dateUtils'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
@@ -1481,7 +1481,14 @@ export const BankManagementPage: React.FC = () => {
 
     const headers = ['Date', ...(showCompanyColumn ? ['Company'] : []), 'Cheque No.', 'Particulars', 'Withdrawal', 'Deposit', 'Category', 'Current Balance']
 
-    const rows = filteredTransactions.map((t) => [
+    const rows = filteredTransactions.map((t) => {
+      const cleaned = stripBankSystemPrefix(t.particulars)
+      const summary = getParticularsSummary(cleaned)
+      const displayParticulars =
+        summary.firstItemName && summary.firstItemName !== '—'
+          ? summary.firstItemName
+          : cleaned || t.category || '—'
+      return [
 
       t.date,
 
@@ -1489,7 +1496,7 @@ export const BankManagementPage: React.FC = () => {
 
       t.chequeNo || '—',
 
-      `"${t.particulars.replace(/"/g, '""')}"`,
+      `"${displayParticulars.replace(/"/g, '""')}"`,
 
       t.withdrawal ? t.withdrawal : '',
 
@@ -1499,7 +1506,8 @@ export const BankManagementPage: React.FC = () => {
 
       t.runningBalance,
 
-    ])
+    ]
+    })
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
 
@@ -1545,7 +1553,14 @@ export const BankManagementPage: React.FC = () => {
 
           .map(
 
-            (t) => `
+            (t) => {
+              const cleaned = stripBankSystemPrefix(t.particulars)
+              const summary = getParticularsSummary(cleaned)
+              const displayParticulars =
+                summary.firstItemName && summary.firstItemName !== '—'
+                  ? summary.firstItemName
+                  : cleaned || t.category || '—'
+              return `
 
           <tr>
 
@@ -1553,7 +1568,7 @@ export const BankManagementPage: React.FC = () => {
 
             <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px; font-weight: 600;">${t.chequeNo || '—'}</td>
 
-            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${t.particulars}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${displayParticulars}</td>
 
             <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #e11d48; font-weight: 600;">${t.withdrawal ? `₱${t.withdrawal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : '—'}</td>
 
@@ -1566,6 +1581,7 @@ export const BankManagementPage: React.FC = () => {
           </tr>
 
         `
+            }
 
           )
 
@@ -3190,19 +3206,26 @@ export const BankManagementPage: React.FC = () => {
                   description={tableSearchQuery ? 'Try clearing your search query' : 'Deposit or withdraw funds to record transactions'}
                 />
               ) : (
-                paginatedTransactions.map((tx) => (
+                paginatedTransactions.map((tx) => {
+                  const cleanedParticulars = stripBankSystemPrefix(tx.particulars)
+                  const summary = getParticularsSummary(cleanedParticulars)
+                  const displayParticulars =
+                    summary.firstItemName && summary.firstItemName !== '—'
+                      ? summary.firstItemName
+                      : cleanedParticulars || tx.category || '—'
+                  return (
                   <TableRow
                     key={tx.id}
                     onClick={() => {
                       setViewingBankTx({
                         id: tx.id,
-                        refNo: tx.chequeNo || tx.id,
+                        refNo: tx.chequeNo || '',
                         chequeNo: tx.chequeNo || '',
                         date: tx.date,
                         type: tx.withdrawal && tx.withdrawal > 0 ? 'Expense' : 'Sales',
                         company: (tx as any).companyName || activeAccount?.companyName || selectedCompany || 'MCT Group of Companies',
-                        description: tx.particulars,
-                        particulars: tx.particulars,
+                        description: cleanedParticulars,
+                        particulars: cleanedParticulars,
                         amount: tx.deposit || tx.withdrawal || 0,
                         withdrawal: tx.withdrawal || 0,
                         deposit: tx.deposit || 0,
@@ -3229,10 +3252,17 @@ export const BankManagementPage: React.FC = () => {
                     </TableCell>
 
                     {/* Particulars */}
-                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars || tx.category || '—'}>
-                      <span className="font-semibold text-focus truncate block">
-                        {tx.particulars?.trim() || tx.category || '—'}
-                      </span>
+                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={cleanedParticulars || tx.category || '—'}>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-semibold text-focus truncate">
+                          {displayParticulars}
+                        </span>
+                        {summary.count > 1 && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                            +{summary.count - 1} more
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
 
                     {/* Withdrawal */}
@@ -3257,7 +3287,8 @@ export const BankManagementPage: React.FC = () => {
                       ₱ {tx.runningBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                     </TableCell>
                   </TableRow>
-                ))
+                  )
+                })
               )}
             </TableBody>
           </Table>

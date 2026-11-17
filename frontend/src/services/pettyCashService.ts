@@ -212,7 +212,6 @@ export interface PettyCashMovement {
 
 interface BackendMovement {
   topup_id: number
-  reference_no?: string | null
   topup_date: string
   amount: string | number
   description?: string | null
@@ -276,7 +275,6 @@ interface BackendLedgerEntry {
   entry_date: string
   description: string
   category?: string | null
-  reference_no?: string | null
   amount_requested?: string | number
   amount_in: string | number
   amount_out: string | number
@@ -381,7 +379,6 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     date: data.entry_date,
     description: data.description,
     category: data.category,
-    referenceNo: data.reference_no,
     amountRequested: Number(data.amount_requested || (data.entry_type === 'topup' ? data.amount_in : 0)),
     amountIn: Number(data.amount_in),
     amountOut: Number(data.amount_out),
@@ -450,7 +447,6 @@ export interface EligibleExpense {
   particulars: string
   category: string | null
   amount: number
-  referenceNo: string | null
 }
 
 const pcCache = new Map<string, { data: any; timestamp: number }>()
@@ -514,7 +510,6 @@ export const pettyCashService = {
       particulars: string
       category?: string | null
       amount: string | number
-      reference_no?: string | null
     }>
     return rows.map((row) => ({
       expenseId: row.expense_id,
@@ -523,7 +518,6 @@ export const pettyCashService = {
       particulars: row.particulars || '',
       category: row.category ?? null,
       amount: Number(row.amount || 0),
-      referenceNo: row.reference_no ?? null,
     }))
   },
 
@@ -641,7 +635,7 @@ export const pettyCashService = {
     if (!response.ok) throw await getBackendError(response)
     return ((await response.json()) as BackendMovement[]).map((m) => ({
       topupId: m.topup_id,
-      refNo: m.reference_no || `PC-${m.topup_id}`,
+      refNo: '',
       date: m.topup_date,
       amount: Number(m.amount),
       description: m.description || 'Petty cash top-up',

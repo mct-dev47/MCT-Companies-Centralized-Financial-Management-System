@@ -717,6 +717,10 @@ class BankService:
                 is_reversal=not more,
                 company_name=company_name or next((t.company_name for t in linked if t.bank_account_id == account.id and t.company_name), None),
             )
+        elif len(linked) == 1 and linked[0].bank_account_id == account.id and particulars:
+            if linked[0].particulars != particulars:
+                linked[0].particulars = particulars
+                tx = linked[0]
         self.db.commit()
         if tx is not None:
             self.db.refresh(tx)
@@ -844,7 +848,9 @@ class BankService:
                     BankTransaction.source_sale_id.is_(None),
                     BankTransaction.category == "Cash",
                     BankTransaction.deposit > 0,
-                    BankTransaction.particulars == f"Sales Collection: {legacy_particulars}",
+                    BankTransaction.particulars.in_(
+                        [legacy_particulars, f"Sales Collection: {legacy_particulars}"]
+                    ),
                 )
                 .order_by(BankTransaction.created_at.desc())
                 .first()
@@ -891,7 +897,9 @@ class BankService:
                     BankTransaction.source_expense_id.is_(None),
                     BankTransaction.source_sale_id.is_(None),
                     BankTransaction.withdrawal > 0,
-                    BankTransaction.particulars == f"Expense Disbursement: {legacy_particulars}",
+                    BankTransaction.particulars.in_(
+                        [legacy_particulars, f"Expense Disbursement: {legacy_particulars}"]
+                    ),
                 )
                 .order_by(BankTransaction.created_at.desc())
                 .first()

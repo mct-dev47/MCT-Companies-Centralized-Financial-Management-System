@@ -88,12 +88,19 @@ def _run_postgresql_migrations(conn) -> list[str]:
     ).first()
 
     if not result_0038:
-        # Pre-flight check for duplicate reference_no in expenses
-        dup_rows = conn.execute(
-            text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
-        ).fetchall()
-        if dup_rows:
-            logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
+        # Pre-flight check for duplicate reference_no in expenses (only if column still exists)
+        has_exp_ref = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'expenses' AND column_name = 'reference_no'"
+            )
+        ).first()
+        if has_exp_ref:
+            dup_rows = conn.execute(
+                text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
+            ).fetchall()
+            if dup_rows:
+                logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
 
         script_0038 = MIGRATIONS_DIR / "0038_petty_cash_excess_reimbursements.postgres.sql"
         if script_0038.exists():
@@ -715,6 +722,21 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0071_drop_deprecated_tables")
             logger.info("Migration 0071_drop_deprecated_tables applied successfully.")
 
+    # 38. 0072: drop system-generated reference_no columns from expenses, petty_cash_topups, and sales
+    result_0072 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0072_drop_reference_no_columns'")
+    ).first()
+    if not result_0072:
+        script_0072 = MIGRATIONS_DIR / "0072_drop_reference_no_columns.postgres.sql"
+        if script_0072.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0072.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0072_drop_reference_no_columns')"))
+            applied.append("0072_drop_reference_no_columns")
+            logger.info("Migration 0072_drop_reference_no_columns applied successfully.")
+
     conn.commit()
     return applied
 
@@ -779,13 +801,15 @@ def _run_sqlite_migrations(conn) -> list[str]:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='petty_cash_topups'")
         ).first()
 
-        # Pre-flight check for duplicate reference_no in expenses
+        # Pre-flight check for duplicate reference_no in expenses (only if column still exists)
         if exp_table_exists:
-            dup_rows = conn.execute(
-                text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
-            ).fetchall()
-            if dup_rows:
-                logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
+            exp_res_pre = conn.execute(text("PRAGMA table_info(expenses)")).fetchall()
+            if "reference_no" in {row[1] for row in exp_res_pre}:
+                dup_rows = conn.execute(
+                    text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
+                ).fetchall()
+                if dup_rows:
+                    logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
 
         # Inspect petty_cash_topups columns if table exists
         if pct_table_exists:
@@ -837,9 +861,6 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 text("CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL")
             )
         if exp_table_exists:
-            conn.execute(
-                text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL")
-            )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)")
             )
@@ -1724,6 +1745,33 @@ def _run_sqlite_migrations(conn) -> list[str]:
                     logger.warning("SQLite migration 0071 skipped statement: %s", exc)
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0071_drop_deprecated_tables')"))
         applied.append("0071_drop_deprecated_tables")
+
+    # 37. 0072: drop system-generated reference_no columns from expenses, petty_cash_topups, and sales
+    result_0072 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0072_drop_reference_no_columns'")
+    ).first()
+    if not result_0072:
+        script_0072 = MIGRATIONS_DIR / "0072_drop_reference_no_columns.sqlite.sql"
+        if script_0072.exists():
+            for stmt in _sql_statements(script_0072.read_text(encoding="utf-8")):
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0072 skipped statement: %s", exc)
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        for tbl in ("expenses", "petty_cash_topups", "sales"):
+            if tbl in existing_tables:
+                cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({tbl})")).fetchall()}
+                if "reference_no" in cols:
+                    try:
+                        conn.execute(text(f"ALTER TABLE {tbl} DROP COLUMN reference_no"))
+                    except Exception as exc:
+                        logger.warning("SQLite migration 0072 failed dropping %s.reference_no: %s", tbl, exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0072_drop_reference_no_columns')"))
+        applied.append("0072_drop_reference_no_columns")
 
     conn.commit()
     return applied

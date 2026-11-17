@@ -11,7 +11,6 @@ class ExpenseBase(StrictBaseModel):
     category_id: Optional[int] = None
     created_by: Optional[int] = None
     expense_date: date
-    reference_no: Optional[str] = Field(None, max_length=100)
     cheque_no: Optional[str] = Field(None, max_length=100)
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Withdrawal amount must be at least 1.00 (cannot be negative or zero)")
     amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
@@ -82,7 +81,6 @@ class ExpenseUpdate(StrictBaseModel):
     category: Optional[str] = Field(None, max_length=150)
     payment_method: Optional[str] = Field(None, max_length=50)
     expense_date: Optional[date] = None
-    reference_no: Optional[str] = Field(None, max_length=100)
     cheque_no: Optional[str] = Field(None, max_length=100)
     chequeNo: Optional[str] = Field(None, max_length=100)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
@@ -154,7 +152,6 @@ class ExpenseOut(BaseModel):
     payment_method: Optional[str] = None
     created_by: Optional[int] = None
     expense_date: Optional[date] = None
-    reference_no: Optional[str] = None
     cheque_no: Optional[str] = None
     amount: Decimal = Field(default=Decimal("0.00"))
     amount_paid: Optional[Decimal] = None

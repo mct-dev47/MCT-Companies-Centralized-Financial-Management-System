@@ -68,11 +68,11 @@ ZERO = Decimal("0.00")
 
 # Opening float set on the company profile. It funds the wallet balance but is
 # not a transaction, so it is hidden from the ledger and Transactions lists.
-INITIAL_PETTY_CASH_REF = "INITIAL-PC"
+INITIAL_PETTY_CASH_DESCRIPTION = "initial petty cash deposit"
 
 
 def _is_initial_petty_cash(topup) -> bool:
-    return (getattr(topup, "reference_no", None) or "").strip().upper() == INITIAL_PETTY_CASH_REF
+    return (getattr(topup, "description", None) or "").strip().lower() == INITIAL_PETTY_CASH_DESCRIPTION
 
 ACTIVE_RESERVATION_STATUSES = (
     "pending finance endorsement",
@@ -239,8 +239,7 @@ class PettyCashService:
         if company_id:
             query = query.filter(Expense.company_id == company_id)
         query = query.filter(
-            (~Expense.reference_no.ilike("SEED-%") & ~Expense.reference_no.ilike("REIMB-%"))
-            | (Expense.reference_no == None)
+            func.lower(func.trim(func.coalesce(Expense.payment_method, ""))) != "bank reimbursement"
         )
         return [
             {
@@ -250,7 +249,6 @@ class PettyCashService:
                 "amount": _to_decimal(exp.amount),
                 "description": exp.description or "",
                 "category": cat_name or "Petty Cash",
-                "reference_no": exp.reference_no,
                 "audit_status": exp.audit_status or "Pending Audit",
                 "audited_by": exp.audited_by,
                 "audited_at": exp.audited_at,
@@ -316,7 +314,6 @@ class PettyCashService:
         amount: Decimal,
         category_name: Optional[str],
         description: str,
-        reference_no: str,
         created_by: Optional[str] = None,
         linked_topup_id: Optional[int] = None,
     ) -> Expense:
@@ -336,7 +333,6 @@ class PettyCashService:
             amount_paid=amount,
             description=description,
             payment_method="Petty Cash",
-            reference_no=reference_no,
             audit_status="Pending Audit",
             created_by=created_by,
             linked_topup_id=linked_topup_id,
@@ -351,9 +347,6 @@ class PettyCashService:
             .options(
                 joinedload(PettyCashTopUp.company),
                 joinedload(PettyCashTopUp.intercompany_transfer),
-            )
-            .filter(
-                ~PettyCashTopUp.reference_no.like("SEED-%") | (PettyCashTopUp.reference_no == None)
             )
         )
         if company_id:
@@ -527,7 +520,6 @@ class PettyCashService:
                     "amount": _to_decimal(exp.amount),
                     "description": exp.description or "",
                     "category": "Petty Cash",
-                    "reference_no": exp.reference_no,
                     "audit_status": exp.audit_status or "Pending Audit",
                     "audited_by": exp.audited_by,
                     "audited_at": exp.audited_at,
@@ -544,7 +536,6 @@ class PettyCashService:
 
         entries = []
         rendered_expense_ids = set()
-        rendered_refs = set()
         for t in topups:
             status_val = t.status or "Approved"
             status_lower = status_val.strip().lower()
@@ -587,7 +578,6 @@ class PettyCashService:
                 "company_id": t.company_id,
                 "company_name": comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown"),
                 "entry_date": t.topup_date,
-                "reference_no": t.reference_no,
                 "status": status_val,
                 "paid_by": getattr(t, "paid_by", None),
                 "receipt_url": None,
@@ -632,8 +622,6 @@ class PettyCashService:
                 if pc_funded > ZERO and not t.existing_expense_id and not (is_auditor and is_unendorsed and not pc_exp_id):
                     if pc_exp_id:
                         rendered_expense_ids.add(pc_exp_id)
-                    rendered_refs.add(f"PC-EXP-{t.topup_id}")
-                    rendered_refs.add(f"PC-DISB-{t.topup_id}")
                     entries.append({
                         **common_data,
                         "entry_id": f"topup-{t.topup_id}-pc",
@@ -656,7 +644,6 @@ class PettyCashService:
                 payout_exp = expenses_by_id.get(payout_exp_id) if payout_exp_id else None
                 if payout_exp:
                     rendered_expense_ids.add(payout_exp_id)
-                    rendered_refs.add(f"PC-REIMB-{t.topup_id}")
                 if (reimb_amt > ZERO or (not added_any and pc_funded <= ZERO)) and not (is_auditor and is_unendorsed):
                     entries.append({
                         **common_data,
@@ -676,8 +663,6 @@ class PettyCashService:
                 is_deducted = bool(pc_exp_id) or is_approved
                 if pc_exp_id:
                     rendered_expense_ids.add(pc_exp_id)
-                rendered_refs.add(f"PC-DISB-{t.topup_id}")
-                rendered_refs.add(f"PC-EXP-{t.topup_id}")
                 entries.append({
                     **common_data,
                     "entry_id": f"topup-{t.topup_id}",
@@ -711,8 +696,7 @@ class PettyCashService:
         for e in expenses:
             if not e["expense_date"]:
                 continue
-            ref_upper = (e.get("reference_no") or "").strip().upper()
-            if e["expense_id"] in rendered_expense_ids or ref_upper in rendered_refs:
+            if e["expense_id"] in rendered_expense_ids:
                 continue
             amt_out = e["amount"]
             entries.append({
@@ -725,7 +709,6 @@ class PettyCashService:
                 "entry_date": e["expense_date"],
                 "description": e["description"],
                 "category": e["category"],
-                "reference_no": e["reference_no"],
                 "amount_requested": ZERO,
                 "amount_in": ZERO,
                 "amount_out": amt_out,
@@ -816,10 +799,6 @@ class PettyCashService:
                 func.lower(func.trim(func.coalesce(Expense.payment_method, ""))).like("%petty cash%"),
                 Expense.linked_topup_id.is_(None),
                 ~Expense.expense_id.in_(claimed_subq),
-                (
-                    (~Expense.reference_no.ilike("SEED-%") & ~Expense.reference_no.ilike("REIMB-%") & ~Expense.reference_no.ilike("PC-EXP-%") & ~Expense.reference_no.ilike("PC-DISB-%"))
-                    | (Expense.reference_no == None)
-                ),
             )
         )
         if q and q.strip():
@@ -828,7 +807,6 @@ class PettyCashService:
                 or_(
                     func.coalesce(Expense.description, "").ilike(term),
                     func.coalesce(Category.name, "").ilike(term),
-                    func.coalesce(Expense.reference_no, "").ilike(term),
                 )
             )
         safe_limit = max(1, min(limit, 100))
@@ -845,7 +823,6 @@ class PettyCashService:
                 particulars=(exp.description or "").strip(),
                 category=cat_name,
                 amount=_to_decimal(exp.amount),
-                reference_no=exp.reference_no,
             )
             for exp, cat_name in rows
         ]
@@ -953,7 +930,6 @@ class PettyCashService:
             movements.append(
                 PettyCashMovementOut(
                     topup_id=t.topup_id,
-                    reference_no=t.reference_no,
                     topup_date=t.topup_date,
                     amount=move_amt,
                     description=t.description,
@@ -1043,7 +1019,6 @@ class PettyCashService:
         status_str: str,
         amount: Decimal,
         request_type: Optional[str] = None,
-        reference_no: Optional[str] = None,
         total_expenses: Optional[Decimal] = None,
         finance_remark: Optional[str] = None,
         remark: Optional[str] = None,
@@ -1065,7 +1040,6 @@ class PettyCashService:
         expires_resolved = now + timedelta(days=90)
         status_lower = (status_str or "").strip().lower()
         req_type = (request_type or "topup").strip().lower()
-        ref = reference_no or str(topup_id)
         amt_val = _to_decimal(amount)
 
         notif_type: Optional[str] = None
@@ -1101,13 +1075,13 @@ class PettyCashService:
                         title = "Petty Cash Replenishment Request (Finance Endorsement)"
                         message = (
                             f"{cname} submitted a petty cash replenishment claim "
-                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt_val:,.2f}, Ref: {ref}) "
+                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt_val:,.2f}) "
                             f"awaiting your review and endorsement."
                         )
                     else:
                         title = "Petty Cash Request (Finance Endorsement)"
                         message = (
-                            f"{cname} requested a petty cash top-up of ₱{amt_val:,.2f} (Ref: {ref}) "
+                            f"{cname} requested a petty cash top-up of ₱{amt_val:,.2f} "
                             f"awaiting your review and endorsement."
                         )
                     recipient_ids.update(
@@ -1124,7 +1098,7 @@ class PettyCashService:
                     kind_label = "replenishment claim" if req_type == "reimbursement" else "top-up"
                     title = "Petty Cash Audit Compliance Required"
                     message = (
-                        f"Petty cash {kind_label} of ₱{amt_val:,.2f} for {cname} (Ref: {ref}) "
+                        f"Petty cash {kind_label} of ₱{amt_val:,.2f} for {cname} "
                         f"was endorsed by Finance and awaits Audit approval."
                     ) + _remarks_suffix(finance_remark, remark)
                     recipient_ids.update(
@@ -1147,17 +1121,17 @@ class PettyCashService:
                     )
                     if is_approved and status_lower == "reimbursed":
                         message = (
-                            f"Your petty cash replenishment claim of ₱{amt_val:,.2f} (Ref: {ref}) has been approved "
+                            f"Your petty cash replenishment claim of ₱{amt_val:,.2f} has been approved "
                             f"and paid out from the company bank account."
                         )
                     elif is_approved:
                         message = (
-                            f"Your petty cash replenishment claim of ₱{amt_val:,.2f} (Ref: {ref}) has been approved by Audit and is ready for settlement."
+                            f"Your petty cash replenishment claim of ₱{amt_val:,.2f} has been approved by Audit and is ready for settlement."
                             if req_type == "reimbursement"
-                            else f"Your petty cash top-up of ₱{amt_val:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                            else f"Your petty cash top-up of ₱{amt_val:,.2f} has been approved by Audit and credited to your petty cash wallet."
                         )
                     else:
-                        message = f"Your petty cash {kind_noun} of ₱{amt_val:,.2f} (Ref: {ref}) was {status_lower}."
+                        message = f"Your petty cash {kind_noun} of ₱{amt_val:,.2f} was {status_lower}."
                     remarks = _remarks_suffix(finance_remark, remark)
                     message += remarks if remarks else ("" if is_approved else " Request declined.")
 
@@ -1391,7 +1365,6 @@ class PettyCashService:
             company_id=company.company_id,
             amount=payable_amount,
             topup_date=topup_in.topup_date,
-            reference_no=(topup_in.reference_no or "").strip() or None,
             description=(topup_in.description or "").strip() or None,
             bank_account_id=bank_id,
             payment_method_option=payment_opt,
@@ -1428,7 +1401,6 @@ class PettyCashService:
                 amount=immediate_pc_amount,
                 category_name=topup.category,
                 description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
-                reference_no=f"PC-EXP-{topup.topup_id}",
                 created_by=creator_uid,
                 linked_topup_id=topup.topup_id,
             )
@@ -1465,7 +1437,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -1517,7 +1488,6 @@ class PettyCashService:
             company_id=company.company_id,
             amount=amt,
             topup_date=disb_in.topup_date,
-            reference_no=(disb_in.reference_no or "").strip() or None,
             description=cleaned_desc,
             status="Approved",
             request_type="disbursement",
@@ -1542,7 +1512,6 @@ class PettyCashService:
             amount=amt,
             category_name=cat_name,
             description=cleaned_desc or f"Petty Cash Disbursement ({cleaned_paid_by or 'Staff'})",
-            reference_no=f"PC-DISB-{topup.topup_id}",
             created_by=creator_uid,
             linked_topup_id=topup.topup_id,
         )
@@ -1677,7 +1646,6 @@ class PettyCashService:
                                     amount=C,
                                     category_name=topup.category,
                                     description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
-                                    reference_no=f"PC-EXP-{topup.topup_id}",
                                     created_by=topup.created_by,
                                     linked_topup_id=topup.topup_id,
                                 )
@@ -1740,7 +1708,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -1787,7 +1754,6 @@ class PettyCashService:
                 status_str=topup.status,
                 amount=topup.amount,
                 request_type=topup.request_type,
-                reference_no=topup.reference_no,
                 total_expenses=topup.total_expenses,
                 finance_remark=topup.finance_remark,
                 remark=topup.remark,
@@ -1843,7 +1809,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -1887,7 +1852,6 @@ class PettyCashService:
                 status_str=topup.status,
                 amount=topup.amount,
                 request_type=topup.request_type,
-                reference_no=topup.reference_no,
                 total_expenses=topup.total_expenses,
                 finance_remark=topup.finance_remark,
                 remark=topup.remark,
@@ -1922,7 +1886,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -1981,7 +1944,6 @@ class PettyCashService:
                 amount=C,
                 category_name=topup.category,
                 description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
-                reference_no=f"PC-EXP-{topup.topup_id}",
                 created_by=topup.created_by,
                 linked_topup_id=topup.topup_id,
             )
@@ -2000,7 +1962,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -2076,14 +2037,13 @@ class PettyCashService:
 
             # 1. Execute bank withdrawal
             bank_svc = BankService(self.db)
-            ref_no = topup.reference_no or f"REIMB-{topup.topup_id}"
             tx_date = datetime.now().strftime("%m/%d/%y")
             withdraw_req = BankDepositWithdrawRequest(
                 amount=O,
                 date=tx_date,
-                particulars=f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'} (Ref: {ref_no})",
+                particulars=f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'}",
                 category="Bank Transfer" if topup.payment_method_option == "direct" else "Cheque",
-                reference_no=ref_no,
+                reference_no=None,
             )
             _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req)
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": bank_acc.id}})
@@ -2132,7 +2092,6 @@ class PettyCashService:
                 amount=C,
                 category_name=topup.category,
                 description=topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}",
-                reference_no=f"PC-EXP-{topup.topup_id}",
                 created_by=topup.created_by,
                 linked_topup_id=topup.topup_id,
             )
@@ -2146,7 +2105,6 @@ class PettyCashService:
                 amount=O,
                 category_name=topup.category,
                 description=topup.description or f"Reimbursement Payout for {topup.paid_by or 'Employee'}",
-                reference_no=f"PC-REIMB-{topup.topup_id}",
                 created_by=topup.created_by,
                 linked_topup_id=topup.topup_id,
             )
@@ -2159,7 +2117,6 @@ class PettyCashService:
                 amount=O,
                 description=topup.description or f"Reimbursement Payout for {topup.paid_by or 'Employee'}",
                 payment_method="Bank Reimbursement",
-                reference_no=f"REIMB-{topup.topup_id}",
                 linked_topup_id=topup.topup_id,
             )
             self.db.add(new_reimb_exp)
@@ -2180,7 +2137,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -2235,7 +2191,7 @@ class PettyCashService:
         withdraw_req = BankDepositWithdrawRequest(
             amount=O,
             date=tx_date,
-            particulars=f"Intercompany Transfer for Reimbursement {topup.reference_no or f'REIMB-{topup.topup_id}'} (Ref: {ict_ref})",
+            particulars=f"Intercompany Transfer for Reimbursement (Ref: {ict_ref})",
             category="Bank Transfer",
             reference_no=ict_ref,
         )
@@ -2419,7 +2375,6 @@ class PettyCashService:
             status_str=topup.status,
             amount=topup.amount,
             request_type=topup.request_type,
-            reference_no=topup.reference_no,
             total_expenses=topup.total_expenses,
             finance_remark=topup.finance_remark,
             remark=topup.remark,
@@ -2597,7 +2552,6 @@ class PettyCashService:
             # Fallback when the account has no company_id: match by company name.
             is_own_account = (funding_acc.company_name or "").strip().lower() == company_name.strip().lower()
 
-        ref = topup.reference_no or f"PC-{topup.topup_id}"
         c_disp = company_name or f"Company #{topup.company_id}"
         tx_date = topup.topup_date.strftime("%m/%d/%y") if topup.topup_date else datetime.now().strftime("%m/%d/%y")
 
@@ -2607,9 +2561,9 @@ class PettyCashService:
                 withdraw_req = BankDepositWithdrawRequest(
                     amount=amount,
                     date=tx_date,
-                    particulars=f"Petty Cash Replenishment for {c_disp} (Ref: {ref})",
+                    particulars=f"Petty Cash Replenishment for {c_disp}",
                     category="Bank Transfer",
-                    reference_no=ref,
+                    reference_no=None,
                 )
                 bank_svc.withdraw(funding_acc.id, withdraw_req)
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
@@ -2622,9 +2576,9 @@ class PettyCashService:
             withdraw_req = BankDepositWithdrawRequest(
                 amount=amount,
                 date=tx_date,
-                particulars=f"Petty Cash Funding for {c_disp} (Ref: {ref})",
+                particulars=f"Petty Cash Funding for {c_disp}",
                 category="Bank Transfer",
-                reference_no=ref,
+                reference_no=None,
             )
             bank_svc.withdraw(funding_acc.id, withdraw_req)
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
@@ -2640,9 +2594,9 @@ class PettyCashService:
                 deposit_req = BankDepositWithdrawRequest(
                     amount=amount,
                     date=tx_date,
-                    particulars=f"Petty Cash Top-up received (Ref: {ref})",
+                    particulars="Petty Cash Top-up received",
                     category="Bank Transfer",
-                    reference_no=ref,
+                    reference_no=None,
                 )
                 bank_svc.deposit(dest_acc.id, deposit_req)
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": dest_acc.id}})
@@ -2690,9 +2644,6 @@ class PettyCashService:
         for exp in linked_expenses:
             if exp.linked_topup_id == topup.topup_id:
                 exp.linked_topup_id = None
-            ref_upper = (exp.reference_no or "").strip().upper()
-            if ref_upper.startswith("PC-EXP-") or ref_upper.startswith("PC-DISB-"):
-                exp.reference_no = f"EXP-PC-{exp.expense_id}"
         topup.petty_cash_expense_id = None
         topup.existing_expense_id = None
         if hasattr(topup, "reimbursement_expense_id"):
@@ -2737,7 +2688,6 @@ class PettyCashService:
             func.coalesce(func.sum(PettyCashTopUp.amount), 0),
         ).filter(
             PettyCashTopUp.company_id.in_(company_ids),
-            ~PettyCashTopUp.reference_no.like("SEED-%") | (PettyCashTopUp.reference_no == None),
         )
         if start:
             q = q.filter(PettyCashTopUp.topup_date >= start)

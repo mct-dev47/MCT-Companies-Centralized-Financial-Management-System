@@ -1857,7 +1857,6 @@ class NotificationService:
                 ][:20]
                 for topup in pending_finance:
                     cname = _company_name(self.db, topup.company_id, name_map)
-                    ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
                     req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
                     if req_type == "reimbursement":
@@ -1865,13 +1864,13 @@ class NotificationService:
                         title = "Petty Cash Replenishment Request (Finance Endorsement)"
                         msg = (
                             f"{cname} submitted a petty cash replenishment claim "
-                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt:,.2f}, Ref: {ref}) "
+                            f"(Total: ₱{tot:,.2f}, Out-of-Pocket: ₱{amt:,.2f}) "
                             f"awaiting your review and endorsement."
                         )
                     else:
                         title = "Petty Cash Request (Finance Endorsement)"
                         msg = (
-                            f"{cname} requested a petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) "
+                            f"{cname} requested a petty cash top-up of ₱{amt:,.2f} "
                             f"awaiting your review and endorsement."
                         )
                     results.append(NotificationOut(
@@ -1894,7 +1893,6 @@ class NotificationService:
                 ][:20]
                 for topup in pending_audit:
                     cname = _company_name(self.db, topup.company_id, name_map)
-                    ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
                     req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
                     kind_label = "replenishment claim" if req_type == "reimbursement" else "top-up"
@@ -1903,7 +1901,7 @@ class NotificationService:
                         notification_type=NotificationType.PETTY_CASH_AUDIT,
                         title="Petty Cash Audit Compliance Required",
                         message=(
-                            f"Petty cash {kind_label} of ₱{amt:,.2f} for {cname} (Ref: {ref}) was endorsed by Finance and awaits Audit approval."
+                            f"Petty cash {kind_label} of ₱{amt:,.2f} for {cname} was endorsed by Finance and awaits Audit approval."
                             + _remarks_suffix(topup.finance_remark, topup.remark)
                         ),
                         company_id=topup.company_id,
@@ -1925,7 +1923,6 @@ class NotificationService:
                     and (company_id is None or t.company_id == company_id)
                 ][:20]
                 for topup in topup_rows:
-                    ref = topup.reference_no or str(topup.topup_id)
                     amt = topup.amount or Decimal("0.00")
                     status_str = topup.status or "Approved"
                     req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
@@ -1939,12 +1936,12 @@ class NotificationService:
                     )
                     if is_approved:
                         msg = (
-                            f"Your petty cash replenishment claim of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and is ready for settlement."
+                            f"Your petty cash replenishment claim of ₱{amt:,.2f} has been approved by Audit and is ready for settlement."
                             if req_type == "reimbursement"
-                            else f"Your petty cash top-up of ₱{amt:,.2f} (Ref: {ref}) has been approved by Audit and credited to your petty cash wallet."
+                            else f"Your petty cash top-up of ₱{amt:,.2f} has been approved by Audit and credited to your petty cash wallet."
                         )
                     else:
-                        msg = f"Your petty cash {kind_noun} of ₱{amt:,.2f} (Ref: {ref}) was {status_str.lower()}."
+                        msg = f"Your petty cash {kind_noun} of ₱{amt:,.2f} was {status_str.lower()}."
                     remarks = _remarks_suffix(topup.finance_remark, topup.remark)
                     msg += remarks if remarks else ("" if is_approved else " Request declined.")
                     results.append(NotificationOut(
@@ -1991,14 +1988,12 @@ class NotificationService:
             for t in topups:
                 if t.company_id is None:
                     continue
-                if t.reference_no and str(t.reference_no).upper().startswith("SEED-"):
-                    continue
                 req_type = (getattr(t, "request_type", "topup") or "topup").strip().lower()
                 if (t.status or "Approved").lower() == "approved" and req_type == "topup":
                     amt = Decimal(str(t.amount or 0)).quantize(Decimal("0.01"))
                     topups_by_company[t.company_id] = topups_by_company.get(t.company_id, Decimal("0.00")) + amt
 
-            # 2. Aggregate non-seed petty cash expenses per company in a single SQL GROUP BY query
+            # 2. Aggregate petty cash expenses per company in a single SQL GROUP BY query
             exp_q = (
                 self.db.query(
                     Expense.company_id,
@@ -2010,7 +2005,6 @@ class NotificationService:
                         func.lower(func.trim(func.coalesce(Expense.payment_method, ""))).like("%petty cash%"),
                         func.lower(func.trim(func.coalesce(Category.name, ""))) == "petty cash",
                     ),
-                    or_(~Expense.reference_no.like("SEED-%"), Expense.reference_no.is_(None)),
                 )
             )
             if company_id is not None:

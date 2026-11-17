@@ -45,7 +45,7 @@ def _db():
     ))
     db.add(PettyCashTopUp(
         company_id=1, amount=Decimal("500.00"), topup_date=date.today(),
-        status="Approved", request_type="topup", reference_no="PC-1",
+        status="Approved", request_type="topup",
     ))
     db.add(Bill(
         bill_id=1, company_id=1, bill_name="Meralco", amount=Decimal("300.00"),

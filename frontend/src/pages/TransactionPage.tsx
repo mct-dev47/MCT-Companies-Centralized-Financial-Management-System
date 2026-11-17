@@ -294,7 +294,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
 
   if (isReimbursement) {
     const claimant = m.paidBy || 'Employee'
-    const desc = m.description || `Petty cash reimbursement for ${claimant} (${m.refNo})`
+    const desc = m.description || `Petty cash reimbursement for ${claimant}`
 
     if (m.isOwnAccount || !m.fundingCompanyId || m.fundingCompanyName === m.companyName) {
       return [
@@ -310,7 +310,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
       ]
     }
 
-    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName} (${m.refNo})`
+    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName}`
     return [
       {
         ...base,
@@ -334,7 +334,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   }
 
   if (m.isOwnAccount) {
-    const particulars = `Petty cash top up funded from own bank account (${m.refNo})`
+    const particulars = 'Petty cash top up funded from own bank account'
     return [
       {
         ...base,
@@ -348,8 +348,8 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
     ]
   }
 
-  const received = `Petty cash top up from ${m.fundingCompanyName} (${m.refNo})`
-  const funded = `Petty cash top up funded for ${m.companyName} (${m.refNo})`
+  const received = `Petty cash top up from ${m.fundingCompanyName}`
+  const funded = `Petty cash top up funded for ${m.companyName}`
   return [
     {
       ...base,
@@ -801,7 +801,6 @@ export const TransactionPage: React.FC = () => {
   }, [selectedBankAccount, effectiveTargetCompany, getStartingBalanceForCompany, bankAccounts])
 
   const isOwner = userRole === 'owner'
-  const isFinanceOnly = isFinance && !isAudit && !isAdmin && !isOwner
   const isViewOnlyUser = isOwner
   const showActionColumn = !isOwner
   const canAudit = (isAdmin || isAudit) && !isOwner
@@ -810,7 +809,7 @@ export const TransactionPage: React.FC = () => {
     userRole.includes('company') ||
     (!isAudit && !isFinance && !isOwner)
   const isBusinessWriter =
-    (isSupervisor || isAdmin) &&
+    (isSupervisor || isFinance || isAdmin) &&
     !isAudit &&
     !isOwner
 
@@ -2117,12 +2116,11 @@ export const TransactionPage: React.FC = () => {
     handleRowClick(tx)
   }
 
-  // Supervisors can edit an unaudited sale or expense in the spreadsheet editor.
-  // Finance is view only here (it can only add remarks on unaudited records).
+  // Supervisors and Finance can edit an unaudited sale or expense in the spreadsheet editor.
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
-    !isFinanceOnly &&
+    (isSupervisor || isFinance || isAdmin) &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     !tx.sourceModule &&
@@ -4153,7 +4151,7 @@ export const TransactionPage: React.FC = () => {
         onOpenChange={setIsModalOpen}
         transaction={selectedTx}
         onTransactionUpdated={handleTransactionUpdated}
-        editable={!isAdmin && !isOwner && !isFinanceOnly}
+        editable={!isAdmin && !isOwner}
         viewOnly={isOwner}
       />
 
@@ -4279,8 +4277,8 @@ export const TransactionPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
-            {/* 3. Supervisor / Admin: Edit */}
-            {(isSupervisor || isAdmin) && !isAudit && !isFinance && canEditTx(activeMenuTx) && (
+            {/* 3. Supervisor / Finance / Admin: Edit */}
+            {(isSupervisor || isFinance || isAdmin) && !isAudit && canEditTx(activeMenuTx) && (
               <button
                 type="button"
                 onClick={() => handleMenuEdit(activeMenuTx)}
@@ -4310,8 +4308,8 @@ export const TransactionPage: React.FC = () => {
               </button>
             )}
 
-            {/* 5. Supervisor / Admin: Delete */}
-            {(isSupervisor || isAdmin) && !isAudit && !isFinance && (
+            {/* 5. Supervisor / Finance / Admin: Delete */}
+            {(isSupervisor || isFinance || isAdmin) && !isAudit && canShowDeleteOption(activeMenuTx) && (
               <div className="border-t border-slate-100 mt-1 pt-1">
                 <button
                   type="button"
@@ -4337,8 +4335,15 @@ export const TransactionPage: React.FC = () => {
         description={
           deleteConfirmTx ? (
             <span>
-              Are you sure you want to delete 1 item (Ref:{' '}
-              <strong className="font-mono">{deleteConfirmTx.refNo}</strong>) totaling{' '}
+              Are you sure you want to delete{' '}
+              <strong>{deleteConfirmTx.particulars || deleteConfirmTx.description || 'this record'}</strong>
+              {deleteConfirmTx.refNo ? (
+                <>
+                  {' '}
+                  (Ref: <strong className="font-mono">{deleteConfirmTx.refNo}</strong>)
+                </>
+              ) : null}{' '}
+              totaling{' '}
               <strong>
                 {formatPHP(
                   Math.abs(deleteConfirmTx.amount || deleteConfirmTx.withdrawal || deleteConfirmTx.deposit || 0)

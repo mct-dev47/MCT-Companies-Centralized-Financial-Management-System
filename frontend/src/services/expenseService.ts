@@ -138,7 +138,7 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
 
   return {
     id: expId,
-    refNo: exp.reference_no || exp.ref_no || `REF-${exp.expense_id || '001'}`,
+    refNo: exp.cheque_no || exp.cheque_number || '',
     chequeNo: exp.cheque_no || exp.cheque_number || '',
     date: displayDate,
     rawDate: rawDateStr,
@@ -466,8 +466,6 @@ export const expenseService = {
       }
     }
 
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-    const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
     const clientRef =
       input.clientRef && input.clientRef.length >= 8
@@ -489,7 +487,6 @@ export const expenseService = {
         category: input.category,
         payment_method: input.paymentMethod || null,
         cheque_no: input.chequeNo || null,
-        reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
         remarks: input.remarks || undefined,
         client_ref: clientRef,
@@ -813,7 +810,6 @@ export const expenseService = {
   exportCsv(items: ExpenseItem[], filename = 'expense_report.csv') {
     const headers = [
       'Date',
-      'Ref No',
       'Cheque No',
       'Particulars',
       'Withdrawal',
@@ -825,7 +821,6 @@ export const expenseService = {
 
     const rows = items.map((e) => [
       e.date,
-      e.refNo,
       e.chequeNo || '—',
       `"${e.particulars.replace(/"/g, '""')}"`,
       e.withdrawal,

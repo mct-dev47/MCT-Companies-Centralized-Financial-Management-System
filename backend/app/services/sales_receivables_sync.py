@@ -531,7 +531,7 @@ class SalesReceivablesSyncService:
                 company_name=company_name,
                 # The sale's own bank wins; never fall back to "whichever account the company has first"
                 account_id=account_id or pick("bank_account_id", "bank_account_id"),
-                particulars=f"Sales Collection: {particulars}",
+                particulars=particulars,
                 reference_no=cheque or None,
                 tx_date=tx_date.strftime("%m/%d/%y") if hasattr(tx_date, "strftime") else None,
                 legacy_particulars=legacy_particulars or particulars,

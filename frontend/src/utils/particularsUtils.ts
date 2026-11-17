@@ -124,8 +124,13 @@ export function parseParticulars(
   ]
 }
 
+export function stripBankSystemPrefix(raw?: string | null): string {
+  if (!raw) return ''
+  return raw.replace(/^\s*(?:Expense Disbursement|Sales Collection)\s*:\s*/i, '').trim()
+}
+
 function parseSingleParticularLine(line: string, index: number): ParticularItem {
-  let cleanedLine = line.trim()
+  let cleanedLine = stripBankSystemPrefix(line)
   let itemStatus: 'Paid' | 'Unpaid' | 'Pending' | 'On hold' | undefined = undefined
 
   const statusTagMatch = cleanedLine.match(/\[(Paid|Unpaid|Pending|On hold|Partial)\]/i)
@@ -266,8 +271,10 @@ export function getParticularsSummary(
   }
 ): {
   firstItemName: string
+  title: string
   firstItemStatus: 'Paid' | 'Pending' | 'Unpaid'
   count: number
+  itemCount: number
   filteredItems: ParticularItem[]
   filteredTotal: number
 } {
@@ -281,10 +288,13 @@ export function getParticularsSummary(
 
   if (filteredItems.length === 0) {
     if (items.length === 0) {
+      const cleanedFallback = stripBankSystemPrefix(rawParticulars) || '—'
       return {
-        firstItemName: rawParticulars || '—',
+        firstItemName: cleanedFallback,
+        title: cleanedFallback,
         firstItemStatus: fallbackStatus,
         count: 0,
+        itemCount: 0,
         filteredItems: [],
         filteredTotal: options?.fallbackTotal || 0,
       }
@@ -292,8 +302,10 @@ export function getParticularsSummary(
     const first = items[0]
     return {
       firstItemName: first.particulars,
+      title: first.particulars,
       firstItemStatus: normalizeParticularStatus(first.status, fallbackStatus),
       count: items.length,
+      itemCount: items.length,
       filteredItems: items,
       filteredTotal: items.reduce((sum, i) => sum + (Number(i.total) || 0), 0),
     }
@@ -306,11 +318,13 @@ export function getParticularsSummary(
 
   return {
     firstItemName: filteredItems[0].particulars,
+    title: filteredItems[0].particulars,
     firstItemStatus: normalizeParticularStatus(
       filteredItems[0].status,
       fallbackStatus
     ),
     count: filteredItems.length,
+    itemCount: filteredItems.length,
     filteredItems,
     filteredTotal:
       filteredTotal > 0 ? filteredTotal : options?.fallbackTotal || 0,

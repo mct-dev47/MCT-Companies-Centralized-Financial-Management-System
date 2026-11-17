@@ -345,10 +345,6 @@ def init_db():
                 if "linked_topup_id" not in exp_cols:
                     conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
                 try:
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL"))
-                except Exception:
-                    pass
-                try:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
                 except Exception:
                     pass

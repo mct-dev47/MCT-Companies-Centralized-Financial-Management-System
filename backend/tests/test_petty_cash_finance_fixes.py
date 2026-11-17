@@ -790,7 +790,6 @@ def test_spec_0042_eligible_expenses_scoping_search_and_claim_exclusion(env):
             expense_date=date.today(),
             amount=Decimal("850.00"),
             description="Laser Toner Cartridge",
-            reference_no="EXP-A-101",
         )
         exp2 = Expense(
             company_id=101,
@@ -799,7 +798,6 @@ def test_spec_0042_eligible_expenses_scoping_search_and_claim_exclusion(env):
             expense_date=date.today(),
             amount=Decimal("420.00"),
             description="Bond Paper Reams",
-            reference_no="EXP-A-102",
         )
         exp_bank = Expense(
             company_id=101,
@@ -808,7 +806,6 @@ def test_spec_0042_eligible_expenses_scoping_search_and_claim_exclusion(env):
             expense_date=date.today(),
             amount=Decimal("1000.00"),
             description="Should Not Appear",
-            reference_no="EXP-BANK-1",
         )
         exp_linked = Expense(
             company_id=101,
@@ -817,7 +814,6 @@ def test_spec_0042_eligible_expenses_scoping_search_and_claim_exclusion(env):
             expense_date=date.today(),
             amount=Decimal("200.00"),
             description="Already Linked Expense",
-            reference_no="EXP-LINKED-1",
             linked_topup_id=1,
         )
         exp_beta = Expense(
@@ -827,7 +823,6 @@ def test_spec_0042_eligible_expenses_scoping_search_and_claim_exclusion(env):
             expense_date=date.today(),
             amount=Decimal("900.00"),
             description="Beta Fleet Fuel",
-            reference_no="EXP-B-201",
         )
         db.add_all([exp1, exp2, exp_bank, exp_linked, exp_beta])
         db.commit()

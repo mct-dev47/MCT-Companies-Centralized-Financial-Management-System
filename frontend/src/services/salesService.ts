@@ -96,7 +96,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
     month && day ? `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}` : rawDate
   const amt = Number(b.amount) || 0
 
-  let chequeNo = b.cheque_no || b.chequeNo || b.reference_no || ''
+  let chequeNo = b.cheque_no || b.chequeNo || ''
   let particulars = b.particulars || b.description || 'Sales Entry'
   if (!chequeNo && particulars.includes('[Cheque:')) {
     const parts = particulars.split('[Cheque:')
@@ -131,7 +131,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
 
   return {
     id: saleId,
-    refNo: chequeNo || `REF-${b.sales_id}`,
+    refNo: chequeNo || '',
     chequeNo: chequeNo || undefined,
     date: displayDate,
     rawDate: rawDate,
@@ -745,7 +745,6 @@ export const salesService = {
   exportCsv(items: SalesItem[], filename = 'sales_report.csv') {
     const headers = [
       'Date',
-      'Ref No',
       'Cheque No',
       'Particulars',
       'Withdrawal',
@@ -757,7 +756,6 @@ export const salesService = {
 
     const rows = items.map((s) => [
       s.date,
-      s.refNo,
       s.chequeNo || '—',
       `"${s.particulars.replace(/"/g, '""')}"`,
       s.withdrawal,

@@ -21,7 +21,6 @@ class PettyCashTopUp(Base):
     )
     amount = Column(Numeric(15, 2), nullable=False)
     topup_date = Column(Date, nullable=False, index=True)
-    reference_no = Column(String(100), nullable=True)
     description = Column(Text, nullable=True)
     # Funding bank chosen by Finance at endorsement (spec 0012). Nullable: historical rows
     # and approvals with no funding bank move no money.

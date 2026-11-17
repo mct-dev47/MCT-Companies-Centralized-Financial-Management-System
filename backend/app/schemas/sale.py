@@ -56,7 +56,6 @@ class SaleCreate(SaleBase):
     company: Optional[str] = Field(None, max_length=150)
     category: Optional[str] = Field(None, max_length=150)
     chequeNo: Optional[str] = Field(None, max_length=100)
-    reference_no: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=500)
     payment_method: Optional[str] = Field(None, max_length=50)
     bank_account_id: Optional[str] = Field(None, max_length=50)

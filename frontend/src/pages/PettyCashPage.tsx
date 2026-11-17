@@ -1837,15 +1837,6 @@ export const PettyCashPage: React.FC = () => {
               <div className="rounded-2xl border border-slate-200/80 bg-white p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5">
                 <div className="min-w-0">
                   <span className="text-xs font-medium text-muted-fg block">
-                    Reference No.
-                  </span>
-                  <span className="font-mono text-sm font-semibold text-focus break-all mt-0.5 block">
-                    {targetEntry.referenceNumber || targetEntry.id || '—'}
-                  </span>
-                </div>
-
-                <div className="min-w-0">
-                  <span className="text-xs font-medium text-muted-fg block">
                     Subsidiary / Company
                   </span>
                   <span className="text-sm font-semibold text-focus break-words mt-0.5 block">
@@ -2472,41 +2463,6 @@ export const PettyCashPage: React.FC = () => {
 
               {/* Footer Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
-
-
-                {/* Allow Edit / Delete */}
-                {!isAudit && (
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const item = targetEntry
-                          setIsSummaryModalOpen(false)
-                          handleOpenEdit(item)
-                        }}
-                        className="h-9 px-3 text-xs font-semibold flex items-center gap-1.5"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        <span>Edit Request</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const item = targetEntry
-                          setIsSummaryModalOpen(false)
-                          handleOpenDelete(item)
-                        }}
-                        className="h-9 px-3 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 flex items-center gap-1.5"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Request</span>
-                      </Button>
-                    </div>
-                  )}
 
                 {/* Finance Team Actions: Endorse to Audit or Reject */}
                 {!isAudit && isFinanceOrAdmin && (targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') && (
@@ -3240,45 +3196,45 @@ export const PettyCashPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
-            {!isBlankStatusEntry(activeMenuPetty) && (
-              <button
-                type="button"
-                onClick={() => {
-                  const target = activeMenuPetty
-                  setOpenMenuPettyId(null)
-                  setMenuPosition(null)
-                  setActiveMenuPetty(null)
-                  handleOpenEdit(target)
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
-              >
-                <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                <span>
-                  {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
-                    ? 'Edit Reimbursement'
-                    : 'Edit Transaction'}
-                </span>
-              </button>
-            )}
-            {!isBlankStatusEntry(activeMenuPetty) && (
-              <button
-                type="button"
-                onClick={() => {
-                  const target = activeMenuPetty
-                  setOpenMenuPettyId(null)
-                  setMenuPosition(null)
-                  setActiveMenuPetty(null)
-                  handleOpenDelete(target)
-                }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                <span>
-                  {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
-                    ? 'Delete Reimbursement'
-                    : 'Delete Transaction'}
-                </span>
-              </button>
+            {!isAudit && !isOwner && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenEdit(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Edit Reimbursement'
+                      : 'Edit Transaction'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenDelete(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Delete Reimbursement'
+                      : 'Delete Transaction'}
+                  </span>
+                </button>
+              </>
             )}
 
             {canAuditActions ? (

@@ -136,7 +136,6 @@ def get_ledger(
         entries = [
             e for e in entries
             if term in (getattr(e, "description", "") or "").lower()
-            or term in (getattr(e, "reference_no", "") or "").lower()
             or term in (getattr(e, "category", "") or "").lower()
             or term in (getattr(e, "company_name", "") or "").lower()
         ]

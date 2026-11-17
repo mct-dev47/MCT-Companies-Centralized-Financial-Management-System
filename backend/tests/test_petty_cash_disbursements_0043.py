@@ -130,12 +130,11 @@ def test_create_disbursement_happy_path_updates_expense_ledger_and_balance(pc_en
     assert Decimal(str(payload["company_funded_amount"])) == Decimal("250.50")
     assert Decimal(str(payload["employee_out_of_pocket"])) == Decimal("0.00")
 
-    # Verify paired Expense created with Petty Cash and PC-DISB-<id>
+    # Verify paired Expense created with Petty Cash and linked to topup
     expenses = db.query(Expense).filter(Expense.company_id == comp_a.company_id).all()
     assert len(expenses) == 1
     exp = expenses[0]
     assert exp.payment_method == "Petty Cash"
-    assert exp.reference_no == f"PC-DISB-{payload['topup_id']}"
     assert exp.linked_topup_id == payload["topup_id"]
     assert Decimal(str(exp.amount)) == Decimal("250.50")
     assert Decimal(str(exp.amount_paid)) == Decimal("250.50")
@@ -412,7 +411,6 @@ def test_audit_status_persistence_via_expenses_endpoint_and_workflow_audit_deriv
         amount_paid=Decimal("100.00"),
         description="Printer ink direct petty cash",
         payment_method="Petty Cash",
-        reference_no="EXP-RAW-1",
     )
     db.add(standalone_exp)
     db.commit()
@@ -559,7 +557,6 @@ def test_delete_pending_mixed_claim_preserves_pc_expense_and_zero_excess_skips_n
     exp_after = db.query(Expense).filter(Expense.expense_id == pc_exp_id).first()
     assert exp_after is not None
     assert exp_after.linked_topup_id is None
-    assert exp_after.reference_no == f"EXP-PC-{pc_exp_id}"
 
     svc = PettyCashService(db)
     expected_bal = Decimal("1000.00") - Decimal("120.00") - Decimal("300.00")

@@ -188,7 +188,6 @@ class CompanyService:
                         company_id=company.company_id,
                         amount=company.petty_cash,
                         topup_date=date.today(),
-                        reference_no="INITIAL-PC",
                         description="Initial Petty Cash Deposit",
                         status="Approved",
                     )
@@ -248,7 +247,6 @@ class CompanyService:
                         company_id=company.company_id,
                         amount=company.petty_cash,
                         topup_date=date.today(),
-                        reference_no="INITIAL-PC",
                         description="Initial Petty Cash Deposit",
                         status="Approved",
                     )
@@ -445,7 +443,7 @@ class CompanyService:
                         self.db.query(PettyCashTopUp)
                         .filter(
                             PettyCashTopUp.company_id == company.company_id,
-                            PettyCashTopUp.reference_no == "INITIAL-PC",
+                            PettyCashTopUp.description == "Initial Petty Cash Deposit",
                         )
                         .first()
                     )
@@ -457,7 +455,6 @@ class CompanyService:
                             company_id=company.company_id,
                             amount=new_petty,
                             topup_date=date.today(),
-                            reference_no="INITIAL-PC",
                             description="Initial Petty Cash Deposit",
                             status="Approved",
                         )

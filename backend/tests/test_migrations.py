@@ -238,6 +238,34 @@ class TestMigrations(unittest.TestCase):
         for dropped in ("staff_credits", "staff_credits_repayment", "budget", "cash_inflow", "login_rate_limits"):
             self.assertNotIn(dropped, tables)
 
+    def test_0072_drops_reference_no_columns(self):
+        """Verify migration 0072 drops idx_expenses_reference_no and reference_no columns from expenses, petty_cash_topups, and sales."""
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE expenses (expense_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100), description TEXT);"))
+            conn.execute(text("CREATE UNIQUE INDEX idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL;"))
+            conn.execute(text("CREATE TABLE petty_cash_topups (topup_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100), description TEXT);"))
+            conn.execute(text("CREATE TABLE sales (sales_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, transaction_date DATE, deposit_status VARCHAR(50), deposit_date DATE, reference_no VARCHAR(100), particulars TEXT);"))
+            conn.execute(text("INSERT INTO expenses (expense_id, company_id, reference_no, description) VALUES (1, 1, 'REF-20261117', 'Supplies');"))
+            conn.execute(text("INSERT INTO petty_cash_topups (topup_id, company_id, reference_no, description) VALUES (1, 1, 'PC-1', 'Topup');"))
+            conn.execute(text("INSERT INTO sales (sales_id, company_id, reference_no, particulars) VALUES (1, 1, 'SL-1', 'Room');"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0072_drop_reference_no_columns", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0072_drop_reference_no_columns", applied_second)
+
+        inspector = inspect(self.engine)
+        for tbl in ("expenses", "petty_cash_topups", "sales"):
+            self.assertNotIn("reference_no", {col["name"] for col in inspector.get_columns(tbl)})
+
+        with self.engine.connect() as conn:
+            idx_names = {row[1] for row in conn.execute(text("PRAGMA index_list(expenses)")).fetchall()}
+            self.assertNotIn("idx_expenses_reference_no", idx_names)
+            self.assertEqual(conn.execute(text("SELECT description FROM expenses WHERE expense_id = 1")).scalar(), "Supplies")
+            self.assertEqual(conn.execute(text("SELECT description FROM petty_cash_topups WHERE topup_id = 1")).scalar(), "Topup")
+            self.assertEqual(conn.execute(text("SELECT particulars FROM sales WHERE sales_id = 1")).scalar(), "Room")
+
 
 if __name__ == "__main__":
     unittest.main()

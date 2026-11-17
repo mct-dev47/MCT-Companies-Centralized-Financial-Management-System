@@ -610,7 +610,6 @@ class BillsService:
             amount_paid=payment.amount,
             description=description,
             payment_method=payment.payment_method,
-            reference_no=f"BILL-{payment.bill_payment_id}",
             cheque_no=payment.reference_no,
             bank_account_id=payment.bank_account_id,
             remarks=payment.notes,

@@ -63,7 +63,9 @@ def test_paid_expense_debits_exactly_the_paid_amount():
     reconcile_expense_bank(db, expense_id=e.expense_id)
     assert _balance(db) == Decimal("700.00")
     reconcile_expense_bank(db, expense_id=e.expense_id)  # running again changes nothing
-    assert db.query(BankTransaction).count() == 1
+    txs = db.query(BankTransaction).all()
+    assert len(txs) == 1
+    assert txs[0].particulars == "Meralco (1x @ ₱300.00 = ₱300.00) [Paid]"
 
 
 def test_mixed_expense_debits_only_paid_lines_then_follows_edits_and_delete():

@@ -470,7 +470,6 @@ def test_petty_cash_low_and_zero_balance_notifications(notif_env):
                 amount=Decimal("3000.00"),
                 description="Replenishment",
                 status="Approved",
-                reference_no="PC-TOP-001",
             )
         )
         db.add(
@@ -479,7 +478,6 @@ def test_petty_cash_low_and_zero_balance_notifications(notif_env):
                 expense_date=today,
                 amount=Decimal("3000.00"),
                 payment_method="Petty Cash",
-                reference_no="EXP-PC-001",
                 particulars="Office supplies",
             )
         )
@@ -611,7 +609,6 @@ def _seed_scaled_dataset(db, count_per_entity: int):
                 amount=Decimal("2000.00"),
                 description=f"Topup {i}",
                 status="Pending" if i % 2 == 0 else "Approved",
-                reference_no=f"PC-SCALE-{i:04d}",
             )
         )
         db.add(

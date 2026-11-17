@@ -116,6 +116,7 @@ export const ExpensePage: React.FC = () => {
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
   const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
+  const canMutateRecord = (isCompanyUser || isFinance) && !isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
   const [expenses, setExpenses] = React.useState<ExpenseItem[]>([])
@@ -448,7 +449,6 @@ export const ExpensePage: React.FC = () => {
 
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim()
-          const matchRef = (item.refNo || '').toLowerCase().includes(q)
           const matchCheque = (item.chequeNo || '').toLowerCase().includes(q)
           const matchParticulars = (item.particulars || '')
             .toLowerCase()
@@ -459,7 +459,6 @@ export const ExpensePage: React.FC = () => {
           const matchAmount = String(item.withdrawal || '').includes(q)
 
           if (
-            !matchRef &&
             !matchCheque &&
             !matchParticulars &&
             !matchCategory &&
@@ -719,7 +718,7 @@ export const ExpensePage: React.FC = () => {
   }
 
   const handleConfirmDelete = async () => {
-    if (!deleteConfirmExpense || isAdmin) return
+    if (!deleteConfirmExpense || !canMutateRecord) return
     try {
       setIsDeleting(true)
       await expenseService.deleteExpense(deleteConfirmExpense.id)
@@ -736,7 +735,7 @@ export const ExpensePage: React.FC = () => {
   }
 
   const handleConfirmDeleteDay = async () => {
-    if (!deleteConfirmDay || isAdmin) return
+    if (!deleteConfirmDay || !canMutateRecord) return
     try {
       setIsDeleting(true)
       for (const item of deleteConfirmDay.items) {
@@ -1115,7 +1114,7 @@ export const ExpensePage: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search particulars, Ref No., Cheque No., company, method…"
+              placeholder="Search particulars, Cheque No., company, method…"
               className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
@@ -1338,7 +1337,7 @@ export const ExpensePage: React.FC = () => {
                               onSave={saveDayRemark}
                               entries={group.items.map((e) => ({
                                 id: e.id,
-                                ref: e.chequeNo || e.refNo,
+                                ref: e.chequeNo || '',
                                 particulars: e.particulars,
                                 amount: tableTab === 'Withdraw' ? getPaidDisbursementForExpense(e) : e.withdrawal,
                                 status: e.status,
@@ -1493,9 +1492,6 @@ export const ExpensePage: React.FC = () => {
                                                   {expense.company}
                                                 </div>
                                               )}
-                                              <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                                                {expense.refNo || (expense as any).reference_no || '—'}
-                                              </div>
                                             </td>
                                             <td className="px-3 py-2 text-focus/90 font-medium truncate align-top">
                                               {expense.paymentMethod || 'Cash'}
@@ -1686,9 +1682,6 @@ export const ExpensePage: React.FC = () => {
                             {expense.company}
                           </div>
                         )}
-                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                          {expense.refNo || (expense as any).reference_no || '—'}
-                        </div>
                       </TableCell>
 
                       {/* 3. Method */}
@@ -1825,7 +1818,7 @@ export const ExpensePage: React.FC = () => {
       />
 
       {/* Delete Confirmation Dialog */}
-      {!isAdmin && (
+      {canMutateRecord && (
         <ConfirmModal
           open={Boolean(deleteConfirmExpense)}
           onOpenChange={(open) => !open && setDeleteConfirmExpense(null)}
@@ -1847,10 +1840,6 @@ export const ExpensePage: React.FC = () => {
                       {formatPHP(deleteConfirmExpense.withdrawal)}
                     </span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-fg">Ref No:</span>
-                    <span className="font-mono text-focus">{deleteConfirmExpense.refNo}</span>
-                  </div>
                 </div>
               )}
             </>
@@ -1865,7 +1854,7 @@ export const ExpensePage: React.FC = () => {
       )}
 
       {/* Delete Day Confirmation Dialog */}
-      {!isAdmin && (
+      {canMutateRecord && (
         <ConfirmModal
           open={Boolean(deleteConfirmDay)}
           onOpenChange={(open) => !open && setDeleteConfirmDay(null)}
@@ -1898,7 +1887,7 @@ export const ExpensePage: React.FC = () => {
         transaction={selectedTx}
         expense={selectedExpense}
         onExpenseUpdated={handleExpenseUpdated}
-        editable={!isAdmin}
+        editable={canMutateRecord && selectedExpense?.auditStatus !== 'Verified'}
         statusFilter={effectiveParticularsStatusFilter}
       />
 
@@ -1933,6 +1922,52 @@ export const ExpensePage: React.FC = () => {
               <Eye className="w-3.5 h-3.5 text-muted-fg shrink-0" />
               <span>See Details</span>
             </button>
+
+            {canMutateRecord && activeMenuExpense.sourceModule && (
+              <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
+                Recorded from {activeMenuExpense.sourceModule}. Edit or remove it there.
+              </p>
+            )}
+
+            {canMutateRecord && !activeMenuExpense.sourceModule && activeMenuExpense.auditStatus !== 'Verified' && (
+              <>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const exp = activeMenuExpense
+                    setOpenMenuExpenseId(null)
+                    setMenuPosition(null)
+                    setActiveMenuExpense(null)
+                    if (exp) {
+                      navigate('/expense/add', {
+                        state: { editExpense: exp },
+                      })
+                    }
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>Edit</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const exp = activeMenuExpense
+                    setOpenMenuExpenseId(null)
+                    setMenuPosition(null)
+                    setActiveMenuExpense(null)
+                    if (exp) setDeleteConfirmExpense(exp)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>Delete…</span>
+                </button>
+              </>
+            )}
 
             {canAuditActions && (
               <>
@@ -1994,7 +2029,7 @@ export const ExpensePage: React.FC = () => {
               <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
             </button>
 
-            {isCompanyUser && !isOwner && dayMenu.items.some((i) => i.sourceModule) && (
+            {canMutateRecord && dayMenu.items.some((i) => i.sourceModule) && (
               <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
                 {dayMenu.items.every((i) => i.sourceModule) ? 'These records come' : 'Some records come'} from{' '}
                 {Array.from(new Set(dayMenu.items.map((i) => i.sourceModule).filter(Boolean))).join(' / ')}. Edit or
@@ -2002,13 +2037,13 @@ export const ExpensePage: React.FC = () => {
               </p>
             )}
 
-            {isCompanyUser && !isOwner && dayMenu.items.some((i) => !i.sourceModule) && (
+            {canMutateRecord && dayMenu.items.some((i) => !i.sourceModule && i.auditStatus !== 'Verified') && (
               <>
                 <button
                   type="button"
                   onClick={() => {
                     // Records made by Tenants or Lending are changed only on their own page
-                    const target = dayMenu.items.find((i) => !i.sourceModule)
+                    const target = dayMenu.items.find((i) => !i.sourceModule && i.auditStatus !== 'Verified')
                     setDayMenu(null)
                     if (target) {
                       navigate('/expense/add', {
@@ -2025,7 +2060,7 @@ export const ExpensePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const items = dayMenu.items.filter((i) => !i.sourceModule)
+                    const items = dayMenu.items.filter((i) => !i.sourceModule && i.auditStatus !== 'Verified')
                     const date = dayMenu.date
                     setDayMenu(null)
                     if (items && items.length > 0) {

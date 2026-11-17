@@ -82,7 +82,6 @@ class Expense(Base):
     payment_method = Column(String(100), nullable=True)  # e.g. GCash, Cash, Petty Cash, Cheque, etc.
     created_by = Column(Integer, nullable=True)
     expense_date = Column(Date, nullable=False)
-    reference_no = Column(String(100), nullable=True)
     cheque_no = Column("cheque_number", String(100), nullable=True)
     cheque_number = synonym("cheque_no")
     amount = Column(Numeric(15, 2), nullable=False)

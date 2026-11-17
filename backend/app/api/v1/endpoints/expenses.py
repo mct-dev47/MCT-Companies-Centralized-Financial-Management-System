@@ -84,8 +84,8 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             target_amount=target,
             company_name=company_name,
             account_id=expense.bank_account_id,
-            particulars=f"Expense Disbursement: {expense.description}",
-            reference_no=expense.cheque_number or expense.cheque_no or expense.reference_no,
+            particulars=expense.description or "",
+            reference_no=expense.cheque_number or expense.cheque_no,
             tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
             legacy_particulars=expense.description,
         )
@@ -253,7 +253,6 @@ def _build_expenses_query(
         query = query.filter(
             or_(
                 Expense.description.ilike(term),
-                Expense.reference_no.ilike(term),
                 Expense.cheque_no.ilike(term),
                 Expense.payment_method.ilike(term),
             )
@@ -271,8 +270,7 @@ def _expense_to_out(exp: Expense, c_name: Optional[str], cat_name: Optional[str]
         payment_method=exp.payment_method,
         created_by=exp.created_by,
         expense_date=exp.expense_date,
-        reference_no=exp.reference_no,
-        cheque_no=exp.cheque_number or exp.cheque_no or (exp.reference_no if not (exp.reference_no or "").startswith("REF-") else None),
+        cheque_no=exp.cheque_number or exp.cheque_no,
         amount=exp.amount,
         amount_paid=exp.amount_paid or Decimal("0.00"),
         unpaid_balance=exp.amount - (exp.amount_paid or Decimal("0.00")),
@@ -586,7 +584,7 @@ def _enqueue_large_expense_alert_if_enabled(
     expense_id: int,
     amount: Decimal,
     description: str,
-    reference_no: Optional[str],
+    cheque_no: Optional[str] = None,
 ) -> None:
     if amount < LARGE_EXPENSE_THRESHOLD:
         return
@@ -598,7 +596,7 @@ def _enqueue_large_expense_alert_if_enabled(
         if not svc._is_notification_enabled_for_company(company_id, NotificationType.EXPENSE_LARGE_TRANSACTION):
             return
 
-        ref_str = f" (Ref: {reference_no})" if reference_no else ""
+        cheque_str = f" (Cheque: {cheque_no})" if cheque_no else ""
         with db.begin_nested():
             enqueue_notification_event(
                 db=db,
@@ -611,14 +609,14 @@ def _enqueue_large_expense_alert_if_enabled(
                     "amount": float(amount),
                     "title": f"Large Transaction Alert: {company_name}",
                     "message": (
-                        f"An expense of ₱{amount:,.2f} was recorded for {company_name}{ref_str} "
+                        f"An expense of ₱{amount:,.2f} was recorded for {company_name}{cheque_str} "
                         f"— {description}."
                     ),
                     "extra_data": {
                         "amount": float(amount),
                         "company_id": company_id,
                         "company_name": company_name,
-                        "reference_no": reference_no,
+                        "cheque_no": cheque_no,
                     },
                 },
                 idempotency_key=f"{NotificationType.EXPENSE_LARGE_TRANSACTION}:{company_id}:expense:{expense_id}",
@@ -664,7 +662,6 @@ def create_expense(
         raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
-    ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
     effective_bank_id = getattr(expense_in, "bank_account_id", None)
     created_row = None
     sb_expense_id = None
@@ -726,7 +723,6 @@ def create_expense(
             "payment_method": payment_method_str,
             "created_by": creator_id,
             "expense_date": expense_in.expense_date.isoformat(),
-            "reference_no": ref,
             "cheque_number": cheque,
             "amount": float(expense_in.amount),
             "amount_paid": float(expense_in.amount_paid or 0.0),
@@ -770,7 +766,6 @@ def create_expense(
                 payment_method=payment_method_str,
                 created_by=creator_id,
                 expense_date=expense_in.expense_date,
-                reference_no=ref,
                 cheque_no=cheque,
                 cheque_number=cheque,
                 amount=expense_in.amount,
@@ -801,7 +796,7 @@ def create_expense(
             expense_id=sb_expense_id,
             amount=expense_in.amount,
             description=parts,
-            reference_no=ref,
+            cheque_no=cheque,
         )
 
         # Particulars library + audit log don't change the response: do them after it is sent
@@ -817,7 +812,7 @@ def create_expense(
             ip_address=request.client.host if request.client else "unknown",
             record_id=sb_expense_id,
             record_type="expense",
-            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
+            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name},
         )
 
         try:
@@ -842,8 +837,7 @@ def create_expense(
             payment_method=payment_method_str,
             created_by=created_row.get("created_by"),
             expense_date=created_row.get("expense_date"),
-            reference_no=created_row.get("reference_no"),
-            cheque_no=created_row.get("cheque_number") or cheque or (created_row.get("reference_no") if not (created_row.get("reference_no") or "").startswith("REF-") else None),
+            cheque_no=created_row.get("cheque_number") or created_row.get("cheque_no") or cheque,
             amount=created_row.get("amount"),
             amount_paid=created_row.get("amount_paid") or 0.0,
             unpaid_balance=Decimal(str(created_row.get("amount") or 0.0)) - Decimal(str(created_row.get("amount_paid") or 0.0)),
@@ -872,8 +866,7 @@ def create_expense(
                     payment_method=payment_method_str,
                     created_by=created_row.get("created_by"),
                     expense_date=created_row.get("expense_date"),
-                    reference_no=created_row.get("reference_no"),
-                    cheque_no=created_row.get("cheque_number") or cheque or (created_row.get("reference_no") if not (created_row.get("reference_no") or "").startswith("REF-") else None),
+                    cheque_no=created_row.get("cheque_number") or created_row.get("cheque_no") or cheque,
                     amount=created_row.get("amount"),
                     amount_paid=created_row.get("amount_paid") or 0.0,
                     unpaid_balance=Decimal(str(created_row.get("amount") or 0.0)) - Decimal(str(created_row.get("amount_paid") or 0.0)),
@@ -894,22 +887,6 @@ def create_expense(
             check_company_access(current_user, existing.company_id)
             response.status_code = status.HTTP_200_OK
             return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
-
-        # If Supabase timed out or dropped connection right as the insert was committed,
-        # verify if the expense with this reference_no is already present in Supabase
-        if ref:
-            try:
-                client = get_supabase_admin_client()
-                if client:
-                    sb_check = client.table("expenses").select("expense_id, company_id").eq("reference_no", ref).limit(1).execute()
-                    if sb_check.data and len(sb_check.data) > 0:
-                        matched_id = sb_check.data[0]["expense_id"]
-                        matched_cid = sb_check.data[0].get("company_id")
-                        check_company_access(current_user, matched_cid)
-                        response.status_code = status.HTTP_200_OK
-                        return get_expense(expense_id=matched_id, current_user=current_user, db=db)
-            except Exception:
-                pass
 
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)
@@ -932,7 +909,8 @@ def create_expense(
             payment_method=(expense_in.payment_method or "").strip() or None,
             created_by=expense_in.created_by,
             expense_date=expense_in.expense_date,
-            reference_no=ref,
+            cheque_no=cheque,
+            cheque_number=cheque,
             amount=expense_in.amount,
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
@@ -958,7 +936,7 @@ def create_expense(
             expense_id=expense.expense_id,
             amount=expense.amount,
             description=parts,
-            reference_no=ref,
+            cheque_no=cheque,
         )
 
         # Auto-save particulars to company library
@@ -978,7 +956,7 @@ def create_expense(
             user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense.expense_id, record_type="expense",
-            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
+            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name},
         )
 
         try:
@@ -1002,8 +980,7 @@ def create_expense(
             category_name=cat.name if cat else "None",
             created_by=expense.created_by,
             expense_date=expense.expense_date,
-            reference_no=expense.reference_no,
-            cheque_no=expense.cheque_number or expense.cheque_no or cheque or (expense.reference_no if not (expense.reference_no or "").startswith("REF-") else None),
+            cheque_no=expense.cheque_number or expense.cheque_no or cheque,
             amount=expense.amount,
             amount_paid=expense.amount_paid or Decimal("0.00"),
             unpaid_balance=expense.amount - (expense.amount_paid or Decimal("0.00")),
@@ -1038,8 +1015,7 @@ def get_expense(
                 payment_method=row.get("payment_method"),
                 created_by=row.get("created_by"),
                 expense_date=row.get("expense_date"),
-                reference_no=row.get("reference_no"),
-                cheque_no=row.get("cheque_number") or row.get("cheque_no") or (row.get("reference_no") if not (row.get("reference_no") or "").startswith("REF-") else None),
+                cheque_no=row.get("cheque_number") or row.get("cheque_no"),
                 amount=row.get("amount") or 0.0,
                 amount_paid=row.get("amount_paid") or 0.0,
                 unpaid_balance=Decimal(str(row.get("amount") or 0.0)) - Decimal(str(row.get("amount_paid") or 0.0)),
@@ -1079,8 +1055,7 @@ def get_expense(
         payment_method=exp.payment_method,
         created_by=exp.created_by,
         expense_date=exp.expense_date,
-        reference_no=exp.reference_no,
-        cheque_no=exp.cheque_number or exp.cheque_no or (exp.reference_no if not (exp.reference_no or "").startswith("REF-") else None),
+        cheque_no=exp.cheque_number or exp.cheque_no,
         amount=exp.amount,
         amount_paid=exp.amount_paid or Decimal("0.00"),
         unpaid_balance=exp.amount - (exp.amount_paid or Decimal("0.00")),
@@ -1143,10 +1118,6 @@ def update_expense(
     if cheque is not None:
         chq_val = cheque.strip() if cheque.strip() else None
         update_payload["cheque_number"] = chq_val
-        if chq_val:
-            update_payload["reference_no"] = chq_val
-    elif expense_in.reference_no is not None:
-        update_payload["reference_no"] = expense_in.reference_no.strip() if expense_in.reference_no.strip() else None
     if expense_in.remarks is not None:
         update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
@@ -1198,8 +1169,6 @@ def update_expense(
             expense.amount_paid = expense_in.amount_paid
         if "description" in update_payload:
             expense.description = update_payload["description"]
-        if "reference_no" in update_payload:
-            expense.reference_no = update_payload["reference_no"]
         if "cheque_number" in update_payload:
             expense.cheque_number = update_payload["cheque_number"]
             expense.cheque_no = update_payload["cheque_number"]
@@ -1259,8 +1228,7 @@ def update_expense(
             payment_method=updated_row.get("payment_method"),
             created_by=updated_row.get("created_by"),
             expense_date=updated_row.get("expense_date"),
-            reference_no=updated_row.get("reference_no"),
-            cheque_no=updated_row.get("cheque_number") or cheque or (updated_row.get("reference_no") if not (updated_row.get("reference_no") or "").startswith("REF-") else None),
+            cheque_no=updated_row.get("cheque_number") or updated_row.get("cheque_no") or cheque,
             amount=updated_row.get("amount"),
             amount_paid=updated_row.get("amount_paid") or 0.0,
             unpaid_balance=Decimal(str(updated_row.get("amount") or 0.0)) - Decimal(str(updated_row.get("amount_paid") or 0.0)),
@@ -1307,8 +1275,7 @@ def update_expense(
         payment_method=expense.payment_method,
         created_by=expense.created_by,
         expense_date=expense.expense_date,
-        reference_no=expense.reference_no,
-        cheque_no=expense.cheque_number or expense.cheque_no or (expense.reference_no if not (expense.reference_no or "").startswith("REF-") else None),
+        cheque_no=expense.cheque_number or expense.cheque_no,
         amount=expense.amount,
         amount_paid=expense.amount_paid or Decimal("0.00"),
         unpaid_balance=expense.amount - (expense.amount_paid or Decimal("0.00")),
