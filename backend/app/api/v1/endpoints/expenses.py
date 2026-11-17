@@ -14,7 +14,6 @@ from app.schemas.expense import ExpenseCreate, ExpenseOut, ExpenseUpdate, DailyE
 from app.schemas.audit_review import AuditReviewIn, audit_fields
 from app.services.audit_review_service import apply_audit_review
 from app.services.audit_service import AuditAction, log_transaction
-from app.services.petty_cash_service import PettyCashService
 from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
 from app.api.v1.endpoints.particulars import extract_particular_names, save_company_particular_if_not_exists
 from app.core.post_save import rest_and_orm_share_database, schedule_created_side_effects
@@ -176,7 +175,7 @@ def get_expenses(
     if not hasattr(pagination, "offset"):
         pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -216,7 +215,7 @@ def get_expenses(
         res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
         rows = res.data or []
 
-        return [
+        return _with_sources(db, [
             ExpenseOut(
                 expense_id=row["expense_id"],
                 company_id=row.get("company_id"),
@@ -239,7 +238,7 @@ def get_expenses(
                 **audit_fields(row)
             )
             for row in rows
-        ]
+        ])
     except HTTPException:
         raise
     except Exception as e:
@@ -282,7 +281,7 @@ def get_expenses(
 
         rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
 
-        return [
+        return _with_sources(db, [
             ExpenseOut(
                 expense_id=exp.expense_id,
                 company_id=exp.company_id,
@@ -305,7 +304,17 @@ def get_expenses(
                 **audit_fields(exp)
             )
             for exp, c_name, cat_name in rows
-        ]
+        ])
+
+
+def _with_sources(db: Session, outs: List[ExpenseOut]) -> List[ExpenseOut]:
+    """Mark expenses that Lending created, so the Expenses page shows them read-only."""
+    from app.services.income_bank_links import expense_sources
+
+    sources = expense_sources(db, [o.expense_id for o in outs])
+    for o in outs:
+        o.source_module = sources.get(o.expense_id)
+    return outs
 
 
 def _to_date(val) -> Optional[date]:
@@ -354,7 +363,7 @@ def get_expenses_daily_summary(
     if not hasattr(pagination, "offset"):
         pagination = PaginationParams()
     user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "finance", "auditor") or bool(current_user.get("is_admin"))
+    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -620,8 +629,8 @@ def create_expense(
 
         check_company_access(current_user, target_company_id)
 
-        # Petty cash expenses are paid from the company's petty cash wallet, not sales
-        PettyCashService(db).ensure_sufficient_balance(target_company_id, expense_in.payment_method, expense_in.amount)
+        # Petty cash expenses are paid from the company's petty cash wallet, not sales. The wallet may
+        # go negative (a supervisor can pay from her own pocket); the form warns before saving.
 
         # 2. Resolve Category in Supabase
         resolved_category_id = expense_in.category_id
@@ -812,8 +821,6 @@ def create_expense(
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)
         check_company_access(current_user, target_company.company_id)
 
-        PettyCashService(db).ensure_sufficient_balance(target_company.company_id, expense_in.payment_method, expense_in.amount)
-
         if _is_petty_cash_payment(expense_in.payment_method):
             effective_bank_id = None
         elif not effective_bank_id and target_company.company_name:
@@ -1000,6 +1007,8 @@ def update_expense(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_expense
+    assert_not_linked_expense(db, expense_id)
 
     target_amt = expense_in.amount if expense_in.amount is not None else expense_in.withdrawal
     if target_amt is not None and target_amt < Decimal("1.00"):
@@ -1022,14 +1031,7 @@ def update_expense(
         expense_in.category = PETTY_CASH_CATEGORY
         expense_in.category_id = None
 
-    # Re-check the petty cash wallet with this expense's old amount added back
-    if current:
-        PettyCashService(db).ensure_sufficient_balance(
-            current.get("company_id"),
-            expense_in.payment_method if expense_in.payment_method is not None else current.get("payment_method"),
-            target_amt if target_amt is not None else current.get("amount"),
-            exclude_expense_id=expense_id,
-        )
+    # No petty cash balance block on edit either: the wallet may go negative (paid out of pocket).
 
     update_payload = {}
     if expense_in.expense_date:
@@ -1320,6 +1322,8 @@ def delete_expense(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_expense
+    assert_not_linked_expense(db, expense_id)
 
     deleted_from_supabase = False
     deleted_company_id = None

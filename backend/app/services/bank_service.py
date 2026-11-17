@@ -676,6 +676,78 @@ class BankService:
             self.db.refresh(tx)
         return tx
 
+    def patch_linked_entry(
+        self,
+        *,
+        link_attr: str,
+        link_id: int,
+        credit: bool,
+        amount: Decimal,
+        account_id: Optional[str],
+        particulars: str,
+        reference_no: Optional[str],
+        tx_date: Optional[str],
+        company_name: Optional[str] = None,
+    ) -> Optional[BankTransaction]:
+        """
+        Keep ONE bank entry for a record and edit it to match: amount, bank, date, text. Used for records
+        that are still editable (not yet Verified), so a correction from 3,000 to 2,000 shows as a single
+        2,000 entry instead of the original plus a reversal. Any extra entries the record built up are
+        removed. Balances are re-derived from the entries of every account touched.
+        """
+        if link_attr not in ("source_sale_id", "source_expense_id"):
+            raise ValueError("Unsupported link attribute.")
+        amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
+        linked = (
+            self.db.query(BankTransaction)
+            .filter(getattr(BankTransaction, link_attr) == link_id)
+            .order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc())
+            .all()
+        )
+        account = self._get_account_for_update(account_id) if account_id else None
+        touched = {t.bank_account_id for t in linked}
+
+        if account is None or amount <= Decimal("0.00"):
+            for t in linked:
+                self.db.delete(t)
+            keep = None
+        elif linked:
+            keep, extras = linked[0], linked[1:]
+            for t in extras:
+                self.db.delete(t)
+            keep.bank_account_id = account.id
+            keep.company_name = self.resolve_tx_company(account, company_name)
+            keep.deposit = amount if credit else Decimal("0.00")
+            keep.withdrawal = Decimal("0.00") if credit else amount
+            keep.net_amount = amount
+            keep.particulars = particulars
+            keep.cheque_no = reference_no
+            if tx_date:
+                keep.transaction_date = tx_date
+        else:
+            keep = self._post_linked_entry(
+                account,
+                link_attr=link_attr,
+                link_id=link_id,
+                is_deposit=credit,
+                amount=amount,
+                particulars=particulars,
+                reference_no=reference_no,
+                tx_date=tx_date,
+                company_name=company_name,
+            )
+        if account is not None:
+            touched.add(account.id)
+        self.db.flush()
+        for acc_id in touched:
+            acc = self._get_account_for_update(acc_id)
+            if acc is not None:
+                self._sync_balance(acc)
+        self.db.commit()
+        if keep is not None:
+            self.db.refresh(keep)
+        return keep
+
     def purge_linked_entries(self, *, link_attr: str, link_id: int) -> int:
         """
         Delete every bank entry linked to a deleted sale/expense (`source_sale_id` / `source_expense_id`).

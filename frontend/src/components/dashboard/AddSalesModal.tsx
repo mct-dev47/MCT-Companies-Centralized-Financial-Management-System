@@ -288,7 +288,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
 
     if (paymentOption !== 'Paid in full') {
       if (!customerName.trim()) {
-        errors.customerName = 'Customer or staff name is required for credit / utang sales.'
+        errors.customerName = 'Customer or staff name is required for credit sales.'
       }
       if (paymentOption === 'Partial') {
         const parsedPaid = parseFloat(amountPaid)
@@ -595,7 +595,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                   Payment Option <span className="text-red-500">*</span>
                 </Label>
                 <span className="text-[11px] text-muted-fg font-medium">
-                  {paymentOption === 'Paid in full' ? 'Cash collected in full' : paymentOption === 'Partial' ? 'Partial down payment' : 'Utang (Pay later)'}
+                  {paymentOption === 'Paid in full' ? 'Cash collected in full' : paymentOption === 'Partial' ? 'Partial down payment' : 'Credit (Pay later)'}
                 </span>
               </div>
 
@@ -694,7 +694,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
                       </div>
 
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200 text-xs">
-                        <span className="text-muted-fg block text-[10px]">Remaining Utang:</span>
+                        <span className="text-muted-fg block text-[10px]">Remaining Balance:</span>
                         <span className="text-sm font-bold text-rose-600">
                           {formatPHP(Math.max(0, (parseFloat(amount) || 0) - (parseFloat(amountPaid) || 0)))}
                         </span>
@@ -704,7 +704,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
 
                   {paymentOption === 'Pay Later' && (
                     <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium">
-                      Entire amount of {formatPHP(parseFloat(amount) || 0)} will be added as outstanding utang for {customerName || 'customer'}.
+                      Entire amount of {formatPHP(parseFloat(amount) || 0)} will be added as outstanding receivable for {customerName || 'customer'}.
                     </div>
                   )}
                 </div>

@@ -49,7 +49,20 @@ from app.core.dependencies import (
 )
 from app.core.company_resolver import resolve_company, normalize_company_id
 from app.core.pagination import PaginationParams
-from app.core.cache import get_cached, set_cached
+from app.core.cache import get_cached, set_cached, system_cache
+
+
+def _local_category_id(db: Session, name: str) -> Optional[int]:
+    """Local category id for a name (created when missing), for the local-database paths."""
+    cleaned = (name or "").strip()
+    if not cleaned or cleaned.lower() == "none":
+        return None
+    cat = db.query(Category).filter(func.lower(Category.name) == cleaned.lower()).first()
+    if cat is None:
+        cat = Category(name=cleaned)
+        db.add(cat)
+        db.flush()
+    return cat.category_id
 
 
 def reconcile_sale_bank(
@@ -82,6 +95,11 @@ def _with_paid_amounts(db: Session, outs: List[SaleOut]) -> List[SaleOut]:
             o.paid_amount = paid.get(o.sales_id)
     except Exception as e:
         print(f"Paid amount computation skipped: {e}")
+    from app.services.income_bank_links import sale_sources
+
+    sources = sale_sources(db, [o.sales_id for o in outs])
+    for o in outs:
+        o.source_module = sources.get(o.sales_id)
     return outs
 
 
@@ -145,7 +163,7 @@ def get_sales(
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
 
-    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -329,7 +347,7 @@ def get_sales_daily_summary(
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
 
-    is_privileged = (current_user.get("role") or "").lower() in ("finance", "audit", "auditor")
+    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
@@ -761,7 +779,7 @@ def create_sale(
 
         sale = Sale(
             company_id=target_company.company_id,
-            category_id=sale_in.category_id,
+            category_id=sale_in.category_id or _local_category_id(db, sale_in.category or ""),
             payment_method=(sale_in.payment_method or "").strip() or None,
             payment_status=sale_in.payment_status or "Paid",
             deposit_status=sale_in.deposit_status or "Not Deposited",
@@ -781,6 +799,8 @@ def create_sale(
         db.add(sale)
         db.commit()
         db.refresh(sale)
+        system_cache.invalidate_tag("dashboard")
+        system_cache.invalidate_tag("sales")
 
         # Credit the bank only while the sale is Deposited (matches the Transactions ledger)
         reconcile_sale_bank(
@@ -807,6 +827,8 @@ def create_sale(
         except Exception:
             pass
 
+        cat = db.query(Category).filter(Category.category_id == sale.category_id).first() if sale.category_id else None
+
         actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
         log_transaction(
             db, AuditAction.SALE_CREATED,
@@ -827,7 +849,7 @@ def create_sale(
             company_id=sale.company_id,
             company_name=target_company.company_name,
             category_id=sale.category_id,
-            category_name="None",
+            category_name=cat.name if cat else "None",
             payment_method=sale.payment_method,
             payment_status=sale.payment_status or "Paid",
             deposit_status=sale.deposit_status or "Not Deposited",
@@ -926,6 +948,8 @@ def update_sale(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     if sale_in.amount is not None and sale_in.amount < 1.00:
         raise HTTPException(status_code=422, detail="Amount must be at least 1.00 (cannot be 0 or less than 1).")
 
@@ -1090,6 +1114,16 @@ def update_sale(
     if sale_in.remarks is not None:
         update_payload["remarks"] = sale_in.remarks.strip() if sale_in.remarks else None
 
+    # A newly chosen bank is saved on the sale (it used to be dropped, so an edit fell back to the old bank).
+    # It must belong to, or be shared with, the sale's company.
+    new_bank_id = (sale_in.bank_account_id or "").strip() or None
+    if new_bank_id:
+        from app.services.income_bank_links import validate_company_bank
+
+        if existing_company_id:
+            validate_company_bank(db, int(existing_company_id), new_bank_id)
+        update_payload["bank_account_id"] = new_bank_id
+
     # Update in Supabase
     updated_row = None
     if use_sb:
@@ -1154,6 +1188,8 @@ def update_sale(
             sale.deposit_date = date.fromisoformat(dd) if dd else None
         if "remarks" in update_payload:
             sale.remarks = update_payload["remarks"]
+        if "bank_account_id" in update_payload:
+            sale.bank_account_id = update_payload["bank_account_id"]
         db.commit()
         db.refresh(sale)
 
@@ -1204,7 +1240,7 @@ def update_sale(
     reconcile_sale_bank(
         db,
         sale_id=sales_id,
-        bank_account_id=getattr(sale_in, "bank_account_id", None),
+        bank_account_id=new_bank_id,
         reference_no=new_cheque_no or None,
         legacy_particulars=old_particulars,
     )
@@ -1289,6 +1325,8 @@ def update_sale_deposit_status(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     target_deposit_status = deposit_in.deposit_status
 
     existing_company_id = None
@@ -1527,6 +1565,8 @@ def delete_sale(
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    from app.services.income_bank_links import assert_not_linked_sale
+    assert_not_linked_sale(db, sales_id)
     deleted_from_supabase = False
     deleted_company_id = None
     deleted_tx_date = None

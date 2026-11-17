@@ -223,9 +223,6 @@ export function getSidebarNavSections(
       operationsItems.push(NAV_ITEM_LENDING)
     } else if (isJK) {
       operationsItems.push(NAV_ITEM_TENANTS)
-    } else {
-      // General view (All Companies or unselected overview)
-      operationsItems.push(NAV_ITEM_TENANTS, NAV_ITEM_LENDING)
     }
   } else {
     // Filcap (Lending) and JK do not have the Sales page per business specifications

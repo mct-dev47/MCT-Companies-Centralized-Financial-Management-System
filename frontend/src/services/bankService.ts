@@ -124,6 +124,7 @@ if (typeof window !== 'undefined') {
 if (typeof window !== 'undefined') {
   const bankEvents: SyncEventType[] = [
     'BANK_UPDATED',
+    'COMPANY_UPDATED' as any,
     'TRANSACTION_UPDATED',
     'EXPENSE_CREATED',
     'EXPENSE_UPDATED',

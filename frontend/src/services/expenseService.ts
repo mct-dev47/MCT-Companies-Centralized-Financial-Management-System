@@ -56,6 +56,8 @@ export interface ExpenseItem {
   bankAccountId?: string
   bankName?: string
   remarks?: string
+  /** 'Tenants' | 'Lending' when that page created this record; it is read-only everywhere else. */
+  sourceModule?: string
 }
 
 export interface DailyExpenseSummaryOut {
@@ -153,6 +155,7 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     bankAccountId: exp.bank_account_id || exp.bankAccountId || undefined,
     bankName: exp.bank_name || exp.bankName || undefined,
     remarks: exp.remarks || undefined,
+    sourceModule: exp.source_module || undefined,
     createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
     createdAt: exp.created_at || new Date().toISOString(),
     updatedAt: exp.updated_at || undefined,

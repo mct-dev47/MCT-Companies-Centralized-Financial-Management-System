@@ -38,10 +38,12 @@ import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatRealName } from '@/utils/formatRealName'
 import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
-import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import { loanService } from '@/services/loanService'
 import {
   pettyCashService,
+  PETTY_CASH_FUNDING,
+  PETTY_CASH_FUNDING_LABEL,
   type PettyCashLedgerEntry,
   type PettyCashCategory,
   type EligibleExpense,
@@ -381,20 +383,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     if (justOpened || compChanged) {
       banksAutoSelectedRef.current = false
       prevBankCompanyRef.current = requestingCompany
-      if (effectiveBankAccounts.length === 0) {
-        setFundingBankId('')
-      }
     }
 
-    if (effectiveBankAccounts.length > 0 && requestingCompany && !banksAutoSelectedRef.current) {
-      const ownAccount = preferSoleOwnedBanks(
-        effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)),
-        requestingCompany
-      )[0]
-      setFundingBankId(ownAccount ? ownAccount.id : '')
+    // Default: pay the reimbursement out of the requesting company's own petty cash.
+    if (requestingCompany && !banksAutoSelectedRef.current) {
+      setFundingBankId(PETTY_CASH_FUNDING)
       banksAutoSelectedRef.current = true
     }
-  }, [open, isFinance, requestingCompany, effectiveBankAccounts])
+  }, [open, isFinance, requestingCompany])
 
   // Close combobox / eligible-expense dropdown when clicking outside
   React.useEffect(() => {
@@ -684,29 +680,16 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         )
       )
     } catch (err: any) {
-      // Fallback: convert file to local data URL so submission isn't broken
-      try {
-        const reader = new FileReader()
-        reader.onload = (e) => {
-          const dataUrl = e.target?.result as string
-          setAttachments((prev) =>
-            prev.map((att) =>
-              att.id === item.id
-                ? { ...att, status: 'uploaded', url: dataUrl, error: undefined }
-                : att
-            )
-          )
-        }
-        reader.readAsDataURL(item.file)
-      } catch {
-        setAttachments((prev) =>
-          prev.map((att) =>
-            att.id === item.id
-              ? { ...att, status: 'failed', error: 'Upload failed. Click retry or remove.' }
-              : att
-          )
+      // Receipts only ever go to the storage bucket. (This used to fall back to an inline base64
+      // copy, which is how receipt files ended up saved in the database.) Show why, and let them retry.
+      const reason = err instanceof Error && err.message ? err.message : 'Upload failed.'
+      setAttachments((prev) =>
+        prev.map((att) =>
+          att.id === item.id
+            ? { ...att, status: 'failed', error: `${reason} Click retry or remove.` }
+            : att
         )
-      }
+      )
     }
   }
 
@@ -840,6 +823,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setGeneralError('Please wait for files to finish uploading before submitting.')
       return
     }
+    // A failed upload is never sent (it would just vanish from the request), so ask to fix it first
+    if (attachments.some((att) => att.status === 'failed')) {
+      setGeneralError('A receipt did not upload. Retry it or remove it before submitting.')
+      return
+    }
 
     const parsedCompanyFunded = parseFloat(companyFundedAmount)
     const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
@@ -882,9 +870,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     const selectedBankForSubmit = ownCompanyBanksForSubmit.find(
       (acc) => String(acc.id) === String(fundingBankId)
     )
+    const isPettyCashFunding = fundingBankId === PETTY_CASH_FUNDING
 
     if (isFinance && !isZeroExcessSubmit) {
-      if (!fundingBankId || !selectedBankForSubmit) {
+      if (!fundingBankId || (!selectedBankForSubmit && !isPettyCashFunding)) {
         errors.fundingBank = requestingCompany
           ? `Please choose a funding bank account belonging to ${requestingCompany} before submitting to Internal Audit.`
           : 'Please choose a funding bank account before submitting to Internal Audit.'
@@ -975,10 +964,14 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         employeeOutOfPocket: netOutOfPocket,
         existingExpenseId: parsedExpenseId || undefined,
         fundingBankId: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
-        fundingBankName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.bankName : undefined,
+        fundingBankName: !isZeroExcessSubmit && isFinance
+          ? (isPettyCashFunding ? PETTY_CASH_FUNDING_LABEL : selectedBankForSubmit?.bankName)
+          : undefined,
         fundingAccountName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.accountName : undefined,
-        fundingCompanyName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.companyName : undefined,
-        isOwnAccount: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? true : undefined,
+        fundingCompanyName: !isZeroExcessSubmit && isFinance
+          ? (isPettyCashFunding ? requestingCompany : selectedBankForSubmit?.companyName)
+          : undefined,
+        isOwnAccount: !isZeroExcessSubmit && isFinance && (selectedBankForSubmit || isPettyCashFunding) ? true : undefined,
         financeRemark: !isZeroExcessSubmit && isFinance && remarks.trim() ? remarks.trim() : undefined,
         amountIn: 0,
         amountOut: isZeroExcessSubmit && !parsedExpenseId ? roundedCompanyFunded : 0,
@@ -1565,13 +1558,19 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                             }
                           }}
                           placeholder="Choose the bank that funds this reimbursement..."
-                          options={(requestingCompany
-                            ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
-                            : effectiveBankAccounts
-                          ).map((acc) => ({
-                            value: acc.id,
-                            label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
-                          }))}
+                          options={[
+                            {
+                              value: PETTY_CASH_FUNDING,
+                              label: `${PETTY_CASH_FUNDING_LABEL}${requestingCompany ? ` [${requestingCompany}]` : ''}`,
+                            },
+                            ...(requestingCompany
+                              ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
+                              : effectiveBankAccounts
+                            ).map((acc) => ({
+                              value: acc.id,
+                              label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
+                            })),
+                          ]}
                           error={fieldErrors.fundingBank}
                           aria-label="Funding Bank"
                         />
@@ -1579,13 +1578,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                       </div>
                     )}
                     <FormFieldError error={fieldErrors.fundingBank} />
-                    {!effectiveBanksLoading && !effectiveBanksError && (requestingCompany ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany)).length === 0 : effectiveBankAccounts.length === 0) && (
-                      <p className="text-[11px] text-amber-700 font-medium">
-                        {requestingCompany
-                          ? `No bank accounts registered for ${requestingCompany}. Add a bank account for this company before endorsing with reimbursement.`
-                          : 'No bank accounts found. Add a bank account before endorsing with reimbursement.'}
-                      </p>
-                    )}
                   </div>
                 </div>
               )}

@@ -475,7 +475,7 @@ export const PersonLedgerDrawer: React.FC<PersonLedgerDrawerProps> = ({
 
           <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 text-left">
             <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
-              Outstanding Utang
+              Outstanding Balance
             </span>
             <span className="text-sm sm:text-base font-bold text-amber-950 mt-0.5 block tabular-nums">
               {formatPHP(person.total_owed)}

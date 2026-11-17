@@ -54,10 +54,14 @@ export function useBankFilter(company: string, options?: { includePettyCash?: bo
     const unsubBank = websocketService.subscribe('BANK_UPDATED', () => {
       loadAccounts(true)
     })
+    const unsubCompany = websocketService.subscribe('COMPANY_UPDATED' as any, () => {
+      loadAccounts(true)
+    })
 
     return () => {
       mounted = false
       unsubBank()
+      unsubCompany()
     }
   }, [userId, userScopeKey])
 
@@ -155,7 +159,7 @@ export const BankFilterSelect: React.FC<BankFilterSelectProps> = ({
         searchable={accounts.length > 5}
         searchPlaceholder="Search banks..."
         className="w-full"
-        triggerClassName="w-full rounded-full px-4 min-h-[44px] h-11 justify-between"
+        triggerClassName="w-full rounded-[10px] px-4 min-h-[44px] h-11 justify-between"
       />
     </div>
   )

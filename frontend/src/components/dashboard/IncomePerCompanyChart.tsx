@@ -29,31 +29,13 @@ interface IncomePerCompanyChartProps {
   data?: CompanyIncome[]
 }
 
-const DEFAULT_COMPANY_INCOME: CompanyIncome[] = [
-  { rank: 1, company: 'MCT Kitchen', score: 9, amount: 980000, color: '#4338CA' },
-  { rank: 2, company: 'MCT Hotel', score: 8, amount: 850000, color: '#0D9488' },
-  { rank: 3, company: 'JK Cafe', score: 7, amount: 720000, color: '#D97706' },
-  { rank: 4, company: 'Annex Nine', score: 6, amount: 610000, color: '#E11D48' },
-  { rank: 5, company: 'Merillon', score: 5, amount: 530000, color: '#0284C7' },
-  { rank: 6, company: 'JK Printing', score: 4, amount: 440000, color: '#9333EA' },
-]
-
-const DEFAULT_COMPANY_DEPARTMENT_INCOME: CompanyIncome[] = [
-  { rank: 1, company: 'Dine-In Operations', score: 9, amount: 380000, color: '#4338CA' },
-  { rank: 2, company: 'Catering & Banquet', score: 8, amount: 280000, color: '#0D9488' },
-  { rank: 3, company: 'Commissary Supply', score: 7, amount: 150000, color: '#D97706' },
-  { rank: 4, company: 'Takeout & Delivery', score: 6, amount: 95000, color: '#E11D48' },
-  { rank: 5, company: 'Bar & Beverage', score: 5, amount: 50000, color: '#0284C7' },
-  { rank: 6, company: 'Special Events', score: 4, amount: 25000, color: '#9333EA' },
-]
-
 export const IncomePerCompanyChart: React.FC<IncomePerCompanyChartProps> = ({
   className,
   companyName,
-  data,
+  data = [],
 }) => {
   const isSingleCompany = Boolean(companyName && companyName !== 'All Companies')
-  const chartData = data ?? (isSingleCompany ? DEFAULT_COMPANY_DEPARTMENT_INCOME : DEFAULT_COMPANY_INCOME)
+  const chartData = data
   const maxDomain = isSingleCompany ? 400000 : 1000000
   const ticks = isSingleCompany
     ? [0, 100000, 200000, 300000, 400000]
@@ -157,14 +139,14 @@ export const IncomePerCompanyChart: React.FC<IncomePerCompanyChartProps> = ({
         </ResponsiveContainer>
       </div>
 
-      {/* 3. Insight Footer matching reference */}
+      {/* 3. Insight Footer */}
       <div className="pt-3 mt-1 border-t border-slate-100 flex items-center justify-between text-2xs sm:text-xs text-muted-fg font-normal">
         <span>
-          {isSingleCompany
-            ? `Top stream: Dine-In Operations with highest share (₱380k).`
-            : 'Top contributor: MCT Kitchen with highest revenue share (₱980k).'}
+          {chartData.length > 0
+            ? `Top: ${chartData[0]?.company} (${formatPHP(chartData[0]?.amount || 0)}).`
+            : 'No income recorded for this period.'}
         </span>
-        <span className="font-medium text-emerald-700">Active Growth</span>
+        <span className="font-medium text-emerald-700">Verified</span>
       </div>
     </Card>
   )

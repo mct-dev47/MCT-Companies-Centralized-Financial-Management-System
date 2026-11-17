@@ -24,18 +24,8 @@ interface WeeklySalesChartProps {
   className?: string
 }
 
-const DEFAULT_WEEKLY_DATA: DailySale[] = [
-  { day: 'Monday', shortDay: 'Mon', amount: 300000 },
-  { day: 'Tuesday', shortDay: 'Tue', amount: 430000 },
-  { day: 'Wednesday', shortDay: 'Wed', amount: 180000 },
-  { day: 'Thursday', shortDay: 'Thu', amount: 260000 },
-  { day: 'Friday', shortDay: 'Fri', amount: 320000 },
-  { day: 'Saturday', shortDay: 'Sat', amount: 270000 },
-  { day: 'Sunday', shortDay: 'Sun', amount: 140000 },
-]
-
 export const WeeklySalesChart: React.FC<WeeklySalesChartProps> = ({
-  data = DEFAULT_WEEKLY_DATA,
+  data = [],
   className,
 }) => {
   return (

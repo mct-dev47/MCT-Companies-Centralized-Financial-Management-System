@@ -14,6 +14,7 @@ export type SyncEventType =
   | 'BANK_UPDATED'
   | 'AUDIT_UPDATED'
   | 'TENANTS_UPDATED'
+  | 'LENDING_UPDATED'
   | 'RECEIVABLES_UPDATED'
   | 'SALES_UPDATED'
   | 'EXPENSE_CREATED'
@@ -110,6 +111,11 @@ class WebSocketService {
       if (isLocalhost) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
         wsUrl = `${protocol}//${window.location.host}/ws`
+      } else if (
+        window.location.hostname.includes('swart') ||
+        window.location.hostname.includes('dev')
+      ) {
+        wsUrl = 'wss://mct-companies-centralized-financial-lwnr.onrender.com/ws'
       } else {
         wsUrl = 'wss://mct-companies-centralized-financial.onrender.com/ws'
       }

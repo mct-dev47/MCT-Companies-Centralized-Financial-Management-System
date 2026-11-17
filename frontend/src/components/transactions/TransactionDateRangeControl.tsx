@@ -198,14 +198,14 @@ export const TransactionDateRangeControl: React.FC<TransactionDateRangeControlPr
         aria-haspopup="dialog"
         aria-label={`Filter by date range: ${triggerLabel}`}
         className={cn(
-          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-full border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+          'inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
           fullWidth && 'w-full justify-between',
           isActive ? 'border-primary/50 bg-primary/5 text-focus' : 'border-stroke/60',
           isOpen && 'ring-2 ring-focus/20 border-focus/50'
         )}
       >
         <span className={cn('inline-flex items-center gap-2 min-w-0', fullWidth && 'flex-1 text-left')}>
-          <CalendarIcon className={cn('h-4 w-4 shrink-0', isActive ? 'text-primary' : 'text-muted-fg')} />
+          <CalendarIcon className={cn('h-4 w-4 shrink-0', isActive ? 'text-focus' : 'text-muted-fg')} />
           <span className={cn('font-semibold text-focus truncate', fullWidth ? 'w-full' : 'max-w-[190px]')}>{triggerLabel}</span>
         </span>
         <ChevronDown

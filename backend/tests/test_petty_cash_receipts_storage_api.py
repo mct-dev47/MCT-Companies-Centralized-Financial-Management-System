@@ -157,7 +157,25 @@ def test_upload_returns_502_instead_of_base64_when_bucket_upload_fails(env):
     assert "data:" not in res.text
 
 
-def test_upload_falls_back_to_data_url_when_storage_is_not_configured(env, monkeypatch):
+def test_upload_explains_when_the_bucket_refuses_the_file_type(env):
+    # Exactly what Supabase answers when the bucket's allowed types exclude PDF
+    def refuse(path, data, options=None):
+        raise RuntimeError("{'statusCode': 415, 'error': invalid_mime_type, "
+                           "'message': mime type application/pdf is not supported}")
+
+    env["bucket"].upload = refuse
+    res = env["client"].post(
+        "/api/v1/petty-cash/receipts",
+        files={"file": ("or.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")},
+    )
+
+    assert res.status_code == 415
+    assert "does not accept PDF files" in res.json()["detail"]
+    assert "data:" not in res.text
+
+
+def test_upload_refuses_instead_of_returning_base64_when_storage_is_not_configured(env, monkeypatch):
+    # No inline base64 fallback: that is how receipt bytes used to end up in the database
     monkeypatch.setattr(env["endpoint_module"], "get_supabase_admin_client", lambda: None)
 
     res = env["client"].post(
@@ -165,9 +183,8 @@ def test_upload_falls_back_to_data_url_when_storage_is_not_configured(env, monke
         files={"file": ("or.png", PNG, "image/png")},
     )
 
-    assert res.status_code == 200
-    assert res.json()["url"].startswith("data:image/png;base64,")
-    assert res.json()["storage_path"] is None
+    assert res.status_code == 503
+    assert "data:" not in res.text
     assert env["bucket"].files == {}
 
 
@@ -243,14 +260,57 @@ def test_create_with_legacy_data_url_moves_bytes_into_bucket(env):
     assert row.receipt_url == rs.storage_ref(path)
 
 
-def test_create_keeps_inline_copy_when_bucket_is_down_so_receipt_is_not_lost(env):
+def test_create_refuses_to_store_base64_when_bucket_is_down(env):
+    # The request is rejected with a clear error; no row is saved and no base64 reaches the database
     env["bucket"].fail_uploads = True
     attachments = json.dumps([{"file_url": PNG_DATA_URL, "file_name": "or.png"}])
 
-    topup_id = _create_topup(env["client"], env["company"].company_id, attachments=attachments)
+    res = env["client"].post("/api/v1/petty-cash/topups", json={
+        "company_id": env["company"].company_id, "amount": 1500.00, "topup_date": "2026-11-12",
+        "description": "Receipt storage test", "request_type": "topup", "attachments": attachments,
+    })
+
+    assert res.status_code == 502
+    assert "could not be saved to storage" in res.json()["detail"]
+    env["db"].expire_all()
+    assert env["db"].query(PettyCashTopUp).count() == 0
+
+
+def test_create_with_base64_receipt_stores_only_the_bucket_path(env):
+    attachments = json.dumps([{"file_url": PNG_DATA_URL, "file_name": "or.png"}])
+
+    topup_id = _create_topup(env["client"], env["company"].company_id,
+                             attachments=attachments, receipt_url=PNG_DATA_URL)
 
     row = _stored_row(env["db"], topup_id)
-    assert json.loads(row.attachments)[0]["file_url"] == PNG_DATA_URL
+    assert "base64" not in (row.attachments or "") and "base64" not in (row.receipt_url or "")
+    path = json.loads(row.attachments)[0]["storage_path"]
+    assert path in env["bucket"].files
+    assert row.receipt_url == f"storage://receipts/{path}"  # the same file, not uploaded twice
+    assert len(env["bucket"].files) == 1
+
+
+def test_one_failed_file_removes_the_files_already_uploaded_in_that_save(env):
+    calls = {"n": 0}
+    original = env["bucket"].upload
+
+    def fail_on_second(path, data, options=None):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("storage unavailable")
+        return original(path, data, options)
+
+    env["bucket"].upload = fail_on_second
+    attachments = json.dumps([{"file_url": PNG_DATA_URL, "file_name": "a.png"},
+                              {"file_url": PNG_DATA_URL, "file_name": "b.png"}])
+    res = env["client"].post("/api/v1/petty-cash/topups", json={
+        "company_id": env["company"].company_id, "amount": 1500.00, "topup_date": "2026-11-12",
+        "description": "Receipt storage test", "request_type": "topup", "attachments": attachments,
+    })
+
+    assert res.status_code == 502
+    first_path = next(iter(env["bucket"].files))
+    assert env["bucket"].removed == [first_path]  # the orphan from file 1 was cleaned up
 
 
 def test_create_without_receipts_stores_nothing(env):

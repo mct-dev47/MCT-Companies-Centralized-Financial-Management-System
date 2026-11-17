@@ -38,6 +38,8 @@ import {
   AlertTriangle,
   Lock,
   HelpCircle,
+  Pencil,
+  Loader2,
 } from 'lucide-react'
 import {
   Dialog,
@@ -228,6 +230,7 @@ export const ReceivablesPage: React.FC = () => {
   const [editingPerson, setEditingPerson] = React.useState<PersonLedgerSummary | null>(null)
   const [editPersonName, setEditPersonName] = React.useState('')
   const [editPersonType, setEditPersonType] = React.useState<CustomerType>('External')
+  const [editTermsSchedule, setEditTermsSchedule] = React.useState<string>('On-Demand / FIFO')
   const [personEditError, setPersonEditError] = React.useState<string | null>(null)
   const [isSavingPersonEdit, setIsSavingPersonEdit] = React.useState(false)
 
@@ -240,6 +243,7 @@ export const ReceivablesPage: React.FC = () => {
     setEditingPerson(p)
     setEditPersonName(p.name)
     setEditPersonType(p.type)
+    setEditTermsSchedule(p.type === 'Staff' ? 'Cash / Payroll Deduction' : 'On-Demand / FIFO')
     setPersonEditError(null)
   }
 
@@ -524,15 +528,15 @@ export const ReceivablesPage: React.FC = () => {
           </style>
         </head>
         <body>
-          <h1>MCT Group of Companies - Receivables &amp; Utang Ledger</h1>
+          <h1>MCT Group of Companies - Accounts Receivable Ledger</h1>
           <div class="subtitle">Generated on ${new Date().toLocaleString()} &bull; Total Accounts: ${filteredPeople.length}</div>
           <div class="kpi-row">
             <div class="kpi-card">
-              <div class="kpi-label">Total External Utang</div>
+              <div class="kpi-label">Total External Receivables</div>
               <div class="kpi-val">₱${kpis.totalExternalUtang.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
             </div>
             <div class="kpi-card">
-              <div class="kpi-label">Total Staff Utang</div>
+              <div class="kpi-label">Total Staff Receivables</div>
               <div class="kpi-val">₱${kpis.totalStaffUtang.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
             </div>
             <div class="kpi-card">
@@ -679,7 +683,7 @@ export const ReceivablesPage: React.FC = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by customer or staff name…"
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+              className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
             />
             {searchQuery && (
               <button
@@ -704,7 +708,7 @@ export const ReceivablesPage: React.FC = () => {
                   type="button"
                   onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
+                    'inline-flex items-center justify-between gap-2 h-11 min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border',
                     isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                   aria-label="Filter receivables by company"
@@ -816,14 +820,14 @@ export const ReceivablesPage: React.FC = () => {
             )}
 
             {/* Dynamic Tab Switcher: All / External / Staff */}
-            <div className="flex items-center bg-slate-100 rounded-full border border-stroke/30 p-1 gap-1 shrink-0">
+            <div className="flex items-center bg-slate-100 rounded-xl border border-stroke/30 p-1 gap-1 shrink-0">
               {(['All', 'External', 'Staff'] as const).map((tab) => (
                 <button
                   key={tab}
                   type="button"
                   onClick={() => setActiveTab(tab)}
                   className={cn(
-                    'inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer select-none',
+                    'inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg text-xs font-bold transition-all cursor-pointer select-none',
                     activeTab === tab
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:bg-white hover:text-focus'
@@ -839,10 +843,10 @@ export const ReceivablesPage: React.FC = () => {
 
       {/* 2. KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
+        <Card className="w-full bg-white rounded-xl border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-medium text-muted-fg block">
-              Total External Utang
+              Total External Receivables
             </span>
             {loading ? (
               <CardSkeleton inline={true} />
@@ -863,9 +867,9 @@ export const ReceivablesPage: React.FC = () => {
           </div>
         </Card>
 
-        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
+        <Card className="w-full bg-white rounded-xl border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
-            <span className="text-xs font-medium text-muted-fg block">Total Staff Utang</span>
+            <span className="text-xs font-medium text-muted-fg block">Total Staff Receivables</span>
             {loading ? (
               <CardSkeleton inline={true} />
             ) : (
@@ -885,7 +889,7 @@ export const ReceivablesPage: React.FC = () => {
           </div>
         </Card>
 
-        <Card className="w-full bg-white rounded-[15px] border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
+        <Card className="w-full bg-white rounded-xl border border-stroke/20 p-4 sm:p-5 shadow-xs flex items-center justify-between transition-all hover:shadow-md hover:border-stroke/40">
           <div className="w-full max-w-[calc(100%-60px)]">
             <span className="text-xs font-medium text-muted-fg block">
               Grand Total Receivables
@@ -911,7 +915,7 @@ export const ReceivablesPage: React.FC = () => {
       </div>
 
       {/* 3. Main Receivables Table Card */}
-      <Card className="rounded-[24px] bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
+      <Card className="rounded-xl bg-white border border-stroke/30 p-5 sm:p-7 shadow-xs scroll-mt-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-4 mb-2 border-b border-slate-100">
           <div className="flex items-center gap-2.5 flex-wrap">
             {statusFilter !== 'All' && (
@@ -1046,27 +1050,15 @@ export const ReceivablesPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 2. Customer Type Badge */}
+                      {/* 2. Customer Type */}
                       <TableCell className="w-[12%] px-3.5 py-3.5 text-left whitespace-nowrap">
                         <span
                           className={cn(
-                            'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold border',
-                            isStaff
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-sky-50 text-sky-700 border-sky-200'
+                            'text-xs font-medium',
+                            isStaff ? 'text-purple-700' : 'text-sky-700'
                           )}
                         >
-                          {isStaff ? (
-                            <>
-                              <User className="w-3 h-3 text-purple-600" />
-                              <span>Staff</span>
-                            </>
-                          ) : (
-                            <>
-                              <Building2 className="w-3 h-3 text-sky-600" />
-                              <span>External</span>
-                            </>
-                          )}
+                          {isStaff ? 'Staff' : 'External'}
                         </span>
                       </TableCell>
 
@@ -1092,9 +1084,20 @@ export const ReceivablesPage: React.FC = () => {
                         </span>
                       </TableCell>
 
-                      {/* 6. Status Badge */}
+                      {/* 6. Status */}
                       <TableCell className="w-[11%] px-3.5 py-3.5 text-left whitespace-nowrap">
-                        <StatusPill status={p.status} />
+                        <span
+                          className={cn(
+                            'text-xs font-semibold',
+                            p.status === 'Paid'
+                              ? 'text-emerald-600'
+                              : p.status === 'Partial'
+                              ? 'text-amber-600'
+                              : 'text-rose-600'
+                          )}
+                        >
+                          {p.status}
+                        </span>
                       </TableCell>
 
                       {/* 7. Actions (Standard 3-dots Menu matching system) */}
@@ -1252,69 +1255,110 @@ export const ReceivablesPage: React.FC = () => {
         }}
       />
 
-      {/* Dialog: Edit Debtor Profile (AC-2, AC-3, AC-9) */}
+      {/* Dialog: Edit Receivable Account & Terms */}
       {editingPerson && (
         <Dialog open={Boolean(editingPerson)} onOpenChange={(o) => !o && setEditingPerson(null)}>
-          <DialogContent className="sm:max-w-[460px] p-6 sm:p-7 rounded-[24px] bg-white border border-stroke/50 shadow-modal">
-            <DialogHeader className="text-left space-y-1.5">
+          <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-[480px] p-5 sm:p-6 rounded-2xl bg-white border border-stroke/30 shadow-2xl">
+            <DialogHeader className="text-left space-y-1.5 pb-3 border-b border-stroke/20">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0">
-                  <Edit2 className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Pencil className="w-5 h-5" />
                 </div>
                 <div>
-                  <DialogTitle className="text-lg font-extrabold text-focus">
-                    Edit Debtor Profile
+                  <DialogTitle className="text-lg sm:text-xl font-bold text-focus leading-tight">
+                    Edit Receivable Terms
                   </DialogTitle>
                   <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                    Update debtor name or customer classification across all non-locked receivable orders for this account.
+                    Update debtor details, classification, and payment terms for this account.
                   </DialogDescription>
                 </div>
               </div>
             </DialogHeader>
 
             {personEditError && (
-              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                 <span>{personEditError}</span>
               </div>
             )}
 
-            <div className="space-y-3 pt-2 text-xs text-left">
+            {/* Account Summary Snapshot Card */}
+            <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-3.5 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-muted-fg font-medium">Assigned Company:</span>
+                <span className="font-semibold text-focus truncate max-w-[200px]">{editingPerson.company || 'All Subsidiaries'}</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-200/60">
+                <span className="text-muted-fg font-medium">Outstanding Balance:</span>
+                <span className="font-bold text-focus tabular-nums">{formatPHP(editingPerson.total_owed)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-3.5 pt-1 text-xs text-left">
               <div>
-                <label className="font-semibold text-focus block mb-1">
-                  Customer / Staff Name
+                <label className="font-semibold text-focus block mb-1 text-xs">
+                  Debtor / Customer Name <span className="text-primary">*</span>
                 </label>
                 <input
                   type="text"
                   value={editPersonName}
                   onChange={(e) => setEditPersonName(e.target.value)}
-                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  placeholder="e.g. Juan Dela Cruz"
+                  className="w-full h-10 px-3.5 rounded-xl border border-stroke/50 bg-white text-focus text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                 />
               </div>
 
               <div>
-                <label className="font-semibold text-focus block mb-1">Customer Type</label>
+                <label className="font-semibold text-focus block mb-1 text-xs">Account Classification</label>
                 <Dropdown
                   value={editPersonType}
-                  onChange={(val) =>
-                    setEditPersonType(val === 'Staff' ? 'Staff' : 'External')
-                  }
+                  onChange={(val) => {
+                    const nextType = val === 'Staff' ? 'Staff' : 'External'
+                    setEditPersonType(nextType)
+                    if (nextType === 'Staff') {
+                      setEditTermsSchedule('Cash / Payroll Deduction')
+                    } else if (editTermsSchedule === 'Cash / Payroll Deduction') {
+                      setEditTermsSchedule('On-Demand / FIFO')
+                    }
+                  }}
                   options={[
-                    { value: 'External', label: 'External' },
-                    { value: 'Staff', label: 'Staff' },
+                    { value: 'External', label: 'External Customer' },
+                    { value: 'Staff', label: 'Staff Member (Internal)' },
                   ]}
-                  aria-label="Customer Type"
+                  aria-label="Account Classification"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-focus block mb-1 text-xs">Settlement Terms / Schedule</label>
+                <Dropdown
+                  value={editTermsSchedule}
+                  onChange={(val) => setEditTermsSchedule(String(val))}
+                  options={
+                    editPersonType === 'Staff'
+                      ? [
+                          { value: 'Cash / Payroll Deduction', label: 'Cash / Payroll Deduction (Default)' },
+                          { value: 'On-Demand / FIFO', label: 'On-Demand / FIFO' },
+                          { value: 'Net 15 Days', label: 'Net 15 Days' },
+                        ]
+                      : [
+                          { value: 'On-Demand / FIFO', label: 'On-Demand / FIFO (Default)' },
+                          { value: 'Net 15 Days', label: 'Net 15 Days' },
+                          { value: 'Net 30 Days', label: 'Net 30 Days' },
+                        ]
+                  }
+                  aria-label="Settlement Schedule"
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-stroke/30">
+            <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-stroke/20">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => setEditingPerson(null)}
                 disabled={isSavingPersonEdit}
-                className="h-10 px-4 rounded-xl text-xs font-semibold"
+                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
               >
                 Cancel
               </Button>
@@ -1322,9 +1366,10 @@ export const ReceivablesPage: React.FC = () => {
                 type="button"
                 onClick={handleSavePersonEdit}
                 disabled={isSavingPersonEdit}
-                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold"
+                className="h-10 px-5 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
-                {isSavingPersonEdit ? 'Updating...' : 'Save Changes'}
+                {isSavingPersonEdit && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <span>{isSavingPersonEdit ? 'Saving…' : 'Save Changes'}</span>
               </Button>
             </div>
           </DialogContent>

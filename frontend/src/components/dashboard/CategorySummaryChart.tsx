@@ -22,18 +22,23 @@ import {
 import { Card } from '@/components/ui/card'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { DashboardTransactionItem } from '@/services/dashboardService'
+import type {
+  DashboardTransactionItem,
+  CategoryBreakdownItem,
+} from '@/services/dashboardService'
 
 import {
   CATEGORY_COLORS,
   CATEGORY_LIST,
-  SALES_CATEGORY_LIST,
+  getCategoryColor,
 } from '@/utils/categoryConstants'
 
 export { CATEGORY_COLORS, CATEGORY_LIST }
 
 interface CategorySummaryChartProps {
   type: 'income' | 'expense'
+  categories?: CategoryBreakdownItem[]
+  companyCategories?: string[]
   transactions?: DashboardTransactionItem[]
   className?: string
   defaultChartType?: 'bar' | 'pie'
@@ -45,6 +50,8 @@ const OTHERS_COLOR = '#94A3B8'
 
 export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
   type,
+  categories,
+  companyCategories,
   transactions = [],
   className,
   defaultChartType,
@@ -84,40 +91,106 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
   // Aggregate by category
   // Income uses Deposit amounts; Expense uses Withdrawal amounts
   const { categoryData, totalAmount } = React.useMemo(() => {
+    // 1. When backend category breakdown is explicitly provided (Dashboard)
+    if (categories !== undefined) {
+      if (categories.length === 0) {
+        return { categoryData: [], totalAmount: 0 }
+      }
+      const total = categories.reduce((sum, c) => sum + (c.amount || 0), 0)
+      const data = categories.map((c, idx) => ({
+        category: c.category,
+        amount: c.amount || 0,
+        color: c.color || getCategoryColor(c.category, idx),
+        percentage: total > 0 ? ((c.amount || 0) / total) * 100 : 0,
+      }))
+      return { categoryData: data, totalAmount: total }
+    }
+
+    // 2. When companyCategories list is provided (SalesPage / ExpensePage)
+    if (companyCategories !== undefined) {
+      if (companyCategories.length === 0) {
+        return { categoryData: [], totalAmount: 0 }
+      }
+      const sumsByLower: Record<string, number> = {}
+      transactions.forEach((tx) => {
+        const rawCat = (tx.category || '').trim()
+        if (!rawCat || rawCat.toLowerCase() === 'none') return
+        const val =
+          type === 'income'
+            ? tx.deposit || tx.amount || 0
+            : tx.withdrawal || tx.amount || 0
+        const key = rawCat.toLowerCase()
+        sumsByLower[key] = (sumsByLower[key] || 0) + val
+      })
+
+      const uniqueCompanyCats: string[] = []
+      const seen = new Set<string>()
+      companyCategories.forEach((c) => {
+        const cleaned = (c || '').trim()
+        if (!cleaned) return
+        const lower = cleaned.toLowerCase()
+        if (!seen.has(lower)) {
+          seen.add(lower)
+          uniqueCompanyCats.push(cleaned)
+        }
+      })
+
+      const total = uniqueCompanyCats.reduce(
+        (sum, cat) => sum + (sumsByLower[cat.toLowerCase()] || 0),
+        0
+      )
+
+      const sortedCats = [...uniqueCompanyCats].sort((a, b) => {
+        const diff =
+          (sumsByLower[b.toLowerCase()] || 0) -
+          (sumsByLower[a.toLowerCase()] || 0)
+        if (diff !== 0) return diff
+        return a.toLowerCase().localeCompare(b.toLowerCase())
+      })
+
+      const data = sortedCats.map((cat, idx) => {
+        const amt = sumsByLower[cat.toLowerCase()] || 0
+        return {
+          category: cat,
+          amount: amt,
+          color: getCategoryColor(cat, idx),
+          percentage: total > 0 ? (amt / total) * 100 : 0,
+        }
+      })
+
+      return { categoryData: data, totalAmount: total }
+    }
+
+    // 3. Fallback when only transactions are provided (no hardcoded category padding)
     const sums: Record<string, number> = {}
 
     transactions.forEach((tx) => {
-      const cat = !tx.category || tx.category === 'None' ? 'Uncategorized' : tx.category
-      const val = type === 'income' ? (tx.deposit || tx.amount || 0) : (tx.withdrawal || tx.amount || 0)
+      const cat = (tx.category || '').trim()
+      if (!cat || cat.toLowerCase() === 'none' || cat.toLowerCase() === 'uncategorized') {
+        return
+      }
+      const val =
+        type === 'income'
+          ? tx.deposit || tx.amount || 0
+          : tx.withdrawal || tx.amount || 0
       sums[cat] = (sums[cat] || 0) + val
     })
 
     const total = Object.values(sums).reduce((a, b) => a + b, 0)
 
-    const extraColors: Record<string, string> = {
-      General: '#64748B',
-      Other: '#767B89',
-      Uncategorized: '#64748B',
-    }
-
-    // Categories with a value, largest first, padded with the standard list so at least 5 always show
     const withValue = Object.keys(sums)
       .filter((cat) => sums[cat] > 0)
       .sort((a, b) => sums[b] - sums[a])
-    const padding = (type === 'income' ? SALES_CATEGORY_LIST : CATEGORY_LIST)
-      .filter((cat) => !withValue.includes(cat))
-      .slice(0, Math.max(COLLAPSED_CATEGORY_COUNT - withValue.length, 0))
 
-    const data = [...withValue, ...padding]
-      .map((cat) => ({
-        category: cat,
-        amount: sums[cat] || 0,
-        color: (CATEGORY_COLORS as Record<string, string>)[cat] || extraColors[cat] || '#6366F1',
-        percentage: total > 0 ? ((sums[cat] || 0) / total) * 100 : 0,
-      }))
+    const data = withValue.map((cat, idx) => ({
+      category: cat,
+      amount: sums[cat] || 0,
+      color: getCategoryColor(cat, idx),
+      percentage: total > 0 ? ((sums[cat] || 0) / total) * 100 : 0,
+    }))
 
     return { categoryData: data, totalAmount: total }
-  }, [transactions, type])
+  }, [categories, companyCategories, transactions, type])
 
   // Top N categories plus a single "Others" bucket; the hidden ones are listed in the See more dropdown
   const hiddenData = categoryData.slice(COLLAPSED_CATEGORY_COUNT)
@@ -143,7 +216,6 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
       ? 'Deposit amounts broken down by category'
       : 'Withdrawal amounts broken down by category'
   const Icon = type === 'income' ? TrendingUp : RotateCw
-  const iconBg = type === 'income' ? 'bg-primary' : 'bg-[#0B0F2B]'
 
   const hasData = totalAmount > 0
 
@@ -157,12 +229,7 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
       {/* 1. Header with Icon, Title, and Independent Chart Type Dropdown */}
       <div className="flex items-start sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-3">
-          <div
-            className={cn(
-              'w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 shadow-xs',
-              iconBg
-            )}
-          >
+          <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200/80 text-focus flex items-center justify-center shrink-0 shadow-xs">
             <Icon className="w-5 h-5" />
           </div>
           <div>
@@ -386,7 +453,11 @@ export const CategorySummaryChart: React.FC<CategorySummaryChartProps> = ({
                 />
                 <span className="text-muted-fg font-medium">{cat.category}:</span>
                 <span className="font-semibold text-focus tabular-nums">
-                  {cat.amount > 0 ? `${Math.round(cat.amount / 1000)}k` : '₱0'}
+                  {cat.amount >= 1000
+                    ? `${Math.round(cat.amount / 1000)}k`
+                    : cat.amount > 0
+                      ? formatPHP(cat.amount)
+                      : '₱0'}
                 </span>
               </div>
             ))}

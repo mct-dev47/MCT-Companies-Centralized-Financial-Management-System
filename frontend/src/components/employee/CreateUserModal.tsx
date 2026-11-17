@@ -4,12 +4,16 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import {
   Check,
   UserPlus,
+  UserCheck,
   Loader2,
   Upload,
   Crop,
   Building2,
   User as UserIcon,
   AlertTriangle,
+  AlertCircle,
+  Shield,
+  Mail,
   X,
 } from 'lucide-react'
 import {
@@ -341,20 +345,22 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
           ref={contentRef}
-          className="sm:max-w-[680px] max-h-[85vh] overflow-y-auto rounded-[24px] p-6 sm:p-8 bg-white border border-stroke/30 shadow-2xl"
+          className="w-[calc(100vw-2rem)] sm:max-w-[620px] max-h-[90vh] overflow-y-auto rounded-2xl p-5 sm:p-7 bg-white border border-stroke/30 shadow-2xl"
         >
           <div ref={topRef} />
           <DialogHeader className="text-left sm:text-left pb-3 border-b border-stroke/20 pr-8">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">
-                <UserPlus className="w-5 h-5" />
+                {isReviewing ? <UserCheck className="w-5 h-5" /> : <UserPlus className="w-5 h-5" />}
               </div>
               <div>
                 <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-                  Create User
+                  {isReviewing ? 'Confirm User Creation' : 'Create User'}
                 </DialogTitle>
                 <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-                  Register an employee and appoint them to a company
+                  {isReviewing
+                    ? 'Please review user credentials and appointed companies before finalizing.'
+                    : 'Register an employee and appoint them to a company'}
                 </DialogDescription>
               </div>
             </div>
@@ -411,17 +417,56 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
           <Form {...form}>
             <form onSubmit={isReviewing ? (e) => { e.preventDefault(); handleConfirmCreate(); } : form.handleSubmit(onSubmit, onInvalidSubmit)} className="space-y-4 pt-2" autoComplete="off">
               {isReviewing ? (
-                <ModalReviewStep
-                  title="Review New User Account"
-                  subtitle="Please verify the user credentials and permissions before creating."
-                  errorMessage={submitError}
-                  items={[
-                    { label: 'Full Name', value: pendingValues?.fullName, highlight: true },
-                    { label: 'Email', value: pendingValues?.email },
-                    { label: 'Role', value: pendingValues?.role },
-                    { label: 'Assigned Companies', value: selectedCompanies.join(', ') || 'All / None' },
-                  ]}
-                />
+                <div className="space-y-4 py-1">
+                  {/* Clean User Preview & Credentials Summary Card */}
+                  <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 sm:p-5 space-y-4">
+                    <div className="flex items-center gap-3.5 pb-3 border-b border-slate-200/70">
+                      <div className="h-14 w-14 rounded-full border-2 border-primary/80 flex items-center justify-center shrink-0 bg-red-50 text-primary font-bold text-lg overflow-hidden">
+                        {profilePreview ? (
+                          <img src={profilePreview} alt="User Avatar" className="h-full w-full object-cover" />
+                        ) : (
+                          initials || <UserIcon className="h-6 w-6 text-primary" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h4 className="text-base font-bold text-focus leading-tight break-words">
+                          {pendingValues?.fullName}
+                        </h4>
+                        <p className="text-xs text-muted-fg mt-0.5 break-all">{pendingValues?.email}</p>
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                            <Shield className="h-3 w-3" />
+                            <span>{pendingValues?.role}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5 text-xs">
+                      <div className="flex items-start justify-between gap-4 py-1">
+                        <span className="text-muted-fg font-medium shrink-0 flex items-center gap-1.5">
+                          <Building2 className="h-3.5 w-3.5 text-muted-fg" />
+                          Appointed Companies:
+                        </span>
+                        <div className="flex flex-wrap gap-1.5 justify-end max-w-[340px]">
+                          {selectedCompanies.length > 0 ? (
+                            selectedCompanies.map((cName) => (
+                              <span
+                                key={cName}
+                                className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-md bg-white border border-slate-200 text-focus font-medium shadow-2xs"
+                              >
+                                <Building2 className="h-2.5 w-2.5 text-muted-fg" />
+                                <span>{cName}</span>
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-focus font-semibold">None Appointed</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               ) : (
                 <>
               {/* 1. Display Profile Image Upload */}
@@ -749,7 +794,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                 </>
               )}
 
-              {/* Action buttons - Standard Phase 2 Layout */}
+              {/* Action buttons - Standard Layout */}
               <div className="flex items-center justify-between gap-3 pt-4 border-t border-stroke/20">
                 <Button
                   type="button"
@@ -762,7 +807,7 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                     }
                   }}
                   disabled={isSubmitting}
-                  className="h-11 px-5 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+                  className="h-11 px-5 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
                 >
                   {isReviewing ? 'Back to Edit' : 'Cancel'}
                 </Button>
@@ -771,9 +816,9 @@ export const CreateUserModal: React.FC<CreateUserModalProps> = ({
                   variant="primary"
                   disabled={isSubmitting}
                   isLoading={isSubmitting}
-                  className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
+                  className="h-11 px-6 rounded-xl text-xs sm:text-sm font-semibold cursor-pointer"
                 >
-                  <span>{isReviewing ? 'Create User' : 'Review User'}</span>
+                  <span>{isReviewing ? 'Confirm Creation' : 'Review User'}</span>
                 </Button>
               </div>
             </form>

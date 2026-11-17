@@ -61,14 +61,15 @@ export const PublicOnlyRoute: React.FC<{ children: React.ReactNode }> = ({
     if (role === 'admin') {
       return <Navigate to="/employee" replace />
     }
-    if (role === 'finance') {
-      return <Navigate to="/centralized-auth" replace />
-    }
-    if (role === 'supervisor') {
-      const cids = user?.companyIds || []
-      if (cids.length > 1) {
+    if (role === 'finance' || role === 'supervisor') {
+      const namesCount = Array.isArray(user?.companyNames) ? user.companyNames.filter(Boolean).length : 0
+      const idsCount = Array.isArray(user?.companyIds) ? user.companyIds.filter(Boolean).length : 0
+      const assignedList = Array.isArray(user?.assignedCompanies) ? user.assignedCompanies.filter(Boolean).length : 0
+      const count = Math.max(namesCount, idsCount, assignedList)
+      if (count > 1) {
         return <Navigate to="/centralized-auth" replace />
       }
+      return <Navigate to="/dashboard" replace />
     }
     return <Navigate to="/dashboard" replace />
   }
@@ -156,7 +157,7 @@ export const CentralizedAuthRouteGuard: React.FC<{ children: React.ReactNode }> 
   }
   const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
 
-  if (role === 'supervisor' && assignedCount <= 1) {
+  if ((role === 'supervisor' || role === 'finance') && assignedCount <= 1) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -169,14 +170,13 @@ export const LendingRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chi
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
   const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (isJKPropertyCompany(targetCompany) || (!isAudit && !isLendingEnabledCompany(targetCompany))) {
+  if (!isLendingEnabledCompany(targetCompany)) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -187,14 +187,13 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
   const { user } = useSession()
   const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
   const targetCompany = activeCompany || user?.assignedCompany || ''
-  if (isFilCapCompany(targetCompany) || (!isAudit && !isTenantEnabledCompany(targetCompany))) {
+  if (!isTenantEnabledCompany(targetCompany)) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -203,25 +202,28 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
 
 export const SalesRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useSession()
+  const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
-  const isCompanyScoped = Boolean(
-    user?.assignedCompany &&
-      user.assignedCompany !== 'All Companies' &&
-      userRole !== 'admin' &&
-      userRole !== 'finance' &&
-      userRole !== 'audit' &&
-      !userRole.includes('auditor')
-  )
+  // Determine current active or assigned company
+  const targetCompany = (activeCompany && activeCompany !== 'All Companies')
+    ? activeCompany
+    : (user?.assignedCompany && user.assignedCompany !== 'All Companies' && !user.assignedCompany.includes(','))
+      ? user.assignedCompany
+      : ''
 
-  // Company-scoped users assigned to Filcap or JK are blocked from Sales
+  // Only block company-scoped users when their active target company is strictly FilCap or JK
   if (
-    isCompanyScoped &&
-    (isFilCapCompany(user?.assignedCompany) || isJKPropertyCompany(user?.assignedCompany))
+    targetCompany &&
+    userRole !== 'finance' &&
+    userRole !== 'audit' &&
+    !userRole.includes('auditor') &&
+    userRole !== 'owner' &&
+    (isFilCapCompany(targetCompany) || isJKPropertyCompany(targetCompany))
   ) {
     return <Navigate to="/dashboard" replace />
   }

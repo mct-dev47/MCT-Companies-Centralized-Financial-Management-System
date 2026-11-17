@@ -64,7 +64,7 @@ export const CentralizedAuthPage: React.FC = () => {
         commaSeparated = user.assignedCompany.split(',').map((c) => c.trim()).filter(Boolean).length
       }
       const assignedCount = Math.max(namesCount, idsCount, assignedList, commaSeparated)
-      if (role === 'supervisor' && assignedCount <= 1) {
+      if ((role === 'supervisor' || role === 'finance') && assignedCount <= 1) {
         navigate('/dashboard', { replace: true })
       }
     }
@@ -92,14 +92,16 @@ export const CentralizedAuthPage: React.FC = () => {
       const userAssignedIds = user?.companyIds || []
       const role = (user?.role || '').toLowerCase()
 
-      // Supervisor is strictly filtered to their assigned companies
-      if (role === 'supervisor' && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
+      // Finance and Supervisor are strictly filtered to their assigned companies
+      if ((role === 'supervisor' || role === 'finance') && (userAssignedNames.length > 0 || userAssignedIds.length > 0)) {
         const filtered = data.filter((comp) => {
           const idMatch = userAssignedIds.some((cid) => String(cid) === String(comp.id))
           const nameMatch = userAssignedNames.some((cname) => isCompanyMatch(cname, comp.name))
           return idMatch || nameMatch
         })
         setCompanies(filtered)
+      } else if (role === 'finance') {
+        setCompanies([])
       } else {
         setCompanies(data)
       }
@@ -296,14 +298,17 @@ export const CentralizedAuthPage: React.FC = () => {
                     </button>
                   )}
 
-                  <Link
-                    to="/settings"
-                    onClick={() => setIsUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer"
-                  >
-                    <Settings className="h-4 w-4 text-muted-fg shrink-0" />
-                    <span>Settings</span>
-                  </Link>
+                  {/* Settings is system configuration, so only Admin sees it */}
+                  {(user?.role || '').toLowerCase() === 'admin' && (
+                    <Link
+                      to="/settings"
+                      onClick={() => setIsUserMenuOpen(false)}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 rounded-xl text-xs sm:text-sm font-medium text-focus hover:bg-surface transition-colors cursor-pointer"
+                    >
+                      <Settings className="h-4 w-4 text-muted-fg shrink-0" />
+                      <span>Settings</span>
+                    </Link>
+                  )}
 
                   <div className="h-px bg-stroke/20 my-1" />
 

@@ -2,6 +2,7 @@ import * as React from 'react'
 import { useSession } from '@/hooks/useSession'
 import { isLendingEnabledCompany } from '@/config/companyFeatures'
 import { isCompanyMatch } from '@/utils/companyUtils'
+import { websocketService } from '@/services/websocketService'
 
 export interface CompanyOption {
   id: number
@@ -53,7 +54,6 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const userRole = (user?.role || '').trim().toLowerCase()
   const isMultiCompanyRole =
     userRole === 'admin' ||
-    userRole === 'finance' ||
     userRole === 'audit' ||
     userRole.includes('auditor') ||
     userRole === 'owner'
@@ -75,54 +75,52 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const hasMultipleAssigned = userAssignedCompanies.length >= 2
 
-  // A user is strictly scoped to one single company ONLY if they have exactly 1 assigned company and are not admin or finance
+  // A user is strictly company-scoped only if they are not a multi-company role,
+  // do not have multiple assigned companies, and are bound to exactly one company
   const isCompanyScoped = Boolean(
     !isMultiCompanyRole &&
-      !hasMultipleAssigned &&
-      userAssignedCompanies.length === 1
+    !hasMultipleAssigned &&
+    userAssignedCompanies.length === 1
   )
 
   const [activeCompany, setActiveCompanyState] = React.useState<string>(() => {
     if (typeof window !== 'undefined') {
+      const selected = sessionStorage.getItem('mct_selected_company')
+      if (selected && selected !== 'All Companies') {
+        return selected
+      }
       const saved = sessionStorage.getItem(COMPANY_STORAGE_KEY)
-      if (saved) {
-        if (
-          isMultiCompanyRole ||
-          userAssignedCompanies.length === 0 ||
-          userAssignedCompanies.some((comp) => isCompanyMatch(comp, saved)) ||
-          (hasMultipleAssigned && saved === 'All Companies')
-        ) {
-          return saved
-        }
+      if (saved && saved !== 'All Companies') {
+        return saved
       }
     }
-    if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
+    if (userAssignedCompanies.length > 0) {
       return userAssignedCompanies[0]
     }
-    return 'All Companies'
+    if (user?.assignedCompany && user.assignedCompany !== 'All Companies') {
+      return user.assignedCompany
+    }
+    return ''
   })
 
-  // Keep in sync when user session changes
+  // Keep in sync when user session or storage changes
   React.useEffect(() => {
-    if (isCompanyScoped && userAssignedCompanies.length === 1) {
+    const selected = typeof window !== 'undefined' ? sessionStorage.getItem('mct_selected_company') : null
+    if (selected && selected !== 'All Companies') {
+      setActiveCompanyState(selected)
+      return
+    }
+    if (userAssignedCompanies.length === 1) {
       setActiveCompanyState(userAssignedCompanies[0])
-    } else if (!isCompanyScoped) {
+    } else if (userAssignedCompanies.length > 1) {
       const saved = typeof window !== 'undefined' ? sessionStorage.getItem(COMPANY_STORAGE_KEY) : null
-      if (
-        saved &&
-        (isMultiCompanyRole ||
-          userAssignedCompanies.length === 0 ||
-          userAssignedCompanies.some((comp) => isCompanyMatch(comp, saved)) ||
-          (hasMultipleAssigned && saved === 'All Companies'))
-      ) {
+      if (saved && userAssignedCompanies.some((comp) => isCompanyMatch(comp, saved))) {
         setActiveCompanyState(saved)
-      } else if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
-        setActiveCompanyState(userAssignedCompanies[0])
       } else {
-        setActiveCompanyState('All Companies')
+        setActiveCompanyState(userAssignedCompanies[0])
       }
     }
-  }, [isCompanyScoped, isMultiCompanyRole, userAssignedCompanies, hasMultipleAssigned, user?.id])
+  }, [userAssignedCompanies, user?.id])
 
   const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>(getCachedCompanies)
   const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
@@ -191,20 +189,25 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     if (user?.id) {
       void loadCompanies()
     }
+    const unsub = websocketService.subscribe('COMPANY_UPDATED' as any, () => {
+      void loadCompanies()
+    })
+    return () => {
+      unsub()
+    }
   }, [loadCompanies, user?.id])
 
   const allCompanies = React.useMemo(() => {
-    if (!isMultiCompanyRole && userAssignedCompanies.length > 0) {
-      return userAssignedCompanies.filter((c) => c !== 'All Companies')
-    }
-    if (dynamicCompanies.length > 0) return dynamicCompanies
-    return ALL_COMPANIES_LIST
-  }, [dynamicCompanies, userAssignedCompanies, isMultiCompanyRole])
+    if (activeCompany) return [activeCompany]
+    if (userAssignedCompanies.length > 0) return userAssignedCompanies
+    return []
+  }, [activeCompany, userAssignedCompanies])
 
   const setActiveCompany = React.useCallback((company: string) => {
     setActiveCompanyState(company)
     if (typeof window !== 'undefined') {
       sessionStorage.setItem(COMPANY_STORAGE_KEY, company)
+      sessionStorage.setItem('mct_selected_company', company)
     }
   }, [])
 

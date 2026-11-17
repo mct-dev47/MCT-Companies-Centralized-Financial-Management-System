@@ -190,8 +190,10 @@ const DEPRECATED_OLD_CATEGORIES = new Set([
 
 const PETTY_CASH = 'Petty Cash'
 
-const isPettyCash = (value?: string | null) =>
-  (value || '').trim().toLowerCase() === 'petty cash'
+const isPettyCash = (value?: string | null) => {
+  const norm = (value || '').trim().toLowerCase()
+  return norm === 'petty cash' || norm === 'petty'
+}
 
 /**
  * Keeps the Petty Cash category and payment method in lockstep.
@@ -220,21 +222,29 @@ const linkPettyCash = (
     }
   }
 
-  if (changed === 'category') {
-    if (catPetty) return { ...row, paymentMethod: PETTY_CASH, serviceFee: 0 }
-    if (pmPetty && isPettyCash(prev?.category)) return { ...row, paymentMethod: 'Cash' }
+  const linked = ((): SpreadsheetRow => {
+    if (changed === 'category') {
+      if (catPetty) return { ...row, paymentMethod: PETTY_CASH, serviceFee: 0 }
+      if (pmPetty && isPettyCash(prev?.category)) return { ...row, paymentMethod: 'Cash' }
+      return row
+    }
+    if (changed === 'paymentMethod') {
+      if (pmPetty) return { ...row, category: PETTY_CASH }
+      if (catPetty && isPettyCash(prev?.paymentMethod)) return { ...row, category: fallbackCategory }
+      return row
+    }
+    if (catPetty || pmPetty) {
+      return { ...row, category: PETTY_CASH, paymentMethod: PETTY_CASH, serviceFee: 0 }
+    }
     return row
-  }
-  if (changed === 'paymentMethod') {
-    if (pmPetty) return { ...row, category: PETTY_CASH }
-    if (catPetty && isPettyCash(prev?.paymentMethod)) return { ...row, category: fallbackCategory }
-    return row
-  }
-  if (catPetty || pmPetty) {
-    return { ...row, category: PETTY_CASH, paymentMethod: PETTY_CASH, serviceFee: 0 }
-  }
-  return row
+  })()
+  // Petty cash leaves the box the moment it is spent, so a petty cash expense is always Paid
+  return isPettyCash(linked.paymentMethod) ? forcePettyCashPaid(linked) : linked
 }
+
+/** A petty cash expense row is always Paid (and counted as already out), never Pending or Unpaid. */
+const forcePettyCashPaid = (row: SpreadsheetRow): SpreadsheetRow =>
+  row.status === 'Paid' && row.depositStatus === 'Deposited' ? row : { ...row, status: 'Paid', depositStatus: 'Deposited' }
 
 interface AddTransactionSheetPageProps {
   initialType?: 'Sales' | 'Expense'
@@ -711,10 +721,11 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
                           <button
                             type="button"
                             aria-label={`Remove ${item.name} from saved list`}
-                            className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
                             title="Remove from saved list"
                             onClick={(e) => {
                               e.stopPropagation()
+                              closeMenu()
                               onDeleteFromList(item.id as number)
                             }}
                           >
@@ -734,14 +745,20 @@ const ParticularsCombobox: React.FC<ParticularsComboboxProps> = ({
   )
 }
 
+export interface CategoryItem {
+  id?: number
+  name: string
+}
+
 interface CategoryComboboxProps {
   value: string
   defaultCategory: string
   onChange: (val: string) => void
   onSelect: (val: string) => void
   persistedCategories: string[]
-  categories: string[]
+  categories: Array<CategoryItem | string>
   onSaveCategory: (name: string) => Promise<void>
+  onDeleteCategory?: (id: number, name: string) => void
   onKeyDown: (e: React.KeyboardEvent) => void
   onPaste?: (e: React.ClipboardEvent) => void
   inputRef?: (el: HTMLInputElement | null) => void
@@ -760,6 +777,7 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
   persistedCategories,
   categories,
   onSaveCategory,
+  onDeleteCategory,
   onKeyDown,
   onPaste,
   inputRef,
@@ -799,12 +817,18 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
 
   const trimmedValue = value.trim()
 
-  const filtered = React.useMemo(() => {
-    if (!isTypingFilter || !trimmedValue) return categories
-    return categories.filter((c) =>
-      c.toLowerCase().includes(trimmedValue.toLowerCase())
+  const normalizedCategories = React.useMemo<CategoryItem[]>(() => {
+    return categories.map((c) =>
+      typeof c === 'string' ? { id: undefined, name: c } : c
     )
-  }, [categories, trimmedValue, isTypingFilter])
+  }, [categories])
+
+  const filtered = React.useMemo(() => {
+    if (!isTypingFilter || !trimmedValue) return normalizedCategories
+    return normalizedCategories.filter((c) =>
+      c.name.toLowerCase().includes(trimmedValue.toLowerCase())
+    )
+  }, [normalizedCategories, trimmedValue, isTypingFilter])
 
   const hasPersistedMatch = React.useMemo(() => {
     if (!trimmedValue) return false
@@ -870,13 +894,13 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
           } else {
             const itemIdx = canSaveToList ? highlightedIndex - 1 : highlightedIndex
             if (itemIdx >= 0 && itemIdx < filtered.length) {
-              onSelect(filtered[itemIdx])
+              onSelect(filtered[itemIdx].name)
             } else {
               onSelect(trimmedValue || value)
             }
           }
         } else if (filtered.length > 0) {
-          onSelect(filtered[0])
+          onSelect(filtered[0].name)
         } else if (canSaveToList) {
           onSaveCategory(trimmedValue)
           onSelect(trimmedValue)
@@ -1054,32 +1078,264 @@ const CategoryCombobox: React.FC<CategoryComboboxProps> = ({
                   No categories configured. Type to add a new category.
                 </div>
               )}
-              {filtered.map((cat, idx) => {
+              {filtered.map((item, idx) => {
                 const actualIndex = canSaveToList ? idx + 1 : idx
                 const isSelected =
                   trimmedValue.length > 0 &&
-                  cat.trim().toLowerCase() === trimmedValue.toLowerCase()
+                  item.name.trim().toLowerCase() === trimmedValue.toLowerCase()
+                const canDelete =
+                  Boolean(onDeleteCategory) &&
+                  typeof item.id === 'number' &&
+                  item.id > 0
+
                 return (
                   <div
-                    key={cat}
+                    key={`${item.id ?? idx}-${item.name}`}
                     className={cn(
-                      'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer hover:bg-slate-100 transition-colors gap-2',
+                      'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer group hover:bg-slate-100 transition-colors gap-2',
                       (highlightedIndex === actualIndex || isSelected) &&
                         'bg-slate-50 font-medium',
                       highlightedIndex === actualIndex && 'bg-slate-100'
                     )}
                     onClick={() => {
-                      onSelect(cat)
+                      onSelect(item.name)
                       closeMenu()
                     }}
                   >
-                    <span className="truncate flex-1">{cat}</span>
-                    {isSelected && (
-                      <Check className="w-3.5 h-3.5 text-[#960C01] shrink-0" />
-                    )}
+                    <span className="truncate flex-1">{item.name}</span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isSelected && (
+                        <Check className="w-3.5 h-3.5 text-[#960C01] shrink-0" />
+                      )}
+                      {canDelete && (
+                        <button
+                          type="button"
+                          aria-label={`Remove ${item.name} from saved list`}
+                          className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                          title="Remove from saved list"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            closeMenu()
+                            onDeleteCategory!(item.id as number, item.name)
+                          }}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )
               })}
+            </div>
+          </div>,
+          document.body
+        )}
+    </div>
+  )
+}
+
+interface PaymentComboboxProps {
+  value: string
+  options: string[]
+  onChange: (val: string) => void
+  onAddCustom: () => void
+  onKeyDown: (e: React.KeyboardEvent) => void
+  inputRef?: (el: HTMLInputElement | null) => void
+  ariaLabel?: string
+  flat?: boolean
+}
+
+const PaymentCombobox: React.FC<PaymentComboboxProps> = ({
+  value,
+  options,
+  onChange,
+  onAddCustom,
+  onKeyDown,
+  inputRef,
+  ariaLabel,
+  flat = true,
+}) => {
+  const [isOpen, setIsOpen] = React.useState(false)
+  const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const internalInputRef = React.useRef<HTMLInputElement | null>(null)
+
+  const setMergedInputRef = React.useCallback(
+    (el: HTMLInputElement | null) => {
+      internalInputRef.current = el
+      inputRef?.(el)
+    },
+    [inputRef]
+  )
+
+  const closeMenu = React.useCallback(() => {
+    setIsOpen(false)
+    setHighlightedIndex(-1)
+  }, [])
+
+  const pos = useComboboxPortalPosition(
+    containerRef,
+    dropdownRef,
+    isOpen,
+    closeMenu,
+    210
+  )
+
+  React.useEffect(() => {
+    if (!isOpen) return
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(target) &&
+        (!dropdownRef.current || !dropdownRef.current.contains(target))
+      ) {
+        closeMenu()
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [isOpen, closeMenu])
+
+  const totalItems = options.length + 1
+
+  const handleKeyDownInternal = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      if (!isOpen) {
+        setIsOpen(true)
+        setHighlightedIndex(options.length > 0 ? 0 : -1)
+        e.preventDefault()
+        return
+      }
+      if (totalItems > 0) {
+        e.preventDefault()
+        setHighlightedIndex((prev) => (prev + 1) % totalItems)
+        return
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (!isOpen) {
+        setIsOpen(true)
+        setHighlightedIndex(totalItems - 1)
+        e.preventDefault()
+        return
+      }
+      if (totalItems > 0) {
+        e.preventDefault()
+        setHighlightedIndex((prev) => (prev - 1 + totalItems) % totalItems)
+        return
+      }
+    } else if (e.key === 'Enter') {
+      if (isOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (highlightedIndex >= 0 && highlightedIndex < options.length) {
+          onChange(options[highlightedIndex])
+          closeMenu()
+        } else if (highlightedIndex === options.length) {
+          closeMenu()
+          onAddCustom()
+        } else {
+          closeMenu()
+        }
+        return
+      }
+      closeMenu()
+    } else if (e.key === 'Escape') {
+      if (isOpen) {
+        e.preventDefault()
+        e.stopPropagation()
+        closeMenu()
+        return
+      }
+    } else if (e.key === 'Tab') {
+      closeMenu()
+    }
+
+    onKeyDown(e)
+  }
+
+  return (
+    <div ref={containerRef} className="relative w-full">
+      <div className="relative w-full flex items-center">
+        <input
+          ref={setMergedInputRef}
+          type="text"
+          readOnly
+          value={value}
+          onClick={() => {
+            setIsOpen((prev) => !prev)
+            setHighlightedIndex(-1)
+          }}
+          onKeyDown={handleKeyDownInternal}
+          aria-label={ariaLabel}
+          title={value || undefined}
+          className={cn(
+            flat ? SALES_INPUT : 'w-full h-9 pl-2.5 text-xs text-focus rounded-lg border bg-white',
+            'pr-7 cursor-pointer select-none font-bold text-xs'
+          )}
+        />
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10 pointer-events-none">
+          <div className="h-6 w-6 rounded-md text-slate-400 flex items-center justify-center transition-colors">
+            <ChevronDown
+              className={cn(
+                'w-3.5 h-3.5 transition-transform duration-150',
+                isOpen && 'rotate-180'
+              )}
+            />
+          </div>
+        </div>
+      </div>
+
+      {isOpen &&
+        pos &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              top: `${pos.top}px`,
+              left: `${pos.left}px`,
+              width: `${pos.width}px`,
+              transform: pos.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.preventDefault()}
+            className="fixed bg-white rounded-xl border border-stroke/40 shadow-2xl z-[99999] overflow-hidden py-1 animate-in fade-in-50 duration-150"
+          >
+            <div style={{ maxHeight: `${pos.maxHeight}px` }} className="overflow-y-auto">
+              {options.map((opt, idx) => {
+                const isSelected = opt.trim().toLowerCase() === value.trim().toLowerCase()
+                return (
+                  <div
+                    key={opt}
+                    className={cn(
+                      'px-3 py-2 text-xs text-focus flex items-center justify-between cursor-pointer hover:bg-slate-100 transition-colors gap-2',
+                      (highlightedIndex === idx || isSelected) && 'bg-slate-50 font-medium',
+                      highlightedIndex === idx && 'bg-slate-100'
+                    )}
+                    onClick={() => {
+                      onChange(opt)
+                      closeMenu()
+                    }}
+                  >
+                    <span className="truncate flex-1 font-medium">{opt}</span>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-[#960C01] shrink-0" />}
+                  </div>
+                )
+              })}
+              <div
+                className={cn(
+                  'px-3 py-2 text-xs font-semibold text-[#960C01] hover:bg-red-50 border-t border-slate-100 flex items-center gap-1.5 cursor-pointer transition-colors',
+                  highlightedIndex === options.length && 'bg-red-100/80 font-bold'
+                )}
+                onClick={() => {
+                  closeMenu()
+                  onAddCustom()
+                }}
+              >
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span>+ Add custom method...</span>
+              </div>
             </div>
           </div>,
           document.body
@@ -1258,7 +1514,21 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   }, [bankAccounts, targetCompany])
 
   const prevTargetCompRef = React.useRef(targetCompany)
+  // Editing: open on the bank the record was saved with (not the company default), once the list has it
+  const savedEditBankId = String((editItem as any)?.bankAccountId || (editItem as any)?.bank_account_id || '')
+  const editBankAppliedRef = React.useRef(false)
   React.useEffect(() => {
+    if (
+      isEditMode &&
+      savedEditBankId &&
+      !editBankAppliedRef.current &&
+      availableBankAccounts.some((a) => String(a.id) === savedEditBankId)
+    ) {
+      editBankAppliedRef.current = true
+      userPickedBankRef.current = true // treat it like a choice, so the default never replaces it
+      if (selectedBankAccountId !== savedEditBankId) setSelectedBankAccountId(savedEditBankId)
+      return
+    }
     if (prevTargetCompRef.current !== targetCompany) {
       prevTargetCompRef.current = targetCompany
       userPickedBankRef.current = false
@@ -1280,7 +1550,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     } else if (!isLoadingBanks) {
       setSelectedBankAccountId('')
     }
-  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks, targetCompany])
+  }, [availableBankAccounts, selectedBankAccountId, isLoadingBanks, targetCompany, isEditMode, savedEditBankId])
 
   // Company Particulars List (per company)
   const [savedParticulars, setSavedParticulars] = React.useState<
@@ -1432,6 +1702,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const [editingCategoryName, setEditingCategoryName] = React.useState('')
   const [categoryModalError, setCategoryModalError] = React.useState('')
   const [isSubmittingCategory, setIsSubmittingCategory] = React.useState(false)
+  const [categoryToDelete, setCategoryToDelete] = React.useState<{ id: number; name: string } | null>(null)
 
   const fetchCategories = React.useCallback(async () => {
     if (!targetCompany || targetCompany === 'All Companies') {
@@ -1517,21 +1788,31 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
   }
 
-  const handleDeleteCategory = async (catId: number, catName: string) => {
-    if (!window.confirm(`Are you sure you want to delete category "${catName}"?`)) return
+  const handleDeleteCategory = (catId: number, catName: string) => {
+    setCategoryToDelete({ id: catId, name: catName })
+  }
+
+  const handleDeleteCategoryFromList = (id: number, name: string) => {
+    setCategoryToDelete({ id, name })
+  }
+
+  const confirmDeleteCategory = async () => {
+    if (!categoryToDelete || !targetCompany) return
+    const { id, name } = categoryToDelete
     setIsSubmittingCategory(true)
     setCategoryModalError('')
     try {
       await categoryService.deleteCompanyCategory(
-        catId,
+        id,
         targetCompany,
         isSales ? 'sales' : 'expense'
       )
-      setCompanyCategories((prev) => prev.filter((c) => c.category_id !== catId))
-      setCategories((prev) => prev.filter((c) => c !== catName))
+      setCompanyCategories((prev) => prev.filter((c) => c.category_id !== id))
+      setCategories((prev) => prev.filter((c) => c !== name))
       setRows((prev) =>
-        prev.map((r) => (r.category === catName ? { ...r, category: '' } : r))
+        prev.map((r) => (r.category === name ? { ...r, category: '' } : r))
       )
+      setCategoryToDelete(null)
     } catch (err: any) {
       setCategoryModalError(err.message || 'Failed to delete category.')
     } finally {
@@ -1647,23 +1928,45 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Build per-row categories without echoing the current row's live typing
   const getRowCategories = React.useCallback(
-    (currentRowIdx: number): string[] => {
-      const list = [...categories]
-      const seen = new Set(categories.map((c) => c.trim().toLowerCase()))
+    (currentRowIdx: number): CategoryItem[] => {
+      const list: CategoryItem[] = []
+      const seen = new Set<string>()
+
+      companyCategories.forEach((cat) => {
+        const trimmed = cat.name.trim()
+        if (isSales && isPettyCash(trimmed)) return
+        const lower = trimmed.toLowerCase()
+        if (!seen.has(lower)) {
+          seen.add(lower)
+          list.push({ id: cat.category_id, name: trimmed })
+        }
+      })
+
+      categories.forEach((catName) => {
+        const trimmed = catName.trim()
+        if (isSales && isPettyCash(trimmed)) return
+        const lower = trimmed.toLowerCase()
+        if (!seen.has(lower)) {
+          seen.add(lower)
+          list.push({ id: undefined, name: trimmed })
+        }
+      })
 
       rows.forEach((r, idx) => {
         if (idx === currentRowIdx) return
         const trimmed = r.category?.trim()
+        if (!trimmed) return
         if (isSales && isPettyCash(trimmed)) return
-        if (trimmed && !seen.has(trimmed.toLowerCase())) {
-          seen.add(trimmed.toLowerCase())
-          list.push(trimmed)
+        const lower = trimmed.toLowerCase()
+        if (!seen.has(lower)) {
+          seen.add(lower)
+          list.push({ id: undefined, name: trimmed })
         }
       })
 
       return list
     },
-    [categories, rows, isSales]
+    [companyCategories, categories, rows, isSales]
   )
 
   // Pre-fill when editing
@@ -2283,7 +2586,9 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   // Calculations & Validation
   const calculatedRows = React.useMemo(() => {
-    return rows.map((r) => {
+    return rows.map((raw) => {
+      // Every save reads these rows: a petty cash expense always goes out as Paid
+      const r = !isSales && isPettyCash(raw.paymentMethod) ? forcePettyCashPaid(raw) : raw
       const price = typeof r.unitPrice === 'number' ? r.unitPrice : parseFloat(String(r.unitPrice || '')) || 0
       const qty = typeof r.quantity === 'number' ? r.quantity : parseInt(String(r.quantity || '1'), 10) || 1
       const pmLower = (r.paymentMethod || '').trim().toLowerCase()
@@ -2393,8 +2698,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     availablePettyCash !== null &&
     pettyCashTotal > availablePettyCash + 0.005
 
-  // Error modal shown when saving would take petty cash below zero
+  // Warning shown when saving would take petty cash below zero (allowed after the user confirms)
   const [pettyCashErrorMessage, setPettyCashErrorMessage] = React.useState<string | null>(null)
+  const pettyShortfallOkRef = React.useRef(false)
+  // The one-shot day remark flags handleSave consumed, restored when the user continues
+  const pettyResumeRef = React.useRef<{ remarkPromptConfirmed: boolean; skipDayRemarks: boolean } | null>(null)
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = React.useState(false)
@@ -2490,12 +2798,18 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       return
     }
 
-    if (exceedsPettyCash) {
+    // Petty cash may go negative (the supervisor sometimes pays from her own pocket), but warn first
+    if (exceedsPettyCash && !pettyShortfallOkRef.current) {
+      const available = availablePettyCash ?? 0
+      pettyResumeRef.current = { remarkPromptConfirmed, skipDayRemarks }
       setPettyCashErrorMessage(
-        `Only ${formatPHP(Math.max(availablePettyCash ?? 0, 0))} is available in petty cash, but these entries total ${formatPHP(pettyCashTotal)}. Petty cash cannot go below ₱0.00. Top up petty cash first or lower the amount.`
+        `Petty cash has ${formatPHP(available)}, but these entries total ${formatPHP(pettyCashTotal)}. ` +
+          `Saving will leave petty cash at −${formatPHP(pettyCashTotal - available)}. ` +
+          'Continue if the difference was paid out of pocket.'
       )
       return
     }
+    pettyShortfallOkRef.current = false
 
     // Step 1: Check if there are unpaid items in Sales
     const unpaidRows = validRows.filter((r) => r.status === 'Unpaid')
@@ -3163,7 +3477,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   setCurrentStep('encode')
                 }}
                 disabled={isSubmitting}
-                className="h-11 px-5 rounded-full border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
+                className="h-11 px-5 rounded-[10px] border-slate-200 text-xs sm:text-sm font-semibold text-focus hover:bg-slate-50 cursor-pointer"
               >
                 Back to Spreadsheet
               </Button>
@@ -3694,6 +4008,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             persistedCategories={categories}
                             categories={getRowCategories(index)}
                             onSaveCategory={handleSaveCategory}
+                            onDeleteCategory={handleDeleteCategoryFromList}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 2)}
                             onPaste={(e) => handlePaste(e, index, 2)}
                             hasError={Boolean(rowErrors?.missingCategory)}
@@ -3701,59 +4016,38 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                         </TableCell>
 
                         {/* Payment Method */}
-                        <TableCell className={SPREADSHEET_TD}>
-                          <div className="relative w-full flex items-center">
-                            <select
-                              aria-label={`Payment, row ${index + 1}`}
-                              title={row.paymentMethod || undefined}
-                              ref={(el) => {
-                                cellRefs.current[`${index}-3`] = el
-                              }}
-                              value={row.paymentMethod}
-                              onChange={(e) => {
-                                const val = e.target.value
-                                if (val === '__add_custom__') {
-                                  setTargetRowForNewPaymentMethod(row.id)
-                                  setNewPaymentMethodName('')
-                                  setIsAddPaymentMethodModalOpen(true)
-                                  return
-                                }
-                                handleRowChange(
-                                  row.id,
-                                  'paymentMethod',
-                                  val
-                                )
-                                const valLower = val.toLowerCase()
-                                if (
-                                  valLower === 'cash' ||
-                                  valLower === 'cheque' ||
-                                  valLower === 'petty cash'
-                                ) {
-                                  handleRowChange(row.id, 'serviceFee', 0)
-                                } else if (
-                                  row.serviceFee === undefined ||
-                                  row.serviceFee === ''
-                                ) {
-                                  handleRowChange(row.id, 'serviceFee', 0)
-                                }
-                              }}
-                              onKeyDown={(e) => handleCellKeyDown(e, index, 3)}
-                              className={cn(SPREADSHEET_INPUT, 'pr-6 appearance-none cursor-pointer')}
-                            >
-                              {paymentOptions.map((pm) => (
-                                <option key={pm} value={pm}>
-                                  {pm}
-                                </option>
-                              ))}
-                              <option
-                                value="__add_custom__"
-                                className="font-semibold text-[#960C01]"
-                              >
-                                + Add custom method...
-                              </option>
-                            </select>
-                            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-                          </div>
+                        <TableCell className={cn(SPREADSHEET_TD, 'relative')}>
+                          <PaymentCombobox
+                            flat={true}
+                            ariaLabel={`Payment, row ${index + 1}`}
+                            inputRef={(el) => {
+                              cellRefs.current[`${index}-3`] = el
+                            }}
+                            value={row.paymentMethod}
+                            options={paymentOptions}
+                            onChange={(val) => {
+                              handleRowChange(row.id, 'paymentMethod', val)
+                              const valLower = val.toLowerCase()
+                              if (
+                                valLower === 'cash' ||
+                                valLower === 'cheque' ||
+                                valLower === 'petty cash'
+                              ) {
+                                handleRowChange(row.id, 'serviceFee', 0)
+                              } else if (
+                                row.serviceFee === undefined ||
+                                row.serviceFee === ''
+                              ) {
+                                handleRowChange(row.id, 'serviceFee', 0)
+                              }
+                            }}
+                            onAddCustom={() => {
+                              setTargetRowForNewPaymentMethod(row.id)
+                              setNewPaymentMethodName('')
+                              setIsAddPaymentMethodModalOpen(true)
+                            }}
+                            onKeyDown={(e) => handleCellKeyDown(e, index, 3)}
+                          />
                           {isFeeApplicable && (
                             <div className="flex items-center gap-1 bg-amber-50/80 border border-amber-200/90 rounded-md px-1.5 py-0.5 mx-1.5 mb-1.5 focus-within:ring-2 focus-within:ring-focus">
                               <span className="text-[10px] font-semibold text-amber-800 shrink-0">
@@ -3901,6 +4195,15 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 : 'bg-amber-50 text-amber-800'
                           )}
                         >
+                          {!isSales && isPettyCash(row.paymentMethod) ? (
+                            // Petty cash is spent on the spot, so the row is Paid and cannot be changed
+                            <div
+                              title="Petty cash expenses are paid immediately, so the status is always Paid"
+                              className="w-full h-11 px-2 text-xs font-bold flex items-center select-none truncate cursor-not-allowed"
+                            >
+                              Paid
+                            </div>
+                          ) : (
                           <div className="relative w-full flex items-center">
                             <select
                               ref={(el) => {
@@ -3924,6 +4227,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             </select>
                             <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 opacity-60" />
                           </div>
+                          )}
                           {row.status === 'Unpaid' && isSales && (() => {
                             const assign =
                               unpaidAssignments.find((u) => u.rowId === row.id) ||
@@ -4400,7 +4704,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               type="button"
               variant="outline"
               onClick={() => setIsDayRemarkOpen(false)}
-              className="h-9 px-4 text-xs font-medium rounded-full border-stroke/50 cursor-pointer"
+              className="h-9 px-4 text-xs font-medium rounded-[10px] border-stroke/50 cursor-pointer"
             >
               Back
             </Button>
@@ -4655,16 +4959,82 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       )}
 
       <ConfirmModal
+        open={Boolean(particularToDelete)}
+        onOpenChange={(open) => {
+          if (!open) setParticularToDelete(null)
+        }}
+        action="delete"
+        variant="destructive"
+        title="Delete Particular"
+        description={`Are you sure you want to delete "${particularToDelete?.name}" from your saved particulars list? This action cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={confirmDeleteParticular}
+      />
+
+      <ConfirmModal
+        open={Boolean(categoryToDelete)}
+        onOpenChange={(open) => {
+          if (!open && !isSubmittingCategory) setCategoryToDelete(null)
+        }}
+        action="delete"
+        variant="destructive"
+        title="Delete Category"
+        description={`Are you sure you want to delete category "${categoryToDelete?.name}"? Any rows currently using this category will have it cleared.`}
+        confirmLabel="Delete Category"
+        isLoading={isSubmittingCategory}
+        loadingLabel="Deleting…"
+        errorMessage={categoryModalError || undefined}
+        onConfirm={confirmDeleteCategory}
+      />
+
+      <ConfirmModal
+        open={isResetConfirmOpen}
+        onOpenChange={setIsResetConfirmOpen}
+        action="warning"
+        title="Reset Sheet"
+        description="Are you sure you want to reset all rows? Any unsaved entries on this sheet will be discarded."
+        confirmLabel="Reset All Rows"
+        variant="destructive"
+        onConfirm={() => {
+          handleReset()
+          setIsResetConfirmOpen(false)
+        }}
+      />
+
+      <ConfirmModal
+        open={isBatchSaveConfirmOpen}
+        onOpenChange={setIsBatchSaveConfirmOpen}
+        action="submit"
+        title={`Save ${transactionType} ${validRowsCount > 1 ? 'Records' : 'Record'}`}
+        description={`Are you sure you want to save ${validRowsCount} ${transactionType.toLowerCase()} ${validRowsCount > 1 ? 'records' : 'record'} for ${targetCompany}?`}
+        confirmLabel={`Save ${validRowsCount > 1 ? 'Records' : 'Record'}`}
+        onConfirm={() => {
+          setIsBatchSaveConfirmOpen(false)
+          void handleSave(true)
+        }}
+      />
+
+      <ConfirmModal
         open={Boolean(pettyCashErrorMessage)}
         onOpenChange={(open) => {
           if (!open) setPettyCashErrorMessage(null)
         }}
         action="warning"
-        title="Insufficient Petty Cash"
+        title="Petty Cash Will Go Negative"
         description={pettyCashErrorMessage ?? ''}
-        cancelLabel=""
-        confirmLabel="Got it"
-        onConfirm={() => setPettyCashErrorMessage(null)}
+        cancelLabel="Cancel"
+        confirmLabel="Continue"
+        onConfirm={() => {
+          setPettyCashErrorMessage(null)
+          const resume = pettyResumeRef.current
+          pettyResumeRef.current = null
+          if (resume) {
+            dayRemarkConfirmedRef.current = resume.remarkPromptConfirmed
+            dayRemarkSkipRef.current = resume.skipDayRemarks
+          }
+          pettyShortfallOkRef.current = true
+          void handleSave(true)
+        }}
       />
     </div>
   )

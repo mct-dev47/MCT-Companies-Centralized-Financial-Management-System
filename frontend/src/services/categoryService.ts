@@ -1,3 +1,5 @@
+import { dashboardService } from '@/services/dashboardService'
+
 export interface CompanyCategory {
   category_id: number
   company_id: number
@@ -27,6 +29,7 @@ class CategoryService {
   }
 
   invalidateCache(companyName?: string, categoryType?: string): void {
+    dashboardService.invalidateCache()
     if (companyName && categoryType) {
       this.cache.delete(this.buildKey(companyName, categoryType))
     } else if (companyName) {

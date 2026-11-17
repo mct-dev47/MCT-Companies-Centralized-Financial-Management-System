@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from app.core.cache import system_cache
 from app.core.company_features import COMPANY_FEATURE_LENDING, FILCAP_COMPANY_ID, require_company_feature_access
 from app.core.dependencies import (
     AuthenticatedUser,
@@ -33,6 +34,20 @@ from app.schemas.lending import (
 )
 
 router = APIRouter()
+
+
+def _changed(result: Any) -> Any:
+    """After a lending change: drop cached notifications and tell every open screen (bell, Lending,
+    Transactions, Bank) to refresh in the background, so a new or changed loan shows without a reload."""
+    system_cache.invalidate_tag("notifications")
+    try:
+        from app.core.websocket import ws_manager
+
+        ws_manager.broadcast_sync({"type": "LENDING_UPDATED"})
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+    except Exception:
+        pass
+    return result
 
 
 def _enforce_lending_access(user: dict, company_id: Optional[int] = None) -> None:
@@ -106,7 +121,7 @@ def create_borrower(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.create_borrower(
+    return _changed(LendingService.create_borrower(
         db=db,
         borrower_name=payload.borrower_name,
         borrower_contact=payload.borrower_contact,
@@ -119,7 +134,7 @@ def create_borrower(
         term_days_val=payload.term_days,
         notes=payload.notes,
         bank_account_id=payload.bank_account_id,
-    )
+    ))
 
 
 @router.put(
@@ -134,11 +149,11 @@ def update_borrower(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.update_borrower(
+    return _changed(LendingService.update_borrower(
         db=db,
         borrower_id=borrower_id,
         payload=payload.model_dump(exclude_unset=True),
-    )
+    ))
 
 
 @router.delete(
@@ -152,7 +167,7 @@ def delete_borrower(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.delete_borrower(db=db, borrower_id=borrower_id)
+    return _changed(LendingService.delete_borrower(db=db, borrower_id=borrower_id))
 
 
 @router.patch(
@@ -178,13 +193,13 @@ def review_borrower_audit(
     if "@" in str(auditor_name) and user_name and "@" not in str(user_name):
         auditor_name = user_name
 
-    return LendingService.save_audit_review(
+    return _changed(LendingService.save_audit_review(
         db=db,
         borrower_id=borrower_id,
         audit_status=payload.audit_status,
         remarks=payload.remarks,
         auditor_name=auditor_name,
-    )
+    ))
 
 
 @router.get(
@@ -254,7 +269,7 @@ def create_transaction(
     _enforce_lending_access(user)
     penalty_val = payload.penalty_amount if payload.penalty_amount is not None else payload.penalty_portion
     recorded_by = payload.recorded_by or user.get("full_name") or user.get("name") or user.get("email") or "System"
-    return LendingService.record_payment(
+    return _changed(LendingService.record_payment(
         db=db,
         borrower_id=payload.borrower_id,
         payment_date_val=payload.payment_date,
@@ -267,7 +282,7 @@ def create_transaction(
         transaction_type=payload.transaction_type,
         cycle_due_date_val=payload.cycle_due_date,
         cycle_index_val=payload.cycle_index,
-    )
+    ))
 
 
 @router.post(
@@ -283,7 +298,7 @@ def record_payment(
 ):
     _enforce_lending_access(user)
     recorded_by = payload.recorded_by or user.get("full_name") or user.get("name") or user.get("email") or "System"
-    return LendingService.record_payment(
+    return _changed(LendingService.record_payment(
         db=db,
         borrower_id=payload.borrower_id,
         payment_date_val=payload.payment_date,
@@ -295,7 +310,7 @@ def record_payment(
         recorded_by=recorded_by,
         cycle_due_date_val=payload.cycle_due_date,
         cycle_index_val=payload.cycle_index,
-    )
+    ))
 
 
 @router.patch(
@@ -310,12 +325,12 @@ def update_payment(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.update_payment(
+    return _changed(LendingService.update_payment(
         db=db,
         transaction_id=transaction_id,
         payload=payload.model_dump(exclude_unset=True),
         user=user,
-    )
+    ))
 
 
 @router.delete(
@@ -329,8 +344,8 @@ def delete_payment(
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.delete_payment(
+    return _changed(LendingService.delete_payment(
         db=db,
         transaction_id=transaction_id,
         user=user,
-    )
+    ))

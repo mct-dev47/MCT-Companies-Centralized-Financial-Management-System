@@ -7,6 +7,12 @@ import {
   Upload,
   Crop,
   AlertTriangle,
+  Building2,
+  MapPin,
+  Phone,
+  PhoneCall,
+  Wallet,
+  Banknote,
 } from 'lucide-react'
 import {
   Dialog,
@@ -279,7 +285,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               ;(document.activeElement as HTMLElement)?.blur()
             }
           }}
-          className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto"
+          className="w-[calc(100vw-2rem)] sm:max-w-[580px] md:max-w-[640px] rounded-2xl p-4 sm:p-6 md:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[90vh] overflow-y-auto"
         >
           <DialogTitle className="sr-only">
             {activeCompany.name} Details
@@ -316,7 +322,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       fileInputRef.current?.click()
                     }
                   }}
-                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-3 bg-white shadow-xs cursor-pointer transition-all overflow-hidden"
+                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-0 bg-white shadow-xs cursor-pointer transition-all overflow-hidden"
                   title={profilePreview ? 'Click to crop / adjust logo' : 'Click to upload company logo'}
                 >
                   <img
@@ -327,11 +333,11 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       target.onerror = null
                       target.src = logo2Url
                     }}
-                    className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
+                    className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white rounded-full">
                     <Crop className="h-5 w-5" />
-                    <span className="text-[10px] font-semibold mt-1">Crop</span>
+                    <span className="text-[10px] font-semibold mt-1">Crop / Change</span>
                   </div>
                 </div>
 
@@ -529,21 +535,21 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                 </div>
               </div>
 
-              {/* Action Buttons: Both on right side */}
-              <div className="flex items-center justify-end gap-3 pt-6 mt-4 border-t border-stroke/20">
+              {/* Action Buttons: Both on right side on desktop, stacked on mobile */}
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 mt-4 border-t border-stroke/20">
                 <Button
                   type="button"
                   variant="outline"
                   disabled={isSubmitting}
                   onClick={() => setIsEditing(false)}
-                  className="h-11 px-7 rounded-xl border border-stroke/50 text-focus hover:bg-surface font-medium text-sm transition-colors cursor-pointer"
+                  className="w-full sm:w-auto h-11 px-7 rounded-xl border border-stroke/50 text-focus hover:bg-surface font-medium text-sm transition-colors cursor-pointer justify-center"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   disabled={isSubmitting}
-                  className="h-11 px-7 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                  className="w-full sm:w-auto h-11 px-7 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                 >
                   {isSubmitting ? (
                     <>
@@ -560,81 +566,110 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               </div>
             </form>
           ) : (
-            /* View Mode in Portrait Orientation */
-            <div className="flex flex-col items-center pt-2">
-              {/* Centered Circular Logo/Profile Badge */}
-              <div className="h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-primary flex items-center justify-center p-3 bg-white shadow-xs overflow-hidden">
-                <img
-                  src={activeCompany.logoUrl || logo2Url}
-                  alt={activeCompany.name}
-                  onError={(e) => {
-                    const target = e.currentTarget
-                    target.onerror = null
-                    target.src = logo2Url
-                  }}
-                  className="h-14 w-14 sm:h-16 sm:w-16 object-contain"
-                />
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold text-focus mt-3.5 tracking-tight text-center">
-                {activeCompany.name}
-              </h2>
-
-              {/* Properly Aligned Key-Value Details */}
-              <div className="w-full space-y-3 pt-5 mt-4 border-t border-stroke/20 text-sm">
-                <div className="flex items-start justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0 mt-0.5">
-                    Address:
-                  </span>
-                  <span className="font-semibold text-focus text-right text-xs sm:text-sm leading-relaxed max-w-[240px]">
-                    {activeCompany.address || '—'}
-                  </span>
+            /* View Mode */
+            <div className="space-y-5 sm:space-y-6">
+              {/* Modern Hero Header Banner */}
+              <div className="-mx-4 -mt-4 sm:-mx-6 sm:-mt-6 md:-mx-7 md:-mt-7 p-4 sm:p-6 md:p-7 bg-gradient-to-b from-rose-50/80 via-rose-50/30 to-white border-b border-rose-100/70 rounded-t-2xl flex flex-col items-center text-center">
+                <div className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full border-4 border-white shadow-md flex items-center justify-center bg-white overflow-hidden shrink-0">
+                  <img
+                    src={activeCompany.logoUrl || logo2Url}
+                    alt={activeCompany.name}
+                    onError={(e) => {
+                      const target = e.currentTarget
+                      target.onerror = null
+                      target.src = logo2Url
+                    }}
+                    className="w-full h-full object-cover"
+                  />
                 </div>
-
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0">
-                    Contact Number:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {activeCompany.contactNumber || '—'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0">
-                    Telephone Number:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {activeCompany.telephoneNumber || '—'}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0">
-                    Starting Balance:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {formatPHP(Number(activeCompany.startingBalance) || 0)}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0">
-                    Petty Cash:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right tabular-nums">
-                    {formatPHP(Number(activeCompany.pettyCash) || 0)}
-                  </span>
+                <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-focus mt-3.5 tracking-tight break-words max-w-full px-2">
+                  {activeCompany.name}
+                </h2>
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-rose-100/80 text-primary border border-rose-200 mt-2">
+                  <Building2 className="h-3.5 w-3.5" />
+                  <span>MCT Group Member</span>
                 </div>
               </div>
 
-              {/* Modal Actions Footer: Both buttons on right side, Cancel removed */}
-              <div className="flex items-center justify-end gap-3 pt-6 mt-4 border-t border-stroke/20 w-full">
+              {/* Main Information Sections */}
+              <div className="space-y-3.5 sm:space-y-4">
+                {/* Contact & Address Section */}
+                <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 sm:p-5 space-y-3.5">
+                  <div className="flex items-start gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0 mt-0.5">
+                      <MapPin className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-medium text-muted-fg block">Address</span>
+                      <p className="text-sm font-semibold text-focus leading-relaxed mt-0.5 break-words">
+                        {activeCompany.address || '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-slate-200/60">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                        <Phone className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-medium text-muted-fg block">Contact Number</span>
+                        <p className="text-sm font-semibold text-focus tabular-nums break-all">
+                          {activeCompany.contactNumber || '—'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                        <PhoneCall className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-xs font-medium text-muted-fg block">Telephone Number</span>
+                        <p className="text-sm font-semibold text-focus tabular-nums break-all">
+                          {activeCompany.telephoneNumber || '—'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Financial Overview Cards - Neutral / Plain White matching other details */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5">
+                  <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                      <Wallet className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-medium text-muted-fg block">Starting Balance</span>
+                      <p className="text-sm font-semibold text-focus tabular-nums mt-0.5">
+                        {formatPHP(Number(activeCompany.startingBalance) || 0)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                      <Banknote className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-medium text-muted-fg block">Petty Cash Fund</span>
+                      <p className="text-sm font-semibold text-focus tabular-nums mt-0.5">
+                        {formatPHP(Number(activeCompany.pettyCash) || 0)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Actions Footer */}
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-4 border-t border-stroke/20 w-full">
                 <Button
                   type="button"
                   variant="outline"
                   disabled={isSubmitting}
                   onClick={handleOpenDeleteConfirm}
-                  className="h-11 px-5 rounded-xl border border-stroke/50 text-focus hover:text-primary hover:border-primary/40 hover:bg-primary/5 font-medium text-sm flex items-center gap-2 transition-colors"
+                  className="w-full sm:w-auto h-11 px-5 rounded-xl border border-stroke/50 text-focus hover:text-primary hover:border-primary/40 hover:bg-primary/5 font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
                   <Trash2 className="h-4 w-4 text-primary" />
                   <span>Delete Company</span>
@@ -644,7 +679,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   type="button"
                   disabled={isSubmitting}
                   onClick={handleStartEdit}
-                  className="h-11 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition-all"
+                  className="w-full sm:w-auto h-11 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                 >
                   <Pencil className="h-4 w-4" />
                   <span>Edit Company</span>

@@ -5,12 +5,14 @@ import {
   Loader2,
   Check,
   ShieldCheck,
+  Shield,
   Building2,
   Mail,
   Upload,
   User as UserIcon,
   Crop,
   Send,
+  Clock,
 } from 'lucide-react'
 import {
   Dialog,
@@ -47,13 +49,6 @@ const ROLES = [
   'Supervisor',
   'Owner',
 ] as const
-
-const formatCompanyList = (names: string[]): string => {
-  if (!names || names.length === 0) return 'no company'
-  if (names.length === 1) return names[0]
-  if (names.length === 2) return `${names[0]} and ${names[1]}`
-  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
-}
 
 
 export const ViewUserModal: React.FC<ViewUserModalProps> = ({
@@ -310,7 +305,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
               ;(document.activeElement as HTMLElement)?.blur()
             }
           }}
-          className="sm:max-w-[640px] md:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[85vh] overflow-y-auto"
+          className="w-[calc(100vw-2rem)] sm:max-w-[580px] md:max-w-[640px] rounded-2xl p-4 sm:p-6 md:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[90vh] overflow-y-auto"
         >
           <DialogTitle className="sr-only">
             {user.fullName} Details
@@ -347,7 +342,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                       fileInputRef.current?.click()
                     }
                   }}
-                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-1 bg-red-50 text-primary font-bold text-2xl shadow-xs cursor-pointer transition-all overflow-hidden"
+                  className="relative group h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-dashed border-primary/50 hover:border-primary flex items-center justify-center p-0 bg-red-50 text-primary font-bold text-2xl shadow-xs cursor-pointer transition-all overflow-hidden"
                   title={editProfilePreview ? 'Click to crop / adjust photo' : 'Click to upload photo'}
                 >
                   {editProfilePreview ? (
@@ -547,21 +542,21 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
 
               </div>
 
-              {/* Action Buttons: Both on right side */}
-              <div className="flex items-center justify-end gap-3 pt-6 mt-4 border-t border-stroke/20">
+              {/* Action Buttons: Both on right side on desktop, stacked on mobile */}
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-5 mt-4 border-t border-stroke/20">
                 <Button
                   type="button"
                   variant="outline"
                   disabled={isSubmitting}
                   onClick={() => setIsEditing(false)}
-                  className="h-11 px-7 rounded-xl border border-stroke/50 text-focus hover:bg-surface font-medium text-sm transition-colors cursor-pointer"
+                  className="w-full sm:w-auto h-11 px-7 rounded-xl border border-stroke/50 text-focus hover:bg-surface font-medium text-sm transition-colors cursor-pointer justify-center"
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
                   disabled={isSubmitting}
-                  className="h-11 px-7 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                  className="w-full sm:w-auto h-11 px-7 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                 >
                   {isSubmitting ? (
                     <>
@@ -578,97 +573,124 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
               </div>
             </form>
           ) : (
-            /* View Mode in Portrait Orientation */
-            <div className="flex flex-col items-center pt-2">
-              {/* Centered Circular User Avatar Badge */}
-              <div className="h-24 w-24 sm:h-28 sm:w-28 rounded-full border-2 border-primary flex items-center justify-center p-1 bg-red-50 text-primary shadow-xs font-bold text-2xl sm:text-3xl overflow-hidden">
-                {user.avatarUrl ? (
-                  <img
-                    src={user.avatarUrl}
-                    alt={user.fullName}
-                    className="h-full w-full object-cover rounded-full"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none'
-                      if (e.currentTarget.parentElement) {
-                        e.currentTarget.parentElement.innerText = initials || 'U'
-                      }
-                    }}
-                  />
-                ) : (
-                  initials || <UserIcon className="h-10 w-10 text-primary" />
-                )}
-              </div>
-              <h2 className="text-xl sm:text-2xl font-bold text-focus mt-3.5 tracking-tight text-center">
-                {user.fullName}
-              </h2>
-              <div className="flex items-center gap-2 mt-1.5">
-                <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-primary/10 text-primary border border-primary/20">
-                  {user.role || (user.isAdmin ? 'Admin' : 'Supervisor')}
-                </span>
-                <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {user.status}
-                </span>
-              </div>
-
-              {/* Key-Value Details */}
-              <div className="w-full space-y-3 pt-5 mt-4 border-t border-stroke/20 text-sm">
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0 flex items-center gap-1.5">
-                    <Mail className="h-3.5 w-3.5 text-muted-fg" />
-                    Email:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right break-all">
-                    {user.email || '—'}
-                  </span>
+            /* View Mode */
+            <div className="space-y-5 sm:space-y-6">
+              {/* Modern Hero Header Banner */}
+              <div className="-mx-4 -mt-4 sm:-mx-6 sm:-mt-6 md:-mx-7 md:-mt-7 p-4 sm:p-6 md:p-7 bg-gradient-to-b from-rose-50/80 via-rose-50/30 to-white border-b border-rose-100/70 rounded-t-2xl flex flex-col items-center text-center">
+                <div className="h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 rounded-full border-4 border-white shadow-md flex items-center justify-center bg-red-50 text-primary font-bold text-xl sm:text-2xl md:text-3xl overflow-hidden shrink-0">
+                  {user.avatarUrl ? (
+                    <img
+                      src={user.avatarUrl}
+                      alt={user.fullName}
+                      className="h-full w-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none'
+                        if (e.currentTarget.parentElement) {
+                          e.currentTarget.parentElement.innerText = initials || 'U'
+                        }
+                      }}
+                    />
+                  ) : (
+                    initials || <UserIcon className="h-10 w-10 text-primary" />
+                  )}
                 </div>
-
-                <div className="flex items-start justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0 mt-0.5 flex items-center gap-1.5">
-                    <Building2 className="h-3.5 w-3.5 text-muted-fg" />
-                    Appointed Companies:
+                <h2 className="text-lg sm:text-xl md:text-2xl font-bold text-focus mt-3.5 tracking-tight break-words max-w-full px-2">
+                  {user.fullName}
+                </h2>
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">
+                    <Shield className="h-3.5 w-3.5" />
+                    <span>{user.role || (user.isAdmin ? 'Admin' : 'Supervisor')}</span>
                   </span>
-                  <div className="flex flex-wrap gap-1 justify-end max-w-[280px]">
-                    {user.companyNames && user.companyNames.length > 0 ? (
-                      user.companyNames.map((cName) => (
-                        <span
-                          key={cName}
-                          className="text-xs px-2.5 py-0.5 rounded font-medium bg-slate-100 text-focus border border-slate-200"
-                        >
-                          {cName}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="font-semibold text-focus text-sm text-right">
-                        {user.companyName || '—'}
-                      </span>
-                    )}
+                  <span
+                    className={`inline-flex items-center text-xs font-semibold px-3 py-1 rounded-full border ${
+                      user.status === 'Active'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-sky-50 text-sky-700 border-sky-200'
+                    }`}
+                  >
+                    {user.status}
+                  </span>
+                  {isProtectedAdmin && (
+                    <span className="inline-flex items-center text-xs font-semibold px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                      Protected
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Main Information Sections */}
+              <div className="space-y-3.5 sm:space-y-4">
+                {/* Account Details Card */}
+                <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 sm:p-5 space-y-3.5">
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                      <Mail className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-medium text-muted-fg block">Email Address</span>
+                      <p className="text-sm font-semibold text-focus break-all mt-0.5">
+                        {user.email || '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 pt-3 border-t border-slate-200/60">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                      <Clock className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <span className="text-xs font-medium text-muted-fg block">Last Login</span>
+                      <p className="text-sm font-semibold text-focus mt-0.5">
+                        {user.lastLogin || 'Never'}
+                      </p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0 flex items-center gap-1.5">
-                    <UserIcon className="h-3.5 w-3.5 text-muted-fg" />
-                    Role:
-                  </span>
-                  <span className="font-semibold text-focus text-sm text-right">
-                    {user.role || (user.isAdmin ? 'Admin' : 'Supervisor')}
-                  </span>
-                </div>
-
-
-
-                <div className="flex items-center justify-between gap-4 py-0.5">
-                  <span className="font-medium text-muted-fg text-sm shrink-0">
-                    Last Login:
-                  </span>
-                  <span className="font-normal text-muted-fg text-xs text-right">
-                    {user.lastLogin || 'Never'}
-                  </span>
+                {/* Appointed Companies Card */}
+                <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 sm:p-5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-primary shrink-0" />
+                      <span className="text-xs font-semibold text-focus uppercase tracking-wider">Appointed Companies</span>
+                    </div>
+                    {user.companyNames && user.companyNames.length > 0 && (
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-200/70 text-focus">
+                        {user.companyNames.length} {user.companyNames.length === 1 ? 'Company' : 'Companies'}
+                      </span>
+                    )}
+                  </div>
+                  <div>
+                    {user.companyNames && user.companyNames.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto pr-1">
+                        {user.companyNames.map((cName) => (
+                          <div
+                            key={cName}
+                            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white text-focus border border-slate-200/80 shadow-2xs text-xs font-medium min-w-0"
+                            title={cName}
+                          >
+                            <div className="w-5 h-5 rounded-md bg-rose-50 text-primary flex items-center justify-center shrink-0">
+                              <Building2 className="h-3 w-3" />
+                            </div>
+                            <span className="truncate">{cName}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white text-focus border border-slate-200/80 shadow-2xs text-xs font-medium">
+                        <div className="w-5 h-5 rounded-md bg-rose-50 text-primary flex items-center justify-center shrink-0">
+                          <Building2 className="h-3 w-3" />
+                        </div>
+                        <span className="truncate">{user.companyName || 'None assigned'}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
               {/* Modal Actions Footer */}
-              <div className="flex items-center justify-end gap-3 pt-6 mt-4 border-t border-stroke/20 w-full">
+              <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2.5 sm:gap-3 pt-4 border-t border-stroke/20 w-full">
                 {isProtectedAdmin ? (
                   <div className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium w-full">
                     <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600" />
@@ -683,7 +705,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                         disabled={isSubmitting || isReinviting}
                         onClick={handleReinvite}
                         className={cn(
-                          "h-11 px-4 rounded-xl border font-medium text-sm flex items-center gap-2 transition-colors cursor-pointer",
+                          "w-full sm:w-auto h-11 px-4 rounded-xl border font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer",
                           reinviteSuccess
                             ? "border-emerald-500 bg-emerald-50 text-emerald-700"
                             : "border-sky-200 text-sky-700 hover:bg-sky-50"
@@ -705,7 +727,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                       variant="outline"
                       disabled={isSubmitting}
                       onClick={() => setIsConfirmDeleteOpen(true)}
-                      className="h-11 px-5 rounded-xl border border-stroke/50 text-focus hover:text-primary hover:border-primary/40 hover:bg-primary/5 font-medium text-sm flex items-center gap-2 transition-colors cursor-pointer"
+                      className="w-full sm:w-auto h-11 px-5 rounded-xl border border-stroke/50 text-focus hover:text-primary hover:border-primary/40 hover:bg-primary/5 font-medium text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
                     >
                       <Trash2 className="h-4 w-4 text-primary" />
                       <span>Delete User</span>
@@ -715,7 +737,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
                       type="button"
                       disabled={isSubmitting}
                       onClick={handleStartEdit}
-                      className="h-11 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center gap-2 shadow-sm transition-all cursor-pointer"
+                      className="w-full sm:w-auto h-11 px-6 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
                     >
                       <Pencil className="h-4 w-4" />
                       <span>Edit User</span>

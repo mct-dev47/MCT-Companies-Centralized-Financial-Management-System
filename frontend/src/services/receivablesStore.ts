@@ -91,7 +91,6 @@ function getLocalTodayStr(): string {
   return formatToYYYYMMDD(new Date())
 }
 
-// Initial Realistic Seed Data: 18 Sales, 10 Customers (5 Staff, 5 External)
 const INITIAL_SALES: UtangSale[] = []
 
 class ReceivablesStore {
@@ -100,8 +99,13 @@ class ReceivablesStore {
   private wsRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor() {
-    this.load()
+    this.sales = []
     if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem(STORAGE_KEY)
+      } catch {
+        // clean up any legacy storage
+      }
       void this.refreshFromBackend()
       const scheduleRefresh = () => {
         if (this.wsRefreshTimer) clearTimeout(this.wsRefreshTimer)
@@ -152,53 +156,22 @@ class ReceivablesStore {
             createdAt: p.created_at || new Date().toISOString(),
           })),
         }))
-        this.saveToStorageOnly()
         this.notify()
       }
     } catch {
-      // Keep optimistic cached data on network error
+      // Keep in-memory data on network error
     }
   }
 
   private saveToStorageOnly(): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.sales))
-    } catch {
-      // ignore quota errors
-    }
+    // Strictly live backend data, no localStorage caching
   }
 
   private load(): void {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw !== null) {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) {
-          this.sales = parsed.map((s) => {
-            const copy = { ...s }
-            delete copy.customer_phone
-            delete copy.customer_role
-            return {
-              ...copy,
-              company: copy.company || '',
-            }
-          })
-          return
-        }
-      }
-    } catch {
-      // ignore parsing errors
-    }
-    this.sales = JSON.parse(JSON.stringify(INITIAL_SALES))
-    this.save()
+    this.sales = []
   }
 
   private save(): void {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.sales))
-    } catch {
-      // ignore quota errors
-    }
     this.notify()
   }
 

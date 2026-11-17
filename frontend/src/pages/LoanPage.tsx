@@ -33,7 +33,6 @@ import { Card } from '@/components/ui/card'
 import { TablePagination, ConfirmModal } from '@/components/common'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
 import { TableErrorState } from '@/components/common/TableErrorState'
-import { StatusPill } from '@/components/common/StatusPill'
 import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
@@ -139,26 +138,8 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const [loans, setLoans] = React.useState<LoanItem[]>([])
   const [loading, setLoading] = React.useState(true)
 
-  // Filter state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-    if (isCompanyScoped && assignedCompany) return assignedCompany
-    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-    return activeCompany || 'All Companies'
-  })
-
-  // Keep selectedCompany in sync if user profile loads after initial render (strictly scoped only)
-  React.useEffect(() => {
-    if (isCompanyScoped && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
-    }
-  }, [isCompanyScoped, user?.assignedCompany])
-
-  // Keep selectedCompany in sync with global activeCompany from context
-  React.useEffect(() => {
-    if (activeCompany) {
-      setSelectedCompany(activeCompany)
-    }
-  }, [activeCompany])
+  // Filter state: strictly locked to activeCompany chosen in Centralized Auth
+  const selectedCompany = activeCompany || assignedCompany
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
   const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
@@ -173,13 +154,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
   // Dropdown menus
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = React.useState(false)
   const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
-  const [companySearch, setCompanySearch] = React.useState('')
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const tableCardRef = React.useRef<HTMLDivElement>(null)
@@ -415,9 +393,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
-      }
-      if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
-        setIsCompanyDropdownOpen(false)
       }
       if (periodDropdownRef.current && !periodDropdownRef.current.contains(target)) {
         setIsPeriodDropdownOpen(false)
@@ -677,13 +652,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     }
   }
 
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyNamesList
-    return companyNamesList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyNamesList])
-
   const displayedCompanyTitle = isCompanyScoped
     ? assignedCompany
     : selectedCompany === 'All Companies'
@@ -772,7 +740,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   setIsExportDropdownOpen((prev) => !prev)
                   setIsPeriodDropdownOpen(false)
                   setIsStatusDropdownOpen(false)
-                  setIsCompanyDropdownOpen(false)
                 }}
                 className={cn(
                   'h-10 sm:h-11 px-4 sm:px-5 rounded-xl font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
@@ -828,114 +795,11 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
           {/* Row 1: All Companies + Periods + Status + Date Range + Approve/Pending Toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 sm:gap-3 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 sm:gap-3 min-w-0">
-              {/* Company Scope: Dropdown for Admin/Finance only */}
-              {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-[2] min-w-[220px] sm:min-w-[260px]">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsCompanyDropdownOpen((prev) => !prev)
-                      setIsPeriodDropdownOpen(false)
-                      setIsStatusDropdownOpen(false)
-                      setIsExportDropdownOpen(false)
-                    }}
-                    className={cn(
-                      'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
-                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                    )}
-                  >
-                    <span className="font-medium text-focus/90 truncate flex-1 text-left">
-                      {selectedCompany}
-                    </span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {selectedCompany !== 'All Companies' && (
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedCompany('All Companies')
-                            setActiveCompany('All Companies')
-                          }}
-                          className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
-                          title="Reset to All Companies"
-                        >
-                          <X className="h-3 w-3" />
-                        </span>
-                      )}
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-fg shrink-0" />
-                    </div>
-                  </button>
-
-                  {isCompanyDropdownOpen && (
-                    <div className="absolute left-0 top-full mt-2 w-68 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150">
-                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                          Filter By Company
-                        </span>
-                        {selectedCompany !== 'All Companies' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCompany('All Companies')
-                              setActiveCompany('All Companies')
-                              setIsCompanyDropdownOpen(false)
-                            }}
-                            className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                          >
-                            Clear Filter
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="px-1 mb-2">
-                        <Input
-                          type="text"
-                          placeholder="Search company…"
-                          value={companySearch}
-                          onChange={(e) => setCompanySearch(e.target.value)}
-                          className="h-8 text-xs rounded-lg"
-                          autoFocus
-                        />
-                      </div>
-
-                      <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                        {filteredCompanyList.length === 0 ? (
-                          <div className="py-4 text-center text-xs text-muted-fg">
-                            No matching companies
-                          </div>
-                        ) : (
-                          filteredCompanyList.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                setSelectedCompany(c)
-                                setActiveCompany(c)
-                                setIsCompanyDropdownOpen(false)
-                                setCompanySearch('')
-                              }}
-                              className={cn(
-                                'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                                selectedCompany === c
-                                  ? 'bg-primary/10 text-primary font-semibold'
-                                  : 'text-focus/80 hover:bg-slate-50'
-                              )}
-                            >
-                              <span className="truncate">{c}</span>
-                              {selectedCompany === c && (
-                                <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                              )}
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-full border border-stroke/60 bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-xs shrink-0 select-none">
-                  <span className="font-semibold text-focus/90 truncate">{assignedCompany}</span>
-                </div>
-              )}
+              {/* Active Company Locked Indicator */}
+              <div className="inline-flex items-center gap-2 h-11 flex-[2] min-w-[220px] sm:min-w-[260px] px-4 rounded-[10px] border border-stroke/60 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs shrink-0 select-none">
+                <Building2 className="w-4 h-4 text-primary shrink-0" />
+                <span className="truncate">{selectedCompany}</span>
+              </div>
 
               {/* Period Dropdown */}
               <div ref={periodDropdownRef} className="relative flex-1 min-w-[120px] sm:min-w-[140px]">
@@ -944,11 +808,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   onClick={() => {
                     setIsPeriodDropdownOpen((prev) => !prev)
                     setIsStatusDropdownOpen(false)
-                    setIsCompanyDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -992,11 +855,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   onClick={() => {
                     setIsStatusDropdownOpen((prev) => !prev)
                     setIsPeriodDropdownOpen(false)
-                    setIsCompanyDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(
-                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap',
+                    'inline-flex items-center justify-between gap-2 h-11 w-full px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus whitespace-nowrap',
                     isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                   )}
                 >
@@ -1053,13 +915,13 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
             <div
               role="group"
               aria-label="Filter loans by approval status"
-              className="inline-flex items-center rounded-full border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
+              className="inline-flex items-center rounded-[10px] border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
             >
               <button
                 type="button"
                 onClick={() => setApprovalTab('Approve')}
                 className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Approve'
                     ? 'bg-[#960C01] text-white shadow-xs'
                     : 'text-focus/70 hover:bg-white/60 hover:text-focus'
@@ -1071,7 +933,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 type="button"
                 onClick={() => setApprovalTab('Pending')}
                 className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
+                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
                   approvalTab === 'Pending'
                     ? 'bg-[#960C01] text-white shadow-xs'
                     : 'text-focus/70 hover:bg-white/60 hover:text-focus'
@@ -1090,7 +952,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               placeholder="Search ref no, company, purpose…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/60 bg-white text-xs sm:text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
         </div>
@@ -1233,6 +1095,10 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                 />
               ) : (
                 paginatedLoans.map((loan) => {
+                  // Used by the status pill below (removed by mistake in 45e8245, which crashed the loan table)
+                  const isPendingFinance =
+                    loan.status === 'Pending Finance Endorsement' || loan.status === 'Pending Approval'
+                  const isPendingAudit = loan.status === 'Pending Audit Approval'
                   const isRejectedFinance = loan.status === 'Rejected by Finance'
                   const isDisapprovedAudit = loan.status === 'Disapproved by Audit'
                   const statusDisplay = getLoanStatusDisplay(loan.status)
@@ -1335,30 +1201,30 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 8. Status */}
                       <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                        <StatusPill
-                          status={
-                            isPendingFinance
-                              ? 'Pending Finance'
-                              : isPendingAudit
-                              ? 'Pending Audit'
-                              : isRejectedFinance
-                              ? 'Rejected'
-                              : isDisapprovedAudit
-                              ? 'Disapproved'
-                              : loan.status || 'Pending'
-                          }
-                          label={
-                            isPendingFinance
-                              ? 'Pending Finance'
-                              : isPendingAudit
-                              ? 'Pending Audit'
-                              : isRejectedFinance
-                              ? 'Rejected'
-                              : isDisapprovedAudit
-                              ? 'Disapproved'
-                              : loan.status || 'Pending'
-                          }
-                        />
+                        <span
+                          className={cn(
+                            'text-xs font-semibold whitespace-nowrap',
+                            isPendingFinance || isPendingAudit
+                              ? 'text-amber-700'
+                              : isRejectedFinance || isDisapprovedAudit || loan.status === 'Overdue'
+                              ? 'text-rose-700'
+                              : loan.status === 'Partially Paid'
+                              ? 'text-blue-700'
+                              : loan.status === 'Disbursed' || loan.status === 'Paid' || loan.status === 'Approved'
+                              ? 'text-emerald-700'
+                              : 'text-slate-700'
+                          )}
+                        >
+                          {isPendingFinance
+                            ? 'Pending Finance'
+                            : isPendingAudit
+                            ? 'Pending Audit'
+                            : isRejectedFinance
+                            ? 'Rejected'
+                            : isDisapprovedAudit
+                            ? 'Disapproved'
+                            : loan.status || 'Pending'}
+                        </span>
                       </TableCell>
 
                       {/* 9. Actions (3 Dots Menu) */}

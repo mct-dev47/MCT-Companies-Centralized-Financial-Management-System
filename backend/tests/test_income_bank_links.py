@@ -136,19 +136,74 @@ def test_lease_bank_must_belong_to_the_company(db):
     assert e.value.status_code == 400
 
 
-def test_changing_lease_bank_only_affects_new_payments(db):
-    svc, lease = _lease(db)
-    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
-    first_sale = out["payments"][0]["sale_id"]
+def _second_jk_bank(db):
     db.add(BankAccount(id="bnk-jk2", bank_name="MBTC", account_name="JK 2", account_number="3",
                        company_name="JK Property and Ventures", company_id=JK,
                        starting_balance=Decimal("0"), current_balance=Decimal("0")))
     db.commit()
+
+
+def test_changing_lease_bank_moves_recorded_payments_and_their_money(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    first_sale = out["payments"][0]["sale_id"]
+    _second_jk_bank(db)
     svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id="bnk-jk2"), USER)
     svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=200), USER)
     db.expire_all()
-    assert db.get(Sale, first_sale).bank_account_id == "bnk-jk"
-    assert _balance(db, "bnk-jk2") == Decimal("200.00")
+    assert db.get(Sale, first_sale).bank_account_id == "bnk-jk2"
+    assert _balance(db, "bnk-jk") == Decimal("1000.00")
+    assert _balance(db, "bnk-jk2") == Decimal("700.00")
+    assert db.query(Sale).count() == 2
+
+
+def test_renaming_the_tenant_patches_the_sale_text(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    sale_id = out["payments"][0]["sale_id"]
+    svc.update_lease(lease["lease_id"], LeaseUpdate(tenant_name="Pedro", unit_name="Unit 9"), USER)
+    db.expire_all()
+    sale = db.get(Sale, sale_id)
+    assert "Rent: Pedro - Unit 9" in sale.particulars
+    assert Decimal(str(sale.amount)) == Decimal("500.00")
+    assert _balance(db, "bnk-jk") == Decimal("1500.00")
+
+
+def test_removing_the_lease_bank_takes_recorded_payments_out_of_the_bank(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    sale_id = out["payments"][0]["sale_id"]
+    after = svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id=""), USER)
+    db.expire_all()
+    assert db.get(Sale, sale_id) is None
+    assert after["payments"][0]["sale_id"] is None
+    assert _balance(db, "bnk-jk") == Decimal("1000.00")
+
+
+def test_adding_a_bank_to_a_lease_puts_recorded_payments_in_it(db):
+    svc, lease = _lease(db, bank=None)
+    svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    after = svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id="bnk-jk"), USER)
+    assert after["payments"][0]["sale_id"] is not None
+    assert _balance(db, "bnk-jk") == Decimal("1500.00")
+
+
+def test_verified_payment_blocks_moving_the_lease_bank(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    sale_id = out["payments"][0]["sale_id"]
+    db.get(Sale, sale_id).audit_status = "Verified"
+    db.commit()
+    _second_jk_bank(db)
+    with pytest.raises(HTTPException) as e:
+        svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id="bnk-jk2"), USER)
+    assert e.value.status_code == 409
+    db.expire_all()
+    assert db.get(Sale, sale_id).bank_account_id == "bnk-jk"
+    assert svc.get_lease(lease["lease_id"], USER)["bank_account_id"] == "bnk-jk"
+    assert _balance(db, "bnk-jk") == Decimal("1500.00")
+    # Notes don't touch the sale, so they can still be edited
+    svc.update_lease(lease["lease_id"], LeaseUpdate(notes="ok"), USER)
 
 
 # ── Lending ─────────────────────────────────────────────────────────────────
@@ -252,3 +307,142 @@ def test_editing_the_principal_updates_the_release(db):
     db.expire_all()
     assert Decimal(str(db.get(Expense, b["releaseExpenseId"]).amount)) == Decimal("600.00")
     assert _balance(db, "bnk-fc") == Decimal("9400.00")
+
+
+def _second_filcap_bank(db):
+    db.add(BankAccount(id="bnk-fc2", bank_name="UB", account_name="FilCap 2", account_number="4",
+                       company_name="FILCAP Prime Holdings Corp.", company_id=FILCAP_COMPANY_ID,
+                       starting_balance=Decimal("5000.00"), current_balance=Decimal("5000.00")))
+    db.commit()
+
+
+def test_changing_borrower_bank_moves_release_and_repayments(db):
+    b = _borrower(db)
+    tx = LendingService.record_payment(
+        db=db, borrower_id=b["borrower_id"], payment_date_val=TODAY.isoformat(), amount_val=Decimal("30"),
+    )
+    sale_id = db.get(LendingTransaction, tx["transaction_id"]).sale_id
+    _second_filcap_bank(db)
+    LendingService.update_borrower(db, b["borrower_id"], {"bank_account_id": "bnk-fc2"})
+    db.expire_all()
+    assert db.get(Sale, sale_id).bank_account_id == "bnk-fc2"
+    assert db.get(Expense, b["releaseExpenseId"]).bank_account_id == "bnk-fc2"
+    assert _balance(db, "bnk-fc") == Decimal("10000.00")
+    assert _balance(db, "bnk-fc2") == Decimal("4030.00")
+
+
+def test_renaming_borrower_patches_repayment_sale_text(db):
+    b = _borrower(db)
+    tx = LendingService.record_payment(
+        db=db, borrower_id=b["borrower_id"], payment_date_val=TODAY.isoformat(), amount_val=Decimal("30"),
+    )
+    sale_id = db.get(LendingTransaction, tx["transaction_id"]).sale_id
+    LendingService.update_borrower(db, b["borrower_id"], {"borrower_name": "Rosa"})
+    db.expire_all()
+    assert "Loan Repayment: Rosa" in db.get(Sale, sale_id).particulars
+    assert "Loan Release: Rosa" in db.get(Expense, b["releaseExpenseId"]).description
+    assert _balance(db, "bnk-fc") == Decimal("9030.00")
+
+
+def test_verified_repayment_blocks_moving_the_borrower_bank(db):
+    b = _borrower(db)
+    tx = LendingService.record_payment(
+        db=db, borrower_id=b["borrower_id"], payment_date_val=TODAY.isoformat(), amount_val=Decimal("30"),
+    )
+    sale_id = db.get(LendingTransaction, tx["transaction_id"]).sale_id
+    db.get(Sale, sale_id).audit_status = "Verified"
+    db.commit()
+    _second_filcap_bank(db)
+    with pytest.raises(HTTPException) as e:
+        LendingService.update_borrower(db, b["borrower_id"], {"bank_account_id": "bnk-fc2"})
+    assert e.value.status_code == 409
+    db.expire_all()
+    assert db.get(Borrower, b["borrower_id"]).bank_account_id == "bnk-fc"
+    assert _balance(db, "bnk-fc") == Decimal("9030.00")
+    assert _balance(db, "bnk-fc2") == Decimal("5000.00")
+
+
+# ── Records made by Tenants / Lending are read-only in Sales and Expenses ───
+
+def test_tenant_and_lending_records_are_tagged_and_locked(db):
+    from app.services import income_bank_links as links
+
+    svc, lease = _lease(db)
+    rent_sale = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)["payments"][0]["sale_id"]
+    b = _borrower(db)
+    tx = LendingService.record_payment(
+        db=db, borrower_id=b["borrower_id"], payment_date_val=TODAY.isoformat(), amount_val=Decimal("30"),
+    )
+    repay_sale = db.get(LendingTransaction, tx["transaction_id"]).sale_id
+    plain = Sale(company_id=JK, amount=Decimal("10"), transaction_date=TODAY, particulars="walk-in")
+    db.add(plain)
+    db.commit()
+
+    assert links.sale_sources(db, [rent_sale, repay_sale, plain.sales_id]) == {
+        rent_sale: "Tenants", repay_sale: "Lending",
+    }
+    assert links.expense_sources(db, [b["releaseExpenseId"]]) == {b["releaseExpenseId"]: "Lending"}
+
+    with pytest.raises(HTTPException) as e:
+        links.assert_not_linked_sale(db, rent_sale)
+    assert e.value.status_code == 409 and "Tenants" in e.value.detail
+    with pytest.raises(HTTPException):
+        links.assert_not_linked_sale(db, repay_sale)
+    with pytest.raises(HTTPException):
+        links.assert_not_linked_expense(db, b["releaseExpenseId"])
+    links.assert_not_linked_sale(db, plain.sales_id)  # an ordinary sale stays editable
+
+
+# ── Edits patch the one bank entry (no reversal lines) ──────────────────────
+
+def _entries(db, **link):
+    from app.models.bank import BankTransaction
+    db.expire_all()
+    q = db.query(BankTransaction)
+    for k, v in link.items():
+        q = q.filter(getattr(BankTransaction, k) == v)
+    return q.all()
+
+
+def test_editing_a_tenant_payment_patches_the_one_bank_deposit(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=1500), USER)
+    pid, sale_id = out["payments"][0]["payment_id"], out["payments"][0]["sale_id"]
+    first = _entries(db, source_sale_id=sale_id)
+    assert len(first) == 1
+    svc.update_payment(lease["lease_id"], pid, PaymentIn(payment_date=TODAY, amount=1000), USER)
+    rows = _entries(db, source_sale_id=sale_id)
+    assert len(rows) == 1 and rows[0].id == first[0].id
+    assert Decimal(str(rows[0].deposit)) == Decimal("1000.00")
+    assert Decimal(str(rows[0].withdrawal or 0)) == Decimal("0.00")
+    assert not rows[0].particulars.startswith("Reversal")
+    assert _balance(db, "bnk-jk") == Decimal("2000.00")
+
+
+def test_moving_lease_bank_moves_the_one_entry(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    sale_id = out["payments"][0]["sale_id"]
+    _second_jk_bank(db)
+    svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id="bnk-jk2"), USER)
+    rows = _entries(db, source_sale_id=sale_id)
+    assert len(rows) == 1 and rows[0].bank_account_id == "bnk-jk2"
+    assert _balance(db, "bnk-jk") == Decimal("1000.00")
+    assert _balance(db, "bnk-jk2") == Decimal("500.00")
+
+
+def test_editing_a_repayment_and_principal_patch_their_one_entries(db):
+    b = _borrower(db)
+    # The principal can only change before any repayment
+    LendingService.update_borrower(db, b["borrower_id"], {"loan_amount": Decimal("600")})
+    rel = _entries(db, source_expense_id=b["releaseExpenseId"])
+    assert len(rel) == 1 and Decimal(str(rel[0].withdrawal)) == Decimal("600.00")
+
+    tx = LendingService.record_payment(
+        db=db, borrower_id=b["borrower_id"], payment_date_val=TODAY.isoformat(), amount_val=Decimal("30"),
+    )
+    sale_id = db.get(LendingTransaction, tx["transaction_id"]).sale_id
+    LendingService.update_payment(db=db, transaction_id=tx["transaction_id"], payload={"amount": Decimal("20")})
+    rows = _entries(db, source_sale_id=sale_id)
+    assert len(rows) == 1 and Decimal(str(rows[0].deposit)) == Decimal("20.00")
+    assert _balance(db, "bnk-fc") == Decimal("9420.00")

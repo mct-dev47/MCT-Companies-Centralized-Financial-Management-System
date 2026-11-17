@@ -18,6 +18,7 @@ from app.schemas.company import AuthorizedCompanyOut, CompanyCreate, CompanyLook
 from app.schemas.notification import CompanyNotificationSettingsOut, CompanyNotificationSettingsUpdate
 from app.services.company_service import CompanyService, CompanyServiceError
 from app.services.audit_service import AuditAction, log_company_management
+from app.core.websocket import ws_manager
 
 router = APIRouter()
 ALLOWED_COMPANY_PICTURE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -59,14 +60,37 @@ def _validate_image_file(picture: UploadFile, picture_data: bytes) -> None:
         )
 
 
-# get all companies (accessible to authenticated users)
+def _extract_allowed_company_ids(current_user: AuthenticatedUser) -> Optional[set[int]]:
+    role = (current_user.get("role") or "").lower()
+    if current_user.get("is_admin") or role in ("admin", "audit", "auditor", "owner"):
+        return None
+    allowed_ids = set()
+    if current_user.get("company_ids"):
+        for cid in current_user["company_ids"]:
+            try:
+                if cid is not None:
+                    allowed_ids.add(int(cid))
+            except (ValueError, TypeError):
+                pass
+    if current_user.get("company_id") is not None:
+        try:
+            allowed_ids.add(int(current_user["company_id"]))
+        except (ValueError, TypeError):
+            pass
+    return allowed_ids
+
+
+# get all companies (accessible to authenticated users, scoped by role)
 @router.get("", response_model=list[CompanyOut], summary="List all MCT companies")
 def get_companies(
-    _: CurrentUser,
+    current_user: CurrentUser,
     db: Session = Depends(get_db),
 ):
     try:
-        return CompanyService(db).list_companies()
+        allowed_ids = _extract_allowed_company_ids(current_user)
+        if allowed_ids is not None and not allowed_ids:
+            return []
+        return CompanyService(db).list_companies(company_ids=allowed_ids)
     except CompanyServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -77,11 +101,14 @@ def get_companies(
 # fast lightweight lookup for company dropdowns and selectors
 @router.get("/lookup", response_model=list[CompanyLookupOut], summary="Fast company lookup for dropdowns")
 def lookup_companies(
-    _: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     try:
-        return CompanyService(db).list_companies_lookup()
+        allowed_ids = _extract_allowed_company_ids(current_user)
+        if allowed_ids is not None and not allowed_ids:
+            return []
+        return CompanyService(db).list_companies_lookup(company_ids=allowed_ids)
     except CompanyServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -119,8 +146,13 @@ def get_authorized_companies(
         except (ValueError, TypeError):
             pass
 
-    if role in ("finance", "audit", "auditor"):
-        user_role_label = "Finance" if role == "finance" else "Auditor"
+    if role == "finance":
+        user_role_label = "Finance"
+        if not allowed_ids:
+            return []
+        companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
+    elif role in ("audit", "auditor"):
+        user_role_label = "Auditor"
         if allowed_ids:
             companies = query.filter(Company.company_id.in_(allowed_ids)).order_by(Company.company_id.asc()).all()
         else:
@@ -196,6 +228,14 @@ def create_company(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 
@@ -249,6 +289,14 @@ async def create_company_with_picture(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 
@@ -284,6 +332,14 @@ def update_company(
         ip_address=request.client.host if request.client else "unknown",
         extra={"company_name": result.name},
     )
+    ws_manager.broadcast_sync({
+        "type": "COMPANY_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name, "action": "updated"},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"company_id": result.id, "company_name": result.name},
+    })
     return result
 
 

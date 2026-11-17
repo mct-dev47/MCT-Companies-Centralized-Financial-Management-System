@@ -184,40 +184,47 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
   }, [open, defaultBorrower, allCompanyNames])
 
   // Pre-validate and show confirmation dialogue
-  const handlePreSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError('')
-    const errors: typeof fieldErrors = {}
+    if (isSubmitting) return
 
-    const todayIso = formatToYYYYMMDD(new Date())
-    if (!date.trim()) {
-      errors.date = 'Date is required.'
-    } else if (date.trim() > todayIso) {
-      errors.date = 'Date cannot be in the future (maximum date is today).'
-    }
+    if (!isReviewing) {
+      setError('')
+      const errors: typeof fieldErrors = {}
 
-    if (!particulars.trim()) {
-      errors.particulars = 'Particulars description is required.'
-    }
+      const todayIso = formatToYYYYMMDD(new Date())
+      if (!date.trim()) {
+        errors.date = 'Date is required.'
+      } else if (date.trim() > todayIso) {
+        errors.date = 'Date cannot be in the future (maximum date is today).'
+      }
 
-    if (!borrowerCompany.trim()) {
-      errors.borrower = 'Borrower company is required.'
-    }
+      if (!particulars.trim()) {
+        errors.particulars = 'Particulars description is required.'
+      }
 
-    const cleanedAmount = amount.replace(/,/g, '').trim()
-    const parsedAmount = parseFloat(cleanedAmount)
-    if (!cleanedAmount || isNaN(parsedAmount) || parsedAmount < 1.0) {
-      errors.amount = 'Amount must be at least 1.00 (cannot be 0 or letters).'
-    }
+      if (!borrowerCompany.trim()) {
+        errors.borrower = 'Borrower company is required.'
+      }
 
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors)
-      setError('Please fill in all required fields.')
+      const cleanedAmount = amount.replace(/,/g, '').trim()
+      const parsedAmount = parseFloat(cleanedAmount)
+      if (!cleanedAmount || isNaN(parsedAmount) || parsedAmount < 1.0) {
+        errors.amount = 'Amount must be at least 1.00 (cannot be 0 or letters).'
+      }
+
+      if (Object.keys(errors).length > 0) {
+        setFieldErrors(errors)
+        setError('Please fill in all required fields.')
+        return
+      }
+
+      setFieldErrors({})
+      setIsReviewing(true)
       return
     }
 
-    setFieldErrors({})
-    setIsReviewing(true)
+    await handleConfirmedSubmit()
   }
 
   // Confirmed submission
@@ -248,7 +255,6 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       onSuccess(created)
     } catch (err: any) {
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record loan entry.'))
-      setIsReviewing(false)
     } finally {
       setIsSubmitting(false)
     }
@@ -277,13 +283,13 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
             </div>
           </DialogHeader>
 
-          <form onSubmit={handlePreSubmit} className="space-y-4 pt-2">
+          <form onSubmit={handleSubmit} className="space-y-4 pt-2">
             {isReviewing ? (
               <ModalReviewStep
-                title="Review Loan Issuance Details"
+                variant="neutral"
+                title={isCompanyUser ? 'Review Loan Request Details' : 'Review Loan Issuance Details'}
                 subtitle="Please verify inter-company loan terms before issuing."
                 errorMessage={error}
-                warningNotice="Note: This loan request will be placed in Pending Approval until confirmed by management."
                 items={[
                   { label: 'Borrower', value: borrowerCompany, highlight: true },
                   { label: 'Principal Amount', value: formatPHP(parseFloat(amount.replace(/,/g, '')) || 0), isCurrency: true },
@@ -353,10 +359,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     <div className="flex items-center gap-2 truncate">
                       <Building2 className="w-4 h-4 text-primary shrink-0" />
                       <span className="truncate font-semibold">{borrowerCompany}</span>
-                    </div>
-                    <span className="text-[11px] text-muted-fg font-normal px-2 py-0.5 rounded-md bg-white border border-stroke/30 shrink-0">
-                      Automatic (Account)
-                    </span>
+                    </div>  
                   </div>
                 )}
                 <FormFieldError error={fieldErrors.borrower} />
@@ -520,7 +523,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
               isLoading={isSubmitting}
               className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <span>{isReviewing ? 'Issue Loan' : 'Review Loan'}</span>
+              <span>{isReviewing ? 'Submit Loan' : (isCompanyUser ? 'Request Loan' : 'Record Loan')}</span>
             </Button>
           </div>
         </form>

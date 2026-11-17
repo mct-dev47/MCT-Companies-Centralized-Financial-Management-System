@@ -1453,8 +1453,40 @@ class LendingService:
                 db.rollback()
                 raise
 
+        # Repayments already recorded sit on the borrower's bank as sales: a new bank or name patches them too.
+        repayments_to_patch: List[LendingTransaction] = []
+        if (b.bank_account_id, b.borrower_name) != (old_release[2], old_release[3]):
+            from app.models.finance import Sale
+
+            for t in db.query(LendingTransaction).filter(LendingTransaction.borrower_id == b.borrower_id).all():
+                if (t.transaction_type or "Repayment") != "Repayment":
+                    continue
+                sale = db.query(Sale).filter(Sale.sales_id == t.sale_id).first() if t.sale_id else None
+                if sale is None and not b.bank_account_id:
+                    continue
+                if sale is not None and links.is_verified(sale.audit_status):
+                    db.rollback()
+                    raise HTTPException(
+                        status_code=409,
+                        detail="A repayment on this loan is already in Sales and has been Verified by an Auditor, "
+                               "so the borrower's bank or name can no longer be changed.",
+                    )
+                repayments_to_patch.append(t)
+
         db.commit()
         db.refresh(b)
+        for t in repayments_to_patch:
+            if b.bank_account_id:
+                t.sale_id = cls._save_repayment_sale(db, b, t, b.bank_account_id)
+                db.commit()
+                links.reconcile_sale(db, t.sale_id)
+            elif t.sale_id:
+                # Bank removed: the repayment no longer sits in any bank
+                links.remove_income_sale(db, t.sale_id)
+                t.sale_id = None
+                db.commit()
+        if repayments_to_patch:
+            db.refresh(b)
         if release_changed:
             if b.bank_account_id:
                 links.reconcile_expense(db, b.release_expense_id)
@@ -1939,6 +1971,22 @@ class LendingService:
             "notes": notes or "",
         })
 
+    @staticmethod
+    def _save_repayment_sale(db: Session, borrower: Borrower, tx: LendingTransaction, bank_account_id: str) -> int:
+        """Create or patch the sale that puts one repayment (with its penalty) on the bank. Flushes only."""
+        return links.save_income_sale(
+            db,
+            sale_id=tx.sale_id,
+            company_id=FILCAP_COMPANY_ID,
+            bank_account_id=bank_account_id,
+            amount=quantize(tx.amount) + quantize(tx.penalty_portion or 0),
+            tx_date=tx.payment_date,
+            particulars=f"Loan Repayment: {borrower.borrower_name} - {borrower.borrower_ref_no} - {tx.transaction_ref_no or tx.transaction_id}",
+            category=links.REPAYMENT_CATEGORY,
+            payment_method=tx.payment_method,
+            reference_no=None if tx.reference_no in (None, "-") else tx.reference_no,
+        )
+
     @classmethod
     def update_payment(
         cls,
@@ -2056,26 +2104,16 @@ class LendingService:
             is_settled = (paid_by_cycle.get(cycle_key, Decimal("0.00")) >= installment_target) or (remaining_balance <= Decimal("0.00"))
             t.status = "Completed" if is_settled else "Partially Paid"
 
-        # Keep the linked sale equal to the payment (the sale keeps its own bank)
+        # Keep the linked sale (and so the bank) equal to the payment, on the borrower's bank.
+        # An older borrower with no bank keeps the sale where it is.
         sale_bank = borrower.bank_account_id
-        if tx.sale_id:
+        if not sale_bank and tx.sale_id:
             from app.models.finance import Sale
             linked_sale = db.query(Sale).filter(Sale.sales_id == tx.sale_id).first()
             if linked_sale is not None and linked_sale.bank_account_id:
                 sale_bank = linked_sale.bank_account_id
         if sale_bank and (tx.transaction_type or "Repayment") == "Repayment":
-            tx.sale_id = links.save_income_sale(
-                db,
-                sale_id=tx.sale_id,
-                company_id=FILCAP_COMPANY_ID,
-                bank_account_id=sale_bank,
-                amount=quantize(tx.amount) + quantize(tx.penalty_portion or 0),
-                tx_date=tx.payment_date,
-                particulars=f"Loan Repayment: {borrower.borrower_name} - {borrower.borrower_ref_no} - {tx.transaction_ref_no or tx.transaction_id}",
-                category=links.REPAYMENT_CATEGORY,
-                payment_method=tx.payment_method,
-                reference_no=None if tx.reference_no in (None, "-") else tx.reference_no,
-            )
+            tx.sale_id = cls._save_repayment_sale(db, borrower, tx, sale_bank)
         updated_sale_id = tx.sale_id
 
         db.commit()

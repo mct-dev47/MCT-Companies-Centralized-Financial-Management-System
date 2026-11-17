@@ -43,6 +43,8 @@ export interface LoanItem {
   auditReviewedAt?: string
   auditRemark?: string
   disbursedBy?: string
+  /** The borrower's bank that received the money on disbursement (bankAccountId is the lender's). */
+  borrowerBankAccountId?: string
   disbursedAt?: string
   auditStatus: 'Verified' | 'Pending Audit' | 'Flagged'
   auditedBy?: string
@@ -186,6 +188,7 @@ function mapBackendLoanToItem(l: any): LoanItem {
     lenderId: l.lender,
     lender: lName,
     bankAccountId: l.bank_account_id || l.bankAccountId,
+    borrowerBankAccountId: l.borrower_bank_account_id || undefined,
     company: bName,
     status: l.status || finalStatus,
     endorsedBy: l.endorsed_by,

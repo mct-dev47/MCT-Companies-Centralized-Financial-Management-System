@@ -40,6 +40,19 @@ from app.services.bills_service import _resolve_company
 PETTY_CASH_METHOD = "petty cash"
 logger = logging.getLogger(__name__)
 
+# Funding choice sent in `bank_account_id` when Finance pays a reimbursement out of the company's
+# own petty cash box instead of a bank. Stored as payment_method_option, with no bank account.
+PETTY_CASH_FUNDING = "petty_cash"
+PETTY_CASH_FUNDING_LABEL = "Company Petty Cash"
+
+
+def _is_petty_cash_funding_choice(raw_bank_id) -> bool:
+    return str(raw_bank_id or "").strip().lower() == PETTY_CASH_FUNDING
+
+
+def _is_petty_cash_funded(topup) -> bool:
+    return (getattr(topup, "payment_method_option", None) or "").strip().lower() == PETTY_CASH_FUNDING
+
 LEDGER_MOVEMENT_STATUSES = {
     "pending finance endorsement",
     "pending finance approval",
@@ -94,10 +107,22 @@ def _resolve_receipt_url(receipt_url: Optional[str], attachments: Optional[str])
     return None
 
 
+def _receipt_storage_failed(exc: Exception) -> HTTPException:
+    """A receipt that cannot go to the bucket stops the save (its bytes are never kept in the database)."""
+    logger.warning("Receipt could not be stored in the bucket: %s", exc)
+    return HTTPException(
+        status_code=502,
+        detail=f"The receipt could not be saved to storage, so nothing was saved. {exc} Please try again.",
+    )
+
+
 def _prepare_receipts(receipt_url: Optional[str], attachments: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Move any inline receipt bytes into the receipts bucket; return storage refs to persist."""
-    atts = receipt_storage.normalize_attachments(attachments)
-    rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    try:
+        atts = receipt_storage.normalize_attachments(attachments)
+        rurl = receipt_storage.normalize_receipt_url(receipt_url, atts)
+    except receipt_storage.ReceiptStorageError as exc:
+        raise _receipt_storage_failed(exc)
     if not rurl:
         rurl = receipt_storage.first_attachment_ref(atts) or _resolve_receipt_url(None, atts)
     return rurl, atts
@@ -159,6 +184,33 @@ def _in_period(day: Optional[date], start: Optional[date], end: Optional[date]) 
     if end and day > end:
         return False
     return True
+
+
+_LEDGER_TYPE_RANK = {"topup": 0, "request": 1}
+
+
+def _created_ts(value) -> float:
+    """Seconds for a created_at value; rows without one sort after the dated ones of that day."""
+    if isinstance(value, datetime):
+        return value.timestamp()
+    if isinstance(value, str) and value.strip():
+        try:
+            return datetime.fromisoformat(value.strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    return float("inf")
+
+
+def _ledger_chronological_key(entry: dict):
+    """Oldest first: by day, then when the row was recorded, then top ups before requests before expenses."""
+    day = entry["entry_date"]
+    day = day.date() if isinstance(day, datetime) else _to_date(day)
+    return (
+        day,
+        _created_ts(entry.get("created_at")),
+        _LEDGER_TYPE_RANK.get(entry["entry_type"], 2),
+        entry["record_id"],
+    )
 
 
 class PettyCashService:
@@ -360,28 +412,6 @@ class PettyCashService:
         ) + reimbursed
         return topped_up - spent
 
-    def ensure_sufficient_balance(
-        self,
-        company_id: Optional[int],
-        payment_method: Optional[str],
-        amount: Optional[Decimal],
-        exclude_expense_id: Optional[int] = None,
-        category: Optional[str] = None,
-    ) -> None:
-        """Block a petty cash expense that would take the wallet below zero."""
-        if not company_id or not is_petty_cash(payment_method) or amount is None:
-            return
-        available = self.get_balance(company_id, exclude_expense_id=exclude_expense_id)
-        if Decimal(str(amount)) > available:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Insufficient petty cash balance (₱{max(available, ZERO):,.2f} available, "
-                    f"requested ₱{Decimal(str(amount)):,.2f}). Petty cash cannot go below ₱0.00. "
-                    "Top up petty cash first."
-                ),
-            )
-
     def _build_summary(
         self,
         company: Company,
@@ -545,12 +575,14 @@ class PettyCashService:
                 getattr(t, "attachments", None),
             )
 
+            pc_funded_payout = _is_petty_cash_funded(t)
+            requesting_company_name = comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown")
             common_data = {
                 "funding_bank_id": funding_bank.id if funding_bank else None,
-                "funding_bank_name": funding_bank.bank_name if funding_bank else None,
+                "funding_bank_name": PETTY_CASH_FUNDING_LABEL if pc_funded_payout else (funding_bank.bank_name if funding_bank else None),
                 "funding_account_name": funding_bank.account_name if funding_bank else None,
-                "funding_company_name": funding["company_name"] if funding else None,
-                "is_own_account": bool(funding and funding["is_own_account"]),
+                "funding_company_name": requesting_company_name if pc_funded_payout else (funding["company_name"] if funding else None),
+                "is_own_account": pc_funded_payout or bool(funding and funding["is_own_account"]),
                 "record_id": t.topup_id,
                 "company_id": t.company_id,
                 "company_name": comp_map.get(t.company_id, t.company.company_name if t.company else "Unknown"),
@@ -619,16 +651,22 @@ class PettyCashService:
 
                 # 2. Replenishment reimbursement row (if employee paid out of pocket)
                 reimb_amt = out_of_pocket if t.total_expenses is not None else amt
+                # Paid out of petty cash: the payout expense is shown on this row, not as its own row.
+                payout_exp_id = getattr(t, "reimbursement_expense_id", None) if pc_funded_payout else None
+                payout_exp = expenses_by_id.get(payout_exp_id) if payout_exp_id else None
+                if payout_exp:
+                    rendered_expense_ids.add(payout_exp_id)
+                    rendered_refs.add(f"PC-REIMB-{t.topup_id}")
                 if (reimb_amt > ZERO or (not added_any and pc_funded <= ZERO)) and not (is_auditor and is_unendorsed):
                     entries.append({
                         **common_data,
                         "entry_id": f"topup-{t.topup_id}-reimb",
-                        "entry_type": "request",
+                        "entry_type": "expense" if payout_exp else "request",
                         "description": f"[Reimbursement] {t.description}" if t.description else "Petty cash reimbursement request",
                         "category": getattr(t, "category", None) or "Reimbursement",
                         "amount_requested": reimb_amt,
                         "amount_in": ZERO,
-                        "amount_out": ZERO,
+                        "amount_out": payout_exp["amount"] if payout_exp else ZERO,
                         "request_type": "reimbursement",
                         **self._derive_workflow_audit_fields(t, status_val),
                     })
@@ -712,11 +750,15 @@ class PettyCashService:
                 "created_at": e.get("created_at"),
             })
 
-        # Running balance is computed over the full history chronologically
-        entries.sort(key=lambda e: (e["entry_date"], 0 if e["entry_type"] == "topup" else (1 if e["entry_type"] == "request" else 2), e["record_id"]))
-        running = ZERO
+        # Each row's running balance is its company's petty cash balance right after it (the ending
+        # balance), worked out oldest first over the full history. Same-day rows follow the order
+        # they were recorded in, which is also the order the page lists them in.
+        entries.sort(key=_ledger_chronological_key)
+        running_by_company: Dict[Optional[int], Decimal] = {}
         for entry in entries:
-            running += entry["amount_in"] - entry["amount_out"]
+            cid = entry.get("company_id")
+            running = running_by_company.get(cid, ZERO) + entry["amount_in"] - entry["amount_out"]
+            running_by_company[cid] = running
             entry["running_balance"] = running
 
         # The opening float still seeds the running balance above, but is not listed as a row.
@@ -880,6 +922,13 @@ class PettyCashService:
             # Zero-excess claims paid purely from company petty cash deduct immediately as Expenses
             # and have no reimbursement payout movement to track on the Transactions page.
             if req_type in ("reimbursement", "replenishment") and move_amt <= ZERO:
+                continue
+            # A reimbursement moves money only when Finance disburses it, so like the bank it
+            # reaches the Transactions page only once it is Reimbursed.
+            if req_type in ("reimbursement", "replenishment") and (t.status or "").strip().lower() != "reimbursed":
+                continue
+            # Paid from Company Petty Cash: its Petty Cash payout expense already lists it there.
+            if req_type in ("reimbursement", "replenishment") and _is_petty_cash_funded(t):
                 continue
 
             funding = None
@@ -1191,7 +1240,9 @@ class PettyCashService:
     def _topup_output(self, topup: PettyCashTopUp) -> PettyCashTopUpOut:
         output = PettyCashTopUpOut.model_validate(topup)
         output.company_name = topup.company.company_name if topup.company else None
-        if topup.bank_account_id:
+        if _is_petty_cash_funded(topup):
+            output.funding_bank_name = PETTY_CASH_FUNDING_LABEL
+        elif topup.bank_account_id:
             b = self.db.query(BankAccount).filter(BankAccount.id == topup.bank_account_id).first()
             if b:
                 output.funding_bank_name = b.bank_name
@@ -1210,8 +1261,13 @@ class PettyCashService:
         company = self.resolve_company(topup_in.company_id, topup_in.company_name or topup_in.company)
         req_type = (topup_in.request_type or "topup").strip().lower()
 
+        # Company Petty Cash can fund a reimbursement payout, never a top up (a top up fills petty cash).
+        use_petty_cash_funding = _is_petty_cash_funding_choice(topup_in.bank_account_id)
+        if use_petty_cash_funding and req_type != "reimbursement":
+            raise HTTPException(status_code=422, detail="A top up must be funded from a bank account.")
+
         # Fail closed before any DB lock/write if a supplied funding bank is foreign or missing.
-        validated_bank = self._validate_company_funding_bank(
+        validated_bank = None if use_petty_cash_funding else self._validate_company_funding_bank(
             topup_in.bank_account_id,
             company.company_id,
             company.company_name,
@@ -1313,7 +1369,16 @@ class PettyCashService:
             endorsed_time = func.now()
             fin_remark = topup_in.finance_remark or topup_in.endorsement_remark or "Endorsed upon creation by Finance"
 
-            if req_type == "reimbursement" and not bank_id:
+            if req_type == "reimbursement" and use_petty_cash_funding:
+                # The float must cover the payout on top of what this claim already took from it.
+                available = self.get_unreserved_balance(company.company_id) - immediate_pc_amount
+                if _to_decimal(payable_amount) > available:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Insufficient petty cash to fund this reimbursement. Available: ₱{available:,.2f}, required: ₱{_to_decimal(payable_amount):,.2f}.",
+                    )
+                payment_opt = PETTY_CASH_FUNDING
+            elif req_type == "reimbursement" and not bank_id:
                 raise HTTPException(
                     status_code=422,
                     detail="Please choose a funding bank account before submitting to Internal Audit.",
@@ -1538,10 +1603,14 @@ class PettyCashService:
             topup.paid_by = paid_by.strip() or None
         if category is not None:
             topup.category = category.strip() or None
-        if attachments is not None:
-            topup.attachments = receipt_storage.normalize_attachments(attachments)
-        if receipt_url is not None:
-            topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        try:
+            if attachments is not None:
+                topup.attachments = receipt_storage.normalize_attachments(attachments)
+            if receipt_url is not None:
+                topup.receipt_url = receipt_storage.normalize_receipt_url(receipt_url, topup.attachments)
+        except receipt_storage.ReceiptStorageError as exc:
+            self.db.rollback()
+            raise _receipt_storage_failed(exc)
         if items is not None:
             topup.items = items
 
@@ -1733,7 +1802,20 @@ class PettyCashService:
         is_zero_excess = is_reimbursement and (_to_decimal(topup.amount) == ZERO or _to_decimal(topup.employee_out_of_pocket) == ZERO)
 
         cleaned_bank_id = str(bank_account_id).strip() if bank_account_id else ""
-        if is_zero_excess:
+        if _is_petty_cash_funding_choice(cleaned_bank_id):
+            if not is_reimbursement:
+                raise HTTPException(status_code=422, detail="A top up must be funded from a bank account.")
+            payout = _to_decimal(topup.amount)
+            available = self.get_unreserved_balance(topup.company_id)
+            if not is_zero_excess and payout > available:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Insufficient petty cash to fund this reimbursement. Available: ₱{available:,.2f}, required: ₱{payout:,.2f}.",
+                )
+            topup.bank_account_id = None
+            topup.payment_method_option = PETTY_CASH_FUNDING
+            topup.destination_bank_id = None
+        elif is_zero_excess:
             if cleaned_bank_id:
                 source_acc = self._validate_company_funding_bank(cleaned_bank_id, topup.company_id)
                 topup.bank_account_id = source_acc.id
@@ -1960,40 +2042,54 @@ class PettyCashService:
                 )
             funding_bank_id = topup.bank_account_id
 
-        if not funding_bank_id:
-            raise HTTPException(status_code=400, detail="No funding bank account configured for reimbursement.")
-
-        # Lock funding bank account and validate balance (AC-14)
-        bank_acc = self._get_bank_account_with_lock(funding_bank_id)
-        if not bank_acc:
-            raise HTTPException(status_code=400, detail="Funding bank account not found.")
-
         O = _to_decimal(topup.amount)
-        if _to_decimal(bank_acc.current_balance) < O:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Insufficient bank funds in {bank_acc.bank_name}. Available balance: ₱{bank_acc.current_balance:,.2f}, required: ₱{O:,.2f}."
+        paid_from_petty_cash = _is_petty_cash_funded(topup) and not is_transfer_first
+        bank_acc = None
+        tx = None
+
+        if paid_from_petty_cash:
+            # Paid out of the company's petty cash box: no bank moves, the float goes down.
+            self._get_wallet_with_lock(topup.company_id)
+            available = self.get_unreserved_balance(topup.company_id, exclude_topup_id=topup.topup_id)
+            if O > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient petty cash. Available balance: ₱{available:,.2f}, required: ₱{O:,.2f}.",
+                )
+        else:
+            if not funding_bank_id:
+                raise HTTPException(status_code=400, detail="No funding bank account configured for reimbursement.")
+
+            # Lock funding bank account and validate balance (AC-14)
+            bank_acc = self._get_bank_account_with_lock(funding_bank_id)
+            if not bank_acc:
+                raise HTTPException(status_code=400, detail="Funding bank account not found.")
+
+            if _to_decimal(bank_acc.current_balance) < O:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Insufficient bank funds in {bank_acc.bank_name}. Available balance: ₱{bank_acc.current_balance:,.2f}, required: ₱{O:,.2f}."
+                )
+
+            # Coordinate under wallet lock
+            self._get_wallet_with_lock(topup.company_id)
+
+            # 1. Execute bank withdrawal
+            bank_svc = BankService(self.db)
+            ref_no = topup.reference_no or f"REIMB-{topup.topup_id}"
+            tx_date = datetime.now().strftime("%m/%d/%y")
+            withdraw_req = BankDepositWithdrawRequest(
+                amount=O,
+                date=tx_date,
+                particulars=f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'} (Ref: {ref_no})",
+                category="Bank Transfer" if topup.payment_method_option == "direct" else "Cheque",
+                reference_no=ref_no,
             )
-
-        # Coordinate under wallet lock
-        self._get_wallet_with_lock(topup.company_id)
-
-        # 1. Execute bank withdrawal
-        bank_svc = BankService(self.db)
-        ref_no = topup.reference_no or f"REIMB-{topup.topup_id}"
-        tx_date = datetime.now().strftime("%m/%d/%y")
-        withdraw_req = BankDepositWithdrawRequest(
-            amount=O,
-            date=tx_date,
-            particulars=f"Petty Cash Reimbursement for {topup.paid_by or 'Employee'} (Ref: {ref_no})",
-            category="Bank Transfer" if topup.payment_method_option == "direct" else "Cheque",
-            reference_no=ref_no,
-        )
-        _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req)
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": bank_acc.id}})
+            _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req)
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": bank_acc.id}})
 
         # 2. Method A (Direct Payment): record intercompany transfer
-        if topup.payment_method_option == "direct":
+        if bank_acc is not None and topup.payment_method_option == "direct":
             ict_ref = f"ICT-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
             transfer = IntercompanyTransfer(
                 source_company_id=bank_acc.company_id,
@@ -2042,7 +2138,20 @@ class PettyCashService:
             )
             topup.petty_cash_expense_id = new_pc_exp.expense_id
 
-        if O > ZERO:
+        if O > ZERO and paid_from_petty_cash:
+            # A Petty Cash expense is what lowers the float (the balance is derived from them).
+            payout_exp = self._create_petty_cash_expense(
+                company_id=topup.company_id,
+                expense_date=topup.topup_date,
+                amount=O,
+                category_name=topup.category,
+                description=topup.description or f"Reimbursement Payout for {topup.paid_by or 'Employee'}",
+                reference_no=f"PC-REIMB-{topup.topup_id}",
+                created_by=topup.created_by,
+                linked_topup_id=topup.topup_id,
+            )
+            topup.reimbursement_expense_id = payout_exp.expense_id
+        elif O > ZERO:
             new_reimb_exp = Expense(
                 company_id=topup.company_id,
                 category_id=cat_obj.category_id if cat_obj else None,

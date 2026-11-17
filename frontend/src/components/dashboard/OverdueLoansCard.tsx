@@ -10,7 +10,7 @@ interface OverdueLoansCardProps {
 }
 
 export const OverdueLoansCard: React.FC<OverdueLoansCardProps> = ({
-  count = 3,
+  count = 0,
   className,
   onClick,
 }) => {

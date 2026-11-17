@@ -25,6 +25,8 @@ export interface DailyRentRecord {
   periodIndex?: number
   createdBy?: number
   createdByName?: string
+  /** The Sale that credited this payment to the bank (spec 0045). That Sale is the payment's row in Transactions. */
+  saleId?: string
 }
 
 export interface TenantLease {
@@ -170,6 +172,7 @@ export function mapLease(b: any): TenantLease {
         periodIndex: p.period_index ?? undefined,
         createdBy: p.created_by ?? undefined,
         createdByName: p.created_by_name || undefined,
+        saleId: p.sale_id != null ? String(p.sale_id) : undefined,
       })
     ),
   }

@@ -211,12 +211,12 @@ export function deriveTransactionLifecycle(
         ? 'Paid · Audited'
         : isAuditFlagged
           ? 'Paid · Flagged'
-          : 'Paid · Audit pending'
+          : 'Paid · Audit Pending'
       shortStatusLabel = isAuditVerified
         ? 'Audited'
         : isAuditFlagged
           ? 'Flagged'
-          : 'Audit pending'
+          : 'Audit Pending'
     } else {
       const base = tx.awaitingAudit ? 'Pending audit approval' : paidStepTitle
       label = isAuditFlagged
@@ -375,13 +375,13 @@ export function deriveTransactionLifecycle(
     ? 'Deposited · Audited'
     : isAuditFlagged
       ? 'Deposited · Flagged'
-      : 'Deposited · Audit pending'
+      : 'Deposited · Audit Pending'
 
   const shortStatusLabel = isAuditVerified
     ? 'Audited'
     : isAuditFlagged
       ? 'Flagged'
-      : 'Audit pending'
+      : 'Audit Pending'
 
   const tone: TransactionLifecycleInfo['tone'] = isAuditVerified
     ? 'done'

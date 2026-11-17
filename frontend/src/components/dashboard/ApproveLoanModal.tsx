@@ -186,7 +186,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl">
+      <DialogContent className="sm:max-w-[540px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/30 shadow-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader className="text-left pb-3 border-b border-stroke/20 pr-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-primary text-white flex items-center justify-center shrink-0 shadow-xs">

@@ -309,14 +309,14 @@ CompanyUser = Annotated[AuthenticatedUser, Depends(require_company_user)]
 
 # Company scope authorization checker
 def check_company_access(user: AuthenticatedUser, target_company_id: int | None) -> None:
-    """Ensure user has access to a specific company or is an administrator/finance/audit user."""
+    """Ensure user has access to a specific company or is an administrator/audit/owner user."""
     if target_company_id is None:
         return
     from app.core.company_resolver import normalize_company_id
     normalized_target_id = normalize_company_id(target_company_id)
 
     role = str(user.get("role") or "").lower()
-    if user.get("is_admin") or role in ("admin", "finance", "audit", "auditor", "owner"):
+    if user.get("is_admin") or role in ("admin", "audit", "auditor", "owner"):
         return
 
     assigned = user.get("company_ids") or []
@@ -337,13 +337,13 @@ def get_authorized_company_scope(
 ) -> list[int] | None:
     """
     Resolve the authorized company IDs for querying:
-    - Finance / Auditor: None (all companies) unless requested_company_id is specified.
-    - Supervisor: Returns [requested_company_id] if assigned, or all assigned company IDs.
-      Raises HTTP 403 Forbidden if requested_company_id is not assigned to the supervisor.
+    - Admin / Audit / Owner: None (all companies) unless requested_company_id is specified.
+    - Finance / Supervisor / Company: Returns [requested_company_id] if assigned, or all assigned company IDs.
+      Raises HTTP 403 Forbidden if requested_company_id is not assigned to the user, or if unassigned.
     """
     from app.core.company_resolver import normalize_company_id
     role = str(user.get("role") or "").lower()
-    is_privileged = user.get("is_admin") or role in ("admin", "finance", "audit", "auditor", "owner")
+    is_privileged = user.get("is_admin") or role in ("admin", "audit", "auditor", "owner")
 
     req_cid = normalize_company_id(requested_company_id) if requested_company_id is not None else None
 

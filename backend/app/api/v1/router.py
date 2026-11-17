@@ -24,11 +24,13 @@ from app.api.v1.endpoints import (
     particulars,
     payment_methods,
     daily_remarks,
+    dashboard,
 )
 
 api_router = APIRouter()
 
 api_router.include_router(health.router, tags=["Health"])
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(auth.router, tags=["Authentication"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
 api_router.include_router(companies.router, prefix="/companies", tags=["Companies"])

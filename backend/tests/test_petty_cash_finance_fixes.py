@@ -580,10 +580,10 @@ def test_reimbursement_accepts_base64_receipt_data_urls_and_blocks_unsafe_scheme
             "attachments": attachments_json,
         },
     )
-    assert resp_ok.status_code == 201, resp_ok.text
-    created_data = resp_ok.json()
-    assert created_data["receipt_url"] == data_url
-    assert created_data["attachments"] == attachments_json
+    # Receipt bytes are never stored in the database: with no storage bucket available, the base64
+    # receipt passes validation but the save is refused (it used to be saved inline as base64).
+    assert resp_ok.status_code == 502, resp_ok.text
+    assert "could not be saved to storage" in resp_ok.json()["detail"]
 
     resp_direct = client.post(
         "/api/v1/petty-cash/topups",
@@ -601,7 +601,10 @@ def test_reimbursement_accepts_base64_receipt_data_urls_and_blocks_unsafe_scheme
             "attachments": attachments_json,
         },
     )
-    assert resp_direct.status_code == 201, resp_direct.text
+    assert resp_direct.status_code == 502, resp_direct.text
+    with env["Session"]() as s:
+        assert s.query(PettyCashTopUp).filter(PettyCashTopUp.description.in_(
+            ["Office receipt upload", "Direct receipt URL upload"])).count() == 0
 
     # Unsafe schemes (HTML / SVG data URLs or internal metadata URLs) must still fail 422
     for bad_url in [

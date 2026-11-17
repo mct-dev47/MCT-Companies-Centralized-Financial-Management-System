@@ -36,6 +36,65 @@ def _plain(text: str) -> str:
     return " ".join((text or "").replace("(", " ").replace(")", " ").split())
 
 
+TENANTS_SOURCE = "Tenants"
+LENDING_SOURCE = "Lending"
+
+
+def sale_sources(db: Session, sale_ids) -> dict:
+    """{sale_id: "Tenants" | "Lending"} for sales created from a rent payment or a loan repayment."""
+    from app.models.lending import LendingTransaction
+    from app.models.tenant import TenantLeasePayment
+
+    ids = [int(i) for i in sale_ids if i is not None]
+    if not ids:
+        return {}
+    out = {}
+    try:
+        for (sid,) in db.query(TenantLeasePayment.sale_id).filter(TenantLeasePayment.sale_id.in_(ids)).all():
+            out[sid] = TENANTS_SOURCE
+        for (sid,) in db.query(LendingTransaction.sale_id).filter(LendingTransaction.sale_id.in_(ids)).all():
+            out[sid] = LENDING_SOURCE
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Sale source lookup skipped: %s", exc)
+    return out
+
+
+def expense_sources(db: Session, expense_ids) -> dict:
+    """{expense_id: "Lending"} for expenses created from a loan release."""
+    from app.models.lending import Borrower
+
+    ids = [int(i) for i in expense_ids if i is not None]
+    if not ids:
+        return {}
+    try:
+        rows = db.query(Borrower.release_expense_id).filter(Borrower.release_expense_id.in_(ids)).all()
+        return {eid: LENDING_SOURCE for (eid,) in rows}
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Expense source lookup skipped: %s", exc)
+        return {}
+
+
+def assert_not_linked_sale(db: Session, sale_id) -> None:
+    """A sale made by Tenants or Lending is changed only there, so the payment, sale and bank stay in step."""
+    source = sale_sources(db, [sale_id]).get(int(sale_id)) if sale_id is not None else None
+    if source:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This sale was recorded from {source}. Edit or remove it on the {source} page.",
+        )
+
+
+def assert_not_linked_expense(db: Session, expense_id) -> None:
+    source = expense_sources(db, [expense_id]).get(int(expense_id)) if expense_id is not None else None
+    if source:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This expense was recorded from {source}. Edit or remove it on the {source} page.",
+        )
+
+
 def is_verified(audit_status: Optional[str]) -> bool:
     return (audit_status or "").strip().lower() == "verified"
 
@@ -124,12 +183,48 @@ def save_income_sale(
     return sale.sales_id
 
 
+def _bank_date(value) -> Optional[str]:
+    return value.strftime("%m/%d/%y") if hasattr(value, "strftime") else None
+
+
+def _broadcast_bank(db: Session, company_id: Optional[int]) -> None:
+    try:
+        from app.core.websocket import ws_manager
+        from app.models.company import Company
+
+        company = db.query(Company).filter(Company.company_id == company_id).first() if company_id else None
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company.company_name if company else None}})
+    except Exception as exc:
+        logger.warning("Bank update broadcast skipped: %s", exc)
+
+
 def reconcile_sale(db: Session, sale_id: Optional[int]) -> None:
+    """Put the sale on its bank as ONE deposit equal to the sale. An edit changes that deposit in place,
+    so a correction from 3,000 to 2,000 shows as 2,000, not 3,000 plus a reversal."""
     if not sale_id:
         return
-    from app.api.v1.endpoints.sales import reconcile_sale_bank
+    from app.models.finance import Sale
+    from app.services.bank_service import BankService
 
-    reconcile_sale_bank(db, sale_id=sale_id)
+    sale = db.query(Sale).filter(Sale.sales_id == sale_id).first()
+    if sale is None:
+        return
+    deposited = (sale.deposit_status or "").strip().lower() == "deposited"
+    try:
+        BankService(db).patch_linked_entry(
+            link_attr="source_sale_id",
+            link_id=sale_id,
+            credit=True,
+            amount=_money(sale.amount) if deposited else Decimal("0.00"),
+            account_id=sale.bank_account_id,
+            particulars=f"Sales Collection: {sale.particulars or ''}",
+            reference_no=sale.cheque_no,
+            tx_date=_bank_date(sale.deposit_date or sale.transaction_date),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Bank update skipped for sale %s: %s", sale_id, exc)
+    _broadcast_bank(db, sale.company_id)
     system_cache.invalidate_tag("sales")
 
 
@@ -217,11 +312,30 @@ def save_release_expense(
 
 
 def reconcile_expense(db: Session, expense_id: Optional[int]) -> None:
+    """Take the loan release out of its bank as ONE withdrawal equal to the expense, edited in place."""
     if not expense_id:
         return
-    from app.api.v1.endpoints.expenses import reconcile_expense_bank
+    from app.models.finance import Expense
+    from app.services.bank_service import BankService
 
-    reconcile_expense_bank(db, expense_id=expense_id)
+    exp = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    if exp is None:
+        return
+    try:
+        BankService(db).patch_linked_entry(
+            link_attr="source_expense_id",
+            link_id=expense_id,
+            credit=False,
+            amount=_money(exp.amount),
+            account_id=exp.bank_account_id,
+            particulars=f"Expense Disbursement: {exp.description or ''}",
+            reference_no=exp.reference_no,
+            tx_date=_bank_date(exp.expense_date),
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Bank update skipped for expense %s: %s", expense_id, exc)
+    _broadcast_bank(db, exp.company_id)
     system_cache.invalidate_tag("expenses")
 
 

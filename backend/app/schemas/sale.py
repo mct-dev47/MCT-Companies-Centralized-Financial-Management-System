@@ -154,6 +154,8 @@ class SaleUpdate(StrictBaseModel):
     particulars: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=500)
     remarks: Optional[str] = Field(None, max_length=500)
+    # The bank the money goes to; changing it moves the sale's bank entry to the new account
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
     @field_validator('amount', mode='before')
     @classmethod
@@ -269,6 +271,8 @@ class SaleOut(BaseModel):
     # Money collected so far: [Paid] lines plus payments on linked receivables (partial ones too).
     # The ledger counts it only while the sale is Deposited.
     paid_amount: Optional[Decimal] = None
+    # "Tenants" / "Lending" when the record was created there; it can only be edited or removed on that page.
+    source_module: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

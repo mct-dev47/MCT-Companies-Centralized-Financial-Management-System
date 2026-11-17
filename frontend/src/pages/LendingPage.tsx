@@ -3,6 +3,7 @@ import { formatCreatedAt } from '@/utils/dateUtils'
 import * as React from 'react'
 import { CompanyBankSelect } from '@/components/common/CompanyBankSelect'
 import type { BankAccount } from '@/services/bankService'
+import { websocketService } from '@/services/websocketService'
 import { createPortal } from 'react-dom'
 import {
   ShieldCheck,
@@ -180,6 +181,30 @@ export const LendingPage: React.FC = () => {
     lendingService.clearStorage()
     fetchFacilities()
   }, [fetchFacilities])
+
+  // Realtime: a lending change made anywhere refreshes the list in the background (no loading state)
+  React.useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const quietReload = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        try {
+          const data = await lendingService.getFacilities()
+          if (Array.isArray(data)) setFacilities(data)
+        } catch {
+          /* the next event or a manual refresh will catch up */
+        }
+      }, 300)
+    }
+    const unsubs = [
+      websocketService.subscribe('LENDING_UPDATED', quietReload),
+      websocketService.subscribe('AUDIT_UPDATED', quietReload),
+    ]
+    return () => {
+      if (timer) clearTimeout(timer)
+      unsubs.forEach((off) => off())
+    }
+  }, [])
 
   const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
     setFacilities(newFacilities)
@@ -1640,7 +1665,7 @@ export const LendingPage: React.FC = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by Borrower's Name or Notes…"
-              className="h-10 sm:h-11 pl-11 pr-4 rounded-full border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
+              className="h-10 sm:h-11 pl-11 pr-4 rounded-[10px] border border-stroke/40 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-1 focus-visible:ring-focus w-full"
             />
           </div>
 
@@ -1651,7 +1676,7 @@ export const LendingPage: React.FC = () => {
                 type="button"
                 onClick={() => setIsPeriodDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isPeriodDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >
@@ -1694,7 +1719,7 @@ export const LendingPage: React.FC = () => {
                 type="button"
                 onClick={() => setIsStatusDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'inline-flex items-center gap-2 h-11 px-4 rounded-full border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                  'inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-stroke/60 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                   isStatusDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
                 )}
               >

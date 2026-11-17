@@ -63,6 +63,7 @@ import {
   expenseService,
   type ExpenseItem,
 } from '@/services/expenseService'
+import { categoryService } from '@/services/categoryService'
 import { bankService } from '@/services/bankService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import {
@@ -95,6 +96,7 @@ import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError } from '@/utils/errorUtils'
+import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
 
 const ITEMS_PER_PAGE = 10
 
@@ -149,37 +151,39 @@ export const ExpensePage: React.FC = () => {
     }
   }, [allCompanies, isAdmin, isFinance])
 
-  // Filter state
-  const [selectedCompany, setSelectedCompany] = React.useState<string>(() => {
-    if (isCompanyScoped && assignedCompany) return assignedCompany
-    if (activeCompany && activeCompany !== 'All Companies') return activeCompany
-    return activeCompany || 'All Companies'
-  })
+  // Filter state: strictly locked to activeCompany chosen in Centralized Auth
+  const selectedCompany = activeCompany || assignedCompany
+
+  const [companyExpenseCategories, setCompanyExpenseCategories] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    let mounted = true
+    const targetComp = isCompanyScoped ? assignedCompany : selectedCompany
+    if (!targetComp || targetComp === 'All Companies') {
+      setCompanyExpenseCategories([])
+      return
+    }
+    categoryService
+      .getCompanyCategories(targetComp, 'expense')
+      .then((cats) => {
+        if (mounted) {
+          setCompanyExpenseCategories(cats.map((c) => c.name))
+        }
+      })
+      .catch(() => {
+        if (mounted) setCompanyExpenseCategories([])
+      })
+    return () => {
+      mounted = false
+    }
+  }, [isCompanyScoped, assignedCompany, selectedCompany])
 
   // Prefetch bank accounts so /expense/add has Withdraw Bank ready in 0ms
   React.useEffect(() => {
-    const targetComp = isCompanyScoped
-      ? assignedCompany
-      : selectedCompany === 'All Companies'
-        ? undefined
-        : selectedCompany
+    const targetComp = selectedCompany === 'All Companies' ? undefined : selectedCompany
     bankService.prefetchAccounts(targetComp)
     bankService.prefetchAccounts()
-  }, [isCompanyScoped, assignedCompany, selectedCompany])
-
-  // Keep selectedCompany in sync if user profile loads after initial render
-  React.useEffect(() => {
-    if (isCompanyScoped && user?.assignedCompany) {
-      setSelectedCompany(user.assignedCompany)
-    }
-  }, [isCompanyScoped, user?.assignedCompany])
-
-  // Keep selectedCompany in sync with global activeCompany from context
-  React.useEffect(() => {
-    if (activeCompany) {
-      setSelectedCompany(activeCompany)
-    }
-  }, [activeCompany])
+  }, [selectedCompany])
 
   const [statusFilter, setStatusFilter] = React.useState<
     'All' | 'Paid' | 'Pending' | 'Unpaid'
@@ -216,20 +220,15 @@ export const ExpensePage: React.FC = () => {
 
   // Dropdown menus
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] =
-    React.useState(false)
   const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
-  const [companySearch, setCompanySearch] = React.useState('')
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const companyDropdownRef = React.useRef<HTMLDivElement>(null)
   const periodDropdownRef = React.useRef<HTMLDivElement>(null)
   const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const tableCardRef = React.useRef<HTMLDivElement>(null)
 
   const exportPos = useDropdownPosition(exportDropdownRef, isExportDropdownOpen)
-  const companyPos = useDropdownPosition(companyDropdownRef, isCompanyDropdownOpen)
   const periodPos = useDropdownPosition(periodDropdownRef, isPeriodDropdownOpen)
   const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
 
@@ -381,12 +380,6 @@ export const ExpensePage: React.FC = () => {
         !exportDropdownRef.current.contains(target)
       ) {
         setIsExportDropdownOpen(false)
-      }
-      if (
-        companyDropdownRef.current &&
-        !companyDropdownRef.current.contains(target)
-      ) {
-        setIsCompanyDropdownOpen(false)
       }
       if (
         periodDropdownRef.current &&
@@ -814,10 +807,14 @@ export const ExpensePage: React.FC = () => {
     }
   }, [openMenuExpenseId])
 
+  // Expenses waiting for a discrepancy reason (Flag Discrepancy always asks why before saving)
+  const [flagTargets, setFlagTargets] = React.useState<ExpenseItem[]>([])
+
   const handleMarkExpenseAudit = (
     expense: ExpenseItem,
     status: 'Verified' | 'Flagged',
-    e?: React.MouseEvent
+    e?: React.MouseEvent,
+    remarks?: string
   ) => {
     e?.stopPropagation()
     const timestamp = new Date().toLocaleString('en-US', {
@@ -834,11 +831,12 @@ export const ExpensePage: React.FC = () => {
       auditStatus: status,
       auditedBy: auditorName,
       auditDate: timestamp,
+      ...(remarks !== undefined ? { auditNotes: remarks } : {}),
     }
     setExpenses((prev) =>
       prev.map((item) => (item.id === expense.id ? updated : item))
     )
-    expenseService.updateExpenseAuditStatus(expense.id, status, auditorName).catch((err) => {
+    expenseService.updateExpenseAuditStatus(expense.id, status, auditorName, remarks).catch((err) => {
       // Spec 0014: show the real status again when the server did not save it.
       reportAuditSaveFailure(err)
       loadExpenses()
@@ -847,13 +845,6 @@ export const ExpensePage: React.FC = () => {
     setMenuPosition(null)
     setActiveMenuExpense(null)
   }
-
-  const filteredCompanyList = React.useMemo(() => {
-    if (!companySearch.trim()) return companyList
-    return companyList.filter((c) =>
-      c.toLowerCase().includes(companySearch.toLowerCase().trim())
-    )
-  }, [companySearch, companyList])
 
   const displayedCompanyTitle = isCompanyScoped
     ? assignedCompany
@@ -892,7 +883,7 @@ export const ExpensePage: React.FC = () => {
                 variant={isAudit ? 'default' : 'outline'}
                 onClick={() => setIsExportDropdownOpen((prev) => !prev)}
                 className={cn(
-                  'h-10 sm:h-11 px-4 sm:px-5 rounded-full font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
+                  'h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 cursor-pointer transition-all box-border',
                   isAudit
                     ? 'bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white'
                     : 'border border-stroke/50 bg-white text-focus hover:bg-surface'
@@ -940,7 +931,7 @@ export const ExpensePage: React.FC = () => {
               <Button
                 type="button"
                 onClick={() => navigate('/expense/add')}
-                className="h-10 sm:h-11 px-4 sm:px-5 rounded-xl bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
+                className="h-10 sm:h-11 px-4 sm:px-5 rounded-[10px] bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white font-semibold text-xs sm:text-sm shadow-xs flex items-center gap-2 transition-all cursor-pointer box-border"
               >
                 <Plus className="h-4 w-4 shrink-0" />
                 <span>Add Expense</span>
@@ -1027,130 +1018,14 @@ export const ExpensePage: React.FC = () => {
           {/* Row 1: Company + Bank + Status + Date + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-2.5 w-full">
             <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
-              {/* Company Scope */}
-              {!isCompanyScoped ? (
-                <div ref={companyDropdownRef} className="relative flex-1 min-w-[200px] sm:min-w-[240px]">
-                  <button
-                    type="button"
-                    onClick={() => setIsCompanyDropdownOpen((prev) => !prev)}
-                    className={cn(
-                      'inline-flex items-center justify-between gap-2 min-h-[44px] h-11 w-full px-4 rounded-full border border-stroke/40 bg-white hover:bg-surface text-focus text-xs sm:text-sm font-semibold shadow-2xs transition-colors cursor-pointer select-none box-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/40',
-                      isCompanyDropdownOpen && 'ring-2 ring-slate-100 border-slate-300'
-                    )}
-                    aria-label="Filter expenses by company"
-                  >
-                    <span className="font-semibold text-focus truncate flex-1 text-left">
-                      {selectedCompany}
-                    </span>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {selectedCompany !== 'All Companies' && (
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setSelectedCompany('All Companies')
-                            setActiveCompany('All Companies')
-                          }}
-                          className="p-0.5 rounded-full hover:bg-slate-200 text-muted-fg hover:text-focus transition-colors inline-flex items-center justify-center cursor-pointer"
-                          title="Reset to All Companies"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </span>
-                      )}
-                      <ChevronDown className="h-4 w-4 text-muted-fg shrink-0" />
-                    </div>
-                  </button>
-
-                  {isCompanyDropdownOpen && (
-                    <div
-                      style={companyPos.isMobile ? companyPos.style : undefined}
-                      className={cn(
-                        'bg-white rounded-[16px] border border-stroke/30 shadow-soft p-2.5 z-50 animate-in fade-in-50 zoom-in-95 duration-150',
-                        companyPos.isMobile
-                          ? 'w-[min(calc(100vw-32px),320px)]'
-                          : 'absolute left-0 top-full mt-2 w-72'
-                      )}
-                    >
-                      <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                          Filter By Company
-                        </span>
-                        {selectedCompany !== 'All Companies' && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedCompany('All Companies')
-                              setActiveCompany('All Companies')
-                              setIsCompanyDropdownOpen(false)
-                            }}
-                            className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                          >
-                            Clear Filter
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="relative mb-2 px-1">
-                        <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <input
-                          type="text"
-                          value={companySearch}
-                          onChange={(e) => setCompanySearch(e.target.value)}
-                          placeholder="Search company…"
-                          className="w-full pl-8 pr-7 py-1.5 rounded-lg border border-stroke/40 bg-slate-50/70 text-xs text-focus placeholder:text-muted-fg/60 focus:outline-none focus:ring-1 focus:ring-focus focus:bg-white"
-                        />
-                        {companySearch && (
-                          <button
-                            type="button"
-                            onClick={() => setCompanySearch('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-fg hover:text-focus p-0.5"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-
-                      <div className="space-y-0.5 max-h-56 overflow-y-auto pr-0.5">
-                        {filteredCompanyList.length === 0 ? (
-                          <div className="py-4 text-center text-xs text-muted-fg">
-                            No matching companies
-                          </div>
-                        ) : (
-                          filteredCompanyList.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              onClick={() => {
-                                setSelectedCompany(c)
-                                setActiveCompany(c)
-                                setIsCompanyDropdownOpen(false)
-                                setCompanySearch('')
-                              }}
-                              className={cn(
-                                'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-colors text-left cursor-pointer',
-                                selectedCompany === c
-                                  ? 'bg-primary/10 text-primary font-semibold'
-                                  : 'text-focus/80 hover:bg-slate-50'
-                              )}
-                            >
-                              <span className="truncate">{c}</span>
-                              {selectedCompany === c && (
-                                <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-2" />
-                              )}
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div
-                  className="inline-flex items-center justify-between gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-full border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
-                  title={selectedCompany}
-                >
-                  <span className="truncate min-w-0">{selectedCompany}</span>
-                </div>
-              )}
+              {/* Active Company Locked Indicator */}
+              <div
+                className="inline-flex items-center gap-2 min-h-[44px] h-11 flex-1 min-w-[200px] sm:min-w-[240px] px-4 rounded-[10px] border border-stroke/50 bg-white text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
+                title={selectedCompany}
+              >
+                <Building2 className="w-4 h-4 text-muted-fg shrink-0" />
+                <span className="truncate min-w-0">{selectedCompany}</span>
+              </div>
 
               {/* Bank Filter Select */}
               <div className="flex-1 min-w-[190px] sm:min-w-[220px]">
@@ -1197,14 +1072,14 @@ export const ExpensePage: React.FC = () => {
               <div
                 role="group"
                 aria-label="Group records"
-                className="inline-flex items-center rounded-full border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
+                className="inline-flex items-center rounded-[10px] border border-stroke/50 bg-slate-100/80 p-0.5 shrink-0"
               >
                 <button
                   type="button"
                   aria-pressed={subTab === 'All Transactions'}
                   onClick={() => setSubTab('All Transactions')}
                   className={cn(
-                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'min-h-[44px] px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     subTab === 'All Transactions'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -1217,7 +1092,7 @@ export const ExpensePage: React.FC = () => {
                   aria-pressed={subTab === 'Daily Summary'}
                   onClick={() => setSubTab('Daily Summary')}
                   className={cn(
-                    'min-h-[44px] px-4 rounded-full text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
+                    'min-h-[44px] px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus',
                     subTab === 'Daily Summary'
                       ? 'bg-[#960C01] text-white shadow-xs'
                       : 'text-focus/70 hover:text-focus hover:bg-white/60'
@@ -1237,7 +1112,7 @@ export const ExpensePage: React.FC = () => {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search particulars, Ref No., Cheque No., company, method…"
-              className="min-h-[44px] h-11 pl-11 pr-4 rounded-full border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
+              className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
         </div>
@@ -1329,6 +1204,7 @@ export const ExpensePage: React.FC = () => {
         ) : (
           <ExpenseSummaryChart
             transactions={mappedTransactions}
+            companyCategories={companyExpenseCategories}
             className="w-full"
           />
         )}
@@ -1345,7 +1221,7 @@ export const ExpensePage: React.FC = () => {
             <button
               type="button"
               onClick={() => setExpandedDates(new Set())}
-              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-4 py-1.5 rounded-[10px] border border-stroke/40 bg-surface/80 hover:bg-surface text-xs font-semibold text-focus transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             >
               <ArrowLeft className="h-3.5 w-3.5" />
               <span>Back to all {dailyExpenseGroups.length} days</span>
@@ -1468,12 +1344,12 @@ export const ExpensePage: React.FC = () => {
                           <TableCell className="px-2.5 sm:px-3 py-2.5 text-center">
                             <span
                               className={cn(
-                                'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border',
+                                'text-xs font-semibold',
                                 group.auditStatus === 'All Verified'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  ? 'text-emerald-600'
                                   : group.auditStatus === 'Discrepancy'
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : 'bg-amber-50 text-amber-700 border-amber-200'
+                                  ? 'text-rose-600'
+                                  : 'text-amber-600'
                               )}
                             >
                               {group.auditStatus}
@@ -1926,6 +1802,17 @@ export const ExpensePage: React.FC = () => {
       </Card>
 
       {/* Add Expense Modal */}
+      <FlagDiscrepancyDialog
+        open={flagTargets.length > 0}
+        count={flagTargets.length}
+        initialReason={flagTargets.length === 1 ? flagTargets[0].auditNotes || '' : ''}
+        onCancel={() => setFlagTargets([])}
+        onConfirm={(reason) => {
+          flagTargets.forEach((exp) => handleMarkExpenseAudit(exp, 'Flagged', undefined, reason))
+          setFlagTargets([])
+        }}
+      />
+
       <AddExpenseModal
         open={isAddModalOpen}
         onOpenChange={setIsAddModalOpen}
@@ -2058,9 +1945,14 @@ export const ExpensePage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={(e) =>
-                    handleMarkExpenseAudit(activeMenuExpense, 'Flagged', e)
-                  }
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    const exp = activeMenuExpense
+                    setOpenMenuExpenseId(null)
+                    setMenuPosition(null)
+                    setActiveMenuExpense(null)
+                    if (exp) setFlagTargets([exp]) // ask for the reason first
+                  }}
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                 >
                   <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
@@ -2098,12 +1990,21 @@ export const ExpensePage: React.FC = () => {
               <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
             </button>
 
-            {isCompanyUser && !isOwner && (
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => i.sourceModule) && (
+              <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
+                {dayMenu.items.every((i) => i.sourceModule) ? 'These records come' : 'Some records come'} from{' '}
+                {Array.from(new Set(dayMenu.items.map((i) => i.sourceModule).filter(Boolean))).join(' / ')}. Edit or
+                remove them there.
+              </p>
+            )}
+
+            {isCompanyUser && !isOwner && dayMenu.items.some((i) => !i.sourceModule) && (
               <>
                 <button
                   type="button"
                   onClick={() => {
-                    const target = dayMenu.items[0]
+                    // Records made by Tenants or Lending are changed only on their own page
+                    const target = dayMenu.items.find((i) => !i.sourceModule)
                     setDayMenu(null)
                     if (target) {
                       navigate('/expense/add', {
@@ -2120,7 +2021,7 @@ export const ExpensePage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const items = dayMenu.items
+                    const items = dayMenu.items.filter((i) => !i.sourceModule)
                     const date = dayMenu.date
                     setDayMenu(null)
                     if (items && items.length > 0) {
@@ -2157,9 +2058,7 @@ export const ExpensePage: React.FC = () => {
                     type="button"
                     disabled={pending.length === 0}
                     onClick={() => {
-                      pending.forEach((e) => {
-                        handleMarkExpenseAudit(e, 'Flagged')
-                      })
+                      setFlagTargets(pending) // one reason for the whole day, asked first
                       setDayMenu(null)
                     }}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"

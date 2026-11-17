@@ -71,8 +71,12 @@ def main() -> int:
                 bytes_before += size_before
                 continue
 
-            new_atts = receipt_storage.normalize_attachments(old_atts)
-            new_url = receipt_storage.normalize_receipt_url(old_url, new_atts)
+            try:
+                new_atts = receipt_storage.normalize_attachments(old_atts)
+                new_url = receipt_storage.normalize_receipt_url(old_url, new_atts)
+            except receipt_storage.ReceiptStorageError:
+                # An upload failed: leave the row exactly as it was and report it below
+                new_atts, new_url = old_atts, old_url
             if _has_inline(new_atts) or _has_inline(new_url):
                 failed += 1
                 print(f"  topup {tid}: upload failed for at least one file — left unchanged")
