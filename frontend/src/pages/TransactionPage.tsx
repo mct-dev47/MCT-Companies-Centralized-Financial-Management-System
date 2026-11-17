@@ -3154,32 +3154,28 @@ export const TransactionPage: React.FC = () => {
                             <TableRow className="bg-slate-50/40 border-b border-slate-200 hover:bg-slate-50/40">
                               <TableCell colSpan={showActionColumn ? 8 : 7} className="p-3 sm:p-4">
                                 <div className="space-y-3.5">
-                                  {/* Formula Banner */}
-                                  <div
-                                    className={cn(
-                                      'rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border',
-                                      isBalanced
-                                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                                        : 'bg-amber-50/70 border-amber-200 text-amber-900'
-                                    )}
-                                  >
-                                    <div className="space-y-1">
-                                      <div>
-                                        Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
+                                  {/* Formula Banner: only shown when the day does not balance
+                                      (the Passbook Check column already says "Balanced" otherwise) */}
+                                  {!isBalanced && (
+                                    <div className="rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border bg-amber-50/70 border-amber-200 text-amber-900">
+                                      <div className="space-y-1">
+                                        <div>
+                                          Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
+                                        </div>
+                                        <div>
+                                          Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
+                                          {`(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
+                                        </div>
+                                        {check.issues.length > 0 && (
+                                          <ul className="list-disc pl-5 font-medium">
+                                            {check.issues.map((issue, i) => (
+                                              <li key={i}>{issue}</li>
+                                            ))}
+                                          </ul>
+                                        )}
                                       </div>
-                                      <div>
-                                        Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
-                                        {isBalanced ? '✓ matches' : `(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
-                                      </div>
-                                      {!isBalanced && check.issues.length > 0 && (
-                                        <ul className="list-disc pl-5 font-medium">
-                                          {check.issues.map((issue, i) => (
-                                            <li key={i}>{issue}</li>
-                                          ))}
-                                        </ul>
-                                      )}
                                     </div>
-                                  </div>
+                                  )}
 
                                   {/* Transactions table on this day */}
                                   <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
