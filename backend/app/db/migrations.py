@@ -700,6 +700,21 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0070_foreign_keys_and_index_cleanup")
             logger.info("Migration 0070_foreign_keys_and_index_cleanup applied successfully.")
 
+    # 37. 0071: permanently drop deprecated unused tables with cascade
+    result_0071 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0071_drop_deprecated_tables'")
+    ).first()
+    if not result_0071:
+        script_0071 = MIGRATIONS_DIR / "0071_drop_deprecated_tables.postgres.sql"
+        if script_0071.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0071.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0071_drop_deprecated_tables')"))
+            applied.append("0071_drop_deprecated_tables")
+            logger.info("Migration 0071_drop_deprecated_tables applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1694,6 +1709,21 @@ def _run_sqlite_migrations(conn) -> list[str]:
                     logger.warning("SQLite migration 0070 skipped statement: %s", exc)
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0070_foreign_keys_and_index_cleanup')"))
         applied.append("0070_foreign_keys_and_index_cleanup")
+
+    # 36. 0071: permanently drop deprecated unused tables
+    result_0071 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0071_drop_deprecated_tables'")
+    ).first()
+    if not result_0071:
+        script_0071 = MIGRATIONS_DIR / "0071_drop_deprecated_tables.sqlite.sql"
+        if script_0071.exists():
+            for stmt in _sql_statements(script_0071.read_text(encoding="utf-8")):
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0071 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0071_drop_deprecated_tables')"))
+        applied.append("0071_drop_deprecated_tables")
 
     conn.commit()
     return applied

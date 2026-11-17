@@ -222,6 +222,22 @@ class TestMigrations(unittest.TestCase):
             self.assertIn("ix_receivables_sale_id", idx_names)
             self.assertNotIn("ix_receivables_expense_id", idx_names)
 
+    def test_0071_permanently_drops_deprecated_tables(self):
+        """Verify migration 0071 ensures staff_credits, staff_credits_repayment, budget, cash_inflow are dropped."""
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS staff_credits (staff_credit_id INTEGER PRIMARY KEY);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS staff_credits_repayment (repayment_id INTEGER PRIMARY KEY, staff_credit_id INTEGER);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS budget (budget_id INTEGER PRIMARY KEY);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS cash_inflow (cash_transaction_id INTEGER PRIMARY KEY);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0071_drop_deprecated_tables", applied)
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        for dropped in ("staff_credits", "staff_credits_repayment", "budget", "cash_inflow", "login_rate_limits"):
+            self.assertNotIn(dropped, tables)
+
 
 if __name__ == "__main__":
     unittest.main()

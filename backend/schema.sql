@@ -125,37 +125,7 @@ CREATE TABLE IF NOT EXISTS loans_repayments (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 12. Staff Credits Table
-CREATE TABLE IF NOT EXISTS staff_credits (
-    staff_credit_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    credit_date DATE NOT NULL,
-    due_date DATE,
-    status VARCHAR(50) DEFAULT 'active',
-    purpose TEXT,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 13. Staff Credits Repayment Table
-CREATE TABLE IF NOT EXISTS staff_credits_repayment (
-    repayment_id BIGSERIAL PRIMARY KEY,
-    staff_credit_id BIGINT REFERENCES staff_credits(staff_credit_id) ON DELETE CASCADE,
-    payment_date DATE NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    payment_method VARCHAR(50),
-    reference_no VARCHAR(100),
-    status VARCHAR(50) DEFAULT 'completed',
-    received_at TIMESTAMPTZ,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 14. Bills Table
+-- 10. Bills Table
 CREATE TABLE IF NOT EXISTS bills (
     bill_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
