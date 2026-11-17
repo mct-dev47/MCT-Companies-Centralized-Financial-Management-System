@@ -411,8 +411,9 @@ export const salesService = {
     }
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
     const clientRef =
-      input.clientRef ||
-      `sale_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+      input.clientRef && input.clientRef.length >= 8
+        ? input.clientRef.slice(0, 64)
+        : `sale_${input.clientRef || Date.now()}_${Math.random().toString(36).substring(2, 9)}`.slice(0, 64)
 
     const payload = {
       company: input.company,
@@ -466,12 +467,20 @@ export const salesService = {
       } else {
         const errData = await res.json().catch(() => ({}))
         let errorMsg = 'Failed to record sales entry.'
-        if (typeof errData.detail === 'string') {
+        if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+          errorMsg = errData.errors
+            .map((e: any) => {
+              const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+              const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+              return field ? `${field}: ${msg}` : msg
+            })
+            .join('; ')
+        } else if (typeof errData.detail === 'string') {
           errorMsg = errData.detail
         } else if (Array.isArray(errData.detail)) {
           errorMsg = errData.detail
             .map((d: any) => {
-              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              const field = Array.isArray(d.loc) ? d.loc.filter((x: any) => x !== 'body').join('.') : ''
               return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
             })
             .join('; ')
@@ -480,7 +489,7 @@ export const salesService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new HttpError(errorMsg, res.status)
+        throw new HttpError(errorMsg, res.status, errData)
       }
     } catch (err: any) {
       if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
@@ -570,7 +579,19 @@ export const salesService = {
         return mapped
       }
       const errData = await res.json().catch(() => ({}))
-      throw new Error(typeof errData.detail === 'string' ? errData.detail : 'Failed to update sales entry.')
+      let errorMsg = 'Failed to update sales entry.'
+      if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+        errorMsg = errData.errors
+          .map((e: any) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+            const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+            return field ? `${field}: ${msg}` : msg
+          })
+          .join('; ')
+      } else if (typeof errData.detail === 'string') {
+        errorMsg = errData.detail
+      }
+      throw new HttpError(errorMsg, res.status, errData)
     } catch (err) {
       if (err instanceof TypeError) throw new Error(SERVER_UNREACHABLE)
       throw err

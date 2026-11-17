@@ -9,10 +9,14 @@
 /** The server answered with a non 2xx status. */
 export class HttpError extends Error {
   readonly status: number
-  constructor(message: string, status: number) {
+  readonly data?: any
+  readonly errors?: any[]
+  constructor(message: string, status: number, data?: any) {
     super(message)
     this.name = 'HttpError'
     this.status = status
+    this.data = data
+    this.errors = Array.isArray(data?.errors) ? data.errors : undefined
   }
 }
 

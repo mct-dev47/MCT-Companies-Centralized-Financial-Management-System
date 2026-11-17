@@ -398,6 +398,25 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       // Trigger callback to redirect & highlight newly added row in table
       onSuccess(created)
     } catch (err: any) {
+      const fieldErrorsFromBackend: Record<string, string> = {}
+      const dataErrors: any[] = Array.isArray(err?.errors)
+        ? err.errors
+        : Array.isArray(err?.data?.errors)
+          ? err.data.errors
+          : []
+      if (dataErrors.length > 0) {
+        dataErrors.forEach((e: any) => {
+          const locStr = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.').toLowerCase() : ''
+          const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid'
+          if (locStr.includes('date')) fieldErrorsFromBackend.date = msg
+          else if (locStr.includes('particular') || locStr.includes('description')) fieldErrorsFromBackend.particulars = msg
+          else if (locStr.includes('amount')) fieldErrorsFromBackend.amount = msg
+          else if (locStr.includes('category')) fieldErrorsFromBackend.category = msg
+        })
+      }
+      if (Object.keys(fieldErrorsFromBackend).length > 0) {
+        setFieldErrors((prev) => ({ ...prev, ...fieldErrorsFromBackend }))
+      }
       setError(formatUserFriendlyErrorMessage(err, 'Failed to record sales entry.'))
       setIsReviewing(false)
     } finally {

@@ -323,13 +323,25 @@ def validation_exception_handler(request: Request, exc: RequestValidationError) 
         }
         for err in exc.errors()
     ]
-    # Surface our own business-rule messages (raised as ValueError) so the UI can show
-    # the actual reason; schema/type errors keep the generic message.
-    detail = "Invalid request parameters. Please verify your submission."
+
+    # Build human readable field specific validation messages
+    formatted_errors = []
     for err in errors:
-        if err["type"] == "value_error":
-            detail = err["msg"].removeprefix("Value error, ")
-            break
+        loc = [str(x) for x in err.get("loc", []) if str(x) != "body"]
+        field_name = ".".join(loc) if loc else ""
+        raw_msg = str(err.get("msg", "Invalid value"))
+        if raw_msg.startswith("Value error, "):
+            clean_msg = raw_msg[len("Value error, "):]
+        else:
+            clean_msg = raw_msg
+
+        if field_name:
+            formatted_errors.append(f"{field_name}: {clean_msg}")
+        else:
+            formatted_errors.append(clean_msg)
+
+    detail = "; ".join(formatted_errors) if formatted_errors else "Invalid request parameters. Please verify your submission."
+
     return JSONResponse(
         status_code=422,
         content={

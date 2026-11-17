@@ -470,8 +470,9 @@ export const expenseService = {
     const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
     const clientRef =
-      input.clientRef ||
-      `exp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
+      input.clientRef && input.clientRef.length >= 8
+        ? input.clientRef.slice(0, 64)
+        : `exp_${input.clientRef || Date.now()}_${Math.random().toString(36).substring(2, 9)}`.slice(0, 64)
 
     try {
       const token =
@@ -524,7 +525,15 @@ export const expenseService = {
       } else {
         const errData = await res.json().catch(() => ({}))
         let errorMsg = 'Failed to record expense entry.'
-        if (typeof errData.detail === 'string') {
+        if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+          errorMsg = errData.errors
+            .map((e: any) => {
+              const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+              const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+              return field ? `${field}: ${msg}` : msg
+            })
+            .join('; ')
+        } else if (typeof errData.detail === 'string') {
           errorMsg = errData.detail
         } else if (Array.isArray(errData.detail)) {
           errorMsg = errData.detail
@@ -538,7 +547,7 @@ export const expenseService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new HttpError(errorMsg, res.status)
+        throw new HttpError(errorMsg, res.status, errData)
       }
     } catch (err: any) {
       if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
