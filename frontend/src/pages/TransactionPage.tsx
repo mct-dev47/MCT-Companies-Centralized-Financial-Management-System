@@ -232,15 +232,8 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
 /**
  * One petty cash top up or reimbursement becomes:
  *  - for top up: funded by another company: a Deposit for the requesting company, a Withdrawal for the funder
- *  - for top up: funded from the company's own bank account: a single Withdrawal, and no Deposit
- *  - for reimbursement: a Withdrawal for the company/funder reflecting employee payout or float disbursement
- * Every petty cash row is a read only mirror (petty cash is audited on its own page).
  */
-/**
- * Money that moves through the company's petty cash box, never a bank: petty cash expenses, and
- * petty cash top ups / payouts with no funding bank. Listed under All Banks, but kept out of every
- * bank balance, day total and passbook check, because the bank never held it.
- */
+
 const isPettyCashLedgerRow = (t: DashboardTransactionItem): boolean => {
   if (t.type === 'Expense') return (t.paymentMethod || '').trim().toLowerCase().includes('petty cash')
   return t.type === 'Petty Cash' && !t.bankAccountId
@@ -888,12 +881,10 @@ export const TransactionPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = React.useState<
     | 'All'
     | 'Deposited'
-    | 'Awaiting'
     | 'Unpaid Sales'
     | 'Paid'
     | 'Pending'
     | 'Unpaid'
-    | 'On hold'
     | 'Pending Audit'
     | 'Audited'
     | 'Flagged'
@@ -909,8 +900,6 @@ export const TransactionPage: React.FC = () => {
       { value: 'Pending', label: 'Pending' },
       { value: 'Unpaid', label: 'Unpaid' },
       { value: 'Deposited', label: 'Deposited' },
-      { value: 'Awaiting', label: 'Awaiting Deposit' },
-      { value: 'On hold', label: 'On Hold' },
     ],
     []
   )
@@ -1564,7 +1553,6 @@ export const TransactionPage: React.FC = () => {
       if (statusFilter === 'All') return true
       const lc = deriveTransactionLifecycle(t)
       if (statusFilter === 'Deposited') return t.type === 'Sales' && lc.bucket === 'deposited'
-      if (statusFilter === 'Awaiting') return t.type === 'Sales' && lc.bucket === 'awaiting'
       if (statusFilter === 'Unpaid Sales') return t.type === 'Sales' && lc.bucket === 'unpaid'
       if (statusFilter === 'Paid') return lc.paymentStatus === 'Paid'
       if (statusFilter === 'Pending') {
@@ -1573,7 +1561,6 @@ export const TransactionPage: React.FC = () => {
       if (statusFilter === 'Unpaid') {
         return lc.paymentStatus === 'Unpaid' || lc.paymentStatus === 'Overdue'
       }
-      if (statusFilter === 'On hold') return lc.paymentStatus === 'On hold'
       if (statusFilter === 'Pending Audit') return lc.isAuditPending
       if (statusFilter === 'Audited') return t.auditStatus === 'Verified'
       if (statusFilter === 'Flagged') return t.auditStatus === 'Flagged'
@@ -2016,11 +2003,9 @@ export const TransactionPage: React.FC = () => {
     }
 
     if (statusFilter !== 'All') {
-      const statusDisplay =
-        statusFilter === 'Awaiting' ? 'Awaiting Deposit / Transfer' : statusFilter
       chips.push({
         key: 'status',
-        label: `Status: ${statusDisplay}`,
+        label: `Status: ${statusFilter}`,
         onClear: () => {
           setStatusFilter('All')
           setDepositCurrentPage(1)
