@@ -2174,11 +2174,21 @@ export const TransactionPage: React.FC = () => {
     setIsMarkAuditModalOpen(true)
   }
 
+  // One-click audit from the row menu: marks the row audited with no remarks, skipping the dialog
+  const handleMenuQuickAuditNoRemarks = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    void submitMarkAudit(tx, undefined)
+  }
+
   const handleConfirmQuickMarkAudit = async () => {
     if (!markAuditTargetTx) return
+    await submitMarkAudit(markAuditTargetTx, markAuditRemarks.trim() || undefined)
+  }
+
+  const submitMarkAudit = async (tx: DashboardTransactionItem, trimmedNotes: string | undefined) => {
     setIsSubmittingAudit(true)
-    const tx = markAuditTargetTx
-    const trimmedNotes = markAuditRemarks.trim() || undefined
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
@@ -2769,7 +2779,7 @@ export const TransactionPage: React.FC = () => {
       <div className="space-y-3">
         {/* Row 1: Company + Bank + Status + Date Range + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row lg:flex-wrap items-stretch lg:items-center justify-between gap-2.5 w-full">
-            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+            <div className="flex flex-1 flex-wrap items-center gap-2.5 min-w-0">
               {/* Active Company Locked Indicator */}
               <div
                 className="inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
@@ -2833,14 +2843,14 @@ export const TransactionPage: React.FC = () => {
                 const focusedTxs = visibleDayGroups.flatMap((g) => g.banks.flatMap((b) => b.transactions))
                 const focusedDate = visibleDayGroups.map((g) => g.date).join(', ')
                 const pendingCount = getDayAuditTargets(focusedTxs).length
-                const disabledTitle = 'Every transaction on this day is already audited or flagged'
+                // Nothing left to audit on this day: hide the buttons instead of showing them disabled
+                if (pendingCount === 0) return null
                 return (
                   <>
                     <Button
                       type="button"
-                      disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
-                      title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
+                      title={`Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
                       className="min-h-[44px] h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -2849,9 +2859,8 @@ export const TransactionPage: React.FC = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
-                      title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
+                      title={`Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
                       className="min-h-[44px] h-11 px-4 rounded-[10px] border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <AlertCircle className="w-4 h-4 shrink-0" />
@@ -4304,6 +4313,18 @@ export const TransactionPage: React.FC = () => {
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                   <span>{activeMenuTx.auditStatus === 'Verified' ? 'Re-Audit' : 'Mark as Audited'}</span>
                 </button>
+
+                {activeMenuTx.auditStatus !== 'Verified' && (
+                  <button
+                    type="button"
+                    disabled={isSubmittingAudit}
+                    onClick={() => handleMenuQuickAuditNoRemarks(activeMenuTx)}
+                    className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Audit without remarks</span>
+                  </button>
+                )}
 
                 {activeMenuTx.auditStatus !== 'Verified' && (
                   <button
