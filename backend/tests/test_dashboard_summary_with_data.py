@@ -33,7 +33,7 @@ def client():
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
     db.add_all([
-        Company(company_id=1, company_name="Company Alpha", starting_balance=Decimal("0"), petty_cash=Decimal("5000.00")),
+        Company(company_id=1, company_name="Company Alpha", petty_cash=Decimal("5000.00")),
         Category(category_id=1, name="Room"),
         Category(category_id=2, name="Food"),
         Category(category_id=3, name="Supplies"),

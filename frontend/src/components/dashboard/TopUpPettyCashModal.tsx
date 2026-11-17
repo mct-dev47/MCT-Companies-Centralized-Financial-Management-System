@@ -311,7 +311,7 @@ export const TopUpPettyCashModal: React.FC<TopUpPettyCashModalProps> = ({
                 {
                   label: 'Funding Bank',
                   value: bankAccountsList.find((a) => String(a.id) === String(fundingBankId))
-                    ? `${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.bankName} (${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.accountNumber})`
+                    ? `${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.bankName} (${bankAccountsList.find((a) => String(a.id) === String(fundingBankId))?.accountName})`
                     : 'Default account',
                 },
                 { label: 'Date', value: requestDate },

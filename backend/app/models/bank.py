@@ -12,9 +12,8 @@ class BankAccount(Base):
     id = Column(String(100), primary_key=True, index=True)
     bank_name = Column(String(255), nullable=False)
     account_name = Column(String(255), nullable=False)
-    account_number = Column(String(100), nullable=False)
     company_name = Column(String(255), nullable=False, index=True)
-    company_id = Column(Integer, nullable=True, index=True)
+    company_id = Column(Integer, ForeignKey("company.company_id", ondelete="SET NULL"), nullable=True, index=True)
     # Full owner list as JSON array text (company_name is the primary owner, always first). NULL = single owner.
     company_names_json = Column("company_names", Text, nullable=True)
     card_label = Column(String(255), nullable=True)
@@ -23,9 +22,10 @@ class BankAccount(Base):
     starting_balance = Column(Numeric(15, 2), nullable=False, default=0.00)
     current_balance = Column(Numeric(15, 2), nullable=False, default=0.00)
     color_theme = Column(String(20), nullable=False, default="red")
-    notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    company = relationship("Company", back_populates="bank_accounts")
 
     transactions = relationship(
         "BankTransaction",

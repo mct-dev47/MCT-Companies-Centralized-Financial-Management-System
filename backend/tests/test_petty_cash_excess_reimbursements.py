@@ -43,13 +43,11 @@ def test_setup(db_session):
     comp_a = Company(
         company_id=101,
         company_name="Alpha Tech Inc",
-        starting_balance=Decimal("100000.00"),
     )
     # Funding Affiliate Company (Company B)
     comp_b = Company(
         company_id=102,
         company_name="Beta Logistics Corp",
-        starting_balance=Decimal("100000.00"),
     )
     db_session.add_all([comp_a, comp_b])
     db_session.flush()
@@ -61,7 +59,6 @@ def test_setup(db_session):
         company_name=comp_a.company_name,
         bank_name="BDO Unibank",
         account_name="Alpha Checking",
-        account_number="101-0001",
         current_balance=Decimal("20000.00"),
         starting_balance=Decimal("20000.00"),
     )
@@ -72,7 +69,6 @@ def test_setup(db_session):
         company_name=comp_b.company_name,
         bank_name="BPI",
         account_name="Beta Funding",
-        account_number="102-0001",
         current_balance=Decimal("50000.00"),
         starting_balance=Decimal("50000.00"),
     )

@@ -41,7 +41,7 @@ def env(monkeypatch):
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
     db = Session()
-    company = Company(company_name="MCT Kitchen", starting_balance=Decimal("0"))
+    company = Company(company_name="MCT Kitchen")
     db.add(company)
     db.flush()
     legacy = PettyCashTopUp(

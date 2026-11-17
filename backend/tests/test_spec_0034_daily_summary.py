@@ -65,7 +65,6 @@ def test_sales_daily_summary_aggregation(client, db_session):
         company_id=1,
         company_name="MCT Kitchen",
         location="Manila",
-        starting_balance=Decimal("0.00"),
     )
     db_session.add(company)
     db_session.commit()
@@ -131,7 +130,6 @@ def test_expenses_daily_summary_aggregation(client, db_session):
         company_id=1,
         company_name="MCT Kitchen",
         location="Manila",
-        starting_balance=Decimal("0.00"),
     )
     db_session.add(company)
     db_session.commit()

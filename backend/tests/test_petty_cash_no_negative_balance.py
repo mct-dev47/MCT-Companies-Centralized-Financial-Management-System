@@ -23,7 +23,7 @@ def db():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
-    session.add(Company(company_id=1, company_name="Company One", starting_balance=0))
+    session.add(Company(company_id=1, company_name="Company One"))
     session.add(PettyCashTopUp(company_id=1, amount=Decimal("500.00"), topup_date=date(2026, 1, 1), status="Approved"))
     session.commit()
     yield session

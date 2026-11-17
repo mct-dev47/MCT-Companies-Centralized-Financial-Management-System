@@ -708,8 +708,6 @@ def create_expense(
                 local_comp = Company(
                     company_id=target_company_id,
                     company_name=target_company_name,
-                    starting_balance=0.00,
-                    current_balance=0.00
                 )
                 db.add(local_comp)
                 db.commit()

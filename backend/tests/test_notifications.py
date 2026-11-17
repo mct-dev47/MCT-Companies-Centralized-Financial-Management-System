@@ -95,13 +95,11 @@ def notif_env(monkeypatch):
                     company_id=1,
                     company_name="JK Property and Ventures",
                     location="Manila",
-                    starting_balance=Decimal("100000.00"),
                 ),
                 Company(
                     company_id=2,
                     company_name="MCT Lending Corp",
                     location="Cebu",
-                    starting_balance=Decimal("100000.00"),
                 ),
             ]
         )
@@ -649,8 +647,8 @@ def test_zero_n_plus_one_query_scaling(monkeypatch):
         with SessionLocal() as db:
             db.add_all(
                 [
-                    Company(company_id=1, company_name="JK Property and Ventures", starting_balance=0),
-                    Company(company_id=2, company_name="MCT Lending Corp", starting_balance=0),
+                    Company(company_id=1, company_name="JK Property and Ventures"),
+                    Company(company_id=2, company_name="MCT Lending Corp"),
                 ]
             )
             db.commit()

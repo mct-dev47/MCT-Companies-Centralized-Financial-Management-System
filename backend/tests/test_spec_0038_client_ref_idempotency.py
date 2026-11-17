@@ -43,8 +43,8 @@ def env():
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with Session() as seed:
         seed.add_all([
-            Company(company_id=1, company_name="Company One", location="Manila", starting_balance=0),
-            Company(company_id=2, company_name="Company Two", location="Cebu", starting_balance=0),
+            Company(company_id=1, company_name="Company One", location="Manila"),
+            Company(company_id=2, company_name="Company Two", location="Cebu"),
         ])
         seed.commit()
 

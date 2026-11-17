@@ -369,17 +369,6 @@ def init_db():
     except Exception as e:
         logger.warning(f"Bank integrity repair skipped on init: {e}")
 
-    try:
-        from app.services.company_service import CompanyService
-
-        _comp_db = SessionLocal()
-        try:
-            CompanyService(_comp_db).reconcile_existing_company_starting_balances()
-        finally:
-            _comp_db.close()
-    except Exception as e:
-        logger.warning(f"Company bank starting balance reconciliation skipped on init: {e}")
-
     import threading
 
     def _sync_companies_from_supabase():
@@ -403,13 +392,11 @@ def init_db():
                                 continue
                             existing = db.query(Company).filter(Company.company_id == cid).first()
                             p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
-                            s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
                             if existing:
                                 existing.company_name = sc.get("company_name") or existing.company_name
                                 existing.location = sc.get("location") or existing.location
                                 existing.contact_number = sc.get("contact_number")
                                 existing.phone = sc.get("phone")
-                                existing.starting_balance = s_bal
                                 existing.petty_cash = p_cash
                                 existing.logo_url = sc.get("logo_url")
                             else:
@@ -419,16 +406,10 @@ def init_db():
                                     location=sc.get("location"),
                                     contact_number=sc.get("contact_number"),
                                     phone=sc.get("phone"),
-                                    starting_balance=s_bal,
                                     petty_cash=p_cash,
                                     logo_url=sc.get("logo_url"),
                                 ))
                         db.commit()
-                        try:
-                            from app.services.company_service import CompanyService
-                            CompanyService(db).reconcile_existing_company_starting_balances()
-                        except Exception as rec_err:
-                            logger.warning(f"Could not reconcile company bank starting balances after supabase sync: {rec_err}")
                     finally:
                         db.close()
                 return

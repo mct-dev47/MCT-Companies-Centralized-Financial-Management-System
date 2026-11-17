@@ -52,15 +52,14 @@ def setup_app(monkeypatch):
 
     with Session() as seed:
         seed.add_all([
-            Company(company_id=1, company_name="MCT Kitchen", location="Manila", starting_balance=0),
-            Company(company_id=5, company_name="JK Property and Ventures Corporation", location="Manila", starting_balance=0),
+            Company(company_id=1, company_name="MCT Kitchen", location="Manila"),
+            Company(company_id=5, company_name="JK Property and Ventures Corporation", location="Manila"),
             BankAccount(
                 id="bank-1",
                 company_id=1,
                 company_name="MCT Kitchen",
                 bank_name="BDO",
                 account_name="Main Operating Account",
-                account_number="1234567890",
                 account_type="Checking",
                 branch="Main",
                 current_balance=Decimal("500000.00"),

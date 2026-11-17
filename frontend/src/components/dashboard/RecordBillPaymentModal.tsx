@@ -421,7 +421,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                     fundingSource === 'petty_cash'
                       ? 'Petty Cash'
                       : fundingSource === 'bank' && bankAccounts.find((a) => String(a.id) === String(bankAccountId))
-                        ? `${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.bankName} (${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.accountNumber})`
+                        ? `${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.bankName} (${bankAccounts.find((a) => String(a.id) === String(bankAccountId))?.accountName})`
                         : 'Unassigned',
                 },
                 { label: 'Payment Date', value: paymentDate },
@@ -993,7 +993,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
                   options={[
                     ...bankAccounts.map((acc) => ({
                       value: `bank:${acc.id}`,
-                      label: `${acc.bankName}${acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} — ${formatPHP(Number(acc.currentBalance) || 0)}`,
+                      label: `${acc.bankName}${acc.accountName ? ` (${acc.accountName})` : ''} — ${formatPHP(Number(acc.currentBalance) || 0)}`,
                     })),
                     {
                       value: 'petty_cash',

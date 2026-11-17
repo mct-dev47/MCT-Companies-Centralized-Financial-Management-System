@@ -81,7 +81,7 @@ def client(monkeypatch):
     Base.metadata.create_all(bind=engine)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     s = SessionLocal()
-    s.add(Company(company_id=1, company_name="Company Alpha", starting_balance=Decimal("0")))
+    s.add(Company(company_id=1, company_name="Company Alpha"))
     s.commit()
     s.close()
 

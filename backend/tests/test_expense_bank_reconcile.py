@@ -18,10 +18,10 @@ def _db():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
-    db.add(Company(company_id=1, company_name="Acme", starting_balance=Decimal("0.00")))
+    db.add(Company(company_id=1, company_name="Acme"))
     for acc_id in ("bnk-001", "bnk-002"):
         db.add(BankAccount(
-            id=acc_id, bank_name="BDO", account_name=acc_id, account_number=acc_id,
+            id=acc_id, bank_name="BDO", account_name=acc_id, 
             company_name="Acme", starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
         ))
     db.commit()

@@ -10,7 +10,6 @@ class CompanyBase(BaseModel):
     location: str = Field(min_length=1, max_length=100)
     contact_number: Optional[str] = Field(default=None, max_length=11)
     phone: Optional[str] = Field(default=None, max_length=8)
-    starting_balance: Decimal = Field(default=Decimal("0.00"), decimal_places=2)
     petty_cash: Optional[Decimal] = Field(default=Decimal("0.00"), decimal_places=2)
     logo_url: Optional[str] = Field(default=None, max_length=2048)
 
@@ -27,7 +26,6 @@ class CompanyUpdate(BaseModel):
     location: Optional[str] = Field(default=None, min_length=1, max_length=100)
     contact_number: Optional[str] = Field(default=None, max_length=11)
     phone: Optional[str] = Field(default=None, max_length=8)
-    starting_balance: Optional[Decimal] = Field(default=None, decimal_places=2)
     petty_cash: Optional[Decimal] = Field(default=None, decimal_places=2)
     logo_url: Optional[str] = Field(default=None, max_length=2048)
 
@@ -42,7 +40,6 @@ class CompanyOut(BaseModel):
     location: str
     contact_number: Optional[str] = None
     phone: Optional[str] = None
-    starting_balance: float
     petty_cash: float = 0.0
     logo_url: Optional[str] = None
     total_revenue: float = 0.0
@@ -59,7 +56,6 @@ class AuthorizedCompanyOut(BaseModel):
     location: str
     contact_number: Optional[str] = None
     phone: Optional[str] = None
-    starting_balance: float = 0.0
     petty_cash: float = 0.0
     logo_url: Optional[str] = None
     role: str

@@ -37,8 +37,8 @@ class TestPettyCashReplenishmentAndCategories(unittest.TestCase):
         self.db = Session()
 
         # Set up Company A and Company B
-        self.comp_a = Company(company_id=101, company_name="Company Alpha", starting_balance=Decimal("100000.00"))
-        self.comp_b = Company(company_id=102, company_name="Company Beta", starting_balance=Decimal("100000.00"))
+        self.comp_a = Company(company_id=101, company_name="Company Alpha")
+        self.comp_b = Company(company_id=102, company_name="Company Beta")
         self.db.add_all([self.comp_a, self.comp_b])
         self.db.flush()
 
@@ -49,7 +49,6 @@ class TestPettyCashReplenishmentAndCategories(unittest.TestCase):
             company_name="Company Alpha",
             bank_name="Alpha Bank",
             account_name="Alpha Checking",
-            account_number="101-0001",
             starting_balance=Decimal("50000.00"),
             current_balance=Decimal("50000.00"),
         )
@@ -59,7 +58,6 @@ class TestPettyCashReplenishmentAndCategories(unittest.TestCase):
             company_name="Company Beta",
             bank_name="Beta Bank",
             account_name="Beta Checking",
-            account_number="102-0001",
             starting_balance=Decimal("50000.00"),
             current_balance=Decimal("50000.00"),
         )

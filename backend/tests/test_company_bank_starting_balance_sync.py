@@ -2,98 +2,67 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.company import Company
-from app.models.bank import BankAccount, BankTransaction
-from app.schemas.company import CompanyCreate, CompanyUpdate
+from app.db.session import Base, SessionLocal, engine
+from app.models.bank import BankAccount
+from app.schemas.bank import BankAccountCreate
+from app.schemas.company import CompanyCreate
+from app.services.bank_service import BankService
 from app.services.company_service import CompanyService
 
 
-def test_create_company_auto_creates_primary_bank_with_starting_balance(db: Session):
+@pytest.fixture()
+def db():
+    Base.metadata.create_all(bind=engine)
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.query(BankAccount).delete()
+        session.commit()
+        session.close()
+
+
+def test_create_company_does_not_auto_create_bank_account(db: Session):
     service = CompanyService(db)
     comp_in = CompanyCreate(
-        name="Auto Bank Co",
+        name="No Auto Bank Co",
         location="Makati",
-        starting_balance=Decimal("250000.00"),
         petty_cash=Decimal("5000.00"),
     )
     result = service.create_company(comp_in)
     assert result.id is not None
-    assert result.starting_balance == 250000.00
 
-    # Verify BankAccount was auto-created
     acc = db.query(BankAccount).filter(BankAccount.company_id == result.id).first()
-    assert acc is not None
-    assert acc.company_name == "Auto Bank Co"
-    assert acc.bank_name == "CHINABANK"
-    assert Decimal(str(acc.starting_balance)) == Decimal("250000.00")
-    assert Decimal(str(acc.current_balance)) == Decimal("250000.00")
+    assert acc is None
 
 
-def test_update_company_starting_balance_syncs_existing_bank_and_recalculates(db: Session):
-    service = CompanyService(db)
-    comp_in = CompanyCreate(
-        name="Sync Existing Bank Co",
-        location="BGC",
-        starting_balance=Decimal("100000.00"),
+def test_bank_account_links_company_id_and_allows_unassigned(db: Session):
+    comp = CompanyService(db).create_company(
+        CompanyCreate(name="Linked Co", location="BGC")
     )
-    result = service.create_company(comp_in)
-    acc = db.query(BankAccount).filter(BankAccount.company_id == result.id).first()
-    assert acc is not None
-    assert Decimal(str(acc.starting_balance)) == Decimal("100000.00")
+    bank_service = BankService(db)
 
-    # Add transactions to this bank account
-    db.add(BankTransaction(
-        id="tx-test-01",
-        bank_account_id=acc.id,
-        transaction_date="2026-11-16",
-        particulars="Customer Deposit",
-        deposit=Decimal("20000.00"),
-        withdrawal=Decimal("0.00"),
-        net_amount=Decimal("20000.00"),
-        category="Sales Deposit",
-    ))
-    db.add(BankTransaction(
-        id="tx-test-02",
-        bank_account_id=acc.id,
-        transaction_date="2026-11-16",
-        particulars="Office Supplies",
-        deposit=Decimal("0.00"),
-        withdrawal=Decimal("5000.00"),
-        net_amount=Decimal("-5000.00"),
-        category="Operating Expense",
-    ))
-    acc.current_balance = Decimal("115000.00")
-    db.commit()
-
-    # Now Admin updates company starting balance to 300000.00
-    updated = service.update_company(result.id, CompanyUpdate(starting_balance=Decimal("300000.00")))
-    assert updated is not None
-    assert updated.starting_balance == 300000.00
-
-    db.refresh(acc)
-    # Starting balance is updated
-    assert Decimal(str(acc.starting_balance)) == Decimal("300000.00")
-    # Current balance is re-derived: 300000 + 20000 - 5000 = 315000
-    assert Decimal(str(acc.current_balance)) == Decimal("315000.00")
-
-
-def test_reconcile_existing_company_starting_balances(db: Session):
-    service = CompanyService(db)
-    # Create a company without a bank account
-    company = Company(
-        company_name="Orphan Balance Corp",
-        location="Ortigas",
-        starting_balance=Decimal("500000.00"),
+    linked = bank_service.create_account(
+        BankAccountCreate(
+            bank_name="BDO",
+            account_name="Linked Operating",
+            company_name="Linked Co",
+            company_id=comp.id,
+            starting_balance=Decimal("100000.00"),
+        )
     )
-    db.add(company)
-    db.commit()
-    db.refresh(company)
+    assert linked.company_id == comp.id
+    assert Decimal(str(linked.starting_balance)) == Decimal("100000.00")
+    assert Decimal(str(linked.current_balance)) == Decimal("100000.00")
 
-    # Reconcile
-    reconciled = service.reconcile_existing_company_starting_balances()
-    assert reconciled >= 1
-
-    acc = db.query(BankAccount).filter(BankAccount.company_id == company.company_id).first()
-    assert acc is not None
-    assert Decimal(str(acc.starting_balance)) == Decimal("500000.00")
-    assert Decimal(str(acc.current_balance)) == Decimal("500000.00")
+    unassigned = bank_service.create_account(
+        BankAccountCreate(
+            bank_name="BPI",
+            account_name="General Treasury",
+            company_name="General Treasury / Unassigned",
+            company_id=None,
+            starting_balance=Decimal("50000.00"),
+        )
+    )
+    assert unassigned.company_id is None
+    assert Decimal(str(unassigned.current_balance)) == Decimal("50000.00")

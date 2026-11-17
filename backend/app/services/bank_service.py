@@ -303,8 +303,6 @@ class BankService:
                 return existing_match
 
         account_id = self._generate_account_id()
-        num_suffix = account_id.replace("bnk-", "")
-        acc_num = data.account_number.strip() if data.account_number and data.account_number.strip() else f"1092-4820-{num_suffix}"
         label = (data.card_label or data.account_name or data.company_name or "").strip()
 
         # Resolve company_id from input or company name
@@ -322,7 +320,6 @@ class BankService:
             id=account_id,
             bank_name=bank_clean,
             account_name=acct_clean,
-            account_number=acc_num,
             company_name=comp_clean,
             company_id=resolved_cid,
             company_names_json=json.dumps(owners) if len(owners) > 1 else None,
@@ -332,7 +329,6 @@ class BankService:
             starting_balance=start_bal,
             current_balance=start_bal,
             color_theme=data.color_theme or "red",
-            notes=data.notes.strip() if data.notes else None,
         )
         self.db.add(account)
         self.db.commit()
@@ -373,8 +369,6 @@ class BankService:
                 pass
         if data.branch is not None:
             account.branch = data.branch.strip()
-        if data.notes is not None:
-            account.notes = data.notes.strip()
         if data.color_theme is not None:
             account.color_theme = data.color_theme
         if data.card_label is not None:

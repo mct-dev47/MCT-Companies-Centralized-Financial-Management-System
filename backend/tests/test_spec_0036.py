@@ -43,7 +43,6 @@ def setup_db():
         company_id=1,
         company_name="Test Company",
         location="Manila",
-        starting_balance=Decimal("0.00"),
         petty_cash=Decimal("0.00"),
     )
     db.add(comp)

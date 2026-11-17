@@ -103,6 +103,52 @@ class TestMigrations(unittest.TestCase):
         self.assertIn("user_invitations", inspector.get_table_names())
         self.assertIn("invitation_outbox", inspector.get_table_names())
 
+    def test_migration_0067_drops_legacy_columns_and_nulls_orphan_company_id(self):
+        """Verify 0067 drops unused company and bank_accounts columns and nulls orphan company_id."""
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE company (
+                    company_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name VARCHAR(100) NOT NULL,
+                    location VARCHAR(100) NOT NULL,
+                    contact_person VARCHAR(100),
+                    email VARCHAR(100),
+                    current_balance NUMERIC(15, 2),
+                    starting_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE bank_accounts (
+                    id VARCHAR(100) PRIMARY KEY,
+                    bank_name VARCHAR(255) NOT NULL,
+                    account_name VARCHAR(255) NOT NULL,
+                    account_number VARCHAR(100) NOT NULL DEFAULT '0000',
+                    company_name VARCHAR(255) NOT NULL,
+                    company_id INTEGER,
+                    notes TEXT
+                );
+            """))
+            conn.execute(text("INSERT INTO company (company_id, company_name, location, starting_balance) VALUES (1, 'Valid Co', 'Manila', 100.00)"))
+            conn.execute(text("INSERT INTO bank_accounts (id, bank_name, account_name, company_name, company_id) VALUES ('bnk-1', 'BDO', 'Main', 'Valid Co', 1)"))
+            conn.execute(text("INSERT INTO bank_accounts (id, bank_name, account_name, company_name, company_id) VALUES ('bnk-2', 'BPI', 'Orphan', 'Missing Co', 999)"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0067_company_bank_schema_cleanup", applied)
+
+        inspector = inspect(self.engine)
+        company_cols = {col["name"] for col in inspector.get_columns("company")}
+        bank_cols = {col["name"] for col in inspector.get_columns("bank_accounts")}
+        for dropped in ("contact_person", "email", "current_balance", "starting_balance"):
+            self.assertNotIn(dropped, company_cols)
+        for dropped in ("account_number", "notes"):
+            self.assertNotIn(dropped, bank_cols)
+
+        with self.engine.connect() as conn:
+            valid_cid = conn.execute(text("SELECT company_id FROM bank_accounts WHERE id = 'bnk-1'")).scalar()
+            orphan_cid = conn.execute(text("SELECT company_id FROM bank_accounts WHERE id = 'bnk-2'")).scalar()
+            self.assertEqual(valid_cid, 1)
+            self.assertIsNone(orphan_cid)
+
 
 if __name__ == "__main__":
     unittest.main()

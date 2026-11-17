@@ -37,8 +37,8 @@ def pc_env(monkeypatch):
     engine, SessionLocal = _make_test_env()
     db = SessionLocal()
 
-    comp_a = Company(company_name="MCT Kitchen", starting_balance=Decimal("0.00"))
-    comp_b = Company(company_name="MCT Cafe", starting_balance=Decimal("0.00"))
+    comp_a = Company(company_name="MCT Kitchen")
+    comp_b = Company(company_name="MCT Cafe")
     db.add_all([comp_a, comp_b])
     db.flush()
 

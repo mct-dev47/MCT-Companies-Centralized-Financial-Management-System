@@ -78,8 +78,8 @@ def test_check_any_owner_access_enforces_boundaries(svc):
     from app.models.company import Company
 
     # Seed companies Alpha (id=10) and Beta (id=20)
-    c1 = Company(company_id=10, company_name="Alpha", starting_balance=Decimal("0.00"))
-    c2 = Company(company_id=20, company_name="Beta", starting_balance=Decimal("0.00"))
+    c1 = Company(company_id=10, company_name="Alpha")
+    c2 = Company(company_id=20, company_name="Beta")
     svc.db.add_all([c1, c2])
     svc.db.commit()
 
@@ -220,9 +220,9 @@ def test_list_bank_accounts_includes_shared_and_alias_banks_for_supervisor_and_o
     from app.models.company import Company
 
     svc.db.add_all([
-        Company(company_id=10, company_name="Alpha Tech Inc", starting_balance=Decimal("0.00")),
-        Company(company_id=20, company_name="Beta Logistics Corp", starting_balance=Decimal("0.00")),
-        Company(company_id=30, company_name="Gamma Ventures", starting_balance=Decimal("0.00")),
+        Company(company_id=10, company_name="Alpha Tech Inc"),
+        Company(company_id=20, company_name="Beta Logistics Corp"),
+        Company(company_id=30, company_name="Gamma Ventures"),
     ])
     svc.db.commit()
 

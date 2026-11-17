@@ -38,8 +38,8 @@ def db():
 
 @pytest.fixture
 def setup(db):
-    a = Company(company_id=201, company_name="Alpha Foods", starting_balance=Decimal("0"))
-    b = Company(company_id=202, company_name="Beta Retail", starting_balance=Decimal("0"))
+    a = Company(company_id=201, company_name="Alpha Foods")
+    b = Company(company_id=202, company_name="Beta Retail")
     db.add_all([a, b])
     db.flush()
     bank_a = BankAccount(
@@ -48,7 +48,6 @@ def setup(db):
         company_name=a.company_name,
         bank_name="BDO",
         account_name="Alpha Checking",
-        account_number="1",
         current_balance=Decimal("20000.00"),
         starting_balance=Decimal("20000.00"),
     )

@@ -3631,7 +3631,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   }
                   options={availableBankAccounts.map((acc) => ({
                     value: acc.id,
-                    label: `${acc.bankName} - ${acc.accountName || acc.accountNumber} (${formatPHP(acc.currentBalance)})`,
+                    label: `${acc.bankName} - ${acc.accountName} (${formatPHP(acc.currentBalance)})`,
                   }))}
                   aria-label="Deposit Bank"
                 />

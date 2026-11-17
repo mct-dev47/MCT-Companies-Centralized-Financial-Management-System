@@ -36,12 +36,12 @@ def db(monkeypatch):
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     session.add_all([
-        Company(company_id=JK, company_name="JK Property and Ventures", starting_balance=0),
-        Company(company_id=FILCAP_COMPANY_ID, company_name="FILCAP Prime Holdings Corp.", starting_balance=0),
-        BankAccount(id="bnk-jk", bank_name="BDO", account_name="JK Main", account_number="1",
+        Company(company_id=JK, company_name="JK Property and Ventures"),
+        Company(company_id=FILCAP_COMPANY_ID, company_name="FILCAP Prime Holdings Corp."),
+        BankAccount(id="bnk-jk", bank_name="BDO", account_name="JK Main", 
                     company_name="JK Property and Ventures", company_id=JK,
                     starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00")),
-        BankAccount(id="bnk-fc", bank_name="BPI", account_name="FilCap Main", account_number="2",
+        BankAccount(id="bnk-fc", bank_name="BPI", account_name="FilCap Main", 
                     company_name="FILCAP Prime Holdings Corp.", company_id=FILCAP_COMPANY_ID,
                     starting_balance=Decimal("10000.00"), current_balance=Decimal("10000.00")),
     ])
@@ -137,7 +137,7 @@ def test_lease_bank_must_belong_to_the_company(db):
 
 
 def _second_jk_bank(db):
-    db.add(BankAccount(id="bnk-jk2", bank_name="MBTC", account_name="JK 2", account_number="3",
+    db.add(BankAccount(id="bnk-jk2", bank_name="MBTC", account_name="JK 2", 
                        company_name="JK Property and Ventures", company_id=JK,
                        starting_balance=Decimal("0"), current_balance=Decimal("0")))
     db.commit()
@@ -310,7 +310,7 @@ def test_editing_the_principal_updates_the_release(db):
 
 
 def _second_filcap_bank(db):
-    db.add(BankAccount(id="bnk-fc2", bank_name="UB", account_name="FilCap 2", account_number="4",
+    db.add(BankAccount(id="bnk-fc2", bank_name="UB", account_name="FilCap 2", 
                        company_name="FILCAP Prime Holdings Corp.", company_id=FILCAP_COMPANY_ID,
                        starting_balance=Decimal("5000.00"), current_balance=Decimal("5000.00")))
     db.commit()

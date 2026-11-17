@@ -11,7 +11,6 @@ import {
   MapPin,
   Phone,
   PhoneCall,
-  Wallet,
   Banknote,
 } from 'lucide-react'
 import {
@@ -96,7 +95,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
     address: '',
     contactNumber: '',
     telephoneNumber: '',
-    startingBalance: 0,
     pettyCash: 0,
     logoUrl: undefined,
   })
@@ -122,7 +120,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
         address: targetComp.address,
         contactNumber: initContact,
         telephoneNumber: targetComp.telephoneNumber || '',
-        startingBalance: targetComp.startingBalance ?? 0,
         pettyCash: targetComp.pettyCash ?? 0,
         logoUrl: targetComp.logoUrl,
       })
@@ -215,7 +212,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       setIsSubmitting(true)
       const updated = await employeeService.updateCompany(targetId, {
         ...formData,
-        startingBalance: formData.startingBalance === ('' as unknown as number) ? 0 : (Number(formData.startingBalance) || 0),
         pettyCash: formData.pettyCash === ('' as unknown as number) ? 0 : (Number(formData.pettyCash) || 0),
         logoFile: profileFile || undefined,
       })
@@ -481,33 +477,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="edit-comp-start-bal" className="text-xs font-medium text-focus/80">
-                      Starting Balance (₱) <span className="text-[10px] text-muted-fg ml-1">(Optional, default 0)</span>
-                    </Label>
-                    <Input
-                      id="edit-comp-start-bal"
-                      type="text"
-                      inputMode="decimal"
-                      placeholder="0.00"
-                      value={formData.startingBalance === undefined || formData.startingBalance === null ? '' : formData.startingBalance}
-                      onKeyDown={(e) => {
-                        if (['-', '+', 'e', 'E'].includes(e.key)) {
-                          e.preventDefault()
-                        }
-                      }}
-                      onChange={(e) => {
-                        const val = sanitizeNumericInput(e.target.value)
-                        setFormData({
-                          ...formData,
-                          startingBalance: val === '' ? ('' as unknown as number) : (val as unknown as number),
-                        })
-                      }}
-                      className="h-10 rounded-xl text-sm"
-                    />
-                  </div>
-                  <div className="space-y-1">
+                <div className="space-y-1">
                     <Label htmlFor="edit-comp-petty-cash" className="text-xs font-medium text-focus/80">
                       Petty Cash (₱) <span className="text-[10px] text-muted-fg ml-1">(Optional, default 0)</span>
                     </Label>
@@ -532,7 +502,6 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       className="h-10 rounded-xl text-sm"
                     />
                   </div>
-                </div>
               </div>
 
               {/* Action Buttons: Both on right side on desktop, stacked on mobile */}
@@ -634,30 +603,16 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                   </div>
                 </div>
 
-                {/* Financial Overview Cards - Neutral / Plain White matching other details */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-3.5">
-                  <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
-                      <Wallet className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <span className="text-xs font-medium text-muted-fg block">Starting Balance</span>
-                      <p className="text-sm font-semibold text-focus tabular-nums mt-0.5">
-                        {formatPHP(Number(activeCompany.startingBalance) || 0)}
-                      </p>
-                    </div>
+                {/* Financial Overview Card - Petty Cash */}
+                <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 flex items-center gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
+                    <Banknote className="h-4 w-4" />
                   </div>
-
-                  <div className="bg-slate-50/70 border border-slate-200/70 rounded-xl p-4 flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-lg bg-rose-50 border border-rose-100 flex items-center justify-center text-primary shrink-0">
-                      <Banknote className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <span className="text-xs font-medium text-muted-fg block">Petty Cash Fund</span>
-                      <p className="text-sm font-semibold text-focus tabular-nums mt-0.5">
-                        {formatPHP(Number(activeCompany.pettyCash) || 0)}
-                      </p>
-                    </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-xs font-medium text-muted-fg block">Petty Cash Fund</span>
+                    <p className="text-sm font-semibold text-focus tabular-nums mt-0.5">
+                      {formatPHP(Number(activeCompany.pettyCash) || 0)}
+                    </p>
                   </div>
                 </div>
               </div>

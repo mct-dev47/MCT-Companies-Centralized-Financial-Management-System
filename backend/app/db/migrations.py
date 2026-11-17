@@ -593,6 +593,48 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0065_dashboard_and_multi_tenant_indexes failed and was skipped: %s", exc)
 
+    # 32. 0067: drop unused company & bank_accounts columns and link bank_accounts.company_id -> company(company_id)
+    result_0067 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0067_company_bank_schema_cleanup'")
+    ).first()
+
+    if not result_0067:
+        has_company = conn.execute(text("SELECT to_regclass('public.company')")).scalar() is not None
+        has_bank = conn.execute(text("SELECT to_regclass('public.bank_accounts')")).scalar() is not None
+        with conn.begin_nested():
+            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+            if has_company:
+                for col in ("contact_person", "email", "current_balance", "starting_balance"):
+                    conn.execute(text(f"ALTER TABLE company DROP COLUMN IF EXISTS {col} CASCADE"))
+            if has_bank:
+                for col in ("account_number", "notes"):
+                    conn.execute(text(f"ALTER TABLE bank_accounts DROP COLUMN IF EXISTS {col} CASCADE"))
+                if has_company:
+                    conn.execute(
+                        text(
+                            "UPDATE bank_accounts SET company_id = NULL "
+                            "WHERE company_id IS NOT NULL AND company_id NOT IN (SELECT company_id FROM company)"
+                        )
+                    )
+                    conn.execute(text("ALTER TABLE bank_accounts ALTER COLUMN company_id TYPE BIGINT"))
+                    has_fk = conn.execute(
+                        text(
+                            "SELECT 1 FROM pg_constraint c "
+                            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
+                            "WHERE c.conrelid = 'bank_accounts'::regclass AND c.contype = 'f' AND a.attname = 'company_id'"
+                        )
+                    ).first()
+                    if not has_fk:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE bank_accounts ADD CONSTRAINT fk_bank_accounts_company_id "
+                                "FOREIGN KEY (company_id) REFERENCES company(company_id) ON DELETE SET NULL"
+                            )
+                        )
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0067_company_bank_schema_cleanup')"))
+        applied.append("0067_company_bank_schema_cleanup")
+        logger.info("Migration 0067_company_bank_schema_cleanup applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1423,6 +1465,35 @@ def _run_sqlite_migrations(conn) -> list[str]:
                     logger.warning("SQLite index migration 0065 skipped statement: %s", exc)
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0065_dashboard_and_multi_tenant_indexes')"))
         applied.append("0065_dashboard_and_multi_tenant_indexes")
+
+    # 31. 0067: drop unused company & bank_accounts columns
+    result_0067 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0067_company_bank_schema_cleanup'")
+    ).first()
+    if not result_0067:
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        if "company" in existing_tables:
+            comp_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(company)")).fetchall()}
+            for col in ("contact_person", "email", "current_balance", "starting_balance"):
+                if col in comp_cols:
+                    conn.execute(text(f"ALTER TABLE company DROP COLUMN {col}"))
+        if "bank_accounts" in existing_tables:
+            bank_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_accounts)")).fetchall()}
+            for col in ("account_number", "notes"):
+                if col in bank_cols:
+                    conn.execute(text(f"ALTER TABLE bank_accounts DROP COLUMN {col}"))
+            if "company_id" in bank_cols and "company" in existing_tables:
+                conn.execute(
+                    text(
+                        "UPDATE bank_accounts SET company_id = NULL "
+                        "WHERE company_id IS NOT NULL AND company_id NOT IN (SELECT company_id FROM company)"
+                    )
+                )
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0067_company_bank_schema_cleanup')"))
+        applied.append("0067_company_bank_schema_cleanup")
 
     conn.commit()
     return applied

@@ -63,8 +63,8 @@ class TestSpec0044Roadmap(unittest.TestCase):
         self.db.query(Loan).delete()
         self.db.query(Company).delete()
 
-        comp1 = Company(company_id=1, company_name="Alpha Corp", starting_balance=Decimal("10000.00"))
-        comp2 = Company(company_id=2, company_name="Beta Corp", starting_balance=Decimal("10000.00"))
+        comp1 = Company(company_id=1, company_name="Alpha Corp")
+        comp2 = Company(company_id=2, company_name="Beta Corp")
         self.db.add_all([comp1, comp2])
         self.db.commit()
 

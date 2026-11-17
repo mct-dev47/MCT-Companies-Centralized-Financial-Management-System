@@ -52,12 +52,10 @@ def env(monkeypatch):
         comp_a = Company(
             company_id=101,
             company_name="Alpha Tech Inc",
-            starting_balance=Decimal("100000.00"),
         )
         comp_b = Company(
             company_id=102,
             company_name="Beta Logistics Corp",
-            starting_balance=Decimal("100000.00"),
         )
         seed.add_all([comp_a, comp_b])
         seed.flush()
@@ -68,7 +66,6 @@ def env(monkeypatch):
             company_name="Alpha Tech Inc",
             bank_name="BDO Unibank",
             account_name="Alpha Checking",
-            account_number="101-0001",
             current_balance=Decimal("50000.00"),
             starting_balance=Decimal("50000.00"),
         )
@@ -78,7 +75,6 @@ def env(monkeypatch):
             company_name="Beta Logistics Corp",
             bank_name="BPI",
             account_name="Beta Funding",
-            account_number="102-0001",
             current_balance=Decimal("80000.00"),
             starting_balance=Decimal("80000.00"),
         )
@@ -89,7 +85,6 @@ def env(monkeypatch):
             company_names=["Beta Logistics Corp", "Alpha Tech Inc"],
             bank_name="Metrobank",
             account_name="Joint Ops",
-            account_number="103-0001",
             current_balance=Decimal("40000.00"),
             starting_balance=Decimal("40000.00"),
         )

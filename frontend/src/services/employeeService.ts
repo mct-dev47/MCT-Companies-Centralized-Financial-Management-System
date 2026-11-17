@@ -8,14 +8,9 @@ export type { ActivityLogItem }
 export interface Company {
   id: string
   name: string
-  email?: string
   address: string
-  contactPerson?: string
-  contactPersonEmail?: string
   contactNumber: string
   telephoneNumber: string
-  startingBalance: number
-  currentBalance?: number
   pettyCash?: number
   status: 'Active' | 'Inactive'
   createdAt: string
@@ -41,14 +36,9 @@ export interface EmployeeUser {
 
 export interface CreateCompanyPayload {
   name: string
-  email?: string
   address: string
-  contactPerson?: string
-  contactPersonEmail?: string
   contactNumber: string
   telephoneNumber?: string
-  startingBalance: number
-  currentBalance?: number
   pettyCash?: number
   logoUrl?: string
   logoFile?: File
@@ -196,7 +186,6 @@ function mapCompany(value: unknown): Company {
     location: string
     contact_number: string | null
     phone: string | null
-    starting_balance: number
     petty_cash?: number
     created_at: string | null
     logo_url?: string | null
@@ -207,7 +196,6 @@ function mapCompany(value: unknown): Company {
     address: company.location,
     contactNumber: company.contact_number || '',
     telephoneNumber: company.phone || '',
-    startingBalance: Number(company.starting_balance) || 0,
     pettyCash: Number(company.petty_cash) || 0,
     status: 'Active',
     createdAt: company.created_at || '',
@@ -503,7 +491,6 @@ export const employeeService = {
       location: payload.address,
       contact_number: payload.contactNumber || null,
       phone: payload.telephoneNumber || null,
-      starting_balance: Number(payload.startingBalance) || 0,
       petty_cash: Number(payload.pettyCash) || 0,
       logo_url: payload.logoUrl && !payload.logoUrl.startsWith('data:') ? payload.logoUrl : null,
     })
@@ -514,7 +501,6 @@ export const employeeService = {
       formData.append('location', payload.address)
       formData.append('contact_number', payload.contactNumber || '')
       formData.append('phone', payload.telephoneNumber || '')
-      formData.append('starting_balance', String(Number(payload.startingBalance) || 0))
       formData.append('petty_cash', String(Number(payload.pettyCash) || 0))
       formData.append('picture', payload.logoFile)
       endpoint = '/api/v1/companies/with-picture'
@@ -540,7 +526,6 @@ export const employeeService = {
     if (payload.address !== undefined) body.location = payload.address
     if (payload.contactNumber !== undefined) body.contact_number = payload.contactNumber || null
     if (payload.telephoneNumber !== undefined) body.phone = payload.telephoneNumber || null
-    if (payload.startingBalance !== undefined) body.starting_balance = payload.startingBalance
     if (payload.pettyCash !== undefined) body.petty_cash = payload.pettyCash
     if (payload.logoUrl !== undefined && !payload.logoUrl.startsWith('data:')) {
       body.logo_url = payload.logoUrl

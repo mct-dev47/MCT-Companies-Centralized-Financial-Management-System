@@ -38,12 +38,12 @@ def env(monkeypatch):
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with Session() as seed:
         seed.add_all([
-            Company(company_id=1, company_name="Lender Co", starting_balance=0),
-            Company(company_id=2, company_name="Borrower Co", starting_balance=0),
-            BankAccount(id="bnk-lender", bank_name="BDO", account_name="Lender", account_number="1",
+            Company(company_id=1, company_name="Lender Co"),
+            Company(company_id=2, company_name="Borrower Co"),
+            BankAccount(id="bnk-lender", bank_name="BDO", account_name="Lender", 
                         company_name="Lender Co", company_id=1,
                         starting_balance=Decimal("10000"), current_balance=Decimal("10000")),
-            BankAccount(id="bnk-borrower", bank_name="BPI", account_name="Borrower", account_number="2",
+            BankAccount(id="bnk-borrower", bank_name="BPI", account_name="Borrower", 
                         company_name="Borrower Co", company_id=2,
                         starting_balance=Decimal("0"), current_balance=Decimal("0")),
             Loan(loan_id=1, borrower=2, lender=1, loan_ref_no="LN-1", bank_account_id="bnk-lender",

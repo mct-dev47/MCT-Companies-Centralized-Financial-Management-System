@@ -5,13 +5,12 @@ from pathlib import PurePosixPath
 from typing import List, Optional, Iterable
 from uuid import uuid4
 
-from sqlalchemy import text, func, or_
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.cache import system_cache
 from app.db.supabase import get_supabase_admin_client
-from app.models.bank import BankAccount, BankTransaction
 from app.models.company import Company, CompanyNotificationSettings
 from app.models.petty_cash import PettyCashTopUp, PettyCashWallet
 from app.schemas.company import CompanyCreate, CompanyOut, CompanyUpdate
@@ -31,7 +30,6 @@ class CompanyService:
     _required_update_fields = {
         "name",
         "location",
-        "starting_balance",
     }
 
     # initialize the CompanyService with a database session and a FinanceService
@@ -48,7 +46,6 @@ class CompanyService:
                 "location": company.location,
                 "contact_number": company.contact_number,
                 "phone": company.phone,
-                "starting_balance": float(company.starting_balance or 0.0),
                 "petty_cash": float(company.petty_cash or 0.0),
                 "logo_url": company.logo_url,
             }
@@ -68,13 +65,11 @@ class CompanyService:
                             continue
                         existing = self.db.query(Company).filter(Company.company_id == cid).first()
                         p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
-                        s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
                         if existing:
                             existing.company_name = sc.get("company_name") or existing.company_name
                             existing.location = sc.get("location") or existing.location
                             existing.contact_number = sc.get("contact_number")
                             existing.phone = sc.get("phone")
-                            existing.starting_balance = s_bal
                             existing.petty_cash = p_cash
                             existing.logo_url = sc.get("logo_url")
                         else:
@@ -84,160 +79,12 @@ class CompanyService:
                                 location=sc.get("location"),
                                 contact_number=sc.get("contact_number"),
                                 phone=sc.get("phone"),
-                                starting_balance=s_bal,
                                 petty_cash=p_cash,
                                 logo_url=sc.get("logo_url"),
                             ))
                     self.db.commit()
         except Exception as exc:
             logger.debug("Supabase company sync skipped: %s", exc)
-
-    def _sync_company_bank_starting_balance(
-        self, company: Company, new_balance: Decimal
-    ) -> Optional[BankAccount]:
-        try:
-            target_cid = company.company_id
-            target_name = (company.company_name or "").strip()
-            bal = Decimal(str(new_balance or 0.00))
-
-            accounts = (
-                self.db.query(BankAccount)
-                .filter(
-                    or_(
-                        BankAccount.company_id == target_cid,
-                        func.lower(BankAccount.company_name) == func.lower(target_name),
-                    )
-                )
-                .order_by(BankAccount.created_at.asc(), BankAccount.id.asc())
-                .all()
-            )
-
-            primary_acc: Optional[BankAccount] = None
-            if accounts:
-                sole_owned = [
-                    a for a in accounts
-                    if not a.company_names_json or len(a.company_names) <= 1
-                ]
-                primary_acc = sole_owned[0] if sole_owned else accounts[0]
-                primary_acc.starting_balance = bal
-                if not primary_acc.company_id:
-                    primary_acc.company_id = target_cid
-
-                net_tx = (
-                    self.db.query(
-                        func.coalesce(
-                            func.sum(
-                                func.coalesce(BankTransaction.deposit, 0)
-                                - func.coalesce(BankTransaction.withdrawal, 0)
-                            ),
-                            0,
-                        )
-                    )
-                    .filter(BankTransaction.bank_account_id == primary_acc.id)
-                    .scalar()
-                )
-                primary_acc.current_balance = (bal + Decimal(str(net_tx or 0))).quantize(Decimal("0.01"))
-            else:
-                from app.services.bank_service import BankService
-
-                bank_service = BankService(self.db)
-                acct_id = bank_service._generate_account_id()
-                suffix = acct_id.replace("bnk-", "")
-                primary_acc = BankAccount(
-                    id=acct_id,
-                    bank_name="CHINABANK",
-                    account_name=f"{target_name} Operating Account",
-                    account_number=f"1092-4820-{suffix}",
-                    company_name=target_name,
-                    company_id=target_cid,
-                    company_names_json=None,
-                    card_label=target_name,
-                    account_type="Checking",
-                    branch="Central Corporate Branch",
-                    starting_balance=bal,
-                    current_balance=bal,
-                    color_theme="red",
-                    notes="Primary operating account auto-created from company starting balance.",
-                )
-                self.db.add(primary_acc)
-
-            self.db.commit()
-            self.db.refresh(primary_acc)
-
-            try:
-                from app.core.websocket import ws_manager
-
-                ws_manager.broadcast_sync({
-                    "type": "BANK_UPDATED",
-                    "payload": {
-                        "company_id": target_cid,
-                        "company_name": target_name,
-                        "account_id": primary_acc.id,
-                        "action": "starting_balance_updated",
-                    },
-                })
-                ws_manager.broadcast_sync({
-                    "type": "COMPANY_UPDATED",
-                    "payload": {
-                        "company_id": target_cid,
-                        "company_name": target_name,
-                    },
-                })
-            except Exception as ws_err:
-                logger.warning("Could not broadcast bank update after starting balance sync: %s", ws_err)
-
-            return primary_acc
-        except Exception as exc:
-            logger.warning(
-                "Failed to sync bank starting balance for company %s: %s",
-                getattr(company, "company_id", None),
-                exc,
-            )
-            return None
-
-    def reconcile_existing_company_starting_balances(self) -> int:
-        """
-        Reconcile companies with positive starting balance that have missing or out-of-sync
-        primary bank accounts.
-        """
-        reconciled_count = 0
-        try:
-            companies = self.db.query(Company).filter(Company.starting_balance > 0).all()
-            for comp in companies:
-                target_cid = comp.company_id
-                target_name = (comp.company_name or "").strip()
-                s_bal = Decimal(str(comp.starting_balance or 0.00))
-
-                accounts = (
-                    self.db.query(BankAccount)
-                    .filter(
-                        or_(
-                            BankAccount.company_id == target_cid,
-                            func.lower(BankAccount.company_name) == func.lower(target_name),
-                        )
-                    )
-                    .order_by(BankAccount.created_at.asc(), BankAccount.id.asc())
-                    .all()
-                )
-
-                needs_sync = False
-                if not accounts:
-                    needs_sync = True
-                else:
-                    sole_owned = [
-                        a for a in accounts
-                        if not a.company_names_json or len(a.company_names) <= 1
-                    ]
-                    primary_acc = sole_owned[0] if sole_owned else accounts[0]
-                    if Decimal(str(primary_acc.starting_balance or 0.00)) != s_bal:
-                        needs_sync = True
-
-                if needs_sync:
-                    self._sync_company_bank_starting_balance(comp, s_bal)
-                    reconciled_count += 1
-        except Exception as exc:
-            logger.warning("Error reconciling existing company starting balances: %s", exc)
-        return reconciled_count
 
     #list_companies retrieves companies from the database, orders them by company_id in ascending order, and returns a list of CompanyOut objects.
     def list_companies(self, company_ids: Optional[Iterable[int]] = None) -> List[CompanyOut]:
@@ -324,7 +171,6 @@ class CompanyService:
             location=company_in.location,
             contact_number=company_in.contact_number,
             phone=company_in.phone,
-            starting_balance=company_in.starting_balance if company_in.starting_balance is not None else Decimal("0.00"),
             petty_cash=company_in.petty_cash or Decimal("0.00"),
             logo_url=company_in.logo_url,
         )
@@ -367,9 +213,6 @@ class CompanyService:
                 except Exception as exc:
                     logger.warning("Could not create initial petty cash topup: %s", exc)
 
-            if company.starting_balance is not None:
-                self._sync_company_bank_starting_balance(company, company.starting_balance)
-
             return self.to_response(company)
         except SQLAlchemyError as error:
             raise self._database_error("create company", error)
@@ -386,7 +229,6 @@ class CompanyService:
             location=company_in.location,
             contact_number=company_in.contact_number,
             phone=company_in.phone,
-            starting_balance=company_in.starting_balance if company_in.starting_balance is not None else Decimal("0.00"),
             petty_cash=company_in.petty_cash or Decimal("0.00"),
         )
         storage_path = ""
@@ -447,9 +289,6 @@ class CompanyService:
 
             # Re-sync logo_url to Supabase table
             self._sync_company_to_supabase(company)
-
-            if company.starting_balance is not None:
-                self._sync_company_bank_starting_balance(company, company.starting_balance)
 
             return self.to_response(company)
         except SQLAlchemyError as error:
@@ -643,11 +482,6 @@ class CompanyService:
                 except Exception as exc:
                     logger.warning("Could not sync initial petty cash topup on update: %s", exc)
 
-            # If starting_balance was updated, sync company's primary bank account
-            if "starting_balance" in company_in.model_dump(exclude_unset=True):
-                new_starting = company.starting_balance if company.starting_balance is not None else Decimal("0.00")
-                self._sync_company_bank_starting_balance(company, new_starting)
-
             # Sync updated company row directly to Supabase table
             self._sync_company_to_supabase(company)
 
@@ -830,7 +664,6 @@ class CompanyService:
             location=company.location,
             contact_number=company.contact_number,
             phone=company.phone,
-            starting_balance=float(company.starting_balance) if company.starting_balance is not None else 0.0,
             petty_cash=float(getattr(company, "petty_cash", 0.0) or 0.0),
             logo_url=company.logo_url,
             total_revenue=total_revenue,

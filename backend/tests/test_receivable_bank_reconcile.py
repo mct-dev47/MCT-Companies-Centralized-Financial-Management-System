@@ -18,9 +18,9 @@ def _setup():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
-    db.add(Company(company_id=1, company_name="MCT Kitchen", location="Manila", starting_balance=Decimal("0.00")))
+    db.add(Company(company_id=1, company_name="MCT Kitchen", location="Manila"))
     db.add(BankAccount(
-        id="bnk-001", bank_name="BDO", account_name="Main", account_number="1",
+        id="bnk-001", bank_name="BDO", account_name="Main", 
         company_name="MCT Kitchen", company_id=1,
         starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
     ))

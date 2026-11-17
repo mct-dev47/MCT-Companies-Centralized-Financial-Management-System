@@ -44,7 +44,6 @@ def test_delete_company_cascades_all_child_records(db_session):
         company_id=10,
         company_name="Target Enterprise Inc.",
         location="Manila",
-        starting_balance=Decimal("50000.00"),
         petty_cash=Decimal("5000.00"),
         logo_url="https://example.supabase.co/storage/v1/object/public/Company%20Profiles%20Pictures/company/10/logo.png",
     )
@@ -108,7 +107,6 @@ def test_delete_company_cascades_all_child_records(db_session):
         id="bank_10_acc",
         bank_name="BDO",
         account_name="Target Main",
-        account_number="123456789",
         company_name="Target Enterprise Inc.",
         company_id=10,
         starting_balance=Decimal("100000.00"),
@@ -231,7 +229,6 @@ def test_delete_company_storage_failure_resilience(db_session):
         company_id=20,
         company_name="Resilience Corp",
         location="Cebu",
-        starting_balance=Decimal("10000.00"),
         logo_url="https://example.supabase.co/storage/v1/object/public/Company%20Profiles%20Pictures/company/20/logo.png",
     )
     db_session.add(company)

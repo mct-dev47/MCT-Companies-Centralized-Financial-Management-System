@@ -50,8 +50,8 @@ def db_session_factory():
     SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
     with SessionFactory() as db:
-        c1 = Company(company_id=1, company_name="JK Property and Ventures", location="Manila", starting_balance=100000.0)
-        c2 = Company(company_id=2, company_name="MCT Lending Corp", location="Cebu", starting_balance=100000.0)
+        c1 = Company(company_id=1, company_name="JK Property and Ventures", location="Manila")
+        c2 = Company(company_id=2, company_name="MCT Lending Corp", location="Cebu")
         db.add_all([c1, c2])
 
         # Users: Admin, Finance, Supervisor 1 (Company 1), Supervisor 2 (Company 2)

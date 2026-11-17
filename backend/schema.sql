@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS company (
     location VARCHAR(100) NOT NULL,
     contact_number VARCHAR(11),
     phone VARCHAR(8),
-    starting_balance NUMERIC(15, 2) NOT NULL,
     petty_cash NUMERIC(15, 2) DEFAULT 0.00,
     logo_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -241,9 +240,8 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
     id VARCHAR(100) PRIMARY KEY,
     bank_name VARCHAR(255) NOT NULL,
     account_name VARCHAR(255) NOT NULL,
-    account_number VARCHAR(100) NOT NULL,
     company_name VARCHAR(255) NOT NULL,
-    company_id INTEGER,
+    company_id BIGINT REFERENCES company(company_id) ON DELETE SET NULL,
     company_names TEXT,
     card_label VARCHAR(255),
     account_type VARCHAR(50) NOT NULL DEFAULT 'Checking',
@@ -251,7 +249,6 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
     starting_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
     current_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
     color_theme VARCHAR(20) NOT NULL DEFAULT 'red',
-    notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

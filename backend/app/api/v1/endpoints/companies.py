@@ -175,7 +175,6 @@ def get_authorized_companies(
             location=c.location,
             contact_number=c.contact_number,
             phone=c.phone,
-            starting_balance=float(c.starting_balance),
             petty_cash=float(c.petty_cash or 0.0),
             logo_url=c.logo_url,
             role=user_role_label,
@@ -232,10 +231,6 @@ def create_company(
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
     })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
-    })
     return result
 
 
@@ -252,7 +247,6 @@ async def create_company_with_picture(
     location: str = Form(...),
     contact_number: str | None = Form(None),
     phone: str | None = Form(None),
-    starting_balance: Decimal = Form(Decimal("0.00")),
     petty_cash: Decimal = Form(Decimal("0.00")),
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -265,7 +259,6 @@ async def create_company_with_picture(
         location=location,
         contact_number=contact_number,
         phone=phone,
-        starting_balance=starting_balance,
         petty_cash=petty_cash,
     )
     try:
@@ -292,10 +285,6 @@ async def create_company_with_picture(
     ws_manager.broadcast_sync({
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
-    })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
     })
     return result
 
@@ -335,10 +324,6 @@ def update_company(
     ws_manager.broadcast_sync({
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "updated"},
-    })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
     })
     return result
 

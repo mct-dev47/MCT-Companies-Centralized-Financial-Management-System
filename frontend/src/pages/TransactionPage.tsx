@@ -373,16 +373,6 @@ const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAcco
     }
   }
 
-  // 5. Account number match (last 4 digits or full number)
-  const accNum = (account.accountNumber || '').replace(/\D/g, '')
-  if (accNum.length >= 4) {
-    const last4 = accNum.slice(-4)
-    const combinedText = `${tx.particulars || ''} ${tx.description || ''} ${tx.chequeNo || ''} ${tx.refNo || ''}`
-    if (combinedText.includes(accNum) || combinedText.includes(last4)) {
-      return true
-    }
-  }
-
   return false
 }
 
@@ -435,7 +425,6 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
       return (
         a.bankName.toLowerCase().includes(q) ||
         a.accountName.toLowerCase().includes(q) ||
-        (a.accountNumber && a.accountNumber.toLowerCase().includes(q)) ||
         (a.companyName && a.companyName.toLowerCase().includes(q))
       )
     })
@@ -1820,7 +1809,6 @@ export const TransactionPage: React.FC = () => {
           date: string
           bankKey: string
           bankName: string
-          accountNumber?: string
           totalDeposit: number
           totalWithdrawal: number
           netMovement: number
@@ -1847,14 +1835,12 @@ export const TransactionPage: React.FC = () => {
       const isPetty = isPettyCashLedgerRow(tx)
       const bankKey = isPetty ? '__petty_cash__' : matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
       const bankName = isPetty ? 'Petty Cash' : matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
-      const accountNumber = isPetty ? undefined : matchedBank?.accountNumber
 
       if (!banksMap.has(bankKey)) {
         banksMap.set(bankKey, {
           date: dateKey,
           bankKey,
           bankName,
-          accountNumber,
           totalDeposit: 0,
           totalWithdrawal: 0,
           netMovement: 0,
@@ -3260,11 +3246,6 @@ export const TransactionPage: React.FC = () => {
                                                 {/* 2. BANK / METHOD */}
                                                 <td className="px-2.5 py-2.5 align-top text-xs text-focus/90 font-medium truncate">
                                                   <div className="truncate font-medium">{bankMethod}</div>
-                                                  {matchedBank?.accountNumber && (
-                                                    <div className="text-[10px] text-muted-fg font-mono truncate">
-                                                      {matchedBank.accountNumber}
-                                                    </div>
-                                                  )}
                                                 </td>
 
                                                 {/* 3. PARTICULARS */}
@@ -3582,11 +3563,6 @@ export const TransactionPage: React.FC = () => {
                                           {/* 2. BANK/METHOD */}
                                           <td className="px-2.5 sm:px-3 py-2.5 align-top text-xs text-focus/90 font-medium truncate">
                                             <div className="truncate font-medium">{bankMethod}</div>
-                                            {matchedBank?.accountNumber && (
-                                              <div className="text-[10px] text-muted-fg font-mono truncate">
-                                                {matchedBank.accountNumber}
-                                              </div>
-                                            )}
                                           </td>
 
                                           {/* 3. PARTICULARS */}
