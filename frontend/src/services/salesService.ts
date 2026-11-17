@@ -9,6 +9,9 @@ import {
   deriveRecordStatusFromParticulars,
 } from '@/utils/particularsUtils'
 
+/** Strip dashboard prefix (`sale_`) so API calls always receive the numeric sale ID. */
+const stripSalePrefix = (id: string): string => String(id).replace(/^sale_/, '')
+
 export interface SalesItem {
   id: string
   refNo: string
@@ -523,12 +526,13 @@ export const salesService = {
     }
 
     try {
+      const numericId = stripSalePrefix(id)
       const token =
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
 
-      const res = await fetch(`/api/v1/sales/${id}`, {
+      const res = await fetch(`/api/v1/sales/${numericId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -559,7 +563,9 @@ export const salesService = {
         } else if (input.status) {
           mapped.status = input.status
         }
-        inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+        inMemorySales = inMemorySales.map((s) =>
+          s.id === numericId || s.id === id ? mapped : s
+        )
         this.invalidateCache()
         return mapped
       }
@@ -578,12 +584,13 @@ export const salesService = {
     bankAccountId?: string
   ): Promise<SalesItem> {
     this.invalidateCache()
+    const numericId = stripSalePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
 
-    const res = await fetch(`/api/v1/sales/${id}/deposit-status`, {
+    const res = await fetch(`/api/v1/sales/${numericId}/deposit-status`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -625,12 +632,13 @@ export const salesService = {
 
   async updateSaleRemarks(id: string, remarks: string): Promise<SalesItem> {
     this.invalidateCache()
+    const numericId = stripSalePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
 
-    const res = await fetch(`/api/v1/sales/${id}/remarks`, {
+    const res = await fetch(`/api/v1/sales/${numericId}/remarks`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -654,12 +662,13 @@ export const salesService = {
   async deleteSale(id: string): Promise<boolean> {
     this.invalidateCache()
     try {
+      const numericId = stripSalePrefix(id)
       const token =
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
 
-      const res = await fetch(`/api/v1/sales/${id}`, {
+      const res = await fetch(`/api/v1/sales/${numericId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
@@ -668,7 +677,7 @@ export const salesService = {
       })
       // 404 = already gone on the server, which is what the caller wants
       if (res.ok || res.status === 404) {
-        inMemorySales = inMemorySales.filter((s) => s.id !== id)
+        inMemorySales = inMemorySales.filter((s) => s.id !== numericId && s.id !== id)
         this.invalidateCache()
         return true
       }
@@ -691,10 +700,11 @@ export const salesService = {
     // `auditedBy` is kept in the signature for existing callers; the server ignores it.
     void auditedBy
     try {
-      const saved = await saveAuditReview('sales', id, auditStatus, auditNotes)
+      const numericId = stripSalePrefix(id)
+      const saved = await saveAuditReview('sales', numericId, auditStatus, auditNotes)
       const mapped = mapBackendSaleToItem(saved)
       inMemorySales = inMemorySales.map((s) =>
-        s.id === id
+        s.id === numericId || s.id === id
           ? {
               ...s,
               auditStatus: mapped.auditStatus,
@@ -704,7 +714,7 @@ export const salesService = {
             }
           : s
       )
-      return inMemorySales.find((s) => s.id === id) || mapped
+      return inMemorySales.find((s) => s.id === numericId || s.id === id) || mapped
     } finally {
       // Success or failure, the next read must come from the server.
       this.invalidateCache()

@@ -9,6 +9,9 @@ import {
   deriveRecordStatusFromParticulars,
 } from '@/utils/particularsUtils'
 
+/** Strip `exp_` or dashboard `expense_` prefix so API calls always receive the numeric expense ID. */
+const stripExpensePrefix = (id: string): string => String(id).replace(/^(exp|expense)_/, '')
+
 export class ExpenseValidationError extends Error {
   constructor(message: string) {
     super(message)
@@ -554,7 +557,7 @@ export const expenseService = {
     }
   ): Promise<ExpenseItem | null> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const withdrawalVal =
       updates.withdrawal !== undefined
         ? updates.withdrawal
@@ -658,7 +661,7 @@ export const expenseService = {
     }
   ): Promise<ExpenseItem> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const index = inMemoryExpenses.findIndex(
       (e) => e.id === id || e.id === `exp_${numericId}`
     )
@@ -701,7 +704,7 @@ export const expenseService = {
 
   async updateExpenseRemarks(id: string, remarks: string): Promise<ExpenseItem> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
@@ -733,7 +736,7 @@ export const expenseService = {
 
   async deleteExpense(id: string): Promise<boolean> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     try {
       const token =
         typeof window !== 'undefined'
@@ -773,7 +776,7 @@ export const expenseService = {
     // `auditedBy` is kept in the signature for existing callers; the server ignores it.
     void auditedBy
     try {
-      const numericId = id.replace(/^exp_/, '')
+      const numericId = stripExpensePrefix(id)
       const saved = await saveAuditReview('expenses', numericId, auditStatus, auditNotes)
       const mapped = mapBackendExpenseToItem(saved)
       const index = inMemoryExpenses.findIndex(
