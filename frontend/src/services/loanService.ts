@@ -411,8 +411,13 @@ export const loanService = {
       if (params?.status && params.status !== 'All') query.append('status', params.status)
       if (params?.start_date) query.append('start_date', params.start_date)
       if (params?.end_date) query.append('end_date', params.end_date)
+      if ((params as any)?.page !== undefined) query.append('page', String((params as any).page))
+      if ((params as any)?.limit !== undefined) query.append('limit', String((params as any).limit))
+      if ((params as any)?.search) query.append('search', String((params as any).search))
 
-      const url = `/api/v1/loans${query.toString() ? `?${query.toString()}` : ''}`
+      const hasPagination = (params as any)?.page !== undefined || (params as any)?.limit !== undefined
+      const endpointPath = hasPagination ? '/api/v1/loans' : '/api/v1/loans/export'
+      const url = `${endpointPath}${query.toString() ? `?${query.toString()}` : ''}`
       const res = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',

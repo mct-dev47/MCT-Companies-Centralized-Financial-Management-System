@@ -84,6 +84,25 @@ def list_bills(
     )
 
 
+@router.get("/export", response_model=List[BillOut], summary="Export all matching company bills")
+def export_bills(
+    user: AuthenticatedUser = Depends(require_business_reader),
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    company: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    cid, cname, cids = _resolve_caller_scope(user, db, company_id, company_name or company)
+    resolved_cname = None if cid is not None else cname
+    return BillsService(db).list_bills(
+        company_id=cid,
+        company_name=resolved_cname,
+        company_ids=cids,
+        limit=None,
+        offset=0,
+    )
+
+
 @router.post("", response_model=BillOut, status_code=status.HTTP_201_CREATED, summary="Create a company bill")
 def create_bill(
     bill_in: BillCreate,

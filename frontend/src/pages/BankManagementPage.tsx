@@ -247,7 +247,7 @@ const CompanyOwnerChecklist: React.FC<{
   )
 }
 
-const ITEMS_PER_PAGE = 8
+const ITEMS_PER_PAGE = 50
 
 export const BankManagementPage: React.FC = () => {
 

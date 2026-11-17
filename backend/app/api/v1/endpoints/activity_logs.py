@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import AdminUser, AuthenticatedUser, require_business_reader, check_company_access
@@ -58,6 +58,7 @@ def get_entity_timeline(
 @router.get("", response_model=List[ActivityLogOut], summary="List activity logs (Admin only)")
 def list_activity_logs(
     _: AdminUser,
+    response: Response = None,
     search: Optional[str] = Query(None, description="Free-text search across company, user, action, module, target"),
     user_id: Optional[int] = Query(None, description="Filter by user ID"),
     company_id: Optional[int] = Query(None, description="Filter by company ID"),
@@ -65,7 +66,7 @@ def list_activity_logs(
     action_category: Optional[str] = Query(None, description="Filter by category (e.g. AUTH, TRANSACTION)"),
     start_date: Optional[date] = Query(None, description="Filter from date (inclusive)"),
     end_date: Optional[date] = Query(None, description="Filter to date (inclusive)"),
-    limit: int = Query(100, ge=1, le=1000, description="Max records to return"),
+    limit: int = Query(50, ge=1, le=1000, description="Max records to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     db: Session = Depends(get_db),
 ) -> List[ActivityLogOut]:
@@ -73,7 +74,7 @@ def list_activity_logs(
     Returns an enriched list of activity logs directly from Supabase.
     Accessible only to Central Administrator accounts.
     """
-    logs, _ = activity_log_service.get_activity_logs(
+    logs, total = activity_log_service.get_activity_logs(
         search=search,
         user_id=user_id,
         company_id=company_id,
@@ -85,6 +86,8 @@ def list_activity_logs(
         offset=offset,
         db=db,
     )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
     return logs
 
 

@@ -82,11 +82,43 @@ def _notify(event: str, lease_id: int) -> None:
 def list_leases(
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    search: Optional[str] = Query(None),
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    response: Response = None,
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
     scope = _company_scope(current_user, db, company_id, company_name)
-    return TenantService(db).list_leases(scope)
+    items = TenantService(db).list_leases(scope)
+    if status_filter and status_filter.strip().lower() != "all":
+        sf = status_filter.strip().lower()
+        items = [l for l in items if (l.get("status") if isinstance(l, dict) else getattr(l, "status", "") or "").lower() == sf]
+    if search and search.strip():
+        term = search.strip().lower()
+        def _match_lease(l):
+            if isinstance(l, dict):
+                return (
+                    term in (l.get("tenant_name") or "").lower()
+                    or term in (l.get("unit_name") or "").lower()
+                    or term in (l.get("tenant_ref") or "").lower()
+                )
+            return (
+                term in (getattr(l, "tenant_name", "") or "").lower()
+                or term in (getattr(l, "unit_name", "") or "").lower()
+                or term in (getattr(l, "tenant_ref", "") or "").lower()
+            )
+        items = [l for l in items if _match_lease(l)]
+    total = len(items)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    if page is not None or limit is not None:
+        pg = page or 1
+        sz = limit or 50
+        start = (pg - 1) * sz
+        return items[start:start + sz]
+    return items
 
 
 @router.get("/leases/{lease_id}", response_model=LeaseOut, summary="Get one tenant lease")

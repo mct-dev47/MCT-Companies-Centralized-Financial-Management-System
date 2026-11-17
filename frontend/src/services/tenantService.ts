@@ -207,6 +207,35 @@ function paymentBody(p: PaymentInput): Record<string, unknown> {
 }
 
 export const tenantService = {
+  async listLeasesPaginated(params: {
+    page?: number
+    limit?: number
+    search?: string
+    status?: string
+  } = {}): Promise<{ items: TenantLease[]; total: number }> {
+    const sp = new URLSearchParams()
+    sp.set('company_name', TENANT_COMPANY_NAME)
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.status && params.status !== 'All') sp.set('status', params.status)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/tenants/leases?${sp.toString()}`, {
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load tenant leases')
+    const totalHeader = res.headers.get('X-Total-Count')
+    const rows = (await res.json()) as unknown[]
+    const items = rows.map(mapLease)
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   async listLeases(): Promise<TenantLease[]> {
     const rows = await request<unknown[]>(`/leases?company_name=${encodeURIComponent(TENANT_COMPANY_NAME)}`)
     return rows.map(mapLease)

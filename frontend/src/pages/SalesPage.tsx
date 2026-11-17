@@ -114,7 +114,7 @@ import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGr
 import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 export const SalesPage: React.FC = () => {
   const navigate = useNavigate()

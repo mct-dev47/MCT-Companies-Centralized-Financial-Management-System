@@ -2,7 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 from datetime import date
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import case, func
 
 from app.models.finance import Sale, Expense
 from app.models.loan import Loan, LoanRepayment
@@ -186,6 +186,115 @@ class FinanceService:
             total_loans_lent=total_loans_lent,
             total_loans_repaid=total_loans_repaid
         )
+
+    def get_group_financial_summaries(
+        self,
+        company_ids: List[int],
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[CompanyFinancialSummary]:
+        if not company_ids:
+            return []
+
+        sales_q = self.db.query(
+            Sale.company_id,
+            func.coalesce(func.sum(Sale.amount), 0),
+        ).filter(Sale.company_id.in_(company_ids))
+        if start_date:
+            sales_q = sales_q.filter(Sale.transaction_date >= start_date)
+        if end_date:
+            sales_q = sales_q.filter(Sale.transaction_date <= end_date)
+        sales_by_co = {int(cid): quantize_currency(amt) for cid, amt in sales_q.group_by(Sale.company_id).all()}
+
+        non_petty_paid = case(
+            (func.lower(func.coalesce(Expense.payment_method, "")) != PETTY_CASH_METHOD, func.coalesce(Expense.amount_paid, 0)),
+            else_=0,
+        )
+        exp_q = self.db.query(
+            Expense.company_id,
+            func.coalesce(func.sum(Expense.amount), 0),
+            func.coalesce(func.sum(non_petty_paid), 0),
+        ).filter(Expense.company_id.in_(company_ids))
+        if start_date:
+            exp_q = exp_q.filter(Expense.expense_date >= start_date)
+        if end_date:
+            exp_q = exp_q.filter(Expense.expense_date <= end_date)
+        exp_by_co = {
+            int(cid): (quantize_currency(tot), quantize_currency(paid))
+            for cid, tot, paid in exp_q.group_by(Expense.company_id).all()
+        }
+
+        topups_by_co = PettyCashService(self.db).topups_totals_in_period_by_company(company_ids, start_date, end_date)
+
+        borrowed_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.borrower, func.coalesce(func.sum(Loan.principal_amount), 0))
+            .filter(Loan.borrower.in_(company_ids))
+            .group_by(Loan.borrower)
+            .all()
+        }
+        lent_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.lender, func.coalesce(func.sum(Loan.principal_amount), 0))
+            .filter(Loan.lender.in_(company_ids))
+            .group_by(Loan.lender)
+            .all()
+            if cid is not None
+        }
+        repaid_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.borrower, func.coalesce(func.sum(LoanRepayment.amount), 0))
+            .join(Loan)
+            .filter(Loan.borrower.in_(company_ids))
+            .group_by(Loan.borrower)
+            .all()
+        }
+
+        summaries: List[CompanyFinancialSummary] = []
+        for cid in company_ids:
+            total_revenue = sales_by_co.get(cid, Decimal("0.00"))
+            total_expenses, expenses_paid = exp_by_co.get(cid, (Decimal("0.00"), Decimal("0.00")))
+            transfers_to_petty_cash = quantize_currency(topups_by_co.get(cid, Decimal("0.00")))
+            total_loans_borrowed = borrowed_by_co.get(cid, Decimal("0.00"))
+            total_loans_lent = lent_by_co.get(cid, Decimal("0.00"))
+            total_loans_repaid = repaid_by_co.get(cid, Decimal("0.00"))
+
+            net_profit = FinanceCalculator.calculate_net_profit(total_revenue, total_expenses)
+            profit_margin = FinanceCalculator.calculate_profit_margin(total_revenue, net_profit)
+            cash_flow = FinanceCalculator.calculate_cash_flow(
+                cash_received_from_sales=total_revenue,
+                other_cash_inflows=Decimal("0.00"),
+                loans_received=total_loans_borrowed,
+                expenses_paid=expenses_paid,
+                loan_repayments=total_loans_repaid,
+                other_cash_outflows=transfers_to_petty_cash,
+            )
+            summaries.append(
+                CompanyFinancialSummary(
+                    company_id=cid,
+                    period_start=start_date,
+                    period_end=end_date,
+                    total_revenue=total_revenue,
+                    total_expenses=total_expenses,
+                    total_expenses_paid=expenses_paid,
+                    net_profit=net_profit,
+                    profit_margin_percentage=profit_margin,
+                    cash_received_from_sales=total_revenue,
+                    other_cash_inflows=Decimal("0.00"),
+                    loans_received=total_loans_borrowed,
+                    total_cash_inflow=cash_flow["total_cash_inflow"],
+                    expenses_paid=expenses_paid,
+                    loan_repayments_made=total_loans_repaid,
+                    other_cash_outflows=transfers_to_petty_cash,
+                    transfers_to_petty_cash=transfers_to_petty_cash,
+                    total_cash_outflow=cash_flow["total_cash_outflow"],
+                    net_cash_flow=cash_flow["net_cash_flow"],
+                    total_loans_borrowed=total_loans_borrowed,
+                    total_loans_lent=total_loans_lent,
+                    total_loans_repaid=total_loans_repaid,
+                )
+            )
+        return summaries
 
     def get_list_summaries_for_companies(
         self,

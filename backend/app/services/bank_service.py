@@ -113,14 +113,20 @@ class BankService:
         self.db.flush()
         self.db.execute(text("UPDATE bank_transactions SET entry_source = :s WHERE id = :id"), {"s": source, "id": tx.id})
 
-    def list_accounts(self, company_name: Optional[str] = None, company_id: Optional[int] = None) -> List[BankAccount]:
-        query = self._with_entries(self.db.query(BankAccount))
+    def list_accounts(
+        self,
+        company_name: Optional[str] = None,
+        company_id: Optional[int] = None,
+        include_transactions: bool = True,
+    ) -> List[BankAccount]:
+        query = self._with_entries(self.db.query(BankAccount)) if include_transactions else self.db.query(BankAccount)
         all_accounts = query.order_by(BankAccount.id.asc()).all()
 
         norm_name = (company_name or "").strip().lower()
         has_company_filter = bool(company_id) or (bool(norm_name) and norm_name != "all companies")
         if not has_company_filter:
-            self._attach_entry_sources(all_accounts)
+            if include_transactions:
+                self._attach_entry_sources(all_accounts)
             return all_accounts
 
         from fastapi import HTTPException
@@ -182,8 +188,54 @@ class BankService:
             return False
 
         result = [a for a in all_accounts if _matches_target(a)]
-        self._attach_entry_sources(result)
+        if include_transactions:
+            self._attach_entry_sources(result)
         return result
+
+    def list_transactions_paginated(
+        self,
+        account_id: str,
+        offset: int = 0,
+        limit: int = 50,
+        search: Optional[str] = None,
+        tx_type: Optional[str] = None,
+        sort_dir: str = "desc",
+    ) -> tuple[List[BankTransaction], int]:
+        from sqlalchemy import or_, text
+
+        query = self.db.query(BankTransaction).filter(BankTransaction.bank_account_id == account_id)
+        if tx_type:
+            t = tx_type.strip().lower()
+            if t == "deposit":
+                query = query.filter(BankTransaction.deposit > 0)
+            elif t == "withdrawal":
+                query = query.filter(BankTransaction.withdrawal > 0)
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    BankTransaction.particulars.ilike(term),
+                    BankTransaction.cheque_no.ilike(term),
+                    BankTransaction.category.ilike(term),
+                )
+            )
+        total = query.count()
+        if (sort_dir or "desc").lower() == "asc":
+            query = query.order_by(BankTransaction.transaction_date.asc(), BankTransaction.id.asc())
+        else:
+            query = query.order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
+        rows = query.offset(offset).limit(limit).all()
+        if rows and entry_source_supported(self.db):
+            tx_ids = [r.id for r in rows]
+            placeholders = ",".join(f":id_{i}" for i in range(len(tx_ids)))
+            src_rows = self.db.execute(
+                text(f"SELECT id, entry_source FROM bank_transactions WHERE id IN ({placeholders})"),
+                {f"id_{i}": tid for i, tid in enumerate(tx_ids)},
+            ).fetchall()
+            src_map = {str(r[0]): r[1] for r in src_rows}
+            for r in rows:
+                r._entry_source = src_map.get(str(r.id))
+        return rows, total
 
     def get_account(self, account_id: str, with_entries: bool = False) -> Optional[BankAccount]:
         query = self.db.query(BankAccount)

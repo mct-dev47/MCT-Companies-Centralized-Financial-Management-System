@@ -257,6 +257,34 @@ async function fetchAccountsFromNetwork(companyName?: string): Promise<BankAccou
 }
 
 export const bankService = {
+  async getTransactionsPaginated(
+    accountId: string,
+    params: {
+      page?: number
+      limit?: number
+      search?: string
+      txType?: string
+      sortDir?: 'asc' | 'desc'
+    } = {}
+  ): Promise<{ items: BankTransaction[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.txType && params.txType !== 'all') sp.set('tx_type', params.txType)
+    if (params.sortDir) sp.set('sort_dir', params.sortDir)
+    const qs = sp.toString()
+    const res = await fetch(`/api/v1/bank-accounts/${encodeURIComponent(accountId)}/transactions${qs ? `?${qs}` : ''}`, {
+      headers: backendHeaders(),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    const data = await res.json()
+    const totalHeader = res.headers.get('X-Total-Count')
+    const items = Array.isArray(data) ? data.map(mapTransactionFromBackend) : []
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   invalidateCache(): void {
     clearBankCache()
   },

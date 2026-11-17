@@ -905,7 +905,7 @@ export const TransactionPage: React.FC = () => {
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
 
-  const itemsPerPage = 12
+  const itemsPerPage = 50
 
   // View mode / group-by choice persisted across tabs (Step 4 expands with Transaction grouping)
   const [salesViewMode, setSalesViewMode] = React.useState<'all' | 'daily_summary'>('all')

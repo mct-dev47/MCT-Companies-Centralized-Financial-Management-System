@@ -98,7 +98,7 @@ import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError } from '@/utils/errorUtils'
 import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 export const ExpensePage: React.FC = () => {
   const navigate = useNavigate()

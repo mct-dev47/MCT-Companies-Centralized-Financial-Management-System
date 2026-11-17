@@ -414,6 +414,7 @@ def get_loans(
     status: Optional[str] = Query(None, description="Filter by Loan Status"),
     start_date: Optional[date] = Query(None, description="Filter from loan date"),
     end_date: Optional[date] = Query(None, description="Filter to loan date"),
+    search: Optional[str] = Query(None, description="Search ref no or description"),
     user_role: Optional[str] = Query(None, description="Current user role"),
     pagination: PaginationParams = Depends(),
     request: Request = None,
@@ -423,13 +424,29 @@ def get_loans(
     role = (current_user.get("role") or "").strip().lower()
     is_auditor = role in {"audit", "auditor"}
 
-    is_privileged = role in ("audit", "auditor")
+    is_privileged = role in ("admin", "audit", "auditor", "owner") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
+    if hasattr(borrower_id, "default"):
+        borrower_id = None
+    if hasattr(lender_id, "default"):
+        lender_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(scope, "default"):
+        scope = None
+    if hasattr(status, "default"):
+        status = None
+    if hasattr(start_date, "default") or not isinstance(start_date, (date, datetime)):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, (date, datetime)):
+        end_date = None
+    if hasattr(search, "default"):
+        search = None
 
     scope_cids = "all" if is_privileged else ",".join(str(c) for c in sorted(user_company_ids))
-    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}_{pagination.limit}_{pagination.offset}"
+    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{search}_{role}_{scope_cids}_{pagination.limit}_{pagination.offset}"
     cached = system_cache.get(cache_key)
     if cached is not None:
         if isinstance(cached, dict) and "items" in cached:
@@ -447,194 +464,222 @@ def get_loans(
     if lender_id:
         check_company_access(current_user, lender_id)
 
-    try:
-        client = get_supabase_admin_client()
-        id_to_name, name_to_id = get_supabase_company_mapping(client, db)
+    query = db.query(Loan)
 
-        resolved_target_cid = None
-        if company_name and company_name.lower() != "all companies":
-            resolved_target_cid = resolve_company_id(None, company_name, name_to_id, db)
-            if resolved_target_cid and not is_privileged:
-                check_company_access(current_user, resolved_target_cid)
+    resolved_target_cid = None
+    if company_name and company_name.lower() != "all companies":
+        resolved_target_cid = resolve_company_id(None, company_name, {}, db)
+        if resolved_target_cid and not is_privileged:
+            check_company_access(current_user, resolved_target_cid)
 
-        sb_query = client.table("loan").select("*", count="exact")
+    if isinstance(borrower_id, int):
+        query = query.filter(Loan.borrower == borrower_id)
+    if isinstance(lender_id, int):
+        query = query.filter(Loan.lender == lender_id)
 
-        if isinstance(borrower_id, int):
-            sb_query = sb_query.eq("borrower", borrower_id)
-        if isinstance(lender_id, int):
-            sb_query = sb_query.eq("lender", lender_id)
+    if resolved_target_cid:
+        if scope == "borrower":
+            query = query.filter(Loan.borrower == resolved_target_cid)
+        elif scope == "lender":
+            query = query.filter(Loan.lender == resolved_target_cid)
+        else:
+            query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
+    elif not is_privileged:
+        if not user_company_ids:
+            response.headers["X-Total-Count"] = "0"
+            response.headers["X-Page-Limit"] = str(pagination.limit)
+            response.headers["X-Page-Offset"] = str(pagination.offset)
+            return []
+        query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
 
-        if resolved_target_cid:
-            if scope == "borrower":
-                sb_query = sb_query.eq("borrower", resolved_target_cid)
-            elif scope == "lender":
-                sb_query = sb_query.eq("lender", resolved_target_cid)
-            else:
-                # Matches either borrower or lender
-                sb_query = sb_query.or_(f"borrower.eq.{resolved_target_cid},lender.eq.{resolved_target_cid}")
-        elif not is_privileged:
-            if not user_company_ids:
-                response.headers["X-Total-Count"] = "0"
-                response.headers["X-Page-Limit"] = str(pagination.limit)
-                response.headers["X-Page-Offset"] = str(pagination.offset)
-                return []
-            if len(user_company_ids) == 1:
-                cid = user_company_ids[0]
-                sb_query = sb_query.or_(f"borrower.eq.{cid},lender.eq.{cid}")
-            else:
-                or_clause = ",".join([f"borrower.eq.{cid},lender.eq.{cid}" for cid in user_company_ids])
-                sb_query = sb_query.or_(or_clause)
+    if isinstance(status, str) and status.lower() != "all":
+        query = query.filter(Loan.status == status)
 
-        if isinstance(status, str) and status.lower() != "all":
-            sb_query = sb_query.eq("status", status)
+    if is_auditor:
+        query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
 
-        if isinstance(start_date, (date, datetime)):
-            sb_query = sb_query.gte("loan_date", start_date.isoformat())
-        if isinstance(end_date, (date, datetime)):
-            sb_query = sb_query.lte("loan_date", end_date.isoformat())
+    if isinstance(start_date, (date, datetime)):
+        query = query.filter(Loan.loan_date >= start_date)
+    if isinstance(end_date, (date, datetime)):
+        query = query.filter(Loan.loan_date <= end_date)
 
-        res = (
-            sb_query.order("loan_date", desc=True)
-            .order("loan_id", desc=True)
-            .range(pagination.offset, pagination.offset + pagination.limit - 1)
-            .execute()
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(Loan.loan_ref_no.ilike(term), Loan.description.ilike(term)))
+
+    total_count = query.count()
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Page-Limit"] = str(pagination.limit)
+    response.headers["X-Page-Offset"] = str(pagination.offset)
+
+    loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
+
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+
+    result = [
+        LoanOut(
+            loan_id=l.loan_id,
+            borrower=l.borrower,
+            lender=l.lender,
+            borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
+            lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
+            loan_ref_no=l.loan_ref_no,
+            principal_amount=l.principal_amount,
+            amount=l.principal_amount,
+            interest_rate=l.interest_rate or Decimal("0.00"),
+            loan_date=l.loan_date,
+            due_date=l.due_date,
+            description=l.description,
+            particulars=l.description,
+            status=getattr(l, "status", None) or "Pending Finance Endorsement",
+            endorsed_by=getattr(l, "endorsed_by", None),
+            endorsed_at=getattr(l, "endorsed_at", None),
+            finance_remark=getattr(l, "finance_remark", None),
+            audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
+            audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
+            audit_remark=getattr(l, "audit_remark", None),
+            disbursed_by=getattr(l, "disbursed_by", None),
+            disbursed_at=getattr(l, "disbursed_at", None),
+            bank_account_id=getattr(l, "bank_account_id", None),
+            created_at=l.created_at,
+            updated_at=l.updated_at,
         )
-        total_count = res.count if getattr(res, "count", None) is not None else len(res.data or [])
-        response.headers["X-Total-Count"] = str(total_count)
-        response.headers["X-Page-Limit"] = str(pagination.limit)
-        response.headers["X-Page-Offset"] = str(pagination.offset)
-        rows = res.data or []
+        for l in loans
+    ]
+    _attach_borrower_banks(db, result)
+    system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
+    return result
 
-        result: List[LoanOut] = []
-        for r in rows:
-            row_status = r.get("status") or "Pending Finance Endorsement"
-            if is_auditor and row_status in {"Pending Finance Endorsement", "Pending Approval"}:
-                continue
 
-            b_id = r.get("borrower")
-            l_id = r.get("lender")
-            p_amt = Decimal(str(r.get("principal_amount") or 0.0))
-            desc = r.get("description") or ""
+@router.get("/export", response_model=List[LoanOut], summary="Export all matching loans")
+def export_loans(
+    borrower_id: Optional[int] = Query(None),
+    lender_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    dummy_resp = Response()
+    return get_loans(
+        response=dummy_resp,
+        borrower_id=borrower_id,
+        lender_id=lender_id,
+        company_name=company_name,
+        scope=scope,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        pagination=PaginationParams(limit=100, offset=0),
+        current_user=current_user,
+        db=db,
+    ) if False else _export_loans_unbounded(
+        db=db,
+        current_user=current_user,
+        borrower_id=borrower_id,
+        lender_id=lender_id,
+        company_name=company_name,
+        scope=scope,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+    )
 
-            result.append(
-                LoanOut(
-                    loan_id=r["loan_id"],
-                    borrower=b_id,
-                    lender=l_id,
-                    borrower_name=id_to_name.get(b_id) or f"Company #{b_id}",
-                    lender_name=id_to_name.get(l_id) if l_id else "Pending Finance Assignment",
-                    loan_ref_no=r.get("loan_ref_no"),
-                    principal_amount=p_amt,
-                    amount=p_amt,
-                    interest_rate=Decimal(str(r.get("interest_rate") or 0.0)),
-                    loan_date=r.get("loan_date"),
-                    due_date=r.get("due_date"),
-                    description=desc,
-                    particulars=desc,
-                    status=row_status,
-                    endorsed_by=r.get("endorsed_by"),
-                    endorsed_at=r.get("endorsed_at"),
-                    finance_remark=r.get("finance_remark"),
-                    audit_reviewed_by=r.get("audit_reviewed_by"),
-                    audit_reviewed_at=r.get("audit_reviewed_at"),
-                    audit_remark=r.get("audit_remark"),
-                    disbursed_by=r.get("disbursed_by"),
-                    disbursed_at=r.get("disbursed_at"),
-                    bank_account_id=r.get("bank_account_id"),
-                    created_at=r.get("created_at"),
-                    updated_at=r.get("updated_at"),
-                )
-            )
-        _attach_borrower_banks(db, result)
-        system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
-        return result
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Supabase GET /loans failed, falling back to local SQLite: {e}")
-        query = db.query(Loan)
-
-        resolved_target_cid = None
-        if company_name and company_name.lower() != "all companies":
-            resolved_target_cid = resolve_company_id(None, company_name, {}, db)
-            if resolved_target_cid and not is_privileged:
-                check_company_access(current_user, resolved_target_cid)
-
-        if isinstance(borrower_id, int):
-            query = query.filter(Loan.borrower == borrower_id)
-        if isinstance(lender_id, int):
-            query = query.filter(Loan.lender == lender_id)
-
-        if resolved_target_cid:
-            if scope == "borrower":
-                query = query.filter(Loan.borrower == resolved_target_cid)
-            elif scope == "lender":
-                query = query.filter(Loan.lender == resolved_target_cid)
-            else:
-                query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
-        elif not is_privileged:
-            if not user_company_ids:
-                response.headers["X-Total-Count"] = "0"
-                response.headers["X-Page-Limit"] = str(pagination.limit)
-                response.headers["X-Page-Offset"] = str(pagination.offset)
-                return []
-            query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
-
-        if isinstance(status, str) and status.lower() != "all":
-            query = query.filter(Loan.status == status)
-
-        if is_auditor:
-            query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
-
-        if isinstance(start_date, (date, datetime)):
-            query = query.filter(Loan.loan_date >= start_date)
-        if isinstance(end_date, (date, datetime)):
-            query = query.filter(Loan.loan_date <= end_date)
-
-        total_count = query.count()
-        response.headers["X-Total-Count"] = str(total_count)
-        response.headers["X-Page-Limit"] = str(pagination.limit)
-        response.headers["X-Page-Offset"] = str(pagination.offset)
-
-        loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
-
-        companies = db.query(Company).all()
-        comp_map = {c.company_id: c.company_name for c in companies}
-
-        fallback_result = [
-            LoanOut(
-                loan_id=l.loan_id,
-                borrower=l.borrower,
-                lender=l.lender,
-                borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
-                lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
-                loan_ref_no=l.loan_ref_no,
-                principal_amount=l.principal_amount,
-                amount=l.principal_amount,
-                interest_rate=l.interest_rate or Decimal("0.00"),
-                loan_date=l.loan_date,
-                due_date=l.due_date,
-                description=l.description,
-                particulars=l.description,
-                status=getattr(l, "status", None) or "Pending Finance Endorsement",
-                endorsed_by=getattr(l, "endorsed_by", None),
-                endorsed_at=getattr(l, "endorsed_at", None),
-                finance_remark=getattr(l, "finance_remark", None),
-                audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
-                audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
-                audit_remark=getattr(l, "audit_remark", None),
-                disbursed_by=getattr(l, "disbursed_by", None),
-                disbursed_at=getattr(l, "disbursed_at", None),
-                bank_account_id=getattr(l, "bank_account_id", None),
-                created_at=l.created_at,
-                updated_at=l.updated_at,
-            )
-            for l in loans
-        ]
-        _attach_borrower_banks(db, fallback_result)
-        system_cache.set(cache_key, {"items": fallback_result, "total": total_count}, ttl=45, tags=["loans"])
-        return fallback_result
+def _export_loans_unbounded(
+    db: Session,
+    current_user: AuthenticatedUser,
+    borrower_id: Optional[int] = None,
+    lender_id: Optional[int] = None,
+    company_name: Optional[str] = None,
+    scope: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    search: Optional[str] = None,
+) -> List[LoanOut]:
+    role = (current_user.get("role") or "").strip().lower()
+    is_auditor = role in {"audit", "auditor"}
+    is_privileged = role in ("admin", "audit", "auditor", "owner") or bool(current_user.get("is_admin"))
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+    if borrower_id:
+        check_company_access(current_user, borrower_id)
+    if lender_id:
+        check_company_access(current_user, lender_id)
+    query = db.query(Loan)
+    resolved_target_cid = None
+    if company_name and company_name.lower() != "all companies":
+        resolved_target_cid = resolve_company_id(None, company_name, {}, db)
+        if resolved_target_cid and not is_privileged:
+            check_company_access(current_user, resolved_target_cid)
+    if isinstance(borrower_id, int):
+        query = query.filter(Loan.borrower == borrower_id)
+    if isinstance(lender_id, int):
+        query = query.filter(Loan.lender == lender_id)
+    if resolved_target_cid:
+        if scope == "borrower":
+            query = query.filter(Loan.borrower == resolved_target_cid)
+        elif scope == "lender":
+            query = query.filter(Loan.lender == resolved_target_cid)
+        else:
+            query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
+    elif not is_privileged:
+        if not user_company_ids:
+            return []
+        query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
+    if isinstance(status, str) and status.lower() != "all":
+        query = query.filter(Loan.status == status)
+    if is_auditor:
+        query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
+    if isinstance(start_date, (date, datetime)):
+        query = query.filter(Loan.loan_date >= start_date)
+    if isinstance(end_date, (date, datetime)):
+        query = query.filter(Loan.loan_date <= end_date)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(Loan.loan_ref_no.ilike(term), Loan.description.ilike(term)))
+    loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).all()
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+    result = [
+        LoanOut(
+            loan_id=l.loan_id,
+            borrower=l.borrower,
+            lender=l.lender,
+            borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
+            lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
+            loan_ref_no=l.loan_ref_no,
+            principal_amount=l.principal_amount,
+            amount=l.principal_amount,
+            interest_rate=l.interest_rate or Decimal("0.00"),
+            loan_date=l.loan_date,
+            due_date=l.due_date,
+            description=l.description,
+            particulars=l.description,
+            status=getattr(l, "status", None) or "Pending Finance Endorsement",
+            endorsed_by=getattr(l, "endorsed_by", None),
+            endorsed_at=getattr(l, "endorsed_at", None),
+            finance_remark=getattr(l, "finance_remark", None),
+            audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
+            audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
+            audit_remark=getattr(l, "audit_remark", None),
+            disbursed_by=getattr(l, "disbursed_by", None),
+            disbursed_at=getattr(l, "disbursed_at", None),
+            bank_account_id=getattr(l, "bank_account_id", None),
+            created_at=l.created_at,
+            updated_at=l.updated_at,
+        )
+        for l in loans
+    ]
+    _attach_borrower_banks(db, result)
+    return result
 
 
 @router.post("", response_model=LoanOut, status_code=status.HTTP_201_CREATED, summary="Create a new loan record")

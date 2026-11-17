@@ -92,11 +92,11 @@ class BillPayment(Base):
     notes = Column(Text, nullable=True)
     # Where the money came from (migration 0059): 'bank' or 'petty_cash'. NULL = older payment, no money moved.
     funding_source = Column(String(20), nullable=True)
-    bank_account_id = Column(String(100), nullable=True, index=True)
+    bank_account_id = Column(String(100), ForeignKey("bank_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
     # The paid Expense recorded for this payment. It is what debits the bank (bank entry linked to the
     # expense) or the petty cash wallet (petty cash balance is derived from Petty Cash expenses), and
     # what shows the payment in Transactions.
-    expense_id = Column(Integer, nullable=True, index=True)
+    expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     bill = relationship("Bill", back_populates="payments")

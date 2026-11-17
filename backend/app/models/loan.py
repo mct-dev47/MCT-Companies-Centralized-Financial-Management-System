@@ -9,8 +9,8 @@ class Loan(Base):
     __tablename__ = "loan"
 
     loan_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    borrower = Column(Integer, nullable=False, index=True)  # Company_ID of borrower
-    lender = Column(Integer, nullable=True, index=True)    # Company_ID of lender, assigned by Finance upon approval
+    borrower = Column(Integer, ForeignKey("company.company_id", ondelete="RESTRICT"), nullable=False, index=True)  # Company_ID of borrower
+    lender = Column(Integer, ForeignKey("company.company_id", ondelete="RESTRICT"), nullable=True, index=True)    # Company_ID of lender, assigned by Finance upon approval
     loan_ref_no = Column(String(100), unique=True, nullable=True)
     bank_account_id = Column(String(100), nullable=True)
     principal_amount = Column(Numeric(15, 2), nullable=True)

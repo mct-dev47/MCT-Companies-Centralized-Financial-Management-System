@@ -266,6 +266,34 @@ function mapNotificationSettings(value: unknown): CompanyNotificationSettings {
 }
 
 export const employeeService = {
+  async getUsersPaginated(params: {
+    page?: number
+    limit?: number
+    search?: string
+    sortBy?: 'recent' | 'asc' | 'desc'
+    companyId?: number
+  } = {}): Promise<{ items: EmployeeUser[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.sortBy) sp.set('sort_by', params.sortBy)
+    if (params.companyId !== undefined) sp.set('company_id', String(params.companyId))
+    const qs = sp.toString()
+    const response = await fetch(`/api/v1/users${qs ? `?${qs}` : ''}`, {
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) {
+      throw new Error(await getApiError(response))
+    }
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = await mapApiResponse(response, (value) =>
+      (value as unknown[]).map(mapUser)
+    )
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   async getUsers(): Promise<EmployeeUser[]> {
     const response = await fetch('/api/v1/users', {
       headers: getAuthHeaders(),
@@ -276,6 +304,29 @@ export const employeeService = {
     return await mapApiResponse(response, (value) =>
       (value as unknown[]).map(mapUser)
     )
+  },
+
+  async getCompaniesPaginated(params: {
+    page?: number
+    limit?: number
+    search?: string
+    sortBy?: 'recent' | 'asc' | 'desc'
+  } = {}): Promise<{ items: Company[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.sortBy) sp.set('sort_by', params.sortBy)
+    const qs = sp.toString()
+    const response = await fetch(`/api/v1/companies${qs ? `?${qs}` : ''}`, {
+      headers: getAuthHeaders(),
+    })
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = await mapApiResponse(response, (value) =>
+      (value as unknown[]).map(mapCompany)
+    )
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
   },
 
   async getCompanies(): Promise<Company[]> {

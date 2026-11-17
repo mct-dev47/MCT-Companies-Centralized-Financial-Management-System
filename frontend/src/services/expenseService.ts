@@ -278,6 +278,113 @@ export const expenseService = {
     return { category_id: Date.now(), name: cleaned }
   },
 
+  async getExpensesPaginated(params: {
+    company?: string
+    page?: number
+    limit?: number
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
+  } = {}): Promise<{ items: ExpenseItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.sort_by) sp.set('sort_by', params.sort_by)
+    if (params.sort_dir) sp.set('sort_dir', params.sort_dir)
+
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load expenses')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data.map(mapBackendExpenseToItem) : []
+    const totalHeader = res.headers.get('X-Total-Count')
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
+  async getExpensesSummary(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+  } = {}): Promise<{
+    total_count: number
+    total_amount: number
+    paid_amount: number
+    unpaid_amount: number
+    categories: { category: string; amount: number }[]
+  }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses/summary${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load expenses summary')
+    return await res.json()
+  },
+
+  async exportExpensesData(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+  } = {}): Promise<ExpenseItem[]> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses/export${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to export expenses')
+    const data = await res.json()
+    return Array.isArray(data) ? data.map(mapBackendExpenseToItem) : []
+  },
+
   async getExpenses(params?: {
     company?: string
     start_date?: string
@@ -304,7 +411,7 @@ export const expenseService = {
       if (params?.end_date) query.append('end_date', params.end_date)
       if (params?.category_id) query.append('category_id', String(params.category_id))
 
-      const url = `/api/v1/expenses${query.toString() ? `?${query.toString()}` : ''}`
+      const url = `/api/v1/expenses/export${query.toString() ? `?${query.toString()}` : ''}`
       const res = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',

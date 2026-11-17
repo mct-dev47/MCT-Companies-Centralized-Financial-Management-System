@@ -4,7 +4,7 @@ import time
 from datetime import date
 from typing import Optional, Dict, Any, List, Tuple
 from fastapi import APIRouter, Depends, Query, HTTPException, status
-from sqlalchemy import func, or_, desc
+from sqlalchemy import case, func, or_, desc
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import (
@@ -154,54 +154,41 @@ def get_dashboard_summary(
         sales_filters.append(Sale.transaction_date <= end_date)
         expense_filters.append(Expense.expense_date <= end_date)
 
-    # Aggregate: Total Cash Inflow (Sales)
-    # float() at the source: PostgreSQL returns SUM(Numeric) as Decimal (SQLite returns float), and the
-    # category percentages below divide a float by these totals, which raised TypeError on Postgres.
-    total_sales_val = float(db.query(func.coalesce(func.sum(Sale.amount), 0.0)).filter(*sales_filters).scalar() or 0.0)
+    # Aggregate: Sales total + flagged/overdue + pending in a single pass
+    sales_agg = db.query(
+        func.coalesce(func.sum(Sale.amount), 0.0),
+        func.coalesce(func.sum(case((or_(Sale.audit_status == "Flagged", Sale.payment_status == "Overdue"), 1), else_=0)), 0),
+        func.coalesce(func.sum(case((Sale.payment_status == "Pending", 1), else_=0)), 0),
+    ).filter(*sales_filters).first()
+    total_sales_val = float(sales_agg[0] or 0.0) if sales_agg else 0.0
+    flagged_sales_count = int(sales_agg[1] or 0) if sales_agg else 0
+    pending_sales = int(sales_agg[2] or 0) if sales_agg else 0
 
-    # Aggregate: Total Cash Outflow (Expenses)
-    total_expense_val = float(db.query(func.coalesce(func.sum(Expense.amount), 0.0)).filter(*expense_filters).scalar() or 0.0)
+    # Aggregate: Expenses total + flagged in a single pass
+    exp_agg = db.query(
+        func.coalesce(func.sum(Expense.amount), 0.0),
+        func.coalesce(func.sum(case((Expense.audit_status == "Flagged", 1), else_=0)), 0),
+    ).filter(*expense_filters).first()
+    total_expense_val = float(exp_agg[0] or 0.0) if exp_agg else 0.0
+    flagged_expense_count = int(exp_agg[1] or 0) if exp_agg else 0
 
-    # Aggregate: Overdue & Due Soon
-    # Overdue: flagged in audit, overdue bills, overdue loans
-    flagged_sales_count = db.query(func.count(Sale.sales_id)).filter(
-        *sales_filters,
-        or_(Sale.audit_status == "Flagged", Sale.payment_status == "Overdue")
-    ).scalar() or 0
+    # Aggregate: Bills overdue + unpaid in a single pass
+    bills_agg = db.query(
+        func.coalesce(func.sum(case((func.lower(Bill.status) == "overdue", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((func.lower(Bill.status) == "unpaid", 1), else_=0)), 0),
+    ).filter(*bills_filters).first()
+    overdue_bills_count = int(bills_agg[0] or 0) if bills_agg else 0
+    pending_bills = int(bills_agg[1] or 0) if bills_agg else 0
 
-    flagged_expense_count = db.query(func.count(Expense.expense_id)).filter(
-        *expense_filters,
-        Expense.audit_status == "Flagged"
-    ).scalar() or 0
-
-    overdue_bills_count = db.query(func.count(Bill.bill_id)).filter(
-        *bills_filters,
-        func.lower(Bill.status) == "overdue"
-    ).scalar() or 0
-
-    overdue_loans_count = db.query(func.count(Loan.loan_id)).filter(
-        *loans_filters,
-        func.lower(Loan.status) == "overdue"
-    ).scalar() or 0
+    # Aggregate: Loans overdue + pending in a single pass
+    loans_agg = db.query(
+        func.coalesce(func.sum(case((func.lower(Loan.status) == "overdue", 1), else_=0)), 0),
+        func.coalesce(func.sum(case((func.lower(Loan.status).like("pending%"), 1), else_=0)), 0),
+    ).filter(*loans_filters).first()
+    overdue_loans_count = int(loans_agg[0] or 0) if loans_agg else 0
+    pending_loans = int(loans_agg[1] or 0) if loans_agg else 0
 
     overdue_total = flagged_sales_count + flagged_expense_count + overdue_bills_count + overdue_loans_count
-
-    # Due soon: pending items
-    pending_sales = db.query(func.count(Sale.sales_id)).filter(
-        *sales_filters,
-        Sale.payment_status == "Pending"
-    ).scalar() or 0
-
-    pending_bills = db.query(func.count(Bill.bill_id)).filter(
-        *bills_filters,
-        func.lower(Bill.status) == "unpaid"
-    ).scalar() or 0
-
-    pending_loans = db.query(func.count(Loan.loan_id)).filter(
-        *loans_filters,
-        func.lower(Loan.status).like("pending%")
-    ).scalar() or 0
-
     due_soon_total = pending_sales + pending_bills + pending_loans
 
     # Aggregate: Petty Cash Balance

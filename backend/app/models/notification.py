@@ -56,7 +56,6 @@ class Notification(Base):
 
     __table_args__ = (
         UniqueConstraint("notification_id", "recipient_user_id", name="uq_notification_recipient"),
-        Index("idx_notifications_recipient_feed", "recipient_user_id", "created_at", "notification_id"),
         Index("idx_notifications_recipient_company", "recipient_user_id", "company_id", "created_at", "notification_id"),
         Index("idx_notifications_compound_cursor", "recipient_user_id", "created_at", "notification_id"),
     )

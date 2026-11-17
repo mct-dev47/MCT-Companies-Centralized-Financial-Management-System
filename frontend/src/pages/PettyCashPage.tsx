@@ -272,7 +272,7 @@ export const PettyCashPage: React.FC = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
-  const itemsPerPage = 10
+  const itemsPerPage = 50
 
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)

@@ -657,6 +657,49 @@ def _run_postgresql_migrations(conn) -> list[str]:
         applied.append("0068_schema_cleanup_unused_tables_and_columns")
         logger.info("Migration 0068_schema_cleanup_unused_tables_and_columns applied successfully.")
 
+    # 34. 0066: company categories & dashboard indexes (wire previously unexecuted script)
+    result_0066 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0066_company_categories_dashboard_indexes'")
+    ).first()
+    if not result_0066:
+        script_0066 = MIGRATIONS_DIR / "0066_company_categories_dashboard_indexes.postgres.sql"
+        if script_0066.exists():
+            with conn.begin_nested():
+                for stmt in _sql_statements(script_0066.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0066_company_categories_dashboard_indexes')"))
+            applied.append("0066_company_categories_dashboard_indexes")
+            logger.info("Migration 0066_company_categories_dashboard_indexes applied successfully.")
+
+    # 35. 0069: drop unused zero-row tables
+    result_0069 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0069_drop_unused_tables'")
+    ).first()
+    if not result_0069:
+        script_0069 = MIGRATIONS_DIR / "0069_drop_unused_tables.postgres.sql"
+        if script_0069.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0069.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0069_drop_unused_tables')"))
+            applied.append("0069_drop_unused_tables")
+            logger.info("Migration 0069_drop_unused_tables applied successfully.")
+
+    # 36. 0070: harden foreign keys, drop duplicate indexes, add composite pagination indexes
+    result_0070 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0070_foreign_keys_and_index_cleanup'")
+    ).first()
+    if not result_0070:
+        script_0070 = MIGRATIONS_DIR / "0070_foreign_keys_and_index_cleanup.postgres.sql"
+        if script_0070.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text(script_0070.read_text(encoding="utf-8")))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0070_foreign_keys_and_index_cleanup')"))
+            applied.append("0070_foreign_keys_and_index_cleanup")
+            logger.info("Migration 0070_foreign_keys_and_index_cleanup applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1595,6 +1638,62 @@ def _run_sqlite_migrations(conn) -> list[str]:
             text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0068_schema_cleanup_unused_tables_and_columns')")
         )
         applied.append("0068_schema_cleanup_unused_tables_and_columns")
+
+    # 33. 0066: company categories & dashboard indexes
+    result_0066 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0066_company_categories_dashboard_indexes'")
+    ).first()
+    if not result_0066:
+        script_0066 = MIGRATIONS_DIR / "0066_company_categories_dashboard_indexes.sqlite.sql"
+        if script_0066.exists():
+            existing_tables = {
+                row[0].lower()
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            }
+            for stmt in _sql_statements(script_0066.read_text(encoding="utf-8")):
+                match = re.search(r"\bON\s+([a-zA-Z0-9_]+)", stmt, re.IGNORECASE)
+                if match and match.group(1).lower() not in existing_tables:
+                    continue
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0066 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0066_company_categories_dashboard_indexes')"))
+        applied.append("0066_company_categories_dashboard_indexes")
+
+    # 34. 0069: drop unused zero-row tables
+    result_0069 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0069_drop_unused_tables'")
+    ).first()
+    if not result_0069:
+        script_0069 = MIGRATIONS_DIR / "0069_drop_unused_tables.sqlite.sql"
+        if script_0069.exists():
+            for stmt in _sql_statements(script_0069.read_text(encoding="utf-8")):
+                conn.execute(text(stmt))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0069_drop_unused_tables')"))
+        applied.append("0069_drop_unused_tables")
+
+    # 35. 0070: drop duplicate indexes and add composite pagination indexes
+    result_0070 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0070_foreign_keys_and_index_cleanup'")
+    ).first()
+    if not result_0070:
+        script_0070 = MIGRATIONS_DIR / "0070_foreign_keys_and_index_cleanup.sqlite.sql"
+        if script_0070.exists():
+            existing_tables = {
+                row[0].lower()
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            }
+            for stmt in _sql_statements(script_0070.read_text(encoding="utf-8")):
+                match = re.search(r"\bON\s+([a-zA-Z0-9_]+)", stmt, re.IGNORECASE)
+                if match and match.group(1).lower() not in existing_tables:
+                    continue
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0070 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0070_foreign_keys_and_index_cleanup')"))
+        applied.append("0070_foreign_keys_and_index_cleanup")
 
     conn.commit()
     return applied

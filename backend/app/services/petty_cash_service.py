@@ -2725,7 +2725,23 @@ class PettyCashService:
         return self.get_summary(company)
 
     def topups_total_in_period(self, company_id: int, start: Optional[date], end: Optional[date]) -> Decimal:
-        return sum(
-            (_to_decimal(t.amount) for t in self._topups(company_id) if _in_period(t.topup_date, start, end)),
-            ZERO,
+        return self.topups_totals_in_period_by_company([company_id], start, end).get(company_id, ZERO)
+
+    def topups_totals_in_period_by_company(
+        self, company_ids: List[int], start: Optional[date], end: Optional[date]
+    ) -> dict[int, Decimal]:
+        if not company_ids:
+            return {}
+        q = self.db.query(
+            PettyCashTopUp.company_id,
+            func.coalesce(func.sum(PettyCashTopUp.amount), 0),
+        ).filter(
+            PettyCashTopUp.company_id.in_(company_ids),
+            ~PettyCashTopUp.reference_no.like("SEED-%") | (PettyCashTopUp.reference_no == None),
         )
+        if start:
+            q = q.filter(PettyCashTopUp.topup_date >= start)
+        if end:
+            q = q.filter(PettyCashTopUp.topup_date <= end)
+        rows = q.group_by(PettyCashTopUp.company_id).all()
+        return {int(cid): _to_decimal(total) for cid, total in rows if cid is not None}

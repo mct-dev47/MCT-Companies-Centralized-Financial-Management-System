@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -22,7 +22,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user_companies = relationship("UserCompany", cascade="all, delete-orphan", lazy="joined", back_populates="user")
+    user_companies = relationship("UserCompany", cascade="all, delete-orphan", lazy="selectin", back_populates="user")
 
     def __repr__(self):
         return f"<User(id={self.user_id}, name='{self.name}', email='{self.email}', role='{self.role}')>"
@@ -30,6 +30,9 @@ class User(Base):
 
 class UserCompany(Base):
     __tablename__ = "user_companies"
+    __table_args__ = (
+        UniqueConstraint("user_id", "company_id", name="uq_user_company"),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True, index=True)
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, index=True)

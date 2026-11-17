@@ -78,6 +78,48 @@ function backendHeaders(): Record<string, string> {
 }
 
 export const receivablesService = {
+  async listReceivablesPaginated(params?: {
+    company_id?: number
+    company_name?: string
+    customer_type?: string
+    status?: string
+    start_date?: string
+    end_date?: string
+    search?: string
+    page?: number
+    limit?: number
+  }): Promise<{ items: BackendReceivable[]; total: number }> {
+    const query = new URLSearchParams()
+    if (params?.company_id) query.set('company_id', String(params.company_id))
+    if (params?.company_name && params.company_name !== 'All Companies') {
+      query.set('company_name', params.company_name)
+    }
+    if (params?.customer_type && params.customer_type !== 'All') {
+      query.set('customer_type', params.customer_type)
+    }
+    if (params?.status && params.status !== 'All') {
+      query.set('status', params.status)
+    }
+    if (params?.start_date) query.set('start_date', params.start_date)
+    if (params?.end_date) query.set('end_date', params.end_date)
+    if (params?.search) query.set('search', params.search)
+    if (params?.page !== undefined) query.set('page', String(params.page))
+    if (params?.limit !== undefined) query.set('limit', String(params.limit))
+
+    const url = `/api/v1/receivables${query.toString() ? `?${query.toString()}` : ''}`
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: backendHeaders(),
+    })
+    if (!res.ok) {
+      throw new Error(`Failed to fetch receivables: ${res.statusText}`)
+    }
+    const totalHeader = res.headers.get('X-Total-Count')
+    const items: BackendReceivable[] = await res.json()
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   async listReceivables(params?: {
     company_id?: number
     company_name?: string
@@ -102,7 +144,7 @@ export const receivablesService = {
     if (params?.end_date) query.set('end_date', params.end_date)
     if (params?.search) query.set('search', params.search)
 
-    const url = `/api/v1/receivables${query.toString() ? `?${query.toString()}` : ''}`
+    const url = `/api/v1/receivables/export${query.toString() ? `?${query.toString()}` : ''}`
     const res = await fetch(url, {
       method: 'GET',
       headers: backendHeaders(),

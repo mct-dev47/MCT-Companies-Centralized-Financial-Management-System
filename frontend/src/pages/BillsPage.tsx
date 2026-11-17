@@ -66,7 +66,7 @@ import { cn } from '@/lib/utils'
 
 const DEFAULT_COMPANY_LIST = ['All Companies']
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 export const BillsPage: React.FC = () => {
   const { user } = useSession()

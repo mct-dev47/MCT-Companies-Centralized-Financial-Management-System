@@ -126,15 +126,55 @@ export function formatLogTime(value?: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+const mapRawAuditLogRow = (row: RawAuditLogRow): ActivityLogItem => {
+  let parsedDetails: Record<string, unknown> | undefined
+  if (typeof row.details === 'object' && row.details !== null) {
+    parsedDetails = row.details as Record<string, unknown>
+  } else if (typeof row.details === 'string') {
+    try {
+      parsedDetails = JSON.parse(row.details)
+    } catch {
+      // ignore malformed details
+    }
+  }
+
+  const sevRaw = row.severity || parsedDetails?.severity || 'INFO'
+  const sevStr = typeof sevRaw === 'string' ? sevRaw : String(sevRaw || 'INFO')
+  const normalizedSeverity: 'INFO' | 'WARNING' | 'CRITICAL' =
+    sevStr.toUpperCase() === 'CRITICAL'
+      ? 'CRITICAL'
+      : sevStr.toUpperCase() === 'WARNING'
+      ? 'WARNING'
+      : 'INFO'
+
+  return {
+    id: String(row.audit_log_id),
+    company: row.company_name || 'System',
+    user: row.user_name || 'System',
+    action: row.description || row.action,
+    module: row.module || 'General',
+    target: row.target || (row.record_ref ? String(row.record_ref) : '-'),
+    time: formatLogTime(row.created_at),
+    ipAddress: row.ip_address || (parsedDetails?.ip_address as string) || (parsedDetails?.ip as string) || '—',
+    severity: normalizedSeverity,
+    recordType: row.record_type || (parsedDetails?.record_type as string) || undefined,
+    recordId: row.record_id ?? (parsedDetails?.record_id as string | number) ?? undefined,
+    recordRef: row.record_ref || (parsedDetails?.record_ref as string) || undefined,
+    userAgent: row.user_agent || (parsedDetails?.user_agent as string) || undefined,
+    changes: row.changes || (parsedDetails?.changes as Record<string, { old: unknown; new: unknown }>) || undefined,
+    rawDetails: parsedDetails,
+    details: row.details,
+    rawCreatedAt: row.created_at || '',
+  }
+}
+
 export const activityLogService = {
-  /**
-   * Fetches real activity logs directly from Supabase via the backend API.
-   * Admin-only. Supports query filtering and pagination.
-   */
-  async getActivityLogs(params: ActivityLogQueryParams = {}): Promise<ActivityLogItem[]> {
+  async getActivityLogsPaginated(
+    params: ActivityLogQueryParams = {}
+  ): Promise<{ items: ActivityLogItem[]; total: number }> {
     try {
       const searchParams = new URLSearchParams()
-      const limit = params.limit ?? 1000
+      const limit = params.limit ?? 50
       searchParams.set('limit', String(limit))
 
       if (params.offset !== undefined) searchParams.set('offset', String(params.offset))
@@ -158,50 +198,27 @@ export const activityLogService = {
       }
 
       const rows = (await response.json()) as RawAuditLogRow[]
-      return rows.map((row) => {
-        let parsedDetails: Record<string, unknown> | undefined
-        if (typeof row.details === 'object' && row.details !== null) {
-          parsedDetails = row.details as Record<string, unknown>
-        } else if (typeof row.details === 'string') {
-          try {
-            parsedDetails = JSON.parse(row.details)
-          } catch {
-            // ignore malformed details
-          }
-        }
-
-        const sevRaw = row.severity || parsedDetails?.severity || 'INFO'
-        const sevStr = typeof sevRaw === 'string' ? sevRaw : String(sevRaw || 'INFO')
-        const normalizedSeverity: 'INFO' | 'WARNING' | 'CRITICAL' =
-          sevStr.toUpperCase() === 'CRITICAL'
-            ? 'CRITICAL'
-            : sevStr.toUpperCase() === 'WARNING'
-            ? 'WARNING'
-            : 'INFO'
-
-        return {
-          id: String(row.audit_log_id),
-          company: row.company_name || 'System',
-          user: row.user_name || 'System',
-          action: row.description || row.action,
-          module: row.module || 'General',
-          target: row.target || (row.record_ref ? String(row.record_ref) : '-'),
-          time: formatLogTime(row.created_at),
-          ipAddress: row.ip_address || (parsedDetails?.ip_address as string) || (parsedDetails?.ip as string) || '—',
-          severity: normalizedSeverity,
-          recordType: row.record_type || (parsedDetails?.record_type as string) || undefined,
-          recordId: row.record_id ?? (parsedDetails?.record_id as string | number) ?? undefined,
-          recordRef: row.record_ref || (parsedDetails?.record_ref as string) || undefined,
-          userAgent: row.user_agent || (parsedDetails?.user_agent as string) || undefined,
-          changes: row.changes || (parsedDetails?.changes as Record<string, { old: unknown; new: unknown }>) || undefined,
-          rawDetails: parsedDetails,
-          details: row.details,
-          rawCreatedAt: row.created_at || '',
-        }
-      })
+      const totalHeader = response.headers.get('X-Total-Count')
+      const total = totalHeader !== null ? Number(totalHeader) || rows.length : rows.length
+      return {
+        items: rows.map(mapRawAuditLogRow),
+        total,
+      }
     } catch (err) {
       throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to load activity logs. Please try again.'))
     }
+  },
+
+  /**
+   * Fetches real activity logs directly from Supabase via the backend API.
+   * Admin-only. Supports query filtering and pagination.
+   */
+  async getActivityLogs(params: ActivityLogQueryParams = {}): Promise<ActivityLogItem[]> {
+    const { items } = await this.getActivityLogsPaginated({
+      ...params,
+      limit: params.limit ?? 1000,
+    })
+    return items
   },
 
   /**

@@ -97,6 +97,13 @@ def get_ledger(
     company_name: Optional[str] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    entry_type: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    audit_status: Optional[str] = Query(None),
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    response: Response = None,
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
@@ -114,7 +121,34 @@ def get_ledger(
             elif current_user.get("company_id"):
                 company = service.resolve_company(current_user["company_id"], None)
 
-    return service.list_ledger(company, start_date, end_date, user_role=current_user.get("role"))
+    entries = service.list_ledger(company, start_date, end_date, user_role=current_user.get("role"))
+    if entry_type and entry_type.strip().lower() != "all":
+        et = entry_type.strip().lower()
+        entries = [e for e in entries if (getattr(e, "entry_type", "") or "").lower() == et]
+    if status_filter and status_filter.strip().lower() != "all":
+        sf = status_filter.strip().lower()
+        entries = [e for e in entries if (getattr(e, "status", "") or "").lower() == sf]
+    if audit_status and audit_status.strip().lower() != "all":
+        af = audit_status.strip().lower()
+        entries = [e for e in entries if (getattr(e, "audit_status", "") or "").lower() == af]
+    if search and search.strip():
+        term = search.strip().lower()
+        entries = [
+            e for e in entries
+            if term in (getattr(e, "description", "") or "").lower()
+            or term in (getattr(e, "reference_no", "") or "").lower()
+            or term in (getattr(e, "category", "") or "").lower()
+            or term in (getattr(e, "company_name", "") or "").lower()
+        ]
+    total = len(entries)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    if page is not None or limit is not None:
+        pg = page or 1
+        sz = limit or 50
+        start = (pg - 1) * sz
+        return entries[start:start + sz]
+    return entries
 
 
 @router.get(

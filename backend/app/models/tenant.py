@@ -39,7 +39,7 @@ class TenantLease(Base):
     status = Column(String(20), nullable=False, default="Active")
     notes = Column(Text, nullable=True)
     # Bank every rent payment is credited to, as a Sale (spec 0045). NULL = older lease, no sale made.
-    bank_account_id = Column(String(100), nullable=True)
+    bank_account_id = Column(String(100), ForeignKey("bank_accounts.id", ondelete="SET NULL"), nullable=True, index=True)
     audit_status = Column(String(20), nullable=False, default="Pending Audit")
     audited_by = Column(String(100), nullable=True)
     audited_at = Column(DateTime(timezone=True), nullable=True)
@@ -100,7 +100,7 @@ class TenantLeasePayment(Base):
     missed_reason = Column(Text, nullable=True)
     period_index = Column(Integer, nullable=True)
     # The Sale this payment created on the lease's bank (spec 0045)
-    sale_id = Column(Integer, nullable=True, index=True)
+    sale_id = Column(Integer, ForeignKey("sales.sales_id", ondelete="SET NULL"), nullable=True, index=True)
     created_by = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

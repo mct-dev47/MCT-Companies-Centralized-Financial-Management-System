@@ -562,6 +562,37 @@ export const pettyCashService = {
     return result
   },
 
+  async getLedgerPaginated(
+    company?: string,
+    period: PettyCashPeriod = {},
+    params: {
+      page?: number
+      limit?: number
+      search?: string
+      entryType?: string
+      status?: string
+      auditStatus?: string
+    } = {}
+  ): Promise<{ items: PettyCashLedgerEntry[]; total: number }> {
+    const query = buildQuery({
+      company_name: company && company !== 'All Companies' ? company : undefined,
+      start_date: period.startDate,
+      end_date: period.endDate,
+      page: params.page,
+      limit: params.limit,
+      search: params.search,
+      entry_type: params.entryType,
+      status: params.status,
+      audit_status: params.auditStatus,
+    })
+    const response = await fetch(`/api/v1/petty-cash/ledger${query}`, { headers: backendHeaders() })
+    if (!response.ok) throw await getBackendError(response)
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = ((await response.json()) as BackendLedgerEntry[]).map(mapLedgerEntry)
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   async getLedger(company?: string, period: PettyCashPeriod = {}): Promise<PettyCashLedgerEntry[]> {
     const query = buildQuery({
       company_name: company && company !== 'All Companies' ? company : undefined,

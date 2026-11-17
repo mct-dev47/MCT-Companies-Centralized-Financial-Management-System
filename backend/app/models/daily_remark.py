@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Date, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Date, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -15,7 +15,7 @@ class DailyRemark(Base):
     )
 
     daily_remark_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    company_id = Column(Integer, nullable=False, index=True)
+    company_id = Column(Integer, ForeignKey("company.company_id", ondelete="RESTRICT"), nullable=False, index=True)
     remark_date = Column(Date, nullable=False)
     kind = Column(String(20), nullable=False)
     remarks = Column(Text, nullable=False)

@@ -220,6 +220,119 @@ export const salesService = {
     return []
   },
 
+  async getSalesPaginated(params: {
+    company?: string
+    page?: number
+    limit?: number
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
+  } = {}): Promise<{ items: SalesItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.sort_by) sp.set('sort_by', params.sort_by)
+    if (params.sort_dir) sp.set('sort_dir', params.sort_dir)
+
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load sales')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data.map(mapBackendSaleToItem) : []
+    const totalHeader = res.headers.get('X-Total-Count')
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
+  async getSalesSummary(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+  } = {}): Promise<{
+    total_count: number
+    total_amount: number
+    deposited_amount: number
+    pending_amount: number
+    categories: { category: string; amount: number }[]
+  }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales/summary${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load sales summary')
+    return await res.json()
+  },
+
+  async exportSalesData(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+  } = {}): Promise<SalesItem[]> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales/export${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to export sales')
+    const data = await res.json()
+    return Array.isArray(data) ? data.map(mapBackendSaleToItem) : []
+  },
+
   async getSales(company?: string, forceRefresh = false): Promise<SalesItem[]> {
     const cacheKey = company || 'All Companies'
     if (!forceRefresh) {
@@ -232,8 +345,8 @@ export const salesService = {
     try {
       const url =
         company && company !== 'All Companies'
-          ? `/api/v1/sales?company_name=${encodeURIComponent(company)}`
-          : '/api/v1/sales'
+          ? `/api/v1/sales/export?company_name=${encodeURIComponent(company)}`
+          : '/api/v1/sales/export'
 
       const token =
         typeof window !== 'undefined'

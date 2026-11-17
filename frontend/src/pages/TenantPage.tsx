@@ -126,7 +126,7 @@ removeLegacyTenantStorage()
 const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 const SCHEDULE_ITEMS_PER_PAGE = 13
 const HISTORY_ITEMS_PER_PAGE = 13
 

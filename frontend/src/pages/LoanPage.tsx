@@ -79,7 +79,7 @@ import { isCompanyMatch } from '@/utils/companyUtils'
 const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly', 'Quarterly', 'Annually'] as const
 type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 interface LoanPageProps {
   initialType?: 'Borrower' | 'Lender'

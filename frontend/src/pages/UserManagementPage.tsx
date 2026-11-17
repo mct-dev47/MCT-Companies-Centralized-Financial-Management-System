@@ -14,7 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ConfirmModal, ErrorBanner } from '@/components/common'
+import { ConfirmModal, ErrorBanner, TablePagination } from '@/components/common'
 import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { CreateUserModal } from '@/components/employee/CreateUserModal'
 import { ViewUserModal } from '@/components/employee/ViewUserModal'
@@ -56,15 +56,25 @@ export const UserManagementPage: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load users and companies
+  const [currentPage, setCurrentPage] = React.useState(1)
+  const [pageSize, setPageSize] = React.useState(50)
+  const [totalUsers, setTotalUsers] = React.useState(0)
+
   const loadData = React.useCallback(async () => {
     try {
       setLoading(true)
       setLoadError(null)
-      const [userList, companyList] = await Promise.all([
-        employeeService.getUsers(),
+      const [usersPage, companyList] = await Promise.all([
+        employeeService.getUsersPaginated({
+          page: currentPage,
+          limit: pageSize,
+          search: searchQuery || undefined,
+          sortBy,
+        }),
         employeeService.getCompanies(),
       ])
-      setUsers(userList)
+      setUsers(usersPage.items)
+      setTotalUsers(usersPage.total)
       setCompanies(companyList)
     } catch (err) {
       setLoadError(
@@ -76,7 +86,11 @@ export const UserManagementPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [currentPage, pageSize, searchQuery, sortBy])
+
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, sortBy])
 
   React.useEffect(() => {
     void loadData()
@@ -95,36 +109,7 @@ export const UserManagementPage: React.FC = () => {
     document.title = 'User Management - MCT Centralized Financial System'
   }, [])
 
-  // Filtered and sorted users
-  const filteredUsers = React.useMemo(() => {
-    let result = [...users]
-    const q = searchQuery.toLowerCase().trim()
-    if (q) {
-      result = result.filter(
-        (u) =>
-          u.fullName.toLowerCase().includes(q) ||
-          u.email.toLowerCase().includes(q) ||
-          (u.companyName && u.companyName.toLowerCase().includes(q)) ||
-          (u.companyNames && u.companyNames.some((c) => c.toLowerCase().includes(q))) ||
-          (u.role && u.role.toLowerCase().includes(q))
-      )
-    }
-    return result.sort((a, b) => {
-      if (sortBy === 'asc') {
-        return a.fullName.localeCompare(b.fullName, undefined, { sensitivity: 'base', numeric: true })
-      }
-      if (sortBy === 'desc') {
-        return b.fullName.localeCompare(a.fullName, undefined, { sensitivity: 'base', numeric: true })
-      }
-      // 'recent': newest created first
-      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0
-      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0
-      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
-        return timeB - timeA
-      }
-      return Number(b.id) - Number(a.id)
-    })
-  }, [users, searchQuery, sortBy])
+  const filteredUsers = users
 
   const handleCardClickUser = (usr: EmployeeUser) => {
     setSelectedUser(usr)
@@ -166,12 +151,7 @@ export const UserManagementPage: React.FC = () => {
       ),
     })
     try {
-      const [userList, companyList] = await Promise.all([
-        employeeService.getUsers(),
-        employeeService.getCompanies(),
-      ])
-      setUsers(userList)
-      setCompanies(companyList)
+      await loadData()
     } catch (e) {
       console.warn('Background reload failed:', e)
     }
@@ -214,12 +194,7 @@ export const UserManagementPage: React.FC = () => {
       ),
     })
     try {
-      const [userList, companyList] = await Promise.all([
-        employeeService.getUsers(),
-        employeeService.getCompanies(),
-      ])
-      setUsers(userList)
-      setCompanies(companyList)
+      await loadData()
     } catch (e) {
       console.warn('Background reload failed:', e)
     }
@@ -236,12 +211,7 @@ export const UserManagementPage: React.FC = () => {
       message: `"${deletedName}" has been removed from users successfully.`,
     })
     try {
-      const [userList, companyList] = await Promise.all([
-        employeeService.getUsers(),
-        employeeService.getCompanies(),
-      ])
-      setUsers(userList)
-      setCompanies(companyList)
+      await loadData()
     } catch (e) {
       console.warn('Background reload failed:', e)
     }
@@ -466,6 +436,20 @@ export const UserManagementPage: React.FC = () => {
               )
             })}
           </div>
+        )}
+        {!loading && totalUsers > 0 && (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={Math.max(1, Math.ceil(totalUsers / pageSize))}
+            totalItems={totalUsers}
+            pageSize={pageSize}
+            onPageSizeChange={(sz) => {
+              setPageSize(sz)
+              setCurrentPage(1)
+            }}
+            itemLabel="users"
+            onPageChange={setCurrentPage}
+          />
         )}
       </div>
 

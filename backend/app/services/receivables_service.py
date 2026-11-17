@@ -2,8 +2,8 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import case, desc, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.websocket import ws_manager
 from app.models.company import Company
@@ -63,7 +63,7 @@ class ReceivablesService:
             query = query.filter(Receivable.company_name.ilike(f"%{company_name.strip()}%"))
         return query
 
-    def list_receivables(
+    def list_receivables_with_count(
         self,
         company_id: Optional[int] = None,
         company_ids: Optional[List[int]] = None,
@@ -73,9 +73,9 @@ class ReceivablesService:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         search: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = 100,
         offset: int = 0,
-    ) -> List[Receivable]:
+    ) -> Tuple[List[Receivable], int]:
         query = self.db.query(Receivable)
         query = self._apply_company_filters(query, company_id=company_id, company_ids=company_ids, company_name=company_name)
 
@@ -104,13 +104,41 @@ class ReceivablesService:
                 )
             )
 
-        rows = (
-            query.order_by(desc(Receivable.transaction_date), desc(Receivable.receivable_id))
-            .offset(offset)
-            .limit(limit)
-            .all()
+        total = query.count()
+        ordered = query.options(selectinload(Receivable.payments)).order_by(
+            desc(Receivable.transaction_date), desc(Receivable.receivable_id)
         )
-        return self.sync_service.attach_lock_flags(rows)
+        if limit is not None:
+            ordered = ordered.offset(offset).limit(limit)
+        rows = ordered.all()
+        return self.sync_service.attach_lock_flags(rows), total
+
+    def list_receivables(
+        self,
+        company_id: Optional[int] = None,
+        company_ids: Optional[List[int]] = None,
+        company_name: Optional[str] = None,
+        customer_type: Optional[str] = None,
+        payment_status: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        search: Optional[str] = None,
+        limit: Optional[int] = 100,
+        offset: int = 0,
+    ) -> List[Receivable]:
+        rows, _ = self.list_receivables_with_count(
+            company_id=company_id,
+            company_ids=company_ids,
+            company_name=company_name,
+            customer_type=customer_type,
+            payment_status=payment_status,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        return rows
 
     def get_summary_kpis(
         self,
@@ -118,48 +146,38 @@ class ReceivablesService:
         company_ids: Optional[List[int]] = None,
         company_name: Optional[str] = None,
     ) -> ReceivablesKPIsOut:
-        query = self.db.query(Receivable)
-        query = self._apply_company_filters(query, company_id=company_id, company_ids=company_ids, company_name=company_name)
+        base_q = self.db.query(Receivable)
+        base_q = self._apply_company_filters(base_q, company_id=company_id, company_ids=company_ids, company_name=company_name)
 
-        all_recs = query.all()
+        bal_expr = func.coalesce(Receivable.balance, 0)
+        ctype_expr = func.lower(func.trim(func.coalesce(Receivable.customer_type, "")))
+        cname_expr = func.lower(func.trim(func.coalesce(Receivable.customer_name, "")))
+        is_open = bal_expr > Decimal("0.005")
+        is_staff = ctype_expr.in_(("internal", "staff"))
 
-        total_sales = Decimal("0.00")
-        cash_collected = Decimal("0.00")
-        total_outstanding = Decimal("0.00")
-        total_external_utang = Decimal("0.00")
-        total_staff_utang = Decimal("0.00")
-
-        external_debtors = set()
-        staff_debtors = set()
-        all_debtors = set()
-
-        for r in all_recs:
-            total_sales += Decimal(str(r.total_amount or 0))
-            cash_collected += Decimal(str(r.amount_paid or 0))
-            bal = Decimal(str(r.balance or 0))
-            total_outstanding += bal
-
-            cname = (r.customer_name or "").strip().lower()
-            ctype = (r.customer_type or "").strip().lower()
-
-            if bal > Decimal("0.005"):
-                all_debtors.add(cname)
-                if ctype in ("internal", "staff"):
-                    total_staff_utang += bal
-                    staff_debtors.add(cname)
-                else:
-                    total_external_utang += bal
-                    external_debtors.add(cname)
+        row = (
+            base_q.with_entities(
+                func.coalesce(func.sum(Receivable.total_amount), 0),
+                func.coalesce(func.sum(Receivable.amount_paid), 0),
+                func.coalesce(func.sum(bal_expr), 0),
+                func.coalesce(func.sum(case((is_open & ~is_staff, bal_expr), else_=0)), 0),
+                func.coalesce(func.sum(case((is_open & is_staff, bal_expr), else_=0)), 0),
+                func.count(func.distinct(case((is_open & ~is_staff, cname_expr), else_=None))),
+                func.count(func.distinct(case((is_open & is_staff, cname_expr), else_=None))),
+                func.count(func.distinct(case((is_open, cname_expr), else_=None))),
+            )
+            .first()
+        )
 
         return ReceivablesKPIsOut(
-            totalSales=total_sales,
-            cashCollected=cash_collected,
-            totalOutstanding=total_outstanding,
-            totalExternalUtang=total_external_utang,
-            totalStaffUtang=total_staff_utang,
-            externalDebtorCount=len(external_debtors),
-            staffDebtorCount=len(staff_debtors),
-            totalPeopleCount=len(all_debtors),
+            totalSales=Decimal(str(row[0] or 0)),
+            cashCollected=Decimal(str(row[1] or 0)),
+            totalOutstanding=Decimal(str(row[2] or 0)),
+            totalExternalUtang=Decimal(str(row[3] or 0)),
+            totalStaffUtang=Decimal(str(row[4] or 0)),
+            externalDebtorCount=int(row[5] or 0),
+            staffDebtorCount=int(row[6] or 0),
+            totalPeopleCount=int(row[7] or 0),
         )
 
     def get_receivable(self, receivable_id: int, for_update: bool = False) -> Receivable:

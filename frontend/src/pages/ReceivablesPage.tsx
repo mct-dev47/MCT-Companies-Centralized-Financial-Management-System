@@ -65,7 +65,7 @@ import type {
   UtangSale,
 } from '@/services/receivablesStore'
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 export const ReceivablesPage: React.FC = () => {
   const { user } = useSession()
