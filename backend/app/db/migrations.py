@@ -635,6 +635,28 @@ def _run_postgresql_migrations(conn) -> list[str]:
         applied.append("0067_company_bank_schema_cleanup")
         logger.info("Migration 0067_company_bank_schema_cleanup applied successfully.")
 
+    # 33. 0068: drop unused budget & cash_inflow tables, receivables.expense_id, and loan.interest_type
+    result_0068 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0068_schema_cleanup_unused_tables_and_columns'")
+    ).first()
+
+    if not result_0068:
+        has_receivables = conn.execute(text("SELECT to_regclass('public.receivables')")).scalar() is not None
+        has_loan = conn.execute(text("SELECT to_regclass('public.loan')")).scalar() is not None
+        with conn.begin_nested():
+            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+            conn.execute(text("DROP TABLE IF EXISTS budget CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS cash_inflow CASCADE"))
+            if has_receivables:
+                conn.execute(text("ALTER TABLE receivables DROP COLUMN IF EXISTS expense_id CASCADE"))
+            if has_loan:
+                conn.execute(text("ALTER TABLE loan DROP COLUMN IF EXISTS interest_type CASCADE"))
+            conn.execute(
+                text("INSERT INTO schema_migrations (version) VALUES ('0068_schema_cleanup_unused_tables_and_columns')")
+            )
+        applied.append("0068_schema_cleanup_unused_tables_and_columns")
+        logger.info("Migration 0068_schema_cleanup_unused_tables_and_columns applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1494,6 +1516,85 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 )
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0067_company_bank_schema_cleanup')"))
         applied.append("0067_company_bank_schema_cleanup")
+
+    # 32. 0068: drop unused budget & cash_inflow tables, receivables.expense_id, and loan.interest_type
+    result_0068 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0068_schema_cleanup_unused_tables_and_columns'")
+    ).first()
+    if not result_0068:
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        conn.execute(text("DROP TABLE IF EXISTS budget"))
+        conn.execute(text("DROP TABLE IF EXISTS cash_inflow"))
+        if "receivables" in existing_tables:
+            rec_info = conn.execute(text("PRAGMA table_info(receivables)")).fetchall()
+            rec_cols = {row[1] for row in rec_info}
+            if "expense_id" in rec_cols:
+                preserved_indexes = []
+                for idx_row in conn.execute(text("PRAGMA index_list(receivables)")).fetchall():
+                    idx_name = idx_row[1]
+                    idx_cols = [c[2] for c in conn.execute(text(f'PRAGMA index_info("{idx_name}")')).fetchall()]
+                    if "expense_id" in idx_cols:
+                        continue
+                    idx_sql = conn.execute(
+                        text("SELECT sql FROM sqlite_master WHERE type='index' AND name = :name"),
+                        {"name": idx_name},
+                    ).scalar()
+                    if idx_sql:
+                        preserved_indexes.append(idx_sql)
+
+                col_defs = []
+                col_names = []
+                for _, name, col_type, notnull, dflt_val, pk in rec_info:
+                    if name == "expense_id":
+                        continue
+                    col_names.append(name)
+                    parts = [f'"{name}"', col_type or "TEXT"]
+                    if pk:
+                        parts.append("PRIMARY KEY AUTOINCREMENT" if "INT" in (col_type or "").upper() else "PRIMARY KEY")
+                    else:
+                        if notnull:
+                            parts.append("NOT NULL")
+                        if dflt_val is not None:
+                            parts.append(f"DEFAULT {dflt_val}")
+                    if name == "client_ref":
+                        parts.append("UNIQUE")
+                    col_defs.append(" ".join(parts))
+
+                if "company_id" in col_names and "company" in existing_tables:
+                    col_defs.append("FOREIGN KEY(company_id) REFERENCES company(company_id) ON DELETE CASCADE")
+                if "sale_id" in col_names and "sales" in existing_tables:
+                    col_defs.append("FOREIGN KEY(sale_id) REFERENCES sales(sales_id) ON DELETE CASCADE")
+
+                cols_csv = ", ".join(f'"{c}"' for c in col_names)
+                if conn.in_transaction():
+                    conn.commit()
+                fk_was_on = conn.execute(text("PRAGMA foreign_keys")).scalar()
+                if fk_was_on:
+                    conn.execute(text("PRAGMA foreign_keys = OFF"))
+                try:
+                    conn.execute(text(f"CREATE TABLE receivables_new ({', '.join(col_defs)})"))
+                    conn.execute(text(f"INSERT INTO receivables_new ({cols_csv}) SELECT {cols_csv} FROM receivables"))
+                    conn.execute(text("DROP TABLE receivables"))
+                    conn.execute(text("ALTER TABLE receivables_new RENAME TO receivables"))
+                    for idx_sql in preserved_indexes:
+                        conn.execute(text(idx_sql))
+                    conn.commit()
+                finally:
+                    if fk_was_on:
+                        if conn.in_transaction():
+                            conn.commit()
+                        conn.execute(text("PRAGMA foreign_keys = ON"))
+        if "loan" in existing_tables:
+            loan_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loan)")).fetchall()}
+            if "interest_type" in loan_cols:
+                conn.execute(text("ALTER TABLE loan DROP COLUMN interest_type"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0068_schema_cleanup_unused_tables_and_columns')")
+        )
+        applied.append("0068_schema_cleanup_unused_tables_and_columns")
 
     conn.commit()
     return applied

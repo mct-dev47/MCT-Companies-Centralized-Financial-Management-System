@@ -22,7 +22,6 @@ export interface LoanItem {
   rawDate: string // e.g. "2026-10-01"
   dueDate?: string // e.g. "2026-12-31"
   interestRate?: number // e.g. 5.0 (%)
-  interestType?: string // e.g. "simple"
   particulars: string
   category: string
   amount: number
@@ -176,7 +175,6 @@ function mapBackendLoanToItem(l: any): LoanItem {
     rawDate: rawDateStr,
     dueDate: l.due_date || '',
     interestRate: Number(l.interest_rate || 0),
-    interestType: l.interest_type || 'simple',
     particulars: l.particulars || l.description || 'Inter-company term financing facility',
     category: l.category || 'In-house',
     amount: amt,
@@ -452,7 +450,6 @@ export const loanService = {
         lender_company: input.lenderCompany,
         principal_amount: input.amount,
         interest_rate: input.interestRate || 0.0,
-        interest_type: 'simple',
         loan_date: input.date,
         due_date: input.dueDate || null,
         description: input.particulars,

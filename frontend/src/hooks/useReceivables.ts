@@ -86,7 +86,6 @@ export function useReceivables(
       company_id?: number
       sale_id?: number
       sale_line_index?: number
-      expense_id?: number
     }) => {
       return receivablesStore.addNewSale(params)
     },

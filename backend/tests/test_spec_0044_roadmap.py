@@ -103,7 +103,6 @@ class TestSpec0044Roadmap(unittest.TestCase):
                     loan_ref_no=f"LN-0044-{i}",
                     principal_amount=Decimal("5000.00"),
                     interest_rate=Decimal("2.50"),
-                    interest_type="simple",
                     loan_date=date(2026, 11, i),
                     due_date=date(2026, 12, i),
                     description=f"Working capital {i}",

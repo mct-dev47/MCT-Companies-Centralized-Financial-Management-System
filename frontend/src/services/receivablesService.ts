@@ -21,7 +21,6 @@ export interface BackendReceivable {
   customer_type: 'Internal' | 'External'
   sale_id?: number | null
   sale_line_index?: number | null
-  expense_id?: number | null
   transaction_date: string
   items_summary: string
   total_amount: number
@@ -157,7 +156,6 @@ export const receivablesService = {
     company_id?: number
     sale_id?: number
     sale_line_index?: number
-    expense_id?: number
     /** Unique ID for this new receivable; resending it returns the existing one (spec 0038). */
     client_ref?: string
   }): Promise<BackendReceivable> {

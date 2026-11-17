@@ -90,23 +90,11 @@ class AuditAction(str, Enum):
     SALE_DELETED        = "SALE_DELETED"
     SALE_VIEWED         = "SALE_VIEWED"
 
-    # ── Cash Inflows ─────────────────────────────────────────────────────────
-    CASH_INFLOW_CREATED = "CASH_INFLOW_CREATED"
-    CASH_INFLOW_UPDATED = "CASH_INFLOW_UPDATED"
-    CASH_INFLOW_DELETED = "CASH_INFLOW_DELETED"
-    CASH_INFLOW_VIEWED  = "CASH_INFLOW_VIEWED"
-
     # ── Loans ────────────────────────────────────────────────────────────────
     LOAN_CREATED        = "LOAN_CREATED"
     LOAN_UPDATED        = "LOAN_UPDATED"
     LOAN_DELETED        = "LOAN_DELETED"
     LOAN_VIEWED         = "LOAN_VIEWED"
-
-    # ── Budgets ──────────────────────────────────────────────────────────────
-    BUDGET_CREATED      = "BUDGET_CREATED"
-    BUDGET_UPDATED      = "BUDGET_UPDATED"
-    BUDGET_DELETED      = "BUDGET_DELETED"
-    BUDGET_VIEWED       = "BUDGET_VIEWED"
 
     # ── Staff Credits ────────────────────────────────────────────────────────
     STAFF_CREDIT_CREATED = "STAFF_CREDIT_CREATED"
@@ -182,18 +170,10 @@ _ACTION_CATEGORY_MAP: dict[str, str] = {
     "SALE_UPDATED": "TRANSACTION",
     "SALE_DELETED": "TRANSACTION",
     "SALE_VIEWED": "TRANSACTION",
-    "CASH_INFLOW_CREATED": "TRANSACTION",
-    "CASH_INFLOW_UPDATED": "TRANSACTION",
-    "CASH_INFLOW_DELETED": "TRANSACTION",
-    "CASH_INFLOW_VIEWED": "TRANSACTION",
     "LOAN_CREATED": "LOAN",
     "LOAN_UPDATED": "LOAN",
     "LOAN_DELETED": "LOAN",
     "LOAN_VIEWED": "LOAN",
-    "BUDGET_CREATED": "BUDGET",
-    "BUDGET_UPDATED": "BUDGET",
-    "BUDGET_DELETED": "BUDGET",
-    "BUDGET_VIEWED": "BUDGET",
     "STAFF_CREDIT_CREATED": "STAFF_CREDIT",
     "STAFF_CREDIT_UPDATED": "STAFF_CREDIT",
     "STAFF_CREDIT_DELETED": "STAFF_CREDIT",
@@ -258,18 +238,10 @@ _ACTION_DESCRIPTION_MAP: dict[str, str] = {
     "SALE_UPDATED":            "Sale record updated",
     "SALE_DELETED":            "Sale record deleted",
     "SALE_VIEWED":             "Sale record(s) viewed",
-    "CASH_INFLOW_CREATED":     "New cash inflow record created",
-    "CASH_INFLOW_UPDATED":     "Cash inflow record updated",
-    "CASH_INFLOW_DELETED":     "Cash inflow record deleted",
-    "CASH_INFLOW_VIEWED":      "Cash inflow record(s) viewed",
     "LOAN_CREATED":            "New loan record created",
     "LOAN_UPDATED":            "Loan record updated",
     "LOAN_DELETED":            "Loan record deleted",
     "LOAN_VIEWED":             "Loan record(s) viewed",
-    "BUDGET_CREATED":          "New budget created",
-    "BUDGET_UPDATED":          "Budget updated",
-    "BUDGET_DELETED":          "Budget deleted",
-    "BUDGET_VIEWED":           "Budget(s) viewed",
     "STAFF_CREDIT_CREATED":    "New staff credit created",
     "STAFF_CREDIT_UPDATED":    "Staff credit updated",
     "STAFF_CREDIT_DELETED":    "Staff credit deleted",
@@ -510,7 +482,7 @@ def log_transaction(
 ) -> None:
     """
     Generic helper for financial transaction audit events
-    (expenses, sales, cash inflows, loans, budgets, staff credits).
+    (expenses, sales, loans, staff credits).
     """
     details: dict[str, Any] = {}
     if record_id is not None:

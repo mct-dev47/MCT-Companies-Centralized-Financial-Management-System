@@ -14,7 +14,6 @@ class Category(Base):
 
     sales = relationship("Sale", back_populates="category")
     expenses = relationship("Expense", back_populates="category")
-    budgets = relationship("Budget", back_populates="category")
 
 
 class CompanyCategory(Base):
@@ -35,20 +34,6 @@ class CompanyCategory(Base):
     )
 
     company = relationship("Company", backref="company_categories")
-
-
-class CashInflow(Base):
-    __tablename__ = "cash_inflow"
-
-    cash_transaction_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    company_id = Column(Integer, nullable=False, index=True)
-    transaction_date = Column(Date, nullable=False)
-    transaction_type = Column(String(100), nullable=False)
-    amount = Column(Numeric(15, 2), nullable=False)
-    reference_no = Column(String(100), nullable=True)
-    description = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Sale(Base):
@@ -128,21 +113,4 @@ class Expense(Base):
         super().__init__(**kwargs)
 
     category = relationship("Category", back_populates="expenses")
-
-
-class Budget(Base):
-    __tablename__ = "budget"
-
-    budget_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    company_id = Column(Integer, nullable=False, index=True)
-    category_id = Column(Integer, ForeignKey("category.category_id", ondelete="CASCADE"), nullable=False)
-    amount = Column(Numeric(15, 2), nullable=False)
-    period_type = Column(String(50), nullable=False)  # monthly, quarterly, yearly
-    start_date = Column(Date, nullable=False)
-    end_date = Column(Date, nullable=False)
-    description = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    category = relationship("Category", back_populates="budgets")
 

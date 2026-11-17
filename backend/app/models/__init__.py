@@ -1,7 +1,7 @@
 from app.models.company import Company, CompanyNotificationSettings
 from app.models.user import User
 from app.models.audit_log import AuditLog
-from app.models.finance import Category, CompanyCategory, CashInflow, Sale, Expense, Budget
+from app.models.finance import Category, CompanyCategory, Sale, Expense
 from app.models.loan import Loan, LoanRepayment
 from app.models.staff_credit import StaffCredit, StaffCreditRepayment
 from app.models.bills import Bill, BillPayment
@@ -28,10 +28,8 @@ __all__ = [
     "AuditLog",
     "Category",
     "CompanyCategory",
-    "CashInflow",
     "Sale",
     "Expense",
-    "Budget",
     "Loan",
     "LoanRepayment",
     "StaffCredit",

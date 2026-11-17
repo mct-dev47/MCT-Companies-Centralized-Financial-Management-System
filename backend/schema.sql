@@ -59,20 +59,7 @@ CREATE TABLE IF NOT EXISTS category (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 6. Cash Inflow Table
-CREATE TABLE IF NOT EXISTS cash_inflow (
-    cash_transaction_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    transaction_date DATE NOT NULL,
-    transaction_type VARCHAR(100) NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    reference_no VARCHAR(100),
-    description TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 7. Sales Table
+-- 6. Sales Table
 CREATE TABLE IF NOT EXISTS sales (
     sales_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL,
@@ -90,7 +77,7 @@ CREATE TABLE IF NOT EXISTS sales (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 8. Expenses Table
+-- 7. Expenses Table
 CREATE TABLE IF NOT EXISTS expenses (
     expense_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL,
@@ -106,21 +93,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 9. Budget Table
-CREATE TABLE IF NOT EXISTS budget (
-    budget_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    category_id BIGINT REFERENCES category(category_id) ON DELETE CASCADE,
-    amount NUMERIC(15, 2) NOT NULL,
-    period_type VARCHAR(50) NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    description TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 10. Loan Table
+-- 8. Loan Table
 CREATE TABLE IF NOT EXISTS loan (
     loan_id BIGSERIAL PRIMARY KEY,
     borrower BIGINT NOT NULL,
@@ -128,7 +101,6 @@ CREATE TABLE IF NOT EXISTS loan (
     loan_ref_no VARCHAR(100) UNIQUE,
     principal_amount NUMERIC(15, 2) NOT NULL,
     interest_rate NUMERIC(5, 2) DEFAULT 0.00,
-    interest_type VARCHAR(50) DEFAULT 'simple',
     loan_date DATE NOT NULL,
     due_date DATE,
     description TEXT,

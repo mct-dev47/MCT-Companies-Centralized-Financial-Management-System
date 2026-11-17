@@ -15,7 +15,6 @@ class Loan(Base):
     bank_account_id = Column(String(100), nullable=True)
     principal_amount = Column(Numeric(15, 2), nullable=True)
     interest_rate = Column(Numeric(5, 2), default=0.00)
-    interest_type = Column(String(50), default="simple")  # simple, compound
     loan_date = Column(Date, nullable=False)
     due_date = Column(Date, nullable=True)
     description = Column(Text, nullable=True)

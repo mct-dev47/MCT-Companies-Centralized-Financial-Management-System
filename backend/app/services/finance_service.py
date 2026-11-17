@@ -4,10 +4,9 @@ from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.models.finance import Sale, Expense, CashInflow, Budget
+from app.models.finance import Sale, Expense
 from app.models.loan import Loan, LoanRepayment
 from app.schemas.financial_calc import CompanyFinancialSummary, GroupFinancialSummary
-from app.schemas.budget import BudgetVarianceOut
 from app.schemas.loan import LoanStatementOut, LoanRepaymentOut
 from app.services.petty_cash_service import PETTY_CASH_METHOD, PettyCashService
 
@@ -85,24 +84,6 @@ class FinanceCalculator:
         remaining = total_loan_payable - total_repayments
         return quantize_currency(max(Decimal("0.00"), remaining))
 
-    @staticmethod
-    def calculate_budget_variance(allocated_amount: Decimal, actual_spent: Decimal) -> dict:
-        """
-        Actual Spent = Total Expenses for category within selected period
-        Remaining Budget = Allocated Budget - Actual Spent
-        Budget Utilization (%) = (Actual Spent / Allocated Budget) * 100
-        Over Budget = Yes if Actual Spent > Allocated Budget
-        """
-        allocated = quantize_currency(allocated_amount)
-        spent = quantize_currency(actual_spent)
-        remaining = quantize_currency(allocated - spent)
-        utilization = (float(spent) / float(allocated) * 100.0) if allocated > 0 else 0.0
-        return {
-            "remaining_budget": remaining,
-            "utilization_percentage": round(utilization, 2),
-            "is_over_budget": spent > allocated
-        }
-
 
 class FinanceService:
     """
@@ -126,13 +107,8 @@ class FinanceService:
             sales_q = sales_q.filter(Sale.transaction_date <= end_date)
         total_revenue = quantize_currency(sales_q.scalar())
 
-        # 2. Other Cash Inflows (Capital injections, grants, misc deposits)
-        inflow_q = self.db.query(func.coalesce(func.sum(CashInflow.amount), 0)).filter(CashInflow.company_id == company_id)
-        if start_date:
-            inflow_q = inflow_q.filter(CashInflow.transaction_date >= start_date)
-        if end_date:
-            inflow_q = inflow_q.filter(CashInflow.transaction_date <= end_date)
-        other_cash_inflows = quantize_currency(inflow_q.scalar())
+        # 2. Other Cash Inflows (cash_inflow table removed; kept as 0.00 for summary schema compatibility)
+        other_cash_inflows = Decimal("0.00")
 
         # 3. Expenses & Expenses Paid
         exp_q = self.db.query(
@@ -252,33 +228,6 @@ class FinanceService:
             }
         return result
 
-    def get_budget_variance(self, budget_id: int) -> Optional[BudgetVarianceOut]:
-        budget = self.db.query(Budget).filter(Budget.budget_id == budget_id).first()
-        if not budget:
-            return None
-
-        spent = self.db.query(func.coalesce(func.sum(Expense.amount), 0)).filter(
-            Expense.company_id == budget.company_id,
-            Expense.category_id == budget.category_id,
-            Expense.expense_date >= budget.start_date,
-            Expense.expense_date <= budget.end_date
-        ).scalar()
-
-        variance = FinanceCalculator.calculate_budget_variance(budget.amount, Decimal(spent))
-
-        return BudgetVarianceOut(
-            budget_id=budget.budget_id,
-            company_id=budget.company_id,
-            category_id=budget.category_id,
-            allocated_budget=budget.amount,
-            actual_spent=quantize_currency(spent),
-            remaining_budget=variance["remaining_budget"],
-            utilization_percentage=variance["utilization_percentage"],
-            is_over_budget=variance["is_over_budget"],
-            start_date=budget.start_date,
-            end_date=budget.end_date
-        )
-
     def get_loan_statement(self, loan_id: int) -> Optional[LoanStatementOut]:
         loan = self.db.query(Loan).filter(Loan.loan_id == loan_id).first()
         if not loan:
@@ -299,7 +248,6 @@ class FinanceService:
             lender=loan.lender,
             principal_amount=loan.principal_amount,
             interest_rate=rate,
-            interest_type=loan.interest_type or "simple",
             interest_amount=interest_amount,
             total_loan_payable=total_payable,
             total_amount_repaid=quantize_currency(total_repaid),

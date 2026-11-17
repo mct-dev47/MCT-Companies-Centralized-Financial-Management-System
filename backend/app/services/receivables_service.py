@@ -216,7 +216,6 @@ class ReceivablesService:
             customer_type=customer_type,
             sale_id=data.sale_id,
             sale_line_index=data.sale_line_index,
-            expense_id=data.expense_id,
             transaction_date=data.transaction_date or date.today(),
             items_summary=data.items_summary.strip(),
             total_amount=total,

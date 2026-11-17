@@ -149,6 +149,79 @@ class TestMigrations(unittest.TestCase):
             self.assertEqual(valid_cid, 1)
             self.assertIsNone(orphan_cid)
 
+    def test_migration_0068_drops_unused_tables_and_columns(self):
+        """Verify 0068 drops budget and cash_inflow tables plus receivables.expense_id and loan.interest_type safely with FKs and rows."""
+        with self.engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            conn.execute(text("CREATE TABLE company (company_id INTEGER PRIMARY KEY AUTOINCREMENT, company_name VARCHAR(100) NOT NULL);"))
+            conn.execute(text("CREATE TABLE sales (sales_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, transaction_date DATE, deposit_status VARCHAR(50), deposit_date DATE);"))
+            conn.execute(text("CREATE TABLE expenses (expense_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100));"))
+            conn.execute(text("CREATE TABLE budget (budget_id INTEGER PRIMARY KEY AUTOINCREMENT, amount NUMERIC(15, 2));"))
+            conn.execute(text("CREATE TABLE cash_inflow (cash_transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, amount NUMERIC(15, 2));"))
+            conn.execute(text("""
+                CREATE TABLE receivables (
+                    receivable_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id INTEGER NOT NULL,
+                    sale_id INTEGER,
+                    expense_id INTEGER,
+                    customer_name VARCHAR(255) NOT NULL DEFAULT 'Walk-in',
+                    total_amount NUMERIC(15, 2) NOT NULL DEFAULT 100.00,
+                    FOREIGN KEY(company_id) REFERENCES company(company_id) ON DELETE CASCADE,
+                    FOREIGN KEY(sale_id) REFERENCES sales(sales_id) ON DELETE CASCADE,
+                    FOREIGN KEY(expense_id) REFERENCES expenses(expense_id) ON DELETE SET NULL
+                );
+            """))
+            conn.execute(text("CREATE INDEX ix_receivables_expense_id ON receivables (expense_id);"))
+            conn.execute(text("CREATE INDEX ix_receivables_sale_id ON receivables (sale_id);"))
+            conn.execute(text("""
+                CREATE TABLE receivable_payments (
+                    payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receivable_id INTEGER NOT NULL,
+                    amount NUMERIC(15, 2) NOT NULL,
+                    FOREIGN KEY(receivable_id) REFERENCES receivables(receivable_id) ON DELETE CASCADE
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE loan (
+                    loan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    principal_amount NUMERIC(15, 2),
+                    interest_type VARCHAR(50) DEFAULT 'simple'
+                );
+            """))
+            conn.execute(text("INSERT INTO company (company_id, company_name) VALUES (1, 'Alpha')"))
+            conn.execute(text("INSERT INTO sales (sales_id, company_id) VALUES (10, 1)"))
+            conn.execute(text("INSERT INTO expenses (expense_id, company_id) VALUES (20, 1)"))
+            conn.execute(text("INSERT INTO receivables (receivable_id, company_id, sale_id, expense_id, customer_name, total_amount) VALUES (100, 1, 10, 20, 'Juan', 250.00)"))
+            conn.execute(text("INSERT INTO receivable_payments (payment_id, receivable_id, amount) VALUES (1000, 100, 50.00)"))
+
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            conn.commit()
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0068_schema_cleanup_unused_tables_and_columns", applied)
+
+        # Idempotency check: second run must succeed cleanly without reapplying
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0068_schema_cleanup_unused_tables_and_columns", applied_second)
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        self.assertNotIn("budget", tables)
+        self.assertNotIn("cash_inflow", tables)
+        self.assertNotIn("expense_id", {col["name"] for col in inspector.get_columns("receivables")})
+        self.assertNotIn("interest_type", {col["name"] for col in inspector.get_columns("loan")})
+
+        with self.engine.connect() as conn:
+            rec_row = conn.execute(text("SELECT receivable_id, company_id, sale_id, customer_name FROM receivables WHERE receivable_id = 100")).fetchone()
+            self.assertIsNotNone(rec_row)
+            self.assertEqual(tuple(rec_row), (100, 1, 10, "Juan"))
+            pay_count = conn.execute(text("SELECT COUNT(*) FROM receivable_payments WHERE receivable_id = 100")).scalar()
+            self.assertEqual(pay_count, 1)
+            idx_names = {row[1] for row in conn.execute(text("PRAGMA index_list(receivables)")).fetchall()}
+            self.assertIn("ix_receivables_sale_id", idx_names)
+            self.assertNotIn("ix_receivables_expense_id", idx_names)
+
 
 if __name__ == "__main__":
     unittest.main()

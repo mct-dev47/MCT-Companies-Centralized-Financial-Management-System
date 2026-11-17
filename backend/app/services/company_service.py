@@ -513,8 +513,6 @@ class CompanyService:
             self.db.execute(text("DELETE FROM bills WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM expenses WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM sales WHERE company_id = :id"), {"id": company_id})
-            self.db.execute(text("DELETE FROM cash_inflow WHERE company_id = :id"), {"id": company_id})
-            self.db.execute(text("DELETE FROM budget WHERE company_id = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM loans_repayments WHERE loan_id IN (SELECT loan_id FROM loan WHERE borrower = :id OR lender = :id)"), {"id": company_id})
             self.db.execute(text("DELETE FROM loan WHERE borrower = :id OR lender = :id"), {"id": company_id})
             self.db.execute(text("DELETE FROM staff_credits WHERE company_id = :id"), {"id": company_id})
