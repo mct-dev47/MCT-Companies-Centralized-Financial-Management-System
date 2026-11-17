@@ -83,8 +83,8 @@ export interface UnpaidAssignmentRow {
   customerName: string
 }
 
-/** How many sheet rows are saved at the same time. */
-const SAVE_CONCURRENCY = 4
+/** How many sheet rows are saved at the same time (1 for atomic, sequential safety). */
+const SAVE_CONCURRENCY = 1
 
 export interface SpreadsheetRow {
   id: string
@@ -3086,6 +3086,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: extraItemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           } else {
             await expenseService.addExpense({
@@ -3100,6 +3101,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: extraItemized,
               bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           }
         })
@@ -3139,6 +3141,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: itemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
 
             if (row.status === 'Unpaid' && unpaidAssignments.length > 0) {
@@ -3191,6 +3194,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: itemized,
               bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           }
         })

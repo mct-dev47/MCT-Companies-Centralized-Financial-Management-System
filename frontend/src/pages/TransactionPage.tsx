@@ -3154,22 +3154,6 @@ export const TransactionPage: React.FC = () => {
                                         : 'bg-amber-50/70 border-amber-200 text-amber-900'
                                     )}
                                   >
-                                    <div className="space-y-1">
-                                      <div>
-                                        Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
-                                      </div>
-                                      <div>
-                                        Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
-                                        {isBalanced ? '✓ matches' : `(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
-                                      </div>
-                                      {!isBalanced && check.issues.length > 0 && (
-                                        <ul className="list-disc pl-5 font-medium">
-                                          {check.issues.map((issue, i) => (
-                                            <li key={i}>{issue}</li>
-                                          ))}
-                                        </ul>
-                                      )}
-                                    </div>
                                   </div>
 
                                   {/* Transactions table on this day */}

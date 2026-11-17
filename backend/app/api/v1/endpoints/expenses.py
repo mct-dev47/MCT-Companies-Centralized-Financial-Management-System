@@ -3,6 +3,7 @@ from typing import List, Optional
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from app.core.business_time import business_today
@@ -29,6 +30,7 @@ class _SkipBackup(Exception):
     """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
@@ -664,6 +666,8 @@ def create_expense(
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
     effective_bank_id = getattr(expense_in, "bank_account_id", None)
+    created_row = None
+    sb_expense_id = None
 
     try:
         client = get_supabase_admin_client()
@@ -854,6 +858,35 @@ def create_expense(
     except HTTPException:
         raise
     except Exception as e:
+        # If the row was already inserted into Supabase, NEVER fall back to inserting
+        # a duplicate into SQLite/Postgres. Return the created expense record.
+        if created_row and sb_expense_id:
+            logger.warning("Expense %s was successfully saved in Supabase, but a post-save step failed: %s", sb_expense_id, e)
+            try:
+                return ExpenseOut(
+                    expense_id=created_row["expense_id"],
+                    company_id=created_row.get("company_id"),
+                    company_name=target_company_name,
+                    category_id=created_row.get("category_id"),
+                    category_name=category_name,
+                    payment_method=payment_method_str,
+                    created_by=created_row.get("created_by"),
+                    expense_date=created_row.get("expense_date"),
+                    reference_no=created_row.get("reference_no"),
+                    cheque_no=created_row.get("cheque_number") or cheque or (created_row.get("reference_no") if not (created_row.get("reference_no") or "").startswith("REF-") else None),
+                    amount=created_row.get("amount"),
+                    amount_paid=created_row.get("amount_paid") or 0.0,
+                    unpaid_balance=Decimal(str(created_row.get("amount") or 0.0)) - Decimal(str(created_row.get("amount_paid") or 0.0)),
+                    particulars=created_row.get("description"),
+                    description=created_row.get("description"),
+                    created_at=created_row.get("created_at"),
+                    updated_at=created_row.get("updated_at"),
+                    remarks=created_row.get("remarks"),
+                    **audit_fields(created_row)
+                )
+            except Exception:
+                return get_expense(expense_id=sb_expense_id, current_user=current_user, db=db)
+
         # The insert may have succeeded before a later step failed, or a parallel request with the same
         # client_ref won the race: return that expense instead of inserting a second one
         existing = _find_expense_by_client_ref(db, expense_in.client_ref)
@@ -861,6 +894,22 @@ def create_expense(
             check_company_access(current_user, existing.company_id)
             response.status_code = status.HTTP_200_OK
             return get_expense(expense_id=existing.record_id, current_user=current_user, db=db)
+
+        # If Supabase timed out or dropped connection right as the insert was committed,
+        # verify if the expense with this reference_no is already present in Supabase
+        if ref:
+            try:
+                client = get_supabase_admin_client()
+                if client:
+                    sb_check = client.table("expenses").select("expense_id, company_id").eq("reference_no", ref).limit(1).execute()
+                    if sb_check.data and len(sb_check.data) > 0:
+                        matched_id = sb_check.data[0]["expense_id"]
+                        matched_cid = sb_check.data[0].get("company_id")
+                        check_company_access(current_user, matched_cid)
+                        response.status_code = status.HTTP_200_OK
+                        return get_expense(expense_id=matched_id, current_user=current_user, db=db)
+            except Exception:
+                pass
 
         # Fallback to local SQLite only if Supabase error occurs
         target_company = resolve_company(db, company_id=expense_in.company_id, company_name=expense_in.company)

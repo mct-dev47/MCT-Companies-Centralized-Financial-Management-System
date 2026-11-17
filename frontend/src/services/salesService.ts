@@ -407,6 +407,9 @@ export const salesService = {
       }
     }
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+    const clientRef =
+      input.clientRef ||
+      `sale_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
 
     const payload = {
       company: input.company,
@@ -422,7 +425,7 @@ export const salesService = {
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
       remarks: input.remarks || undefined,
-      client_ref: input.clientRef || undefined,
+      client_ref: clientRef,
     }
 
     try {

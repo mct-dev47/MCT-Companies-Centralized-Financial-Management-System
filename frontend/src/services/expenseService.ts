@@ -466,6 +466,9 @@ export const expenseService = {
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+    const clientRef =
+      input.clientRef ||
+      `exp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`
 
     try {
       const token =
@@ -485,7 +488,7 @@ export const expenseService = {
         reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
         remarks: input.remarks || undefined,
-        client_ref: input.clientRef || undefined,
+        client_ref: clientRef,
       }
 
       const res = await fetch('/api/v1/expenses', {

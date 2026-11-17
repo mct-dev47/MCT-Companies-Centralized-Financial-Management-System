@@ -3,6 +3,7 @@ from typing import List, Optional
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
+import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from app.core.business_time import business_today
@@ -36,6 +37,7 @@ class _SkipBackup(Exception):
     """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 from app.core.dependencies import (
     AuditorUser,
@@ -671,6 +673,8 @@ def create_sale(
     if not cat_str:
         _reject_petty_cash_category_id(db, sale_in.category_id, use_sb)
     effective_bank_id = getattr(sale_in, "bank_account_id", None)
+    created_row = None
+    sb_sales_id = None
 
     try:
         if not use_sb:
@@ -847,7 +851,34 @@ def create_sale(
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        # If the row was already inserted into Supabase, NEVER fall back to inserting
+        # a duplicate into SQLite/Postgres. Return the created sale record.
+        if created_row and sb_sales_id:
+            logger.warning("Sale %s was successfully saved in Supabase, but a post-save step failed: %s", sb_sales_id, e)
+            try:
+                return SaleOut(
+                    sales_id=created_row["sales_id"],
+                    company_id=created_row.get("company_id"),
+                    company_name=target_company_name,
+                    category_id=created_row.get("category_id"),
+                    category_name=category_name,
+                    payment_method=payment_method_str,
+                    payment_status=created_row.get("payment_status") or sale_in.payment_status or "Paid",
+                    deposit_status=created_row.get("deposit_status") or sale_in.deposit_status or "Not Deposited",
+                    deposit_date=created_row.get("deposit_date") or sale_in.deposit_date,
+                    transaction_date=created_row.get("transaction_date"),
+                    cheque_no=created_row.get("cheque_number") or cheque,
+                    amount=created_row.get("amount"),
+                    particulars=created_row.get("particulars"),
+                    created_at=created_row.get("created_at"),
+                    updated_at=created_row.get("updated_at"),
+                    remarks=created_row.get("remarks"),
+                    **audit_fields(created_row)
+                )
+            except Exception:
+                return get_sale(sales_id=sb_sales_id, current_user=current_user, db=db)
+
         # The insert may have succeeded before a later step failed, or a parallel request with the same
         # client_ref won the race: return that sale instead of inserting a second one
         existing = _find_sale_by_client_ref(db, sale_in.client_ref)
