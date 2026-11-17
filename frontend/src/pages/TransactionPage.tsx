@@ -119,8 +119,8 @@ const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
 const isAwaitingAudit = (status?: string | null): boolean =>
   (status || '').trim().toLowerCase() === 'pending audit approval'
 
-/** YYYY-MM-DD -> MM/DD/YYYY, uniform display format. */
-const toLedgerDate = (iso: string): string => {
+/** Any date input -> MM/DD/YYYY, uniform display format. */
+const toLedgerDate = (iso: string | null | undefined): string => {
   if (!iso) return '—'
   const trimmed = String(iso).trim()
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
@@ -132,18 +132,39 @@ const toLedgerDate = (iso: string): string => {
     const yy = Number(mTwo[3]) >= 70 ? `19${mTwo[3]}` : `20${mTwo[3]}`
     return `${mTwo[1].padStart(2, '0')}/${mTwo[2].padStart(2, '0')}/${yy}`
   }
+  const normalized = normalizeDateToYYYYMMDD(trimmed)
+  if (normalized && /^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const [y, mon, d] = normalized.split('-')
+    return `${mon.padStart(2, '0')}/${d.padStart(2, '0')}/${y}`
+  }
   return trimmed
 }
 
-/** Resolves grouping date (deposit date for deposited sales, expense date for expenses, fallback to sale date for undeposited sales). */
+/** Resolves grouping/sorting date (deposit date for deposited sales, expense date for expenses, fallback to sale date for undeposited sales). */
 const getRowGroupDateIso = (tx: DashboardTransactionItem): string => {
   if (tx.type === 'Sales') {
     const isDeposited = tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited'
     const depDay = String(tx.deposit_date || tx.depositDate || '').slice(0, 10)
-    if (isDeposited && depDay) return depDay
-    return getRowSaleDateIso(tx) || normalizeDateToYYYYMMDD(tx.date) || 'Unknown Date'
+    const normalizedDep = depDay ? normalizeDateToYYYYMMDD(depDay) : ''
+    if (isDeposited && normalizedDep) return normalizedDep
+    const saleIso = getRowSaleDateIso(tx)
+    if (saleIso) return saleIso
+    return normalizeDateToYYYYMMDD(tx.date) || '1970-01-01'
   }
-  return normalizeDateToYYYYMMDD(tx.date) || tx.date || 'Unknown Date'
+  return normalizeDateToYYYYMMDD(tx.date) || tx.date || '1970-01-01'
+}
+
+/** Extracts encoding/creation timestamp as epoch milliseconds for sorting tie-breakers. */
+const getTxEncodedTimestamp = (tx: DashboardTransactionItem): number => {
+  if (tx.createdAt) {
+    const parsed = Date.parse(tx.createdAt)
+    if (!isNaN(parsed)) return parsed
+  }
+  if (tx.updatedAt) {
+    const parsed = Date.parse(tx.updatedAt)
+    if (!isNaN(parsed)) return parsed
+  }
+  return 0
 }
 
 /** The company has a real lender (not "Pending Finance Assignment" or an external lender). */
@@ -1243,18 +1264,21 @@ export const TransactionPage: React.FC = () => {
     return posted
   }, [bankAccounts])
 
-  /** Order within one bank ledger day: when the money moved (bank posting time), oldest first. */
+  /** Order within one bank ledger day: when the money moved (bank posting time or encoding time), oldest first. */
   const compareLedgerTime = React.useCallback(
     (a: DashboardTransactionItem, b: DashboardTransactionItem) => {
       const time = (t: DashboardTransactionItem) => {
-        const posted = bankPostedAt.get(String(t.id))
+        const rawId = String(t.id)
+        const expKey = rawId.startsWith('exp_') ? rawId : `exp_${rawId}`
+        const posted = bankPostedAt.get(rawId) ?? (t.type === 'Expense' ? bankPostedAt.get(expKey) : undefined)
         if (posted !== undefined) return posted
-        // No bank entry: the last update (e.g. when it was marked Paid), else when it was created
-        const fallback = Date.parse((t.type === 'Sales' && t.updatedAt) || t.createdAt || '')
-        return isNaN(fallback) ? 0 : fallback
+        return getTxEncodedTimestamp(t)
       }
       const diff = time(a) - time(b)
-      return diff !== 0 ? diff : String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+      if (diff !== 0) return diff
+      const encDiff = getTxEncodedTimestamp(a) - getTxEncodedTimestamp(b)
+      if (encDiff !== 0) return encDiff
+      return String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
     },
     [bankPostedAt]
   )
@@ -1477,18 +1501,7 @@ export const TransactionPage: React.FC = () => {
   )
 
   const formatToShortDate = React.useCallback((val: string | null | undefined): string => {
-    if (!val) return '—'
-    const trimmed = String(val).trim()
-    const mIso = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
-    if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1]}`
-    const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
-    if (mLong) return `${mLong[1].padStart(2, '0')}/${mLong[2].padStart(2, '0')}/${mLong[3]}`
-    const mTwo = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(trimmed)
-    if (mTwo) {
-      const yy = Number(mTwo[3]) >= 70 ? `19${mTwo[3]}` : `20${mTwo[3]}`
-      return `${mTwo[1].padStart(2, '0')}/${mTwo[2].padStart(2, '0')}/${yy}`
-    }
-    return trimmed
+    return toLedgerDate(val)
   }, [])
 
   const getBankLedgerParticulars = React.useCallback((tx: DashboardTransactionItem) => {
@@ -1753,8 +1766,15 @@ export const TransactionPage: React.FC = () => {
       if (cmp !== 0) {
         return sortOrder === 'desc' ? cmp : -cmp
       }
-      const timeCmp = (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      return sortOrder === 'desc' ? timeCmp : -timeCmp
+      const timeA = getTxEncodedTimestamp(a)
+      const timeB = getTxEncodedTimestamp(b)
+      const timeCmp = timeB - timeA
+      if (timeCmp !== 0) {
+        return sortOrder === 'desc' ? timeCmp : -timeCmp
+      }
+      return sortOrder === 'desc'
+        ? String(b.id).localeCompare(String(a.id), undefined, { numeric: true })
+        : String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
     })
 
     return list

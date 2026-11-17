@@ -111,11 +111,11 @@ function saveStoredExpenses(items: ExpenseItem[]): void {
 
 function mapBackendExpenseToItem(exp: any): ExpenseItem {
   const rawDateStr = exp.expense_date || '2026-10-01'
-  let displayDate = '10/01/26'
+  let displayDate = '10/01/2026'
   if (rawDateStr) {
     const parts = rawDateStr.split('-')
     if (parts.length === 3) {
-      displayDate = `${parts[1]}/${parts[2]}/${parts[0].slice(2)}`
+      displayDate = `${parts[1].padStart(2, '0')}/${parts[2].padStart(2, '0')}/${parts[0]}`
     }
   }
 
@@ -160,7 +160,7 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     remarks: exp.remarks || undefined,
     sourceModule: exp.source_module || undefined,
     createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
-    createdAt: exp.created_at || new Date().toISOString(),
+    createdAt: exp.created_at || exp.createdAt || undefined,
     updatedAt: exp.updated_at || undefined,
     updatedBy: exp.updated_by || exp.updated_by_name || undefined,
   }

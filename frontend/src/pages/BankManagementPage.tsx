@@ -118,6 +118,7 @@ import { Link } from 'react-router-dom'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
 import { getParticularsSummary } from '@/utils/particularsUtils'
+import { formatToMMDDYYYY } from '@/utils/dateUtils'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 
@@ -3219,7 +3220,7 @@ export const BankManagementPage: React.FC = () => {
                   >
                     {/* Date */}
                     <TableCell className="px-2.5 sm:px-3 py-3 font-mono text-xs text-muted-fg whitespace-nowrap">
-                      {tx.date}
+                      {formatToMMDDYYYY(tx.date) || tx.date}
                     </TableCell>
 
                     {/* Cheque No */}
@@ -3228,9 +3229,9 @@ export const BankManagementPage: React.FC = () => {
                     </TableCell>
 
                     {/* Particulars */}
-                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars}>
+                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars || tx.category || '—'}>
                       <span className="font-semibold text-focus truncate block">
-                        {getBankParticularsShortTitle(tx.particulars, tx.category)}
+                        {tx.particulars?.trim() || tx.category || '—'}
                       </span>
                     </TableCell>
 

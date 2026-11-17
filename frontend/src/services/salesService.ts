@@ -93,7 +93,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
     b.transaction_date || (b.created_at ? b.created_at.split('T')[0] : '2026-10-01')
   const [year, month, day] = rawDate.split('-')
   const displayDate =
-    month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
+    month && day ? `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}` : rawDate
   const amt = Number(b.amount) || 0
 
   let chequeNo = b.cheque_no || b.chequeNo || b.reference_no || ''
@@ -161,7 +161,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
     auditNotes: b.audit_remarks || undefined,
     createdBy: b.created_by || b.created_by_name || 'Finance Staff',
-    createdAt: b.created_at || new Date().toISOString(),
+    createdAt: b.created_at || b.createdAt || undefined,
     updatedAt: b.updated_at || undefined,
     updatedBy: b.updated_by || b.updated_by_name || undefined,
     bankAccountId: b.bank_account_id || b.bankAccountId || undefined,

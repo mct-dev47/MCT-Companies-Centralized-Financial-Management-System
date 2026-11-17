@@ -478,7 +478,11 @@ export const ExpensePage: React.FC = () => {
         const dateB = b.rawDate || normalizeDateToYYYYMMDD(b.date)
         const cmp = dateB.localeCompare(dateA)
         if (cmp !== 0) return cmp
-        return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
+        const timeA = a.createdAt ? Date.parse(a.createdAt) : 0
+        const timeB = b.createdAt ? Date.parse(b.createdAt) : 0
+        const timeCmp = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA)
+        if (timeCmp !== 0) return timeCmp
+        return String(b.id).localeCompare(String(a.id), undefined, { numeric: true })
       })
   }, [
     expenses,
