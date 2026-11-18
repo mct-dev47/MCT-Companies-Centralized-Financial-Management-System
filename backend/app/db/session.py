@@ -383,6 +383,12 @@ def init_db():
                 except Exception:
                     pass
 
+        if "loan" in table_names:
+            loan_cols = {col["name"] for col in inspector.get_columns("loan")}
+            if "borrower_bank_account_id" not in loan_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE loan ADD COLUMN borrower_bank_account_id VARCHAR(100)"))
+
         if "loans_repayments" in table_names:
             lr_cols = {col["name"] for col in inspector.get_columns("loans_repayments")}
             with engine.begin() as conn:

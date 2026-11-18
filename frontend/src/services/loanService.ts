@@ -64,6 +64,7 @@ export interface NewLoanInput {
   particulars: string
   borrowerCompany: string
   lenderCompany?: string
+  borrowerBankAccountId?: string
   category?: string
   chequeNo?: string
   status?: string
@@ -475,6 +476,7 @@ export const loanService = {
       const payload = {
         borrower_company: input.borrowerCompany,
         lender_company: input.lenderCompany,
+        borrower_bank_account_id: input.borrowerBankAccountId || null,
         principal_amount: input.amount,
         interest_rate: input.interestRate || 0.0,
         loan_date: input.date,
@@ -536,6 +538,7 @@ export const loanService = {
       amount: input.amount,
       borrower: input.borrowerCompany,
       lender: input.lenderCompany || 'Pending Finance Assignment',
+      borrowerBankAccountId: input.borrowerBankAccountId,
       company: input.borrowerCompany,
       status: (input.status as any) || 'Pending Approval',
       auditStatus: 'Pending Audit',

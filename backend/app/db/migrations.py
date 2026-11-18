@@ -1851,6 +1851,19 @@ def _run_sqlite_migrations(conn) -> list[str]:
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0074_loan_repayment_links')"))
         applied.append("0074_loan_repayment_links")
 
+    # 40. 0075: store borrower's chosen receiving bank account on loan requests
+    result_0075 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0075_loan_borrower_bank'")
+    ).first()
+    if not result_0075:
+        exists = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='loan'")).first()
+        if exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loan)")).fetchall()}
+            if "borrower_bank_account_id" not in cols:
+                conn.execute(text("ALTER TABLE loan ADD COLUMN borrower_bank_account_id VARCHAR(100) NULL"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0075_loan_borrower_bank')"))
+        applied.append("0075_loan_borrower_bank")
+
     conn.commit()
     return applied
 
