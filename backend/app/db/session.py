@@ -151,40 +151,51 @@ def init_db():
     from app.models.company import Company
 
 
+    from sqlalchemy import inspect as sa_inspect
     from sqlalchemy.exc import ProgrammingError, OperationalError
 
+    is_prod = (getattr(settings, "ENVIRONMENT", "development") or "development").strip().lower() == "production"
+
     try:
-        try:
-            run_migrations(engine)
-        except Exception as me:
-            logger.warning(f"Migration runner encountered an issue: {me}. Falling back to metadata inspection.")
-        Base.metadata.create_all(bind=engine)
-    except (ProgrammingError, OperationalError) as e:
-        if "already exists" not in str(e).lower():
+        run_migrations(engine)
+    except Exception as me:
+        if is_prod:
+            logger.critical("Migration runner failed in production: %s", me)
             raise
+        logger.warning(f"Migration runner encountered an issue: {me}. Falling back to metadata inspection.")
 
-        from sqlalchemy import inspect as sa_inspect
+    should_create_all = engine.dialect.name != "postgresql"
+    if not should_create_all:
+        existing_tables = set(sa_inspect(engine).get_table_names())
+        should_create_all = "schema_migrations" not in existing_tables or len(existing_tables) <= 1
 
-        existing = set(sa_inspect(engine).get_table_names())
-        missing = [t for t in Base.metadata.sorted_tables if t.name not in existing]
-        if missing:
-            logger.warning(
-                "Schema partially exists; creating %d missing table(s): %s",
-                len(missing),
-                ", ".join(t.name for t in missing),
-            )
-            for table in missing:
-                try:
-                    table.create(bind=engine, checkfirst=True)
-                except (ProgrammingError, OperationalError) as te:
-                    if "already exists" not in str(te).lower():
-                        raise
-                    logger.warning("Skipping existing object for table %s: %s", table.name, te)
-        else:
-            logger.warning(
-                "All tables already exist (likely provisioned out-of-band); "
-                "skipping create and continuing startup."
-            )
+    if should_create_all:
+        try:
+            Base.metadata.create_all(bind=engine)
+        except (ProgrammingError, OperationalError) as e:
+            if "already exists" not in str(e).lower():
+                raise
+
+            existing = set(sa_inspect(engine).get_table_names())
+            missing = [t for t in Base.metadata.sorted_tables if t.name not in existing]
+            if missing:
+                logger.warning(
+                    "Schema partially exists; creating %d missing table(s): %s",
+                    len(missing),
+                    ", ".join(t.name for t in missing),
+                )
+                for table in missing:
+                    try:
+                        table.create(bind=engine, checkfirst=True)
+                    except (ProgrammingError, OperationalError) as te:
+                        if "already exists" not in str(te).lower():
+                            raise
+                        logger.warning("Skipping existing object for table %s: %s", table.name, te)
+            else:
+                logger.warning(
+                    "All tables already exist (likely provisioned out-of-band); "
+                    "skipping create and continuing startup."
+                )
 
     
     try:
