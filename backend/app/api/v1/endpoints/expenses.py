@@ -91,8 +91,11 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             legacy_particulars=expense.description,
             commit=commit,
         )
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
-    except Exception as exc:  # never block saving an expense on a bank sync problem
+        if commit:
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
+    except Exception as exc:  # never block saving an expense unless running inside an atomic commit=False batch
+        if not commit:
+            raise
         logging.getLogger(__name__).warning("Bank reconcile skipped for expense %s: %s", expense_id, exc)
 
 

@@ -2099,41 +2099,58 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     const recIdFromUtang =
       typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
         ? Number(editItem.id.replace('utang-', ''))
-        : !Number.isNaN(saleIdNum)
-          ? saleIdNum
-          : undefined
-
-    const linkedRec = !Number.isNaN(saleIdNum)
-      ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
-      : recIdFromUtang
-        ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
         : undefined
 
-    const debtorName =
-      editItem.customer_name ||
-      linkedRec?.customer_name ||
-      ''
-    const rawType = editItem.customer_type || linkedRec?.customer_type
-    const debtorType: CustomerType =
-      rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+    const findMatchingReceivable = () =>
+      !Number.isNaN(saleIdNum)
+        ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
+        : recIdFromUtang
+          ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
+          : undefined
 
-    if (debtorName) {
-      const initialRowId =
-        editItem.items && editItem.items.length > 0 && editItem.items[0].id
-          ? editItem.items[0].id
-          : generateSheetRowId(1)
-      setUnpaidAssignments([
-        {
-          rowId: initialRowId,
-          saleLineIndex: 0,
-          particulars: editItem.particulars || '',
-          quantity: 1,
-          unitPrice: fallbackTotal,
-          total: fallbackTotal,
-          customerType: debtorType,
-          customerName: debtorName,
-        },
-      ])
+    const linkedRec = findMatchingReceivable()
+
+    const applyLinkedDebtor = (rec: typeof linkedRec) => {
+      const name = editItem.customer_name || rec?.customer_name || ''
+      const rawType = editItem.customer_type || rec?.customer_type
+      const dType: CustomerType =
+        rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+
+      if (name) {
+        const initialRowId =
+          editItem.items && editItem.items.length > 0 && editItem.items[0].id
+            ? editItem.items[0].id
+            : generateSheetRowId(1)
+        setUnpaidAssignments([
+          {
+            rowId: initialRowId,
+            saleLineIndex: 0,
+            particulars: editItem.particulars || '',
+            quantity: 1,
+            unitPrice: fallbackTotal,
+            total: fallbackTotal,
+            customerType: dType,
+            customerName: name,
+          },
+        ])
+      }
+    }
+
+    applyLinkedDebtor(linkedRec)
+
+    if (!linkedRec && !editItem.customer_name && (!Number.isNaN(saleIdNum) || recIdFromUtang)) {
+      let cancelled = false
+      void receivablesStore.refreshFromBackend().then(() => {
+        if (cancelled) return
+        setKnownDebtors(receivablesStore.getPeopleSummaries())
+        const refreshedRec = findMatchingReceivable()
+        if (refreshedRec) {
+          applyLinkedDebtor(refreshedRec)
+        }
+      })
+      return () => {
+        cancelled = true
+      }
     }
   }, [editItem])
 

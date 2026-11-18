@@ -1473,6 +1473,10 @@ export const TransactionPage: React.FC = () => {
         return { deposit: 0, withdrawal: t.withdrawal }
       }
       // Fall back to the record type to decide the direction of the raw amount.
+      // Petty Cash and Loan rows carry explicit deposit/withdrawal; 0 means no bank cash moved.
+      if (t.type === 'Petty Cash' || t.type === 'Loan') {
+        return { deposit: 0, withdrawal: 0 }
+      }
       const amt = t.amount || 0
       if (t.type === 'Sales' || t.type === 'Income') {
         return { deposit: amt, withdrawal: 0 }
@@ -1897,15 +1901,6 @@ export const TransactionPage: React.FC = () => {
         await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
-      } else if (tx.type === 'Loan') {
-        if (tx.id.startsWith('loan_rep_')) {
-          setIsDiscrepancyModalOpen(false)
-          setDiscrepancyReason('')
-          setDiscrepancyTargetTx(null)
-          return
-        }
-        const loanId = tx.id.replace(/:lender$/, '')
-        await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
         await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
@@ -1944,6 +1939,8 @@ export const TransactionPage: React.FC = () => {
           paidAmount: remarksTargetTx.paidAmount,
           bankAccountId: remarksTargetTx.bankAccountId,
           bankName: remarksTargetTx.bankName,
+          sourceModule: remarksTargetTx.sourceModule,
+          isMirrorRow: remarksTargetTx.isMirrorRow,
         }
         handleTransactionUpdated(tx)
       } else if (remarksTargetTx.type === 'Sales') {
@@ -1958,6 +1955,8 @@ export const TransactionPage: React.FC = () => {
           depositStatus: remarksTargetTx.depositStatus,
           depositDate: remarksTargetTx.depositDate,
           saleDate: remarksTargetTx.saleDate,
+          sourceModule: remarksTargetTx.sourceModule,
+          isMirrorRow: remarksTargetTx.isMirrorRow,
         }
         handleTransactionUpdated(tx)
       } else if (remarksTargetTx.type === 'Bank' || String(remarksTargetTx.id).startsWith('tx-')) {

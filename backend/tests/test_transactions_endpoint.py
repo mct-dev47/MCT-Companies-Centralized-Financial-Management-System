@@ -1,5 +1,5 @@
 import pytest
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -10,6 +10,7 @@ from app.db.session import get_db, SessionLocal
 from app.models.company import Company
 from app.models.bank import BankAccount, BankTransaction
 from app.models.finance import Sale, Expense, Category
+from app.models.lending import Borrower
 from app.models.receivable import Receivable, ReceivablePayment
 from app.models.tenant import TenantLease, TenantLeasePayment
 from app.models.bills import Bill, BillPayment
@@ -48,39 +49,30 @@ def override_deps():
 @pytest.fixture
 def db_session():
     db = SessionLocal()
+    existing_cids = {cid for (cid,) in db.query(Company.company_id).all()}
+    existing_bt_ids = {bid for (bid,) in db.query(BankTransaction.id).all()}
+    existing_borrower_ids = {bid for (bid,) in db.query(Borrower.borrower_id).all()}
     try:
         yield db
     finally:
         try:
-            # Clean up test companies and cascade records to avoid shared DB test pollution
-            test_comps = db.query(Company).filter(
-                or_(
-                    Company.company_name.like("%Test%"),
-                    Company.company_name.like("%Sync%"),
-                    Company.company_name.like("%Lock%"),
-                    Company.company_name.like("%Cascade%"),
-                    Company.company_name.like("%Bills%"),
-                    Company.company_name.like("%Loan%"),
-                    Company.company_name.like("%Partially%"),
-                    Company.company_name.like("%Borrower%"),
-                    Company.company_name.like("%Lender%"),
-                    Company.company_name.like("%Company One%"),
-                    Company.company_name.like("%Company Two%"),
-                    Company.company_name.like("%IDOR%"),
-                    Company.company_name.like("%Tenant%"),
-                )
-            ).all()
-            cids = [c.company_id for c in test_comps]
+            db.rollback()
+            new_borrower_ids = [bid for (bid,) in db.query(Borrower.borrower_id).all() if bid not in existing_borrower_ids]
+            if new_borrower_ids:
+                db.query(Borrower).filter(Borrower.borrower_id.in_(new_borrower_ids)).delete(synchronize_session=False)
+
+            new_bt_ids = [bid for (bid,) in db.query(BankTransaction.id).all() if bid not in existing_bt_ids]
+            if new_bt_ids:
+                db.query(BankTransaction).filter(BankTransaction.id.in_(new_bt_ids)).delete(synchronize_session=False)
+
+            cids = [cid for (cid,) in db.query(Company.company_id).all() if cid not in existing_cids]
             if cids:
                 db.query(ReceivablePayment).filter(ReceivablePayment.receivable.has(Receivable.company_id.in_(cids))).delete(synchronize_session=False)
                 db.query(Receivable).filter(Receivable.company_id.in_(cids)).delete(synchronize_session=False)
                 db.query(TenantLeasePayment).filter(TenantLeasePayment.lease.has(TenantLease.company_id.in_(cids))).delete(synchronize_session=False)
                 db.query(TenantLease).filter(TenantLease.company_id.in_(cids)).delete(synchronize_session=False)
                 db.query(BankTransaction).filter(
-                    or_(
-                        BankTransaction.bank_account_id.like("%test%"),
-                        BankTransaction.account.has(BankAccount.company_id.in_(cids)),
-                    )
+                    BankTransaction.account.has(BankAccount.company_id.in_(cids))
                 ).delete(synchronize_session=False)
                 db.query(BankAccount).filter(BankAccount.company_id.in_(cids)).delete(synchronize_session=False)
                 db.query(BillPayment).filter(BillPayment.bill.has(Bill.company_id.in_(cids))).delete(synchronize_session=False)
@@ -91,7 +83,7 @@ def db_session():
                 db.query(Loan).filter(or_(Loan.borrower.in_(cids), Loan.lender.in_(cids))).delete(synchronize_session=False)
                 db.query(PettyCashTopUp).filter(PettyCashTopUp.company_id.in_(cids)).delete(synchronize_session=False)
                 db.query(Company).filter(Company.company_id.in_(cids)).delete(synchronize_session=False)
-                db.commit()
+            db.commit()
         except Exception:
             db.rollback()
         finally:
@@ -1145,3 +1137,439 @@ def test_delete_bill_rolls_back_everything_when_a_payment_cleanup_fails(db_sessi
     db_session.expire_all()
     assert db_session.query(Bill).filter(Bill.bill_id == bill_id).first() is None
     assert db_session.query(Expense).filter(Expense.expense_id.in_(expense_ids)).count() == 0
+
+
+def test_delete_petty_cash_pending_succeeds_and_reviewed_rejected(db_session):
+    """Pending petty cash topups can be deleted via transactions endpoint; reviewed ones return 400."""
+    comp = Company(company_name="Petty Delete Corp")
+    db_session.add(comp)
+    db_session.flush()
+
+    pending = PettyCashTopUp(
+        company_id=comp.company_id,
+        request_type="topup",
+        amount=Decimal("1500.00"),
+        topup_date=date.today(),
+        status="Pending Finance Endorsement",
+        description="Pending topup",
+    )
+    reviewed = PettyCashTopUp(
+        company_id=comp.company_id,
+        request_type="topup",
+        amount=Decimal("2500.00"),
+        topup_date=date.today(),
+        status="Approved",
+        description="Approved topup",
+    )
+    db_session.add_all([pending, reviewed])
+    db_session.commit()
+
+    res_ok = client.delete(f"/api/v1/transactions/petty_{pending.topup_id}")
+    assert res_ok.status_code == 200
+    assert db_session.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == pending.topup_id).first() is None
+
+    res_err = client.delete(f"/api/v1/transactions/petty_{reviewed.topup_id}")
+    assert res_err.status_code == 400
+
+
+def test_delete_manual_bank_tx_cross_company_403_and_verified_409(db_session):
+    """Manual bank transaction deletion rejects wrong-company users (403) and Verified entries (409)."""
+    comp_a = Company(company_name="Bank Guard Alpha")
+    comp_b = Company(company_name="Bank Guard Beta")
+    db_session.add_all([comp_a, comp_b])
+    db_session.flush()
+
+    bank_a = BankAccount(
+        id="acc-test-guard-a",
+        bank_name="BPI",
+        account_name="Alpha Main",
+        company_name=comp_a.company_name,
+        company_id=comp_a.company_id,
+        starting_balance=Decimal("10000.00"),
+        current_balance=Decimal("10000.00"),
+    )
+    db_session.add(bank_a)
+    db_session.flush()
+
+    bt_pending = BankTransaction(
+        id="tx-guard-pending-1",
+        bank_account_id=bank_a.id,
+        company_name=comp_a.company_name,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Manual bank deposit",
+        deposit=Decimal("500.00"),
+        withdrawal=Decimal("0.00"),
+        audit_status="Pending Audit",
+    )
+    bt_verified = BankTransaction(
+        id="tx-guard-verified-1",
+        bank_account_id=bank_a.id,
+        company_name=comp_a.company_name,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Verified manual deposit",
+        deposit=Decimal("800.00"),
+        withdrawal=Decimal("0.00"),
+        audit_status="Verified",
+    )
+    db_session.add_all([bt_pending, bt_verified])
+    db_session.commit()
+
+    # Wrong-company supervisor gets 403
+    user_b = _supervisor_for(comp_b.company_id)
+    app.dependency_overrides[require_business_writer] = lambda: user_b
+    res_403 = client.delete(f"/api/v1/transactions/{bt_pending.id}")
+    assert res_403.status_code == 403
+
+    # Verified transaction gets 409 even for authorized owner
+    app.dependency_overrides[require_business_writer] = lambda: ADMIN_USER
+    res_409 = client.delete(f"/api/v1/transactions/{bt_verified.id}")
+    assert res_409.status_code == 409
+
+
+def test_delete_linked_sale_and_lending_expense_rejected(db_session):
+    """Linked Tenant sale and Lending release expense return HTTP 409 when deleted via /transactions."""
+    comp = Company(company_name="Linked Guard Corp")
+    db_session.add(comp)
+    db_session.flush()
+
+    linked_sale = Sale(
+        company_id=comp.company_id,
+        transaction_date=date.today(),
+        amount=Decimal("6000.00"),
+        particulars="Tenant rent sale [Paid]",
+        payment_status="Paid",
+        deposit_status="Deposited",
+        audit_status="Pending Audit",
+    )
+    db_session.add(linked_sale)
+    db_session.flush()
+
+    lease = TenantLease(
+        company_id=comp.company_id,
+        tenant_ref=f"TNT-LINK-{int(datetime.now().timestamp() * 1000)}",
+        tenant_name="Tenant Linked",
+        unit_name="Unit B",
+        rent_amount=Decimal("6000.00"),
+        contract_date=date.today(),
+        due_date=date.today(),
+        total_amount_payable=Decimal("6000.00"),
+        status="Active",
+    )
+    db_session.add(lease)
+    db_session.flush()
+
+    pmt = TenantLeasePayment(
+        lease_id=lease.lease_id,
+        payment_date=date.today(),
+        amount=Decimal("6000.00"),
+        method="Cash",
+        status="Paid",
+        sale_id=linked_sale.sales_id,
+    )
+    db_session.add(pmt)
+
+    lending_exp = Expense(
+        company_id=comp.company_id,
+        expense_date=date.today(),
+        amount=Decimal("3000.00"),
+        amount_paid=Decimal("3000.00"),
+        particulars="Loan release",
+        description="Loan release",
+        payment_method="Cash",
+        audit_status="Pending Audit",
+    )
+    db_session.add(lending_exp)
+    db_session.flush()
+
+    borrower = Borrower(
+        borrower_ref_no=f"BRW-LINK-{int(datetime.now().timestamp() * 1000)}",
+        borrower_name="Test Lending Borrower",
+        principal_amount=Decimal("3000.00"),
+        total_payable=Decimal("3600.00"),
+        remaining_balance=Decimal("3600.00"),
+        date_borrowed=date.today(),
+        due_date=date.today() + timedelta(days=30),
+        release_expense_id=lending_exp.expense_id,
+    )
+    db_session.add(borrower)
+    db_session.commit()
+
+    res_sale = client.delete(f"/api/v1/transactions/sale_{linked_sale.sales_id}")
+    assert res_sale.status_code == 409
+
+    res_exp = client.delete(f"/api/v1/transactions/exp_{lending_exp.expense_id}")
+    assert res_exp.status_code == 409
+
+
+def test_list_transactions_query_filters_search_audit_status_and_dates(db_session):
+    """GET /api/v1/transactions honors search, audit_status, start_date, end_date, and X-Total-Count."""
+    comp = Company(company_name="Filter Query Corp")
+    db_session.add(comp)
+    db_session.flush()
+
+    d_old = date.today() - timedelta(days=10)
+    d_mid = date.today() - timedelta(days=2)
+    s_match = Sale(
+        company_id=comp.company_id,
+        transaction_date=d_mid,
+        amount=Decimal("450.00"),
+        particulars="Match Keyword Coffee [Paid]",
+        payment_status="Paid",
+        deposit_status="Deposited",
+        audit_status="Verified",
+    )
+    s_other_status = Sale(
+        company_id=comp.company_id,
+        transaction_date=d_mid,
+        amount=Decimal("200.00"),
+        particulars="Match Keyword Tea [Paid]",
+        payment_status="Paid",
+        deposit_status="Deposited",
+        audit_status="Pending Audit",
+    )
+    s_old = Sale(
+        company_id=comp.company_id,
+        transaction_date=d_old,
+        amount=Decimal("100.00"),
+        particulars="Match Keyword Old [Paid]",
+        payment_status="Paid",
+        deposit_status="Deposited",
+        audit_status="Verified",
+    )
+    db_session.add_all([s_match, s_other_status, s_old])
+    db_session.commit()
+
+    res = client.get(
+        f"/api/v1/transactions?company_id={comp.company_id}&search=Keyword&audit_status=Verified"
+        f"&start_date={(date.today() - timedelta(days=5)).isoformat()}&end_date={date.today().isoformat()}"
+    )
+    assert res.status_code == 200
+    assert res.headers.get("X-Total-Count") == "1"
+    data = res.json()
+    assert [it["id"] for it in data] == [f"sale_{s_match.sales_id}"]
+
+
+def test_petty_cash_reimbursed_vs_unsettled_and_bank_reimbursement_expense_dedup(db_session):
+    """Reimbursed bank-funded claims appear once (Section 3), unsettled or petty_cash claims are hidden,
+    and paired Bank Reimbursement expenses do not duplicate in Section 2."""
+    comp = Company(company_name="Petty Reimb Corp")
+    db_session.add(comp)
+    db_session.flush()
+    bank = BankAccount(
+        id="acc-test-reimb-1",
+        bank_name="BDO",
+        account_name="Reimb Main",
+        company_name=comp.company_name,
+        company_id=comp.company_id,
+        starting_balance=Decimal("25000.00"),
+        current_balance=Decimal("25000.00"),
+    )
+    db_session.add(bank)
+    db_session.flush()
+
+    reimbursed = PettyCashTopUp(
+        company_id=comp.company_id,
+        request_type="reimbursement",
+        amount=Decimal("900.00"),
+        topup_date=date.today(),
+        status="Reimbursed",
+        payment_method_option="bank",
+        bank_account_id=bank.id,
+        description="Reimbursed fuel claim",
+    )
+    unsettled = PettyCashTopUp(
+        company_id=comp.company_id,
+        request_type="reimbursement",
+        amount=Decimal("400.00"),
+        topup_date=date.today(),
+        status="Approved",
+        payment_method_option="bank",
+        bank_account_id=bank.id,
+        description="Unsettled approved reimbursement",
+    )
+    pc_funded = PettyCashTopUp(
+        company_id=comp.company_id,
+        request_type="reimbursement",
+        amount=Decimal("250.00"),
+        topup_date=date.today(),
+        status="Reimbursed",
+        payment_method_option="petty_cash",
+        description="Petty cash funded reimbursement",
+    )
+    db_session.add_all([reimbursed, unsettled, pc_funded])
+    db_session.flush()
+
+    paired_exp = Expense(
+        company_id=comp.company_id,
+        expense_date=date.today(),
+        amount=Decimal("900.00"),
+        amount_paid=Decimal("900.00"),
+        particulars="Bank Reimbursement fuel claim",
+        description="Bank Reimbursement fuel claim",
+        payment_method="Bank Reimbursement",
+        bank_account_id=bank.id,
+        linked_topup_id=reimbursed.topup_id,
+        audit_status="Pending Audit",
+    )
+    db_session.add(paired_exp)
+    db_session.commit()
+
+    res = client.get(f"/api/v1/transactions?company_id={comp.company_id}")
+    assert res.status_code == 200
+    ids = [it["id"] for it in res.json()]
+    assert f"petty_{reimbursed.topup_id}" in ids
+    assert f"petty_{unsettled.topup_id}" not in ids
+    assert f"petty_{pc_funded.topup_id}" not in ids
+    assert f"exp_{paired_exp.expense_id}" not in ids
+
+
+def test_section4_intercompany_dedup_and_shared_bank_null_company_isolation(db_session):
+    """Intercompany bank transfers and null-company entries on shared accounts are excluded for primary owner."""
+    comp_primary = Company(company_name="Shared Primary Corp")
+    comp_co = Company(company_name="Shared CoOwner Corp")
+    db_session.add_all([comp_primary, comp_co])
+    db_session.flush()
+
+    shared_bank = BankAccount(
+        id="acc-test-shared-sec4",
+        bank_name="BPI",
+        account_name="Shared Ops",
+        company_name=comp_primary.company_name,
+        company_id=comp_primary.company_id,
+        starting_balance=Decimal("30000.00"),
+        current_balance=Decimal("30000.00"),
+    )
+    shared_bank.company_names = [comp_primary.company_name, comp_co.company_name]
+    db_session.add(shared_bank)
+    db_session.flush()
+
+    bt_ic_transfer = BankTransaction(
+        id="tx-sec4-ic-1",
+        bank_account_id=shared_bank.id,
+        company_name=comp_primary.company_name,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Intercompany Transfer to Shared CoOwner Corp",
+        withdrawal=Decimal("1000.00"),
+        deposit=Decimal("0.00"),
+        category="Bank Transfer",
+    )
+    bt_ic_repay = BankTransaction(
+        id="tx-sec4-ic-2",
+        bank_account_id=shared_bank.id,
+        company_name=comp_primary.company_name,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Intercompany Repayment from Shared CoOwner Corp",
+        deposit=Decimal("1000.00"),
+        withdrawal=Decimal("0.00"),
+        category="Bank Transfer",
+    )
+    bt_null_shared = BankTransaction(
+        id="tx-sec4-null-shared",
+        bank_account_id=shared_bank.id,
+        company_name=None,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Unlabelled shared entry",
+        deposit=Decimal("500.00"),
+        withdrawal=Decimal("0.00"),
+        category="Deposit",
+    )
+    bt_labelled_primary = BankTransaction(
+        id="tx-sec4-primary-ok",
+        bank_account_id=shared_bank.id,
+        company_name=comp_primary.company_name,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Manual labelled deposit",
+        deposit=Decimal("750.00"),
+        withdrawal=Decimal("0.00"),
+        category="Deposit",
+    )
+    db_session.add_all([bt_ic_transfer, bt_ic_repay, bt_null_shared, bt_labelled_primary])
+    db_session.commit()
+
+    if entry_source_supported(db_session):
+        db_session.execute(
+            text("UPDATE bank_transactions SET entry_source = 'manual' WHERE id = :id"),
+            {"id": bt_labelled_primary.id},
+        )
+        db_session.commit()
+
+    res = client.get(f"/api/v1/transactions?type=bank&company_id={comp_primary.company_id}")
+    assert res.status_code == 200
+    ids = [it["id"] for it in res.json()]
+    assert bt_labelled_primary.id in ids
+    assert bt_ic_transfer.id not in ids
+    assert bt_ic_repay.id not in ids
+    assert bt_null_shared.id not in ids
+
+
+def test_sales_receivables_sync_partial_delete_resets_audit_metadata(db_session, monkeypatch):
+    """Partial deletion of one receivable line on a Flagged multi-line sale resets audit_status to Pending Audit
+    and clears stale auditor metadata, while Verified sales raise 409."""
+    comp = Company(company_name="Sync Audit Reset Corp")
+    db_session.add(comp)
+    db_session.flush()
+
+    sale = Sale(
+        company_id=comp.company_id,
+        transaction_date=date.today(),
+        amount=Decimal("300.00"),
+        particulars="Burger - 100.00 [Unpaid]\nPasta - 200.00 [Unpaid]",
+        payment_status="Unpaid",
+        deposit_status="Not Deposited",
+        audit_status="Flagged",
+        audited_by="Auditor A",
+        audited_at=datetime.now(timezone.utc),
+        audit_remarks="Check receipt",
+    )
+    db_session.add(sale)
+    db_session.flush()
+
+    rec1 = Receivable(
+        company_id=comp.company_id,
+        company_name=comp.company_name,
+        customer_name="Alice",
+        customer_type="External",
+        sale_id=sale.sales_id,
+        sale_line_index=0,
+        transaction_date=date.today(),
+        items_summary="Burger",
+        total_amount=Decimal("100.00"),
+        amount_paid=Decimal("0.00"),
+        balance=Decimal("100.00"),
+        payment_status="Unpaid",
+    )
+    rec2 = Receivable(
+        company_id=comp.company_id,
+        company_name=comp.company_name,
+        customer_name="Bob",
+        customer_type="External",
+        sale_id=sale.sales_id,
+        sale_line_index=1,
+        transaction_date=date.today(),
+        items_summary="Pasta",
+        total_amount=Decimal("200.00"),
+        amount_paid=Decimal("0.00"),
+        balance=Decimal("200.00"),
+        payment_status="Unpaid",
+    )
+    db_session.add_all([rec1, rec2])
+    db_session.commit()
+
+    sync_svc = SalesReceivablesSyncService(db_session)
+    monkeypatch.setattr(sync_svc, "_get_supabase_client", lambda: None)
+
+    sync_svc.sync_receivable_to_sale(rec1, deleted=True)
+    db_session.flush()
+    db_session.refresh(sale)
+    assert sale.audit_status == "Pending Audit"
+    assert sale.audited_by is None
+    assert sale.audited_at is None
+    assert sale.audit_remarks is None
+    assert float(sale.amount) == 200.0
+
+    # Verified parent sale must reject deletion with 409
+    sale.audit_status = "Verified"
+    db_session.flush()
+    with pytest.raises(HTTPException) as exc_info:
+        sync_svc.sync_receivable_to_sale(rec2, deleted=True)
+    assert exc_info.value.status_code == 409

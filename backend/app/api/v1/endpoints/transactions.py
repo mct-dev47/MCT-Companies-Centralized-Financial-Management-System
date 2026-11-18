@@ -97,6 +97,7 @@ def list_transactions(
     companies = comp_q.all()
     comp_map = {c.company_id: c.company_name for c in companies}
     name_to_cid = {c.company_name.lower(): c.company_id for c in companies}
+    allowed_cnames_lower = [c.company_name.lower() for c in companies]
 
     def _visible(cid: Optional[int]) -> bool:
         """True when a row owned by company `cid` may be shown to this user for this request."""
@@ -126,6 +127,8 @@ def list_transactions(
     bank_accs = bank_acc_q.all()
     bank_name_map = {b.id: f"{b.bank_name} - {b.account_name}" for b in bank_accs}
 
+    query_cap = max((offset or 0) + (limit or 5000), 5000)
+
     items: List[TransactionOut] = []
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +146,7 @@ def list_transactions(
         if end_date:
             sale_q = sale_q.filter(Sale.transaction_date <= end_date)
 
-        sales = sale_q.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
+        sales = sale_q.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).limit(query_cap).all()
         sale_ids = [s.sales_id for s in sales]
         sources = sale_sources(db, sale_ids)
 
@@ -234,7 +237,7 @@ def list_transactions(
         if end_date:
             exp_q = exp_q.filter(Expense.expense_date <= end_date)
 
-        expenses = exp_q.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+        expenses = exp_q.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).limit(query_cap).all()
         exp_ids = [e.expense_id for e in expenses]
         lending_sources = expense_sources(db, exp_ids)
 
@@ -318,16 +321,28 @@ def list_transactions(
         if end_date:
             pct_q = pct_q.filter(PettyCashTopUp.topup_date <= end_date)
 
-        topups = pct_q.order_by(PettyCashTopUp.topup_date.desc(), PettyCashTopUp.topup_id.desc()).all()
+        pct_q = pct_q.filter(
+            func.lower(func.coalesce(PettyCashTopUp.request_type, "topup")) != "disbursement",
+            ~func.lower(func.coalesce(PettyCashTopUp.status, "")).in_(["cancelled", "canceled", "transfer cancelled"]),
+        )
+        topups = pct_q.order_by(PettyCashTopUp.topup_date.desc(), PettyCashTopUp.topup_id.desc()).limit(query_cap).all()
 
-        # Batch resolve the owning company of each funding bank (may be outside the user's scope)
+        # Batch resolve owning & co-owner companies of each funding bank (may be outside the user's scope)
         funding_bank_ids = {p.bank_account_id for p in topups if p.bank_account_id}
         funder_by_bank = {}
+        co_owner_cids_by_bank = {}
         if funding_bank_ids:
-            for acc_id, acc_cid in db.query(BankAccount.id, BankAccount.company_id).filter(
-                BankAccount.id.in_(funding_bank_ids)
-            ).all():
-                funder_by_bank[acc_id] = acc_cid
+            for acc in db.query(BankAccount).filter(BankAccount.id.in_(funding_bank_ids)).all():
+                funder_by_bank[acc.id] = acc.company_id
+                bank_name_map.setdefault(acc.id, f"{acc.bank_name} - {acc.account_name}")
+                co_cids = set()
+                if acc.company_id is not None:
+                    co_cids.add(acc.company_id)
+                for co_name in acc.company_names or []:
+                    resolved_cid = name_to_cid.get(str(co_name).strip().lower())
+                    if resolved_cid is not None:
+                        co_cids.add(resolved_cid)
+                co_owner_cids_by_bank[acc.id] = co_cids
         for p in topups:
             # Filter out opening floats
             if (p.description or "").strip().lower() == INITIAL_PETTY_CASH_DESCRIPTION:
@@ -357,88 +372,93 @@ def list_transactions(
             if st_lower in ("cancelled", "canceled", "transfer cancelled"):
                 continue
 
-            # Split funder (bank owner) from recipient company for cross company funding
-            funder_cid = funder_by_bank.get(p.bank_account_id) if p.bank_account_id else None
-            row_bank_id = p.bank_account_id
-            if funder_cid is not None and funder_cid != p.company_id:
-                if _visible(funder_cid):
-                    cname = comp_map.get(funder_cid, "Unknown Company")
-                elif _visible(p.company_id):
-                    # Recipient only: no access to the funder's bank movement
-                    row_bank_id = None
-                else:
-                    continue
-            elif not _visible(p.company_id):
-                continue
-
             if st_lower in ("disapproved by audit", "disapproved"):
                 row_status = "Disapproved"
-                row_withdrawal = 0.0
+                base_withdrawal = 0.0
                 row_awaiting = False
                 row_audit_status = "Flagged"
                 row_paid = 0.0
             elif st_lower in ("rejected by finance", "rejected"):
                 row_status = "Rejected"
-                row_withdrawal = 0.0
+                base_withdrawal = 0.0
                 row_awaiting = False
                 row_audit_status = "Pending Audit"
                 row_paid = 0.0
             elif st_lower in ("transfer in transit", "return pending"):
                 # Bank cash already left the funding account
                 row_status = "In Transit"
-                row_withdrawal = amt if row_bank_id else 0.0
+                base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
                 row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
             elif st_lower in ("transfer received", "reimbursed", "settled", "approved"):
                 row_status = "Paid"
-                row_withdrawal = amt if row_bank_id else 0.0
+                base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
                 row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
             elif "pending" in st_lower:
                 row_status = "Pending"
-                row_withdrawal = 0.0
+                base_withdrawal = 0.0
                 row_awaiting = True
                 row_audit_status = "Pending Audit"
                 row_paid = 0.0
             else:
                 row_status = "Paid"
-                row_withdrawal = amt if row_bank_id else 0.0
+                base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
                 row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
 
-            items.append(
-                TransactionOut(
-                    id=f"petty_{p.topup_id}",
-                    refNo=f"PC-{p.topup_id:04d}",
-                    chequeNo="",
-                    date=p_date_iso or "",
-                    saleDate=p_date_iso,
-                    type="Petty Cash",
-                    company=cname,
-                    description=p.description or f"Petty Cash {p.request_type or 'Top-Up'}",
-                    particulars=p.description or f"Petty Cash {p.request_type or 'Top-Up'}",
-                    amount=amt,
-                    withdrawal=row_withdrawal,
-                    deposit=0.0,
-                    category="Petty Cash",
-                    paymentMethod="Bank Transfer" if p.bank_account_id else "Cash",
-                    status=row_status,
-                    auditStatus=row_audit_status,
-                    auditedBy=p.reviewed_by,
-                    auditNotes=p.remark,
-                    auditDate=p.reviewed_at.isoformat() if p.reviewed_at else None,
-                    createdAt=p.created_at.isoformat() if p.created_at else None,
-                    paidAmount=row_paid,
-                    bankAccountId=row_bank_id,
-                    bankName=bank_name_map.get(row_bank_id) if row_bank_id else None,
-                    remarks=p.remark or p.finance_remark,
-                    sourceModule="Petty Cash",
-                    awaitingAudit=row_awaiting,
+            # Determine which company views to emit (accounting for shared co-owned banks)
+            funder_cid = funder_by_bank.get(p.bank_account_id) if p.bank_account_id else None
+            co_owners = co_owner_cids_by_bank.get(p.bank_account_id, set()) if p.bank_account_id else set()
+            is_cross_company = funder_cid is not None and p.company_id not in co_owners
+
+            emit_specs = []
+            if is_cross_company:
+                funder_visible = _visible(funder_cid)
+                recipient_visible = _visible(p.company_id)
+                if funder_visible:
+                    emit_specs.append((f"petty_{p.topup_id}", comp_map.get(funder_cid, "Unknown Company"), p.bank_account_id, base_withdrawal, False))
+                if recipient_visible:
+                    rec_id = f"petty_{p.topup_id}:recipient" if funder_visible else f"petty_{p.topup_id}"
+                    emit_specs.append((rec_id, cname, None, 0.0, funder_visible))
+            elif _visible(p.company_id):
+                emit_specs.append((f"petty_{p.topup_id}", cname, p.bank_account_id, base_withdrawal, False))
+
+            for out_id, out_cname, out_bank_id, out_withdrawal, is_mirror in emit_specs:
+                items.append(
+                    TransactionOut(
+                        id=out_id,
+                        refNo=f"PC-{p.topup_id:04d}",
+                        chequeNo="",
+                        date=p_date_iso or "",
+                        saleDate=p_date_iso,
+                        type="Petty Cash",
+                        company=out_cname,
+                        description=p.description or f"Petty Cash {p.request_type or 'Top-Up'}",
+                        particulars=p.description or f"Petty Cash {p.request_type or 'Top-Up'}",
+                        amount=amt,
+                        withdrawal=out_withdrawal,
+                        deposit=0.0,
+                        category="Petty Cash",
+                        paymentMethod="Bank Transfer" if p.bank_account_id else "Cash",
+                        status=row_status,
+                        auditStatus=row_audit_status,
+                        auditedBy=p.reviewed_by,
+                        auditNotes=p.remark,
+                        auditDate=p.reviewed_at.isoformat() if p.reviewed_at else None,
+                        createdAt=p.created_at.isoformat() if p.created_at else None,
+                        paidAmount=row_paid,
+                        bankAccountId=out_bank_id,
+                        bankName=bank_name_map.get(out_bank_id) if out_bank_id else None,
+                        remarks=p.remark or p.finance_remark,
+                        isMirrorRow=is_mirror,
+                        sourceModule="Petty Cash",
+                        awaitingAudit=row_awaiting,
+                    )
                 )
-            )
 
     # ─────────────────────────────────────────────────────────────────────────────
     # 4. MANUAL BANK TRANSACTIONS (Direct entries not duplicating Sale/Expense)
@@ -490,8 +510,42 @@ def list_transactions(
                     ),
                 )
             )
+        elif allowed_cids is not None:
+            bt_q = bt_q.filter(
+                or_(
+                    func.lower(BankTransaction.company_name).in_(allowed_cnames_lower) if allowed_cnames_lower else text("1=0"),
+                    and_(
+                        BankTransaction.company_name.is_(None),
+                        BankTransaction.account.has(
+                            and_(
+                                BankAccount.company_id.in_(allowed_cids),
+                                or_(BankAccount.company_names_json.is_(None), BankAccount.company_names_json == ""),
+                            )
+                        ),
+                    ),
+                )
+            )
 
-        manual_entries = bt_q.order_by(BankTransaction.created_at.desc()).all()
+        if start_date:
+            bt_q = bt_q.filter(
+                or_(
+                    BankTransaction.transaction_date.is_(None),
+                    BankTransaction.transaction_date == "",
+                    BankTransaction.transaction_date.like("%/%"),
+                    func.substr(BankTransaction.transaction_date, 1, 10) >= start_date.isoformat(),
+                )
+            )
+        if end_date:
+            bt_q = bt_q.filter(
+                or_(
+                    BankTransaction.transaction_date.is_(None),
+                    BankTransaction.transaction_date == "",
+                    BankTransaction.transaction_date.like("%/%"),
+                    func.substr(BankTransaction.transaction_date, 1, 10) <= end_date.isoformat(),
+                )
+            )
+
+        manual_entries = bt_q.order_by(BankTransaction.created_at.desc()).limit(query_cap).all()
         for b in manual_entries:
             clean_bt_id = b.id if str(b.id).startswith("tx-") else f"tx-{b.id}"
 
@@ -588,14 +642,60 @@ def list_transactions(
         if end_date:
             loan_q = loan_q.filter(Loan.loan_date <= end_date)
 
-        loans = loan_q.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).all()
+        loans = loan_q.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).limit(query_cap).all()
 
-        # Batch load borrower bank accounts to avoid N+1 queries
+        # Batch load actual disbursement bank transactions (via cheque_no == loan_ref_no)
+        # and deterministic own-first / shared-fallback borrower bank accounts (matches loans.py)
+        loan_refs = [ln.loan_ref_no for ln in loans if ln.loan_ref_no]
         borrower_cids = {ln.borrower for ln in loans if ln.borrower}
+        disb_bank_by_loan = {}
+        if loan_refs:
+            disb_rows = (
+                db.query(BankTransaction.cheque_no, BankAccount)
+                .join(BankAccount, BankAccount.id == BankTransaction.bank_account_id)
+                .filter(BankTransaction.cheque_no.in_(loan_refs), BankTransaction.deposit > 0)
+                .order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc())
+                .all()
+            )
+            by_ref_loans = {}
+            for ln in loans:
+                if ln.loan_ref_no:
+                    by_ref_loans.setdefault(ln.loan_ref_no, []).append(ln)
+            for ref, acc in disb_rows:
+                acc_owners = {acc.company_id} if acc.company_id is not None else set()
+                for co_name in acc.company_names or []:
+                    resolved_cid = name_to_cid.get(str(co_name).strip().lower())
+                    if resolved_cid is not None:
+                        acc_owners.add(resolved_cid)
+                for ln in by_ref_loans.get(ref, []):
+                    if ln.loan_id not in disb_bank_by_loan and ln.borrower in acc_owners:
+                        disb_bank_by_loan[ln.loan_id] = acc
+
         borrower_acc_map = {}
         if borrower_cids:
-            for acc in db.query(BankAccount).filter(BankAccount.company_id.in_(borrower_cids)).order_by(BankAccount.created_at.asc(), BankAccount.id.asc()).all():
-                borrower_acc_map.setdefault(acc.company_id, acc)
+            all_borrower_accs = (
+                db.query(BankAccount)
+                .filter(
+                    or_(
+                        BankAccount.company_id.in_(borrower_cids),
+                        BankAccount.company_names_json.isnot(None),
+                    )
+                )
+                .order_by(BankAccount.created_at.asc(), BankAccount.id.asc())
+                .all()
+            )
+            # First pass: company's own single-owner bank
+            for acc in all_borrower_accs:
+                if not (acc.company_names_json or "").strip() and acc.company_id in borrower_cids:
+                    borrower_acc_map.setdefault(acc.company_id, acc)
+            # Second pass: primary owner or co-owner shared bank
+            for acc in all_borrower_accs:
+                if acc.company_id in borrower_cids:
+                    borrower_acc_map.setdefault(acc.company_id, acc)
+                for co_name in acc.company_names or []:
+                    resolved_cid = name_to_cid.get(str(co_name).strip().lower())
+                    if resolved_cid in borrower_cids:
+                        borrower_acc_map.setdefault(resolved_cid, acc)
 
         for ln in loans:
             borrower_name = comp_map.get(ln.borrower, "Borrower")
@@ -608,7 +708,7 @@ def list_transactions(
             loan_audit_st = "Pending Audit"
 
             # Borrower's bank account for receiving loan deposit
-            borrower_acc = borrower_acc_map.get(ln.borrower)
+            borrower_acc = disb_bank_by_loan.get(ln.loan_id) or borrower_acc_map.get(ln.borrower)
             borrower_bank_id = borrower_acc.id if borrower_acc else None
             borrower_bank_name = (
                 bank_name_map.get(borrower_bank_id)
@@ -734,7 +834,7 @@ def list_transactions(
         if end_date:
             tenant_pmt_q = tenant_pmt_q.filter(TenantLeasePayment.payment_date <= end_date)
 
-        for pmt in tenant_pmt_q.order_by(TenantLeasePayment.payment_date.desc(), TenantLeasePayment.payment_id.desc()).all():
+        for pmt in tenant_pmt_q.order_by(TenantLeasePayment.payment_date.desc(), TenantLeasePayment.payment_id.desc()).limit(query_cap).all():
             lease = pmt.lease
             cname = comp_map.get(lease.company_id, "Unknown Company")
             amt = float(pmt.amount or 0)

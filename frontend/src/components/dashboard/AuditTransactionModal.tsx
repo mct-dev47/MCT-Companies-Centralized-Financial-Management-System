@@ -170,11 +170,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
-  const [, setLocalRemarksAuthor] = React.useState<{
-    name: string
-    role?: string
-    timestamp?: string
-  } | null>(null)
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
 
   const [currentTx, setCurrentTx] = React.useState<DashboardTransactionItem | null>(transaction)
@@ -302,7 +297,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       setIsTimelineExpanded(false)
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
-      setLocalRemarksAuthor(null)
       setError('')
       setFieldErrors({})
     }
@@ -566,6 +560,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     depositStatus: t.depositStatus,
     depositDate: t.depositDate,
     saleDate: t.saleDate,
+    sourceModule: t.sourceModule,
+    isMirrorRow: t.isMirrorRow,
   })
 
   const handleSaveImmediateRemarks = async () => {
@@ -574,7 +570,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmittingRemarks(true)
     try {
       const trimmed = remarksInput.trim()
-      const roleStr = user?.role || (isFinance ? 'Finance' : 'Supervisor')
       if (activeTx?.id && (String(activeTx.id).startsWith('tx-') || activeTx.type === 'Bank')) {
         await bankService.updateTransactionRemarks(activeTx.id, trimmed)
         const updatedTx: DashboardTransactionItem = {
@@ -616,15 +611,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setIsSubmittingRemarks(false)
         return
       }
-      setLocalRemarksAuthor(
-        trimmed
-          ? {
-              name: formatRealName(user?.fullName || user?.email || 'Staff', roleStr),
-              role: roleStr,
-              timestamp: new Date().toISOString(),
-            }
-          : null
-      )
       setIsRemarksModalOpen(false)
     } catch (err: any) {
       notifyError(err?.message || 'Failed to update remarks')
@@ -647,11 +633,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     : ((depositVal || 0) - (withdrawalVal || 0))
 
   const isEditableType = Boolean(
-    activeSale ||
-    activeExpense ||
-    isLoan ||
-    activeTx?.type === 'Sales' ||
-    activeTx?.type === 'Expense'
+    !activeTx?.sourceModule &&
+    !activeTx?.isMirrorRow &&
+    (activeSale ||
+      activeExpense ||
+      isLoan ||
+      activeTx?.type === 'Sales' ||
+      activeTx?.type === 'Expense')
   )
   const isEditable = Boolean(!viewOnly && editable && isEditableType && !isAdmin && !isAudited && !isOwner)
 
@@ -704,23 +692,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName, trimmedNotes)
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Verified',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedNotes,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, {
-          auditStatus: 'Verified',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedNotes,
-        })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -745,15 +716,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Expense') {
             await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Loan') {
-            const loanId = activeTx.id.replace(/:lender$/, '')
-            await loanService.updateLoan(loanId, {
-              auditStatus: 'Verified',
-              auditedBy: auditorName,
-              auditDate: today,
-              auditNotes: trimmedNotes,
-            })
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Income') {
             const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
@@ -807,18 +769,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Flagged',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedRemarks,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -843,10 +793,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Expense') {
             await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Loan') {
-            const loanId = activeTx.id.replace(/:lender$/, '')
-            await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Income') {
             const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
@@ -895,18 +841,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Pending Audit',
-          auditedBy: undefined,
-          auditDate: undefined,
-          auditNotes: undefined,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined, auditNotes: undefined })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -925,10 +859,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Expense') {
             await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Loan') {
-            const loanId = activeTx.id.replace(/:lender$/, '')
-            await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
             if (onTransactionUpdated) onTransactionUpdated(updated)
           } else if (activeTx.type === 'Income') {
             const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
