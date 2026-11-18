@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -422,7 +422,21 @@ class BillsService:
         return self._to_output(self.get_bill(bill_id))
 
     def delete_bill(self, bill_id: int) -> None:
-        self.db.delete(self.get_bill(bill_id))
+        bill = self.get_bill(bill_id)
+        # Check audit lock: if any linked expense is Verified, block deletion
+        for payment in bill.payments or []:
+            if payment.expense_id:
+                from app.models.finance import Expense
+                exp = self.db.query(Expense).filter(Expense.expense_id == payment.expense_id).first()
+                if exp and (exp.audit_status or "").strip().lower() == "verified":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Cannot delete bill with an audited & verified payment expense.",
+                    )
+        # Cascade remove all funding expenses and bank entries (prevents ghost data)
+        for payment in list(bill.payments or []):
+            self._remove_funding_expense(payment)
+        self.db.delete(bill)
         self.db.commit()
         system_cache.invalidate_tag("notifications")
 
@@ -628,15 +642,30 @@ class BillsService:
         from app.services.bank_service import BankService
 
         expense_id = payment.expense_id
-        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True)
         expense = self.db.query(Expense).filter(Expense.expense_id == expense_id).first()
+        if expense is not None and (expense.audit_status or "").strip().lower() == "verified":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This bill payment has a Verified funding expense and cannot be deleted without audit unlock.",
+            )
+
+        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True)
         if expense is not None:
             self.db.delete(expense)
         self.db.flush()
+
+        try:
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+            if client:
+                client.table("expenses").delete().eq("expense_id", expense_id).execute()
+        except Exception as exc:
+            logger.warning("Supabase delete failed for bill funding expense %s: %s", expense_id, exc)
+
         try:
             BankService(self.db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Bank entry purge error on bill payment deletion %s: %s", expense_id, exc)
         system_cache.invalidate_tag("petty_cash")
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:

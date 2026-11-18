@@ -179,6 +179,10 @@ def save_income_sale(
     # The money is in the bank on the day it was received
     sale.deposit_status = "Deposited"
     sale.deposit_date = tx_date
+    sale.audit_status = "Pending Audit"
+    sale.audited_by = None
+    sale.audited_at = None
+    sale.audit_remarks = None
     db.flush()
     return sale.sales_id
 
@@ -307,6 +311,10 @@ def save_release_expense(
     exp.payment_method = "Bank Transfer"
     exp.cheque_no = (reference_no or "").strip() or None
     exp.bank_account_id = bank_account_id
+    exp.audit_status = "Pending Audit"
+    exp.audited_by = None
+    exp.audited_at = None
+    exp.audit_remarks = None
     db.flush()
     return exp.expense_id
 

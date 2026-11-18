@@ -13,7 +13,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   UtensilsCrossed,
-  Check,
   Calendar,
   AlertCircle,
   User,
@@ -45,7 +44,7 @@ export interface NewFoodSaleModalProps {
     payment_method?: PaymentMethod
     date?: string
     notes?: string
-  }) => UtangSale
+  }) => Promise<UtangSale> | UtangSale
 }
 
 export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
@@ -104,7 +103,7 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
       ? customName.trim()
       : selectedPersonName.trim()
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
 
@@ -141,27 +140,32 @@ export const NewFoodSaleModal: React.FC<NewFoodSaleModalProps> = ({
       return
     }
 
-    const newSale = onAddNewSale({
-      customer_name: finalName,
-      customer_type: customerType,
-      items_summary: itemsSummary.trim(),
-      total_amount: totalAmount,
-      payment_option: paymentOption,
-      amount_paid:
-        paymentOption === 'Paid in full'
-          ? totalAmount
-          : paymentOption === 'Partial'
-            ? amountPaid
-            : 0,
-      payment_method: paymentOption !== 'Pay Later' ? paymentMethod : undefined,
-      date: saleDate,
-      notes: notes.trim() || undefined,
-    })
+    try {
+      const newSale = await onAddNewSale({
+        customer_name: finalName,
+        customer_type: customerType,
+        items_summary: itemsSummary.trim(),
+        total_amount: totalAmount,
+        payment_option: paymentOption,
+        amount_paid:
+          paymentOption === 'Paid in full'
+            ? totalAmount
+            : paymentOption === 'Partial'
+              ? amountPaid
+              : 0,
+        payment_method: paymentOption !== 'Pay Later' ? paymentMethod : undefined,
+        date: saleDate,
+        notes: notes.trim() || undefined,
+      })
 
-    if (onSuccess) {
-      onSuccess(newSale)
+      if (onSuccess) {
+        onSuccess(newSale)
+      }
+      onOpenChange(false)
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save receivable sale.')
+      setIsReviewing(false)
     }
-    onOpenChange(false)
   }
 
   return (

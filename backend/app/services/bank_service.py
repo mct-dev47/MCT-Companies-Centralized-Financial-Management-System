@@ -825,6 +825,10 @@ class BankService:
             keep.net_amount = amount
             keep.particulars = particulars
             keep.cheque_no = reference_no
+            keep.audit_status = "Pending Audit"
+            keep.audited_by = None
+            keep.audited_at = None
+            keep.audit_remarks = None
             if tx_date:
                 keep.transaction_date = tx_date
         else:

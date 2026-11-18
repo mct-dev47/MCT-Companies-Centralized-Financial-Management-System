@@ -23,6 +23,7 @@ from app.api.v1.endpoints import (
     payment_methods,
     daily_remarks,
     dashboard,
+    transactions,
 )
 
 api_router = APIRouter()
@@ -50,3 +51,4 @@ api_router.include_router(invitations.router, prefix="/admin/invitations", tags=
 api_router.include_router(particulars.router, prefix="/particulars", tags=["Particulars"])
 api_router.include_router(payment_methods.router, prefix="/payment-methods", tags=["Payment Methods"])
 api_router.include_router(daily_remarks.router, prefix="/daily-remarks", tags=["Daily Remarks"])
+api_router.include_router(transactions.router, prefix="/transactions", tags=["Transactions"])

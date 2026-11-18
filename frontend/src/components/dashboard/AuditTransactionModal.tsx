@@ -161,10 +161,10 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
   const isAudit = roleLower.includes('audit')
-  const isAdmin = roleLower === 'admin' || isAudit
+  const isAdmin = roleLower === 'admin'
   const isOwner = roleLower === 'owner'
   const isFinance = roleLower.includes('finance')
-  const canAudit = isAdmin && !isOwner
+  const canAudit = isAudit && !isOwner
 
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
@@ -353,6 +353,18 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const activeExpense = currentExpense || expense
   const activeLoan = currentLoan || loan
 
+  const canEditRemarks = Boolean(
+    activeSale ||
+    activeExpense ||
+    (activeTx && (activeTx.type === 'Sales' || activeTx.type === 'Expense' || activeTx.type === 'Bank' || String(activeTx.id).startsWith('tx-') || String(activeTx.id).startsWith('sale_') || String(activeTx.id).startsWith('exp_')))
+  )
+
+  const isAuditableType =
+    !activeLoan &&
+    activeTx?.type !== 'Petty Cash' &&
+    activeTx?.type !== 'Loan' &&
+    !activeTx?.awaitingAudit
+
   const resolvedTarget = React.useMemo(() => {
     let type = 'transaction'
     let id: string | number | undefined = undefined
@@ -377,13 +389,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       const rawId = activeLoan?.id || activeTx?.id
       id = rawId ? String(rawId).replace(/^loan_/, '').replace(/:lender$/, '') : undefined
       ref = activeLoan?.refNo || activeTx?.refNo
-    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && String(activeTx.id).startsWith('pc_'))) {
+    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && (String(activeTx.id).startsWith('pc_') || String(activeTx.id).startsWith('petty_')))) {
       type = 'petty_cash'
-      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').split(':')[0] : undefined
+      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').replace('petty_', '').split(':')[0] : undefined
       ref = activeTx?.refNo
     } else if (activeTx?.id && String(activeTx.id).startsWith('tenant_')) {
       type = 'tenant'
-      id = activeTx?.id ? String(activeTx.id).replace('tenant_lease_', '').replace('tenant_pmt_', '') : undefined
+      id = activeTx?.id ? String(activeTx.id).replace(/^tenant_lease_/, '').replace(/^tenant_pmt_/, '').split('_')[0] : undefined
       ref = activeTx?.refNo
     }
 
@@ -570,13 +582,18 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(tx)
         if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
         if (onTransactionUpdated) onTransactionUpdated(tx)
-      } else {
-        const updatedSale = await salesService.updateSaleRemarks(targetId, trimmed)
+      } else if (activeSale || activeTx?.type === 'Sales' || String(targetId).startsWith('sale_')) {
+        const cleanId = String(targetId).replace(/^sale_/, '')
+        const updatedSale = await salesService.updateSaleRemarks(cleanId, trimmed)
         setCurrentSale(updatedSale)
         const tx = salesService.toDashboardTransaction(updatedSale)
         setCurrentTx(tx)
         if (onSaleUpdated) onSaleUpdated(updatedSale)
         if (onTransactionUpdated) onTransactionUpdated(tx)
+      } else {
+        notifyWarning('Remarks are only supported for Sales, Expenses, and Bank transactions.')
+        setIsSubmittingRemarks(false)
+        return
       }
       setLocalRemarksAuthor(
         trimmed
@@ -1743,7 +1760,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       </span>
                     )}
                   </button>
-                  {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && (
+                  {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && canEditRemarks && (
                     <Button
                       type="button"
                       variant="outline"
@@ -2088,7 +2105,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             </div>
 
             {/* Audit Actions: Mark as Audited (or Re-Audit when already audited), Flag Discrepancy when not audited */}
-            {canAudit && (
+            {canAudit && isAuditableType && (
               <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (
