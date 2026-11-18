@@ -172,6 +172,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
   const [localRemarksAuthor, setLocalRemarksAuthor] = React.useState<{
     name: string
+    role?: string
     timestamp?: string
   } | null>(null)
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
@@ -252,6 +253,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       setIsEditing(false)
       setError('')
       setFieldErrors({})
+      setIsRemarksExpanded(true)
 
       const activeSale = sale || currentSale
       const activeExpense = expense || currentExpense
@@ -549,17 +551,225 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     return null
   }, [displayRemarks, localRemarksAuthor, timelineRemarksEvent, displayUpdatedAt, displayCreatedAt, displayCreatedBy])
 
+  // --- Unified Role Remarks (Supervisor, Finance, Audit) ---
+  const supervisorRemarksInfo = React.useMemo(() => {
+    const directRemark =
+      activeTx?.supervisorRemark ||
+      (activeTx as any)?.supervisor_remark ||
+      (activeTx as any)?.remark ||
+      (activeExpense as any)?.supervisorRemark ||
+      (activeSale as any)?.supervisorRemark
+
+    const timelineEvt = [...timelineEvents].reverse().find((e) => {
+      if (e.event_type === 'audited') return false
+      const role = (e.actor_role || '').toLowerCase()
+      const title = (e.title || '').toLowerCase()
+      const action = (e.action || '').toLowerCase()
+      const isSuper =
+        role.includes('supervisor') ||
+        role.includes('staff') ||
+        role.includes('creator') ||
+        role.includes('employee') ||
+        title.includes('supervisor') ||
+        action.includes('created') ||
+        action.includes('supervisor')
+      if (!isSuper) return false
+      if (e.notes && String(e.notes).trim()) return true
+      if (e.changes && Object.prototype.hasOwnProperty.call(e.changes, 'remarks')) return true
+      return false
+    })
+
+    const timelineText = timelineEvt
+      ? timelineEvt.notes ||
+        (typeof timelineEvt.changes?.remarks === 'object' && timelineEvt.changes?.remarks !== null
+          ? ((timelineEvt.changes.remarks as any).to ?? (timelineEvt.changes.remarks as any).new ?? '')
+          : String(timelineEvt.changes?.remarks || ''))
+      : ''
+
+    const isLocalSupervisor = localRemarksAuthor && !localRemarksAuthor.role?.toLowerCase().includes('finance')
+    const localText = isLocalSupervisor ? (remarksInput || displayRemarks) : ''
+
+    const isTimelineFinance = timelineRemarksEvent && (timelineRemarksEvent.actor_role || '').toLowerCase().includes('finance')
+    const fallbackText = !isTimelineFinance && !directRemark && !timelineText ? displayRemarks : ''
+
+    const text = (directRemark || localText || timelineText || fallbackText || '').trim()
+    if (!text) return null
+
+    const author =
+      (isLocalSupervisor ? localRemarksAuthor.name : '') ||
+      activeTx?.reviewedBy ||
+      (activeTx as any)?.reviewed_by ||
+      timelineEvt?.actor_name ||
+      remarksAuthorInfo?.name ||
+      displayCreatedBy ||
+      'Authorized Staff'
+
+    const timestamp =
+      (isLocalSupervisor ? localRemarksAuthor.timestamp : '') ||
+      activeTx?.reviewedAt ||
+      (activeTx as any)?.reviewed_at ||
+      timelineEvt?.timestamp ||
+      remarksAuthorInfo?.timestamp ||
+      displayCreatedAt
+
+    return {
+      text,
+      author: formatRealName(author, 'Supervisor'),
+      timestamp,
+    }
+  }, [
+    activeTx,
+    activeExpense,
+    activeSale,
+    timelineEvents,
+    localRemarksAuthor,
+    remarksInput,
+    displayRemarks,
+    timelineRemarksEvent,
+    remarksAuthorInfo,
+    displayCreatedBy,
+    displayCreatedAt,
+  ])
+
+  const financeRemarksInfo = React.useMemo(() => {
+    const directRemark =
+      activeLoan?.financeRemark ||
+      activeTx?.financeRemark ||
+      (activeTx as any)?.finance_remark ||
+      (activeExpense as any)?.financeRemark ||
+      (activeSale as any)?.financeRemark
+
+    const timelineEvt = [...timelineEvents].reverse().find((e) => {
+      if (e.event_type === 'audited') return false
+      const role = (e.actor_role || '').toLowerCase()
+      const title = (e.title || '').toLowerCase()
+      const action = (e.action || '').toLowerCase()
+      const isFin =
+        role.includes('finance') ||
+        title.includes('finance') ||
+        action.includes('finance') ||
+        action.includes('endorsed')
+      if (!isFin) return false
+      if (e.notes && String(e.notes).trim()) return true
+      if (e.changes && Object.prototype.hasOwnProperty.call(e.changes, 'remarks')) return true
+      return false
+    })
+
+    const timelineText = timelineEvt
+      ? timelineEvt.notes ||
+        (typeof timelineEvt.changes?.remarks === 'object' && timelineEvt.changes?.remarks !== null
+          ? ((timelineEvt.changes.remarks as any).to ?? (timelineEvt.changes.remarks as any).new ?? '')
+          : String(timelineEvt.changes?.remarks || ''))
+      : ''
+
+    const isLocalFinance = localRemarksAuthor && localRemarksAuthor.role?.toLowerCase().includes('finance')
+    const localText = isLocalFinance ? (remarksInput || displayRemarks) : ''
+
+    const isTimelineFinance = timelineRemarksEvent && (timelineRemarksEvent.actor_role || '').toLowerCase().includes('finance')
+    const fallbackText = isTimelineFinance && !directRemark && !timelineText ? displayRemarks : ''
+
+    const text = (directRemark || localText || timelineText || fallbackText || '').trim()
+    if (!text) return null
+
+    const author =
+      (isLocalFinance ? localRemarksAuthor.name : '') ||
+      activeLoan?.endorsedBy ||
+      activeTx?.endorsedBy ||
+      (activeTx as any)?.endorsed_by ||
+      timelineEvt?.actor_name ||
+      (isTimelineFinance ? remarksAuthorInfo?.name : '') ||
+      'Finance Officer'
+
+    const timestamp =
+      (isLocalFinance ? localRemarksAuthor.timestamp : '') ||
+      activeLoan?.endorsedAt ||
+      activeTx?.endorsedAt ||
+      (activeTx as any)?.endorsed_at ||
+      timelineEvt?.timestamp ||
+      (isTimelineFinance ? remarksAuthorInfo?.timestamp : '') ||
+      displayUpdatedAt
+
+    return {
+      text,
+      author: formatRealName(author, 'Finance Officer'),
+      timestamp,
+    }
+  }, [
+    activeLoan,
+    activeTx,
+    activeExpense,
+    activeSale,
+    timelineEvents,
+    localRemarksAuthor,
+    remarksInput,
+    displayRemarks,
+    timelineRemarksEvent,
+    remarksAuthorInfo,
+    displayUpdatedAt,
+  ])
+
+  const auditRemarksInfo = React.useMemo(() => {
+    const directNotes =
+      activeSale?.auditNotes ||
+      activeExpense?.auditNotes ||
+      activeLoan?.auditNotes ||
+      activeLoan?.auditRemark ||
+      activeTx?.auditNotes ||
+      (activeTx as any)?.auditRemark ||
+      (activeTx as any)?.audit_remarks ||
+      ''
+
+    const timelineEvt = [...timelineEvents].reverse().find((e) => {
+      const isAuditEvt = e.event_type === 'audited' || (e.actor_role || '').toLowerCase().includes('audit')
+      return isAuditEvt && Boolean(e.notes && String(e.notes).trim())
+    })
+
+    const text = (directNotes || timelineEvt?.notes || '').trim()
+
+    const author =
+      displayAuditedBy ||
+      activeLoan?.auditReviewedBy ||
+      activeTx?.auditedBy ||
+      timelineEvt?.actor_name ||
+      ''
+
+    const timestamp =
+      displayAuditDate ||
+      activeLoan?.auditReviewedAt ||
+      activeTx?.auditDate ||
+      timelineEvt?.timestamp ||
+      ''
+
+    return {
+      text,
+      author: author ? formatRealName(author, 'Audit Officer') : '',
+      timestamp,
+      status: currentAuditStatus,
+    }
+  }, [
+    activeSale,
+    activeExpense,
+    activeLoan,
+    activeTx,
+    timelineEvents,
+    displayAuditedBy,
+    displayAuditDate,
+    currentAuditStatus,
+  ])
+
   const handleSaveImmediateRemarks = async () => {
     const targetId = activeSale?.id || activeExpense?.id || activeTx?.id
     if (!targetId) return
     setIsSubmittingRemarks(true)
     try {
       const trimmed = remarksInput.trim()
+      const roleStr = user?.role || (isFinance ? 'Finance' : 'Supervisor')
       if (activeTx?.id && (String(activeTx.id).startsWith('tx-') || activeTx.type === 'Bank')) {
         await bankService.updateTransactionRemarks(activeTx.id, trimmed)
         const updatedTx: DashboardTransactionItem = {
           ...activeTx,
           remarks: trimmed,
+          ...(isFinance ? { financeRemark: trimmed } : { supervisorRemark: trimmed }),
         }
         setCurrentTx(updatedTx)
         if (onTransactionUpdated) onTransactionUpdated(updatedTx)
@@ -567,6 +777,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
         setCurrentExpense(updatedExpense)
         const tx = expenseService.toDashboardTransaction(updatedExpense)
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
         if (onTransactionUpdated) onTransactionUpdated(tx)
@@ -574,6 +786,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const updatedSale = await salesService.updateSaleRemarks(targetId, trimmed)
         setCurrentSale(updatedSale)
         const tx = salesService.toDashboardTransaction(updatedSale)
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onSaleUpdated) onSaleUpdated(updatedSale)
         if (onTransactionUpdated) onTransactionUpdated(tx)
@@ -581,7 +795,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       setLocalRemarksAuthor(
         trimmed
           ? {
-              name: formatRealName(user?.fullName || user?.email || 'Staff', user?.role || 'Staff'),
+              name: formatRealName(user?.fullName || user?.email || 'Staff', roleStr),
+              role: roleStr,
               timestamp: new Date().toISOString(),
             }
           : null
@@ -1737,11 +1952,28 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
                     )}
                     <span>Remarks</span>
-                    {!isRemarksExpanded && (displayRemarks || displayAuditNotes) && (
-                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary normal-case tracking-normal">
-                        Has note
-                      </span>
-                    )}
+                    {!isRemarksExpanded &&
+                      [
+                        Boolean(supervisorRemarksInfo?.text),
+                        Boolean(financeRemarksInfo?.text),
+                        Boolean(auditRemarksInfo?.text),
+                      ].filter(Boolean).length > 0 && (
+                        <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary normal-case tracking-normal">
+                          {[
+                            Boolean(supervisorRemarksInfo?.text),
+                            Boolean(financeRemarksInfo?.text),
+                            Boolean(auditRemarksInfo?.text),
+                          ].filter(Boolean).length}{' '}
+                          note
+                          {[
+                            Boolean(supervisorRemarksInfo?.text),
+                            Boolean(financeRemarksInfo?.text),
+                            Boolean(auditRemarksInfo?.text),
+                          ].filter(Boolean).length > 1
+                            ? 's'
+                            : ''}
+                        </span>
+                      )}
                   </button>
                   {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && (
                     <Button
@@ -1750,62 +1982,154 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                       size="sm"
                       onClick={(e) => {
                         e.stopPropagation()
-                        setRemarksInput(displayRemarks || '')
+                        const targetDefault = isFinance
+                          ? financeRemarksInfo?.text || displayRemarks
+                          : supervisorRemarksInfo?.text || displayRemarks
+                        setRemarksInput(targetDefault || '')
                         setIsRemarksModalOpen(true)
                       }}
                       className="h-8 px-3 text-xs font-semibold rounded-lg border-primary/30 bg-white hover:bg-primary/5 text-primary flex items-center gap-1.5 shrink-0 cursor-pointer"
                       title="Add or update remarks"
                     >
                       <MessageSquare className="w-3.5 h-3.5 text-primary" />
-                      <span>{displayRemarks ? 'Edit Remarks' : 'Add Remarks'}</span>
+                      <span>
+                        {displayRemarks || financeRemarksInfo?.text || supervisorRemarksInfo?.text
+                          ? 'Edit Remarks'
+                          : 'Add Remarks'}
+                      </span>
                     </Button>
                   )}
                 </div>
                 {isRemarksExpanded && (
-                  <div className="mt-2 pb-1.5 pl-6 space-y-2.5">
-                    <div>
-                      {displayRemarks ? (
+                  <div className="mt-2.5 pb-1 space-y-3">
+                    {/* 1. Supervisor Remarks */}
+                    <div className="rounded-xl border border-amber-200/80 bg-amber-50/50 p-3 text-xs space-y-1.5 shadow-2xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-[11px] uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                          <UserCheck className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                          Supervisor Remarks
+                        </span>
+                        {supervisorRemarksInfo?.timestamp && (
+                          <span className="text-[10px] text-amber-800/80 font-mono">
+                            {formatTimelineDateTime(supervisorRemarksInfo.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                      {supervisorRemarksInfo?.text ? (
                         <div className="space-y-1">
-                          <p className="text-sm font-medium text-focus whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                            {displayRemarks}
+                          <p className="text-xs text-amber-950 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed font-medium">
+                            &ldquo;{supervisorRemarksInfo.text}&rdquo;
                           </p>
-                          {remarksAuthorInfo && (
-                            <p className="text-xs text-muted-fg">
-                              Added by <span className="font-semibold text-focus">{remarksAuthorInfo.name}</span>
-                              {remarksAuthorInfo.timestamp
-                                ? ` · ${formatTimelineDateTime(remarksAuthorInfo.timestamp)}`
-                                : ''}
+                          {supervisorRemarksInfo.author && (
+                            <p className="text-[11px] text-amber-900/80 pt-0.5">
+                              By <span className="font-semibold text-amber-950">{supervisorRemarksInfo.author}</span>
                             </p>
                           )}
                         </div>
                       ) : (
-                        <span className="text-muted-fg/70 italic font-normal text-xs">No operational remarks provided</span>
+                        <p className="text-xs text-muted-fg/70 italic">
+                          No supervisor remarks recorded
+                        </p>
                       )}
                     </div>
 
-                    {displayAuditNotes && (
-                      <div
-                        className={cn(
-                          'rounded-lg border px-3 py-2 text-xs space-y-1',
-                          currentAuditStatus === 'Verified'
-                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                            : 'bg-rose-50/70 border-rose-200 text-rose-900'
-                        )}
-                      >
-                        <span className="font-bold block">
-                          {currentAuditStatus === 'Verified' ? 'Audit Remarks' : 'Audit Discrepancy Note'}
+                    {/* 2. Finance Remarks */}
+                    <div className="rounded-xl border border-blue-200/80 bg-blue-50/60 p-3 text-xs space-y-1.5 shadow-2xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-[11px] uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
+                          <MessageSquare className="w-3.5 h-3.5 text-blue-700 shrink-0" />
+                          Finance Remarks
                         </span>
-                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                          {displayAuditNotes}
-                        </p>
-                        {displayAuditedBy && (
-                          <p className="text-[11px] opacity-85">
-                            By <span className="font-semibold">{formatRealName(displayAuditedBy, 'Audit Officer')}</span>
-                            {displayAuditDate ? ` · ${formatTimelineDateTime(displayAuditDate)}` : ''}
-                          </p>
+                        {financeRemarksInfo?.timestamp && (
+                          <span className="text-[10px] text-blue-800/80 font-mono">
+                            {formatTimelineDateTime(financeRemarksInfo.timestamp)}
+                          </span>
                         )}
                       </div>
-                    )}
+                      {financeRemarksInfo?.text ? (
+                        <div className="space-y-1">
+                          <p className="text-xs text-blue-950 whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed font-medium">
+                            &ldquo;{financeRemarksInfo.text}&rdquo;
+                          </p>
+                          {financeRemarksInfo.author && (
+                            <p className="text-[11px] text-blue-900/80 pt-0.5">
+                              By <span className="font-semibold text-blue-950">{financeRemarksInfo.author}</span>
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-fg/70 italic">
+                          No finance remarks recorded
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 3. Audit Remarks */}
+                    <div
+                      className={cn(
+                        'rounded-xl border p-3 text-xs space-y-1.5 shadow-2xs',
+                        currentAuditStatus === 'Verified'
+                          ? 'border-emerald-200/80 bg-emerald-50/60 text-emerald-950'
+                          : currentAuditStatus === 'Flagged'
+                          ? 'border-rose-200/80 bg-rose-50/60 text-rose-950'
+                          : 'border-slate-200 bg-slate-50/70 text-slate-800'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          className={cn(
+                            'font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5',
+                            currentAuditStatus === 'Verified'
+                              ? 'text-emerald-900'
+                              : currentAuditStatus === 'Flagged'
+                              ? 'text-rose-900'
+                              : 'text-slate-700'
+                          )}
+                        >
+                          {currentAuditStatus === 'Verified' ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              Audit Remarks (Verified)
+                            </>
+                          ) : currentAuditStatus === 'Flagged' ? (
+                            <>
+                              <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                              Audit Discrepancy Note (Flagged)
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                              Audit Remarks
+                            </>
+                          )}
+                        </span>
+                        {auditRemarksInfo?.timestamp && (
+                          <span className="text-[10px] opacity-75 font-mono">
+                            {formatTimelineDateTime(auditRemarksInfo.timestamp)}
+                          </span>
+                        )}
+                      </div>
+                      {auditRemarksInfo?.text ? (
+                        <div className="space-y-1">
+                          <p className="text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed font-medium">
+                            &ldquo;{auditRemarksInfo.text}&rdquo;
+                          </p>
+                          {auditRemarksInfo.author && (
+                            <p className="text-[11px] opacity-80 pt-0.5">
+                              By <span className="font-semibold">{auditRemarksInfo.author}</span>
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-fg/70 italic">
+                          {currentAuditStatus === 'Verified'
+                            ? 'Approved and verified by Internal Audit with no additional notes.'
+                            : currentAuditStatus === 'Flagged'
+                            ? 'Flagged for audit review.'
+                            : 'Pending review by Internal Audit — no audit remarks recorded yet'}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
