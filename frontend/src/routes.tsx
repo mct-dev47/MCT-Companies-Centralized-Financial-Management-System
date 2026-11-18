@@ -437,6 +437,10 @@ export const router = createBrowserRouter([
         element: <Navigate to="/activity-log" replace />,
       },
       {
+        path: '/notifications',
+        element: <Navigate to="/activity-log" replace />,
+      },
+      {
         path: '/settings',
         // System configuration: Admin only (everyone else is sent to the dashboard)
         element: (
