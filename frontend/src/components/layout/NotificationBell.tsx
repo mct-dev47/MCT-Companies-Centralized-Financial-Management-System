@@ -5,9 +5,10 @@ import {
   Check,
   Clock,
   AlertCircle,
-  Settings,
   RefreshCw,
   WifiOff,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -39,6 +40,7 @@ import {
   filterNotificationsByTab,
   calculateTabUnreadCounts,
   partitionBySection,
+  getNotificationRedirectUrl,
 } from '@/lib/notificationHelpers'
 
 const TAB_STORAGE_KEY = 'mct_notification_active_tab'
@@ -82,6 +84,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   const [syncError, setSyncError] = React.useState<string | null>(null)
   const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
   const [expandedGroupIds, setExpandedGroupIds] = React.useState<Set<string>>(new Set())
+  const [isExpandedHeight, setIsExpandedHeight] = React.useState(false)
 
   const dropdownRef = React.useRef<HTMLDivElement>(null)
   const isFetchingRef = React.useRef(false)
@@ -401,37 +404,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
   }
 
-  // Row navigation handler
+  // Row navigation handler redirecting to specific target or transaction receipt
   const navigateTarget = (item: ParsedNotification) => {
     try {
-      if (item.category === 'bills' || item.refType === 'bill' || item.notification_type.startsWith('BILL_')) {
-        if (item.refId && item.refId > 0) {
-          navigate(`/bills/${item.refId}`)
-        } else {
-          navigate('/bills')
-        }
-      } else if (
-        item.category === 'lending' ||
-        item.refType === 'lending' ||
-        item.refType === 'borrower' ||
-        item.notification_type.startsWith('LENDING_')
-      ) {
-        navigate('/lending')
-      } else if (item.refType === 'tenant' || item.notification_type.startsWith('TENANT_')) {
-        navigate('/tenant')
-      } else if (item.refType === 'petty_cash' || item.notification_type.includes('PETTY_CASH')) {
-        navigate('/petty-cash')
-      } else if (item.refType === 'deposit' || item.notification_type.includes('DEPOSIT') || item.refType === 'sale') {
-        navigate('/sales')
-      } else if (item.refType === 'loan' || item.refType === 'loan_repayment' || item.notification_type.includes('LOAN')) {
-        navigate('/loan')
-      } else if (item.refType === 'expense' || item.notification_type.startsWith('EXPENSE_')) {
-        navigate('/expense')
-      } else if (item.refType === 'activity_log' || item.notification_type === 'SYSTEM_ACTIVITY_NOTICE') {
-        navigate('/activity-log')
-      } else {
-        navigate('/lending')
-      }
+      const url = getNotificationRedirectUrl(item)
+      navigate(url)
     } catch (navErr) {
       console.error('Notification navigation error:', formatUserFriendlyErrorMessage(navErr))
     }
@@ -481,7 +458,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
 
     setIsOpen(false)
-    navigate('/lending')
+    const firstChild = group.children[0]
+    if (firstChild) {
+      navigateTarget(firstChild)
+    } else {
+      navigate('/lending')
+    }
   }
 
   return (
@@ -522,9 +504,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             role="region"
             aria-label="Notifications panel"
             className={cn(
-              'bg-white border border-[#EEF0F3] shadow-2xl z-50 overflow-hidden flex flex-col',
-              'sm:absolute sm:right-0 sm:mt-2 sm:w-[440px] sm:rounded-2xl sm:max-h-[640px] animate-in fade-in-0 zoom-in-95 duration-150',
-              'max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-t-2xl max-sm:rounded-b-none max-sm:max-h-[85vh]'
+              'bg-white border border-[#EEF0F3] shadow-2xl z-50 overflow-hidden flex flex-col transition-all duration-200',
+              'sm:absolute sm:right-0 sm:mt-2 sm:w-[440px] sm:rounded-2xl animate-in fade-in-0 zoom-in-95 duration-150',
+              isExpandedHeight
+                ? 'sm:max-h-[760px] max-sm:max-h-[92vh]'
+                : 'sm:max-h-[580px] max-sm:max-h-[85vh]',
+              'max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-t-2xl max-sm:rounded-b-none'
             )}
           >
             {/* Header */}
@@ -566,16 +551,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     Mark all read
                   </button>
                 )}
+                {/* Replaced Settings Icon with View all notifications */}
                 <button
                   type="button"
-                  aria-label="Notification settings"
+                  aria-label="View all notifications"
                   onClick={() => {
                     setIsOpen(false)
-                    navigate('/settings')
+                    navigate('/notifications')
                   }}
-                  className="h-8 w-8 rounded-full flex items-center justify-center text-[#5B6470] hover:text-[#1B2330] hover:bg-slate-100 transition-colors cursor-pointer"
+                  className="text-xs font-semibold text-[#5B6470] hover:text-[#8B1A1A] hover:underline transition-colors cursor-pointer"
                 >
-                  <Settings className="h-4 w-4" />
+                  View all
                 </button>
               </div>
             </div>
@@ -632,7 +618,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             </div>
 
             {/* Notification Items List */}
-            <div className="flex-1 overflow-y-auto max-h-[480px]">
+            <div
+              className={cn(
+                'flex-1 overflow-y-auto transition-all duration-200',
+                isExpandedHeight ? 'max-h-[620px]' : 'max-h-[420px]'
+              )}
+            >
               {isLoading && notifications.length === 0 ? (
                 /* Skeleton Loading: 3 rows */
                 <div className="p-4 sm:p-5 space-y-4">
@@ -955,13 +946,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             <div className="p-3 text-center border-t border-[#EEF0F3] bg-white">
               <button
                 type="button"
-                onClick={() => {
-                  setIsOpen(false)
-                  navigate('/activity-log')
-                }}
-                className="text-xs sm:text-sm font-semibold text-[#8B1A1A] hover:underline cursor-pointer"
+                onClick={() => setIsExpandedHeight((prev) => !prev)}
+                className="text-xs sm:text-sm font-semibold text-[#8B1A1A] hover:underline cursor-pointer inline-flex items-center gap-1.5"
               >
-                See all notifications
+                <span>
+                  {isExpandedHeight ? 'Collapse notifications' : 'See previous notification'}
+                </span>
+                {isExpandedHeight ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
               </button>
             </div>
           </div>

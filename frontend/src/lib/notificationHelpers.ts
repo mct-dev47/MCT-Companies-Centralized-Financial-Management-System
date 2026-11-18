@@ -520,3 +520,99 @@ export function formatCurrencyPHP(amount: number): string {
     maximumFractionDigits: 2,
   }).format(amount)
 }
+
+/**
+ * Determines the target route URL when clicking a notification.
+ * If a transaction reference exists for a payment/financial transaction,
+ * routes to the transaction page to display the receipt modal.
+ * Otherwise routes to the lender page, borrower page, lending facility, bills, etc.
+ */
+export function getNotificationRedirectUrl(item: ParsedNotification): string {
+  const nt = (item.notification_type || '').toUpperCase()
+  const refType = (item.refType || '').toLowerCase()
+  const msg = (item.message || '').toLowerCase()
+  const title = (item.title || '').toLowerCase()
+
+  // 1. Transaction Receipt: If transaction ref exists
+  if (item.txRef) {
+    return `/transaction?tab=all&ref=${encodeURIComponent(item.txRef)}`
+  }
+
+  // 2. Inter-Company Loans: Lender vs Borrower
+  if (refType === 'loan' || refType === 'loan_repayment' || nt.includes('LOAN')) {
+    const isLender =
+      nt.includes('LENDER') ||
+      title.includes('lender') ||
+      msg.includes('lender') ||
+      title.includes('payment not received') ||
+      title.includes('repayment received') ||
+      msg.includes('received a payment') ||
+      msg.includes('lent')
+
+    const isBorrower =
+      nt.includes('BORROWER') ||
+      title.includes('borrower') ||
+      msg.includes('borrower') ||
+      title.includes('request')
+
+    const searchSuffix = item.loanRef ? `?search=${encodeURIComponent(item.loanRef)}` : ''
+
+    if (isLender) {
+      return `/loan/lender${searchSuffix}`
+    }
+    if (isBorrower) {
+      return `/loan/borrower${searchSuffix}`
+    }
+    return `/loan${searchSuffix}`
+  }
+
+  // 3. Filcap Lending Facility
+  if (
+    item.category === 'lending' ||
+    refType === 'lending' ||
+    refType === 'borrower' ||
+    nt.startsWith('LENDING_')
+  ) {
+    const searchSuffix = item.borrowerName
+      ? `?search=${encodeURIComponent(item.borrowerName)}`
+      : item.loanRef
+      ? `?search=${encodeURIComponent(item.loanRef)}`
+      : ''
+    return `/lending${searchSuffix}`
+  }
+
+  // 4. Bills
+  if (item.category === 'bills' || refType === 'bill' || nt.startsWith('BILL_')) {
+    if (item.refId && item.refId > 0) {
+      return `/bills/${item.refId}`
+    }
+    return '/bills'
+  }
+
+  // 5. Tenants
+  if (refType === 'tenant' || nt.startsWith('TENANT_')) {
+    return '/tenant'
+  }
+
+  // 6. Petty Cash
+  if (refType === 'petty_cash' || nt.includes('PETTY_CASH')) {
+    return '/petty-cash'
+  }
+
+  // 7. Sales / Deposits
+  if (refType === 'deposit' || refType === 'sale' || nt.includes('DEPOSIT')) {
+    return '/sales'
+  }
+
+  // 8. Expense
+  if (refType === 'expense' || nt.startsWith('EXPENSE_')) {
+    return '/expense'
+  }
+
+  // 9. Activity Log / System
+  if (refType === 'activity_log' || nt === 'SYSTEM_ACTIVITY_NOTICE') {
+    return '/activity-log'
+  }
+
+  return '/dashboard'
+}

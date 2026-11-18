@@ -9,6 +9,7 @@ import {
   filterNotificationsByTab,
   calculateTabUnreadCounts,
   partitionBySection,
+  getNotificationRedirectUrl,
 } from '../notificationHelpers.ts'
 import type { ParsedNotification } from '../notificationHelpers.ts'
 
@@ -359,5 +360,109 @@ describe('Notification Helpers & Grouping Spec', () => {
     const sectionIds = sections.map((s) => s.id)
     assert.deepEqual(sectionIds, ['new', 'today', 'yesterday'])
     assert.equal(sections.find((s) => s.id === 'earlier'), undefined)
+  })
+
+  it('determines the correct redirect URL and transaction receipt modal target', () => {
+    // 1. Transaction Receipt URL when txRef exists
+    const paymentWithTx: ParsedNotification = {
+      id: 'tx-1',
+      notification_type: 'LENDING_PAYMENT_RECEIVED',
+      title: 'Payment Received',
+      message: 'Jasmine paid ₱240.00 via Cash (TX-20261118-0231)',
+      created_at: null,
+      unread: false,
+      category: 'lending',
+      categoryLabel: 'Lending',
+      isDueReminder: false,
+      isPayment: true,
+      borrowerName: 'Jasmine',
+      txRef: 'TX-20261118-0231',
+      dateKey: '2026-11-18',
+    }
+    assert.equal(
+      getNotificationRedirectUrl(paymentWithTx),
+      '/transaction?tab=all&ref=TX-20261118-0231'
+    )
+
+    // 2. Lender Loan redirection when payment received from lender or lender notice without txRef
+    const lenderLoan: ParsedNotification = {
+      id: 'loan-1',
+      notification_type: 'LOAN_REPAYMENT_RECEIVED',
+      title: 'Overdue Loan — Payment Not Received',
+      message: "Reymie's loan (Ref: LN-101) is overdue. Please check with lender.",
+      created_at: null,
+      unread: true,
+      category: 'other',
+      categoryLabel: 'Loan',
+      isDueReminder: true,
+      isPayment: false,
+      loanRef: 'LN-101',
+      dateKey: '2026-11-18',
+      refType: 'loan',
+    }
+    assert.equal(
+      getNotificationRedirectUrl(lenderLoan),
+      '/loan/lender?search=LN-101'
+    )
+
+    // 3. Borrower Loan redirection
+    const borrowerLoan: ParsedNotification = {
+      id: 'loan-2',
+      notification_type: 'LOAN_REQUEST_FINANCE',
+      title: 'New Loan Request (Borrower)',
+      message: 'New request for borrower (Ref: LN-202)',
+      created_at: null,
+      unread: true,
+      category: 'other',
+      categoryLabel: 'Loan',
+      isDueReminder: false,
+      isPayment: false,
+      loanRef: 'LN-202',
+      dateKey: '2026-11-18',
+      refType: 'loan',
+    }
+    assert.equal(
+      getNotificationRedirectUrl(borrowerLoan),
+      '/loan/borrower?search=LN-202'
+    )
+
+    // 4. Filcap Lending redirection without txRef
+    const lendingBorrower: ParsedNotification = {
+      id: 'lend-1',
+      notification_type: 'LENDING_OVERDUE',
+      title: 'Lending Overdue',
+      message: 'Reymie Gonzaga has an overdue balance',
+      created_at: null,
+      unread: true,
+      category: 'lending',
+      categoryLabel: 'Lending',
+      isDueReminder: true,
+      isPayment: false,
+      borrowerName: 'Reymie Gonzaga',
+      dateKey: '2026-11-18',
+      refType: 'lending',
+    }
+    assert.equal(
+      getNotificationRedirectUrl(lendingBorrower),
+      '/lending?search=Reymie%20Gonzaga'
+    )
+
+    // 5. Bill redirection
+    const billNotif: ParsedNotification = {
+      id: 'bill-1',
+      notification_type: 'BILL_DUE_SOON',
+      title: 'Meralco Bill Due',
+      message: 'Meralco bill is due soon',
+      created_at: null,
+      unread: true,
+      category: 'bills',
+      categoryLabel: 'Bills',
+      isDueReminder: true,
+      isPayment: false,
+      refId: 42,
+      refType: 'bill',
+      dateKey: '2026-11-18',
+    }
+    assert.equal(getNotificationRedirectUrl(billNotif), '/bills/42')
   })
 })
