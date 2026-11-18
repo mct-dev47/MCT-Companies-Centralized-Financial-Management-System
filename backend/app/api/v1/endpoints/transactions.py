@@ -265,6 +265,12 @@ def list_transactions(
             else:
                 paid_val = amount_val
 
+            # Recover legacy rows saved with amount_paid=0.00 when particulars explicitly carry [Paid]
+            if paid_val == 0 and amount_val > 0 and e.particulars:
+                parsed_lines = parse_sale_lines(e.particulars, e.amount or 0)
+                if any(ln.had_status_tag and ln.status == "Paid" for ln in parsed_lines):
+                    paid_val = float(compute_paid_amount_from_particulars(e.particulars, e.amount or 0))
+
             status_str = "Paid" if paid_val >= amount_val and amount_val > 0 else "Partially Paid" if paid_val > 0 else "Unpaid"
 
             # Only disbursed bank expenses withdraw from bank account

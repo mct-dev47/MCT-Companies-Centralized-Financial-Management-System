@@ -1652,3 +1652,22 @@ def test_post_expense_without_amount_paid_shows_paid_in_transactions(db_session,
     unpaid_tx = tx_by_id[f"exp_{exp_unpaid['expense_id']}"]
     assert unpaid_tx["status"] == "Unpaid"
     assert unpaid_tx["paidAmount"] == 0.0
+
+    # 4. Legacy DB row with amount_paid=0.00 but explicit [Paid] tag in particulars
+    legacy_paid = Expense(
+        company_id=comp.company_id,
+        expense_date=date.today(),
+        amount=Decimal("22100.00"),
+        amount_paid=Decimal("0.00"),
+        particulars="LGH [Paid]",
+        payment_method="Cash",
+        audit_status="Pending Audit",
+    )
+    db_session.add(legacy_paid)
+    db_session.commit()
+
+    tx_res2 = client.get(f"/api/v1/transactions?company_id={comp.company_id}")
+    assert tx_res2.status_code == 200, tx_res2.text
+    legacy_tx = next(t for t in tx_res2.json() if t["id"] == f"exp_{legacy_paid.expense_id}")
+    assert legacy_tx["status"] == "Paid"
+    assert legacy_tx["paidAmount"] == 22100.0
