@@ -470,7 +470,7 @@ class SalesReceivablesSyncService:
             bank_svc.record_withdrawal_by_account_id(
                 account_id=pay.bank_account_id,
                 amount=pay_amount,
-                particulars=f"Reversal of Food Receivable Payment - {customer_name}",
+                particulars=f"Reversal of Receivable Payment - {customer_name}",
                 tx_date=date.today().strftime("%m/%d/%y"),
                 source_sale_id=getattr(getattr(pay, "receivable", None), "sale_id", None),
             )
@@ -606,7 +606,7 @@ class SalesReceivablesSyncService:
                     bank_svc.record_deposit_by_account_id(
                         account_id=pay_bank_id,
                         amount=pay_amt,
-                        particulars=f"Food Receivable Payment - {cust_name}",
+                        particulars=f"Receivable Payment - {cust_name}",
                         reference_no=pay.reference_no,
                         tx_date=pay.payment_date.strftime("%m/%d/%y") if pay.payment_date else None,
                         source_sale_id=sale_id,
@@ -630,7 +630,10 @@ class SalesReceivablesSyncService:
                     .filter(
                         BankTransaction.source_sale_id.is_(None),
                         BankTransaction.bank_account_id == pay.bank_account_id,
-                        BankTransaction.particulars == f"Food Receivable Payment - {rec.customer_name}",
+                        BankTransaction.particulars.in_([
+                            f"Receivable Payment - {rec.customer_name}",
+                            f"Food Receivable Payment - {rec.customer_name}",
+                        ]),
                         BankTransaction.deposit == pay.amount,
                     )
                     .order_by(BankTransaction.created_at.desc())

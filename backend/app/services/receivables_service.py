@@ -275,7 +275,7 @@ class ReceivablesService:
                     bank_svc.record_deposit_by_account_id(
                         account_id=deposit_bank_id,
                         amount=amount_paid,
-                        particulars=f"Food Receivable Payment - {rec.customer_name}",
+                        particulars=f"Receivable Payment - {rec.customer_name}",
                         tx_date=rec.transaction_date.strftime("%m/%d/%y"),
                         source_sale_id=rec.sale_id,
                     )
@@ -361,7 +361,7 @@ class ReceivablesService:
                 bank_svc.record_deposit_by_account_id(
                     account_id=deposit_bank_id,
                     amount=pay_amount,
-                    particulars=f"Food Receivable Payment - {rec.customer_name}",
+                    particulars=f"Receivable Payment - {rec.customer_name}",
                     reference_no=payment_data.reference_no,
                     tx_date=pay_date.strftime("%m/%d/%y"),
                     source_sale_id=rec.sale_id,
@@ -511,7 +511,7 @@ class ReceivablesService:
                                 BankService(self.db).record_withdrawal_by_account_id(
                                     account_id=pay.bank_account_id,
                                     amount=reduce_by,
-                                    particulars=f"Adjustment Reversal of Food Receivable Payment - {rec.customer_name}",
+                                    particulars=f"Adjustment Reversal of Receivable Payment - {rec.customer_name}",
                                     tx_date=date.today().strftime("%m/%d/%y"),
                                     source_sale_id=rec.sale_id,
                                 )
@@ -564,7 +564,7 @@ class ReceivablesService:
                         BankService(self.db).record_deposit_by_account_id(
                             account_id=settle_bank_id,
                             amount=remaining,
-                            particulars=f"Food Receivable Payment - {rec.customer_name}",
+                            particulars=f"Receivable Payment - {rec.customer_name}",
                             tx_date=pay_date.strftime("%m/%d/%y"),
                             source_sale_id=rec.sale_id,
                         )
