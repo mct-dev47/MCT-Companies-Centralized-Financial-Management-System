@@ -512,10 +512,28 @@ class SalesReceivablesSyncService:
             cheque = reference_no or pick("cheque_number", "cheque_no")
 
             is_deposited = (str(deposit_status or "")).strip().lower() == "deposited"
+            self._adopt_legacy_receivable_credits(sale_id)
+
+            recs = self.db.query(Receivable).filter(Receivable.sale_id == sale_id).all()
+            rec_by_id = {r.receivable_id: r for r in recs}
+            rec_payments = (
+                self.db.query(ReceivablePayment)
+                .filter(ReceivablePayment.receivable_id.in_(list(rec_by_id.keys())))
+                .all()
+                if rec_by_id
+                else []
+            )
+            recs_with_payments = {p.receivable_id for p in rec_payments}
+
             target = Decimal("0.00")
             if is_deposited and not force_zero:
-                # Partial receivable payments count too, so a partly paid line still reaches the bank
-                target = self.compute_sale_paid_amount(sale_id, particulars, amount)
+                # Direct sale [Paid] lines plus any legacy receivables that have no ReceivablePayment rows
+                full_paid = self.compute_sale_paid_amount(sale_id, particulars, amount, receivables=recs)
+                backed_paid = sum(
+                    (_to_decimal(r.amount_paid) for r in recs if r.receivable_id in recs_with_payments),
+                    Decimal("0.00"),
+                )
+                target = max(Decimal("0.00"), full_paid - backed_paid)
 
             company_name = None
             if company_id:
@@ -523,14 +541,13 @@ class SalesReceivablesSyncService:
                 comp = self.db.query(Company).filter(Company.company_id == company_id).first()
                 company_name = comp.company_name if comp else None
 
-            self._adopt_legacy_receivable_credits(sale_id)
-
             if isinstance(tx_date, str):
                 try:
                     tx_date = date.fromisoformat(tx_date[:10])
                 except ValueError:
                     tx_date = None
-            BankService(self.db).sync_sale_deposit(
+            bank_svc = BankService(self.db)
+            bank_svc.sync_sale_deposit(
                 sale_id=sale_id,
                 target_amount=target,
                 company_name=company_name,
@@ -541,6 +558,60 @@ class SalesReceivablesSyncService:
                 tx_date=tx_date.strftime("%m/%d/%y") if hasattr(tx_date, "strftime") else None,
                 legacy_particulars=legacy_particulars or particulars,
             )
+
+            # Reconcile individual ReceivablePayment bank entries (one BankTransaction per payment)
+            if not is_deposited or force_zero:
+                from app.models.bank import BankTransaction
+                existing_pmt_txs = (
+                    self.db.query(BankTransaction)
+                    .filter(
+                        BankTransaction.source_sale_id == sale_id,
+                        BankTransaction.source_receivable_payment_id.isnot(None),
+                    )
+                    .all()
+                )
+                if existing_pmt_txs:
+                    touched_accs = {t.bank_account_id for t in existing_pmt_txs}
+                    for t in existing_pmt_txs:
+                        self.db.delete(t)
+                    self.db.flush()
+                    for acc_id in touched_accs:
+                        acc = bank_svc._get_account_for_update(acc_id)
+                        if acc is not None:
+                            bank_svc._sync_balance(acc)
+                    self.db.commit()
+            elif rec_payments:
+                from app.models.bank import BankTransaction
+                pmt_ids = [p.payment_id for p in rec_payments]
+                existing_pmt_txs = (
+                    self.db.query(BankTransaction)
+                    .filter(BankTransaction.source_receivable_payment_id.in_(pmt_ids))
+                    .all()
+                )
+                existing_by_pmt_id = {t.source_receivable_payment_id for t in existing_pmt_txs}
+                fallback_bank = account_id or pick("bank_account_id", "bank_account_id")
+                for pay in rec_payments:
+                    if pay.payment_id in existing_by_pmt_id:
+                        continue
+                    if (pay.payment_method or "").strip().lower() == "payroll deduction":
+                        continue
+                    pay_amt = _to_decimal(pay.amount, Decimal("0.00"))
+                    if pay_amt <= Decimal("0.00"):
+                        continue
+                    pay_bank_id = pay.bank_account_id or fallback_bank
+                    if not pay_bank_id:
+                        continue
+                    parent_rec = rec_by_id.get(pay.receivable_id)
+                    cust_name = parent_rec.customer_name if parent_rec else "Customer"
+                    bank_svc.record_deposit_by_account_id(
+                        account_id=pay_bank_id,
+                        amount=pay_amt,
+                        particulars=f"Food Receivable Payment - {cust_name}",
+                        reference_no=pay.reference_no,
+                        tx_date=pay.payment_date.strftime("%m/%d/%y") if pay.payment_date else None,
+                        source_sale_id=sale_id,
+                        source_receivable_payment_id=pay.payment_id,
+                    )
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
         except Exception as exc:
             logger.warning("Bank reconcile skipped for sale %s: %s", sale_id, exc)
@@ -567,6 +638,7 @@ class SalesReceivablesSyncService:
                 )
                 if tx:
                     tx.source_sale_id = sale_id
+                    tx.source_receivable_payment_id = pay.payment_id
 
     def compute_sale_paid_amount(
         self,

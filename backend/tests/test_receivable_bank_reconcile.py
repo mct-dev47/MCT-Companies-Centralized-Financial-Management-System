@@ -81,3 +81,25 @@ def test_receivable_payment_follows_sale_deposit_status():
     net = sum((t.deposit or 0) - (t.withdrawal or 0) for t in db.query(BankTransaction).all())
     assert _bank(db) == Decimal("1000.00") + Decimal(str(net))
     db.close()
+
+
+def test_three_receivable_payments_create_three_bank_transactions():
+    from datetime import timedelta
+    db = _setup()
+    svc = ReceivablesService(db)
+    d1 = date.today() - timedelta(days=2)
+    d2 = date.today() - timedelta(days=1)
+    d3 = date.today()
+
+    svc.record_payment(1, ReceivablePaymentCreate(amount=Decimal("100.00"), payment_date=d1, bank_account_id="bnk-001"))
+    svc.record_payment(1, ReceivablePaymentCreate(amount=Decimal("200.00"), payment_date=d2, bank_account_id="bnk-001"))
+    svc.record_payment(1, ReceivablePaymentCreate(amount=Decimal("200.00"), payment_date=d3, bank_account_id="bnk-001"))
+
+    # Reconciling must keep all 3 bank transactions instead of collapsing them into 1.
+    SalesReceivablesSyncService(db).reconcile_sale_bank(1)
+
+    txs = db.query(BankTransaction).order_by(BankTransaction.deposit.asc()).all()
+    assert len(txs) == 3
+    assert [Decimal(str(t.deposit)) for t in txs] == [Decimal("100.00"), Decimal("200.00"), Decimal("200.00")]
+    assert _bank(db) == Decimal("1500.00")
+    db.close()

@@ -1671,3 +1671,67 @@ def test_post_expense_without_amount_paid_shows_paid_in_transactions(db_session,
     legacy_tx = next(t for t in tx_res2.json() if t["id"] == f"exp_{legacy_paid.expense_id}")
     assert legacy_tx["status"] == "Paid"
     assert legacy_tx["paidAmount"] == 22100.0
+
+
+def test_three_receivable_payments_appear_as_three_transactions(db_session):
+    """Paying a receivable 3 times must return 3 separate transactions in GET /api/v1/transactions."""
+    from datetime import timedelta
+    from app.models.bank import BankAccount
+    from app.schemas.receivable import ReceivablePaymentCreate
+    from app.services.receivables_service import ReceivablesService
+
+    comp = Company(company_name="Three Payments Test Corp")
+    db_session.add(comp)
+    db_session.flush()
+
+    db_session.add(BankAccount(
+        id="bnk-3pmt", bank_name="BDO", account_name="Main",
+        company_name=comp.company_name, company_id=comp.company_id,
+        starting_balance=Decimal("0.00"), current_balance=Decimal("0.00"),
+    ))
+    sale = Sale(
+        company_id=comp.company_id,
+        transaction_date=date.today() - timedelta(days=5),
+        amount=Decimal("500.00"),
+        particulars="Catering [Unpaid]",
+        payment_status="Unpaid",
+        deposit_status="Not Deposited",
+        bank_account_id="bnk-3pmt",
+    )
+    db_session.add(sale)
+    db_session.flush()
+
+    rec = Receivable(
+        company_id=comp.company_id,
+        company_name=comp.company_name,
+        sale_id=sale.sales_id,
+        customer_name="Ana",
+        customer_type="External",
+        transaction_date=sale.transaction_date,
+        items_summary="Catering",
+        total_amount=Decimal("500.00"),
+        amount_paid=Decimal("0.00"),
+        balance=Decimal("500.00"),
+        payment_status="Unpaid",
+    )
+    db_session.add(rec)
+    db_session.commit()
+
+    svc = ReceivablesService(db_session)
+    d1 = date.today() - timedelta(days=2)
+    d2 = date.today() - timedelta(days=1)
+    d3 = date.today()
+    svc.record_payment(rec.receivable_id, ReceivablePaymentCreate(amount=Decimal("100.00"), payment_date=d1, bank_account_id="bnk-3pmt"))
+    svc.record_payment(rec.receivable_id, ReceivablePaymentCreate(amount=Decimal("200.00"), payment_date=d2, bank_account_id="bnk-3pmt"))
+    svc.record_payment(rec.receivable_id, ReceivablePaymentCreate(amount=Decimal("200.00"), payment_date=d3, bank_account_id="bnk-3pmt"))
+
+    res = client.get(f"/api/v1/transactions?company_id={comp.company_id}")
+    assert res.status_code == 200, res.text
+    items = res.json()
+
+    # No summed sale_ row should remain, and all 3 payments must appear individually
+    assert not any(it["id"] == f"sale_{sale.sales_id}" for it in items)
+    pmt_rows = [it for it in items if it["id"].startswith("rec_pmt_")]
+    assert len(pmt_rows) == 3
+    assert sorted(it["deposit"] for it in pmt_rows) == [100.0, 200.0, 200.0]
+    assert sorted(it["date"] for it in pmt_rows) == [d1.isoformat(), d2.isoformat(), d3.isoformat()]

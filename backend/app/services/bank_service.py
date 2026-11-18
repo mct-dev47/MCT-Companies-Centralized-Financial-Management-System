@@ -483,7 +483,7 @@ class BankService:
         self.db.refresh(account)
         return account
 
-    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_repayment_id: Optional[int] = None, commit: bool = True) -> Tuple[BankAccount, BankTransaction]:
+    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_repayment_id: Optional[int] = None, source_receivable_payment_id: Optional[int] = None, commit: bool = True) -> Tuple[BankAccount, BankTransaction]:
         account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -509,6 +509,7 @@ class BankService:
             net_amount=amount,
             source_sale_id=source_sale_id,
             source_loan_repayment_id=source_loan_repayment_id,
+            source_receivable_payment_id=source_receivable_payment_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
         tx._entry_source = entry_source
@@ -600,7 +601,7 @@ class BankService:
                 return found
         return None
 
-    def record_deposit_by_account_id(self, account_id: str, amount: Decimal, particulars: str, reference_no: Optional[str] = None, tx_date: Optional[str] = None, source_sale_id: Optional[int] = None) -> Optional[BankTransaction]:
+    def record_deposit_by_account_id(self, account_id: str, amount: Decimal, particulars: str, reference_no: Optional[str] = None, tx_date: Optional[str] = None, source_sale_id: Optional[int] = None, source_receivable_payment_id: Optional[int] = None) -> Optional[BankTransaction]:
         account = self.get_account(account_id)
         if not account:
             return None
@@ -611,7 +612,7 @@ class BankService:
             category="Cash",
             reference_no=reference_no,
         )
-        _, tx = self.deposit(account.id, req, source_sale_id=source_sale_id)
+        _, tx = self.deposit(account.id, req, source_sale_id=source_sale_id, source_receivable_payment_id=source_receivable_payment_id)
         return tx
 
     def record_withdrawal_by_account_id(self, account_id: str, amount: Decimal, particulars: str, cheque_no: Optional[str] = None, tx_date: Optional[str] = None, source_sale_id: Optional[int] = None) -> Optional[BankTransaction]:
@@ -722,6 +723,8 @@ class BankService:
             raise ValueError("Unsupported link attribute.")
         amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
         q = self.db.query(BankTransaction).filter(getattr(BankTransaction, link_attr) == link_id)
+        if link_attr == "source_sale_id":
+            q = q.filter(BankTransaction.source_receivable_payment_id.is_(None))
         if link_attr == "source_loan_repayment_id":
             q = q.filter(BankTransaction.deposit > 0 if credit else BankTransaction.withdrawal > 0)
         linked = q.order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc()).all()
@@ -846,7 +849,14 @@ class BankService:
         Make the bank net for one sale equal `target_amount` (the cash the ledger counts:
         the paid amount while the sale is Deposited, otherwise 0), on the sale's own bank.
         """
-        linked = self.db.query(BankTransaction).filter(BankTransaction.source_sale_id == sale_id).all()
+        linked = (
+            self.db.query(BankTransaction)
+            .filter(
+                BankTransaction.source_sale_id == sale_id,
+                BankTransaction.source_receivable_payment_id.is_(None),
+            )
+            .all()
+        )
 
         # Adopt an older unlinked credit for this sale (made before linking existed), so it is not doubled.
         if not linked and legacy_particulars:

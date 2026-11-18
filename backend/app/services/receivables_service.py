@@ -342,6 +342,7 @@ class ReceivablesService:
             received_by=actor_name or payment_data.received_by,
         )
         self.db.add(payment)
+        self.db.flush()
 
         rec.amount_paid = min(
             Decimal(str(rec.total_amount or 0)),
@@ -364,6 +365,7 @@ class ReceivablesService:
                     reference_no=payment_data.reference_no,
                     tx_date=pay_date.strftime("%m/%d/%y"),
                     source_sale_id=rec.sale_id,
+                    source_receivable_payment_id=payment.payment_id,
                 )
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": deposit_bank_id}})
             except Exception:
@@ -661,7 +663,24 @@ class ReceivablesService:
         self.sync_service.assert_sale_not_locked(rec.sale_id)
 
         pay_amount = Decimal(str(pay.amount or 0))
-        self.sync_service.reverse_payment_bank_deposit(pay, rec.customer_name)
+        from app.models.bank import BankTransaction
+        linked_bt = (
+            self.db.query(BankTransaction)
+            .filter(BankTransaction.source_receivable_payment_id == pay.payment_id)
+            .all()
+        )
+        if linked_bt:
+            bank_svc = BankService(self.db)
+            touched_accounts = {bt.bank_account_id for bt in linked_bt}
+            for bt in linked_bt:
+                self.db.delete(bt)
+            self.db.flush()
+            for acc_id in touched_accounts:
+                acc = bank_svc._get_account_for_update(acc_id)
+                if acc is not None:
+                    bank_svc._sync_balance(acc)
+        else:
+            self.sync_service.reverse_payment_bank_deposit(pay, rec.customer_name)
 
         rec.amount_paid = max(Decimal("0.00"), Decimal(str(rec.amount_paid or 0)) - pay_amount)
         rec.balance = max(Decimal("0.00"), Decimal(str(rec.total_amount or 0)) - rec.amount_paid)

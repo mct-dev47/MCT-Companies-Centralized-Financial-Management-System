@@ -82,7 +82,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   onDeleteSale,
   onDeletePayment,
 }) => {
-  const [activeTab, setActiveTab] = React.useState<'payments' | 'orders'>('payments')
   const [detailSearchQuery, setDetailSearchQuery] = React.useState<string>('')
   const [historyPage, setHistoryPage] = React.useState<number>(1)
   const [showPayrollConfirm, setShowPayrollConfirm] = React.useState(false)
@@ -116,7 +115,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
   React.useEffect(() => {
     setHistoryPage(1)
-  }, [person.key, detailSearchQuery, activeTab])
+  }, [person.key, detailSearchQuery])
 
   // Load company-scoped bank accounts when Edit Order modal opens
   React.useEffect(() => {
@@ -187,29 +186,13 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
     )
   }, [person.payments, detailSearchQuery])
 
-  const filteredSales = React.useMemo(() => {
-    const q = detailSearchQuery.trim().toLowerCase()
-    const list = [...person.sales].sort((a, b) => b.date.localeCompare(a.date))
-    if (!q) return list
-    return list.filter(
-      (s) =>
-        s.date.toLowerCase().includes(q) ||
-        s.items_summary.toLowerCase().includes(q) ||
-        (s.notes || '').toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q) ||
-        s.payment_status.toLowerCase().includes(q)
-    )
-  }, [person.sales, detailSearchQuery])
-
-  const activeRecordsCount =
-    activeTab === 'payments' ? filteredPayments.length : filteredSales.length
+  const activeRecordsCount = filteredPayments.length
   const totalHistoryPages = Math.max(1, Math.ceil(activeRecordsCount / HISTORY_ITEMS_PER_PAGE))
   const safeHistoryPage = Math.min(historyPage, totalHistoryPages)
   const historyStartIndex = (safeHistoryPage - 1) * HISTORY_ITEMS_PER_PAGE
   const historyEndIndex = Math.min(historyStartIndex + HISTORY_ITEMS_PER_PAGE, activeRecordsCount)
 
   const paginatedPayments = filteredPayments.slice(historyStartIndex, historyEndIndex)
-  const paginatedSales = filteredSales.slice(historyStartIndex, historyEndIndex)
 
   const handleStartEditSale = (sale: UtangSale) => {
     if (sale.is_locked) return
@@ -599,33 +582,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                     Payment Schedule & History ({activeRecordsCount})
                   </h3>
                 </div>
-
-                <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-xl border border-slate-200/70">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('payments')}
-                    className={cn(
-                      'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer',
-                      activeTab === 'payments'
-                        ? 'bg-white text-focus shadow-2xs font-bold'
-                        : 'text-muted-fg hover:text-focus'
-                    )}
-                  >
-                    Payments ({person.payments.length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('orders')}
-                    className={cn(
-                      'px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer',
-                      activeTab === 'orders'
-                        ? 'bg-white text-focus shadow-2xs font-bold'
-                        : 'text-muted-fg hover:text-focus'
-                    )}
-                  >
-                    Credit Orders ({person.sales.length})
-                  </button>
-                </div>
               </div>
 
               {/* Search Bar */}
@@ -659,8 +615,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 
             {/* Table Content */}
             <div className="flex-1 flex flex-col">
-              {activeTab === 'payments' ? (
-                person.payments.length === 0 ? (
+              {person.payments.length === 0 ? (
                   <div className="flex-1 py-12 px-4 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 flex flex-col items-center justify-center text-center">
                     <div className="w-14 h-14 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-3 text-emerald-600 shadow-2xs">
                       <Coins className="w-7 h-7" />
@@ -765,111 +720,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                       </tbody>
                     </table>
                   </div>
-                )
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 flex-1">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-muted-fg font-semibold">
-                      <tr>
-                        <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Order Date</th>
-                        <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Order Ref</th>
-                        <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Status</th>
-                        <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Total Amount</th>
-                        <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Balance Due</th>
-                        <th className="py-2.5 px-3.5 text-left">Particulars</th>
-                        {canMutate && (
-                          <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {paginatedSales.length === 0 ? (
-                        <tr>
-                          <td colSpan={canMutate ? 7 : 6} className="py-12 text-center text-muted-fg text-xs">
-                            No credit orders matching &quot;{detailSearchQuery}&quot;
-                          </td>
-                        </tr>
-                      ) : (
-                        paginatedSales.map((sale) => {
-                          const locked = Boolean(sale.is_locked)
-                          return (
-                            <tr key={sale.id} className="hover:bg-slate-50/70 transition-colors">
-                              <td className="py-2.5 px-3.5 font-mono text-focus whitespace-nowrap font-medium">
-                                {sale.date}
-                              </td>
-                              <td className="py-2.5 px-3.5 font-mono font-bold text-[#960C01] whitespace-nowrap">
-                                #{sale.id}
-                              </td>
-                              <td className="py-2.5 px-3.5 whitespace-nowrap">
-                                <span
-                                  className={cn(
-                                    'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border',
-                                    sale.payment_status === 'Paid'
-                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                      : sale.payment_status === 'Partial'
-                                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                      : 'bg-rose-50 text-rose-700 border-rose-200'
-                                  )}
-                                >
-                                  {sale.payment_status === 'Paid' && (
-                                    <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                  )}
-                                  <span>{sale.payment_status}</span>
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-3.5 font-bold text-focus whitespace-nowrap tabular-nums">
-                                {formatPHP(sale.total_amount)}
-                              </td>
-                              <td
-                                className={cn(
-                                  'py-2.5 px-3.5 font-bold whitespace-nowrap tabular-nums',
-                                  sale.balance <= 0.005 ? 'text-emerald-600' : 'text-amber-700'
-                                )}
-                              >
-                                {formatPHP(sale.balance)}
-                              </td>
-                              <td className="py-2.5 px-3.5 text-focus truncate max-w-[220px]" title={sale.items_summary}>
-                                {sale.items_summary}
-                              </td>
-                              {canMutate && (
-                                <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                                  <div className="inline-flex items-center justify-center">
-                                    <RowActionsMenu
-                                      canEdit={!locked && Boolean(onEditSale)}
-                                      canDelete={!locked && Boolean(onDeleteSale)}
-                                      onEdit={() => handleStartEditSale(sale)}
-                                      onDelete={() => setConfirmDeleteSaleId(sale.id)}
-                                      editLabel="Edit Order"
-                                      deleteLabel="Delete Order"
-                                      customItems={
-                                        locked ? (
-                                          <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700">
-                                            <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                            <span>Locked (Audited)</span>
-                                          </div>
-                                        ) : sale.balance > 0.005 ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => onOpenRecordPayment(person, sale)}
-                                            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer"
-                                          >
-                                            <Coins className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                            <span>Pay This Order</span>
-                                          </button>
-                                        ) : undefined
-                                      }
-                                    />
-                                  </div>
-                                </td>
-                              )}
-                            </tr>
-                          )
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                )}
             </div>
           </div>
 
