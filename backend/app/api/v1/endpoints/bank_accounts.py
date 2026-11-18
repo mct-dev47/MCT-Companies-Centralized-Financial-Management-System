@@ -413,7 +413,7 @@ def review_bank_transaction_audit(
     db.refresh(tx)
 
     log_transaction(
-        db, AuditAction.EXPENSE_UPDATED if tx.source_expense_id else AuditAction.SALE_UPDATED if tx.source_sale_id else AuditAction.BANK_UPDATED,
+        db, AuditAction.EXPENSE_UPDATED if tx.source_expense_id else AuditAction.SALE_UPDATED if tx.source_sale_id else AuditAction.BANK_TRANSACTION_UPDATED,
         user_id=current_user.get("user_id"),
         company_id=account.company_id if account else None,
         ip_address=request.client.host if request.client else "unknown",
