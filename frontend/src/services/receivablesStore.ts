@@ -108,7 +108,16 @@ class ReceivablesStore {
       } catch {
         // clean up any legacy storage
       }
-      void this.refreshFromBackend()
+      const hasToken = Boolean(
+        sessionStorage.getItem('mct_access_token') ||
+          sessionStorage.getItem('auth_token') ||
+          localStorage.getItem('auth_token')
+      )
+      if (hasToken) {
+        void this.refreshFromBackend()
+      } else {
+        this.loading = false
+      }
       const scheduleRefresh = () => {
         if (this.wsRefreshTimer) clearTimeout(this.wsRefreshTimer)
         this.wsRefreshTimer = setTimeout(() => {

@@ -14,39 +14,26 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
-  Calendar,
-  Building2,
-  User,
   Plus,
   Trash2,
-  Upload,
   X,
   FileText,
   AlertCircle,
-  Clock,
   Eye,
   CheckCircle2,
   RotateCw,
-  FolderOpen,
-  ChevronDown,
-  Landmark,
-  Search,
 } from 'lucide-react'
-import { Skeleton } from '@/components/ui/skeleton'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { formatRealName } from '@/utils/formatRealName'
 import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtils'
 import { useSession } from '@/hooks/useSession'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { type BankAccount } from '@/services/bankService'
 import { loanService } from '@/services/loanService'
 import {
   pettyCashService,
-  PETTY_CASH_FUNDING,
-  PETTY_CASH_FUNDING_LABEL,
   type PettyCashLedgerEntry,
   type PettyCashCategory,
-  type EligibleExpense,
 } from '@/services/pettyCashService'
 import { particularsService, type CompanyParticular } from '@/services/particularsService'
 import { cn } from '@/lib/utils'
@@ -85,14 +72,6 @@ export interface UploadedFileItem {
 }
 
 const todayIso = () => formatToYYYYMMDD(new Date())
-
-/**
- * Strips unnecessary leading zeroes before another digit (e.g. "05" -> "5", "00.5" -> "0.5"),
- * while keeping empty string, single "0", and decimals like "0.25" intact.
- */
-function sanitizeDecimalInput(value: string): string {
-  return value.replace(/^0+(?=\d)/, '')
-}
 
 function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -142,28 +121,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     { id: '1', particulars: '', amount: '' },
   ])
 
-  // Funding Breakdown (Bi-directional)
-  const [companyFundedAmount, setCompanyFundedAmount] = React.useState('')
-  const [employeeOutOfPocketAmount, setEmployeeOutOfPocketAmount] = React.useState('')
-  const [isPreRecorded, setIsPreRecorded] = React.useState(false)
-  const [existingExpenseId, setExistingExpenseId] = React.useState('')
-  const [eligibleExpenses, setEligibleExpenses] = React.useState<EligibleExpense[]>([])
-  const [eligibleLoading, setEligibleLoading] = React.useState(false)
-  const [eligibleError, setEligibleError] = React.useState<string | null>(null)
-  const [expenseSearchQuery, setExpenseSearchQuery] = React.useState('')
-  const [isExpenseDropdownOpen, setIsExpenseDropdownOpen] = React.useState(false)
-  const [selectedEligibleExpense, setSelectedEligibleExpense] = React.useState<EligibleExpense | null>(null)
-  const expenseDropdownRef = React.useRef<HTMLDivElement | null>(null)
-
-  // Finance Direct-Endorsement Funding Bank
-  const [localBankAccounts, setLocalBankAccounts] = React.useState<BankAccount[]>(initialBankAccounts || [])
-  const [localBanksLoading, setLocalBanksLoading] = React.useState(false)
-  const [localBanksError, setLocalBanksError] = React.useState<string | null>(null)
-  const [fundingBankId, setFundingBankId] = React.useState('')
-  const prevOpenRef = React.useRef(false)
-  const prevBankCompanyRef = React.useRef('')
-  const banksAutoSelectedRef = React.useRef(false)
-
   // Receipt Files
   const [attachments, setAttachments] = React.useState<UploadedFileItem[]>([])
   const [isDragging, setIsDragging] = React.useState(false)
@@ -186,41 +143,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
 
   // Companies Data
   const [dbCompanies, setDbCompanies] = React.useState<string[]>([])
-
-  // Effective bank list & fetch fallback
-  const effectiveBankAccounts = React.useMemo(() => {
-    if (initialBankAccounts && initialBankAccounts.length > 0) return initialBankAccounts
-    return localBankAccounts
-  }, [initialBankAccounts, localBankAccounts])
-
-  const effectiveBanksLoading = Boolean(banksLoading) || localBanksLoading
-  const effectiveBanksError = banksError || localBanksError
-
-  const fetchFallbackBanks = React.useCallback(async (forceRefresh = false) => {
-    setLocalBanksLoading(true)
-    setLocalBanksError(null)
-    try {
-      const accounts = await bankService.getAccounts(undefined, { forceRefresh })
-      setLocalBankAccounts(accounts || [])
-    } catch (err: any) {
-      setLocalBanksError(err instanceof Error ? err.message : 'Could not load bank accounts.')
-    } finally {
-      setLocalBanksLoading(false)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    if (initialBankAccounts && initialBankAccounts.length > 0) {
-      setLocalBankAccounts(initialBankAccounts)
-      setLocalBanksError(null)
-    }
-  }, [initialBankAccounts])
-
-  React.useEffect(() => {
-    if (open && isFinance && (!initialBankAccounts || initialBankAccounts.length === 0)) {
-      void fetchFallbackBanks(false)
-    }
-  }, [open, isFinance, initialBankAccounts, fetchFallbackBanks])
 
   // Load companies
   React.useEffect(() => {
@@ -344,22 +266,11 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       setPaidBy(formatRealName(user?.fullName || user?.name || user?.email || ''))
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
-      setCompanyFundedAmount('')
-      setEmployeeOutOfPocketAmount('')
-      setIsPreRecorded(false)
-      setExistingExpenseId('')
-      setEligibleExpenses([])
-      setEligibleError(null)
-      setExpenseSearchQuery('')
-      setIsExpenseDropdownOpen(false)
-      setSelectedEligibleExpense(null)
-      setFundingBankId('')
-      prevBankCompanyRef.current = ''
-      banksAutoSelectedRef.current = false
       setAttachments([])
       setGeneralError('')
       setFieldErrors({})
       setIsSubmitting(false)
+      setIsReviewing(false)
       setIsDiscardModalOpen(false)
       setActiveComboboxId(null)
       setIsAddingCategory(false)
@@ -369,104 +280,24 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     }
   }, [open, company, user])
 
-  // Auto-preselect sole-owned funding bank of requesting company for Finance users
-  React.useEffect(() => {
-    if (!open || !isFinance) {
-      prevOpenRef.current = open
-      if (!open) banksAutoSelectedRef.current = false
-      return
-    }
-    const compChanged = prevBankCompanyRef.current !== requestingCompany
-    const justOpened = !prevOpenRef.current && open
-    prevOpenRef.current = open
-
-    if (justOpened || compChanged) {
-      banksAutoSelectedRef.current = false
-      prevBankCompanyRef.current = requestingCompany
-    }
-
-    // Default: pay the reimbursement out of the requesting company's own petty cash.
-    if (requestingCompany && !banksAutoSelectedRef.current) {
-      setFundingBankId(PETTY_CASH_FUNDING)
-      banksAutoSelectedRef.current = true
-    }
-  }, [open, isFinance, requestingCompany])
-
-  // Close combobox / eligible-expense dropdown when clicking outside
+  // Close combobox when clicking outside
   React.useEffect(() => {
     const handleDocClick = (e: MouseEvent) => {
       if (comboboxContainerRef.current && !comboboxContainerRef.current.contains(e.target as Node)) {
         setActiveComboboxId(null)
-      }
-      if (expenseDropdownRef.current && !expenseDropdownRef.current.contains(e.target as Node)) {
-        setIsExpenseDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleDocClick)
     return () => document.removeEventListener('mousedown', handleDocClick)
   }, [])
 
-  const loadEligibleExpenses = React.useCallback(
-    async (queryText: string) => {
-      if (!requestingCompany) {
-        setEligibleExpenses([])
-        return
-      }
-      setEligibleLoading(true)
-      setEligibleError(null)
-      try {
-        const list = await pettyCashService.getEligibleExpenses(requestingCompany, queryText, 50)
-        setEligibleExpenses(list)
-      } catch (err: any) {
-        setEligibleError(err instanceof Error ? err.message : 'Failed to load eligible expenses.')
-      } finally {
-        setEligibleLoading(false)
-      }
-    },
-    [requestingCompany]
-  )
-
-  // Clear selected pre-recorded expense when requestingCompany switches
-  const prevExpenseCompanyRef = React.useRef('')
-  React.useEffect(() => {
-    if (!open) {
-      prevExpenseCompanyRef.current = ''
-      return
-    }
-    if (prevExpenseCompanyRef.current && prevExpenseCompanyRef.current !== requestingCompany) {
-      setSelectedEligibleExpense(null)
-      setExistingExpenseId('')
-      setExpenseSearchQuery('')
-    }
-    prevExpenseCompanyRef.current = requestingCompany
-  }, [open, requestingCompany])
-
-  // Fetch company-scoped eligible expenses when pre-recorded toggle is enabled or search changes
-  React.useEffect(() => {
-    if (!open || !isPreRecorded || !requestingCompany) return
-    let active = true
-    const timer = window.setTimeout(() => {
-      if (!active) return
-      void loadEligibleExpenses(expenseSearchQuery)
-    }, expenseSearchQuery ? 200 : 0)
-    return () => {
-      active = false
-      window.clearTimeout(timer)
-    }
-  }, [open, isPreRecorded, requestingCompany, expenseSearchQuery, loadEligibleExpenses])
-
   // Check if form has unsaved modifications
   const isDirty = React.useMemo(() => {
     const hasLineContent = lines.some((l) => l.particulars.trim() || l.amount.trim())
     const hasAttachments = attachments.length > 0
     const hasRemarks = Boolean(remarks.trim())
-    const hasFunding =
-      (companyFundedAmount !== '0' && companyFundedAmount !== '') ||
-      (employeeOutOfPocketAmount !== '0' && employeeOutOfPocketAmount !== '') ||
-      isPreRecorded ||
-      Boolean(existingExpenseId)
-    return hasLineContent || hasAttachments || hasRemarks || hasFunding
-  }, [lines, attachments, remarks, companyFundedAmount, employeeOutOfPocketAmount, isPreRecorded, existingExpenseId])
+    return hasLineContent || hasAttachments || hasRemarks
+  }, [lines, attachments, remarks])
 
   // Safe Close Handler: prompts discard if dirty
   const handleRequestClose = () => {
@@ -494,42 +325,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       return acc + (!isNaN(val) && val > 0 ? val : 0)
     }, 0)
   }, [lines])
-
-  // Auto-sync employeeOutOfPocketAmount whenever grandTotal changes
-  React.useEffect(() => {
-    const cVal = parseFloat(companyFundedAmount) || 0
-    const clampedC = Math.min(grandTotal, Math.max(0, cVal))
-    const oVal = Math.max(0, Math.round((grandTotal - clampedC) * 100) / 100)
-    setEmployeeOutOfPocketAmount(oVal > 0 ? String(oVal) : '')
-  }, [grandTotal])
-
-  const handleSelectEligibleExpense = (exp: EligibleExpense) => {
-    setSelectedEligibleExpense(exp)
-    setExistingExpenseId(String(exp.expenseId))
-    setIsExpenseDropdownOpen(false)
-    const roundedAmt = Math.round(Number(exp.amount || 0) * 100) / 100
-    setCompanyFundedAmount(String(roundedAmt))
-    const compO = Math.max(0, Math.round((grandTotal - roundedAmt) * 100) / 100)
-    setEmployeeOutOfPocketAmount(compO > 0 ? String(compO) : '')
-    if (fieldErrors.existingExpenseId || fieldErrors.companyFunded) {
-      setFieldErrors((prev) => {
-        const next = { ...prev }
-        delete next.existingExpenseId
-        delete next.companyFunded
-        return next
-      })
-    }
-  }
-
-  const companyFundedNum = React.useMemo(() => {
-    const n = parseFloat(companyFundedAmount)
-    return isNaN(n) ? 0 : n
-  }, [companyFundedAmount])
-
-  const employeeOutOfPocket = React.useMemo(() => {
-    const n = parseFloat(employeeOutOfPocketAmount)
-    return isNaN(n) ? 0 : n
-  }, [employeeOutOfPocketAmount])
 
   // Line Item Handlers
   const handleLineChange = (id: string, field: 'particulars' | 'amount', value: string) => {
@@ -829,55 +624,8 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
       return
     }
 
-    const parsedCompanyFunded = parseFloat(companyFundedAmount)
-    const validCompanyFunded = isNaN(parsedCompanyFunded) ? 0 : parsedCompanyFunded
-    const parsedOutOfPocket = parseFloat(employeeOutOfPocketAmount)
-    const validOutOfPocket = isNaN(parsedOutOfPocket) ? 0 : parsedOutOfPocket
-
-    if (validCompanyFunded < 0) {
-      errors.companyFunded = 'Company petty cash amount cannot be negative.'
-    } else if (validCompanyFunded > roundedTotal) {
-      errors.companyFunded = 'Company petty cash portion cannot exceed total expenses.'
-    } else if (!isPreRecorded && validCompanyFunded > 0 && validCompanyFunded > effectiveUnreservedBalance) {
-      errors.companyFunded = `Paid from company petty cash (${formatPHP(validCompanyFunded)}) exceeds available unreserved petty cash (${formatPHP(effectiveUnreservedBalance)}).`
-    }
-
-    if (validOutOfPocket < 0) {
-      errors.companyFunded = 'Reimbursement amount cannot be negative.'
-    } else if (validOutOfPocket > roundedTotal) {
-      errors.companyFunded = 'Reimbursement amount cannot exceed total expenses.'
-    }
-
-    if (Math.round((validCompanyFunded + validOutOfPocket) * 100) / 100 !== roundedTotal) {
-      errors.companyFunded = `Company petty cash (₱${validCompanyFunded.toFixed(2)}) + Reimbursement (₱${validOutOfPocket.toFixed(2)}) must equal Total (₱${roundedTotal.toFixed(2)}).`
-    }
-
-    let parsedExpenseId: number | null = null
-    if (isPreRecorded) {
-      const expIdNum = parseInt(existingExpenseId.trim(), 10)
-      if (!existingExpenseId.trim() || isNaN(expIdNum) || expIdNum <= 0) {
-        errors.existingExpenseId = 'Please select an eligible pre-recorded Petty Cash expense.'
-      } else {
-        parsedExpenseId = expIdNum
-      }
-    }
-
-    const netOutOfPocketCheck = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
-    const isZeroExcessSubmit = roundedTotal > 0 && netOutOfPocketCheck === 0
-    const ownCompanyBanksForSubmit = requestingCompany
-      ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
-      : effectiveBankAccounts
-    const selectedBankForSubmit = ownCompanyBanksForSubmit.find(
-      (acc) => String(acc.id) === String(fundingBankId)
-    )
-    const isPettyCashFunding = fundingBankId === PETTY_CASH_FUNDING
-
-    if (isFinance && !isZeroExcessSubmit) {
-      if (!fundingBankId || (!selectedBankForSubmit && !isPettyCashFunding)) {
-        errors.fundingBank = requestingCompany
-          ? `Please choose a funding bank account belonging to ${requestingCompany} before submitting to Internal Audit.`
-          : 'Please choose a funding bank account before submitting to Internal Audit.'
-      }
+    if (roundedTotal > effectiveUnreservedBalance) {
+      errors.lines = `Total expense (${formatPHP(roundedTotal)}) exceeds available unreserved petty cash (${formatPHP(effectiveUnreservedBalance)}).`
     }
 
     // If there are validation errors, block submit
@@ -905,51 +653,37 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         }))
 
       const combinedDescription = validLines.map((l) => l.particulars).join(', ')
-      const netOutOfPocket = Math.max(0, Math.round(validOutOfPocket * 100) / 100)
-      const roundedCompanyFunded = Math.round(validCompanyFunded * 100) / 100
       const primaryReceiptUrl = uploadedAttachments[0]?.file_url || null
       const httpReceiptUrl =
         primaryReceiptUrl && primaryReceiptUrl.startsWith('data:') ? null : primaryReceiptUrl
       const attachmentsJson = uploadedAttachments.length > 0 ? JSON.stringify(uploadedAttachments) : null
-      const targetStatus = isZeroExcessSubmit
-        ? 'Settled'
-        : (isFinance ? 'Pending Audit Approval' : 'Pending Finance Approval')
 
       await pettyCashService.createTopUp({
         company: requestingCompany,
         company_name: requestingCompany,
-        amount: netOutOfPocket,
+        amount: 0,
         date: expenseDate,
         description: combinedDescription,
-        status: targetStatus,
+        status: 'Settled',
         request_type: 'reimbursement',
         paid_by: paidBy.trim(),
         receipt_url: httpReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
         category: category.trim(),
-        bank_account_id: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
-        finance_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
-        endorsement_remark: !isZeroExcessSubmit && remarks.trim() ? remarks.trim() : undefined,
         total_expenses: roundedTotal,
-        company_funded_amount: roundedCompanyFunded,
-        employee_out_of_pocket: netOutOfPocket,
-        existing_expense_id: parsedExpenseId,
+        company_funded_amount: roundedTotal,
+        employee_out_of_pocket: 0,
+        existing_expense_id: null,
       })
 
-      notifySuccess(
-        isZeroExcessSubmit
-          ? 'Petty cash disbursement deducted immediately.'
-          : roundedCompanyFunded > 0 && !parsedExpenseId
-          ? 'Company petty cash deducted immediately; excess out-of-pocket claim submitted.'
-          : 'Reimbursement request submitted successfully.'
-      )
+      notifySuccess('Petty cash expense recorded successfully.')
 
       const newEntry: PettyCashLedgerEntry = {
         id: `pc-${Date.now()}`,
         recordId: Date.now(),
-        type: isZeroExcessSubmit ? 'expense' : 'request',
-        requestType: isZeroExcessSubmit ? 'replenishment_disbursement' : 'reimbursement',
+        type: 'expense',
+        requestType: 'replenishment_disbursement',
         companyName: requestingCompany,
         date: expenseDate,
         description: combinedDescription,
@@ -958,39 +692,23 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
         receiptUrl: primaryReceiptUrl,
         attachments: attachmentsJson,
         items: JSON.stringify(validLines),
-        amountRequested: isZeroExcessSubmit ? roundedCompanyFunded : netOutOfPocket,
+        amountRequested: roundedTotal,
         totalExpenses: roundedTotal,
-        companyFundedAmount: roundedCompanyFunded,
-        employeeOutOfPocket: netOutOfPocket,
-        existingExpenseId: parsedExpenseId || undefined,
-        fundingBankId: !isZeroExcessSubmit && isFinance && fundingBankId ? fundingBankId : undefined,
-        fundingBankName: !isZeroExcessSubmit && isFinance
-          ? (isPettyCashFunding ? PETTY_CASH_FUNDING_LABEL : selectedBankForSubmit?.bankName)
-          : undefined,
-        fundingAccountName: !isZeroExcessSubmit && isFinance && selectedBankForSubmit ? selectedBankForSubmit.accountName : undefined,
-        fundingCompanyName: !isZeroExcessSubmit && isFinance
-          ? (isPettyCashFunding ? requestingCompany : selectedBankForSubmit?.companyName)
-          : undefined,
-        isOwnAccount: !isZeroExcessSubmit && isFinance && (selectedBankForSubmit || isPettyCashFunding) ? true : undefined,
-        financeRemark: !isZeroExcessSubmit && isFinance && remarks.trim() ? remarks.trim() : undefined,
+        companyFundedAmount: roundedTotal,
+        employeeOutOfPocket: 0,
         amountIn: 0,
-        amountOut: isZeroExcessSubmit && !parsedExpenseId ? roundedCompanyFunded : 0,
+        amountOut: roundedTotal,
         runningBalance: currentBalance || 0,
-        status: isZeroExcessSubmit ? '' : targetStatus,
-        auditStatus: isZeroExcessSubmit ? 'Pending Audit' : null,
+        status: '',
+        auditStatus: 'Pending Audit',
         createdAt: new Date().toISOString(),
       }
 
       onSuccess?.(newEntry)
       onOpenChange(false)
     } catch (err: any) {
-      const msg = formatUserFriendlyErrorMessage(err, 'Failed to submit reimbursement request.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to record petty cash expense.')
       setGeneralError(msg)
-      if (isPreRecorded && /already claimed|already associated|not found/i.test(msg)) {
-        setSelectedEligibleExpense(null)
-        setExistingExpenseId('')
-        void loadEligibleExpenses(expenseSearchQuery)
-      }
     } finally {
       setIsSubmitting(false)
     }
@@ -1021,10 +739,10 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
               </div>
               <div>
                 <DialogTitle className="text-xl sm:text-2xl font-bold text-focus leading-tight">
-                  Reimbursement Request
+                  Record Petty Expense
                 </DialogTitle>
                 <DialogDescription className="text-xs sm:text-sm text-muted-fg font-normal mt-0.5">
-                  For expenses paid out of pocket or split with company petty cash.
+                  Record an expense paid from company petty cash.
                 </DialogDescription>
               </div>
             </div>
@@ -1399,348 +1117,17 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   <span>+ Add line</span>
                 </Button>
 
-                <div className="text-sm font-bold text-focus tabular-nums">
-                  Total: <span className="text-focus">{formatPHP(grandTotal)}</span>
+                <div className="flex items-center gap-3 text-sm font-bold text-focus tabular-nums">
+                  <span className="text-xs font-medium text-muted-fg">
+                    Available: {formatPHP(effectiveUnreservedBalance)}
+                  </span>
+                  <span>
+                    Total: <span className="text-focus">{formatPHP(grandTotal)}</span>
+                  </span>
                 </div>
               </div>
 
               <FormFieldError error={fieldErrors.lines} className="px-1" />
-            </div>
-
-            <div className="rounded-xl border border-stroke/40 bg-slate-50/60 p-3.5 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-xs font-bold text-focus flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 text-primary" />
-                  <span>Funding Breakdown</span>
-                </div>
-                {employeeOutOfPocket === 0 && grandTotal > 0 && (
-                  <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    100% Company Petty Cash (Deducts Immediately)
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* Company Petty Cash Paid (C) */}
-                <div className="space-y-1">
-                  <Label htmlFor="company-funded-amount" className="text-xs font-semibold text-focus">
-                    Paid from company petty cash (₱)
-                  </Label>
-                  <Input
-                    id="company-funded-amount"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    value={companyFundedAmount}
-                    onFocus={() => {
-                      if (companyFundedAmount === '0') setCompanyFundedAmount('')
-                    }}
-                    onChange={(e) => {
-                      const val = sanitizeDecimalInput(e.target.value)
-                      setCompanyFundedAmount(val)
-                      const parsedC = parseFloat(val)
-                      const validC = isNaN(parsedC) ? 0 : parsedC
-                      const compO = Math.max(0, Math.round((grandTotal - validC) * 100) / 100)
-                      setEmployeeOutOfPocketAmount(compO > 0 ? String(compO) : '')
-                      if (fieldErrors.companyFunded) {
-                        setFieldErrors((prev) => {
-                          const n = { ...prev }
-                          delete n.companyFunded
-                          return n
-                        })
-                      }
-                    }}
-                    className={cn(
-                      'h-10 rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs tabular-nums',
-                      fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                    )}
-                  />
-                  <FormFieldError error={fieldErrors.companyFunded} />
-                  <p className="text-[10.5px] text-muted-fg">
-                    {isPreRecorded
-                      ? 'Matched to your selected pre-recorded expense.'
-                      : `Available float: ${formatPHP(effectiveUnreservedBalance)}. Deducts immediately on save.`}
-                  </p>
-                </div>
-
-                {/* Employee Out of Pocket / Reimbursement (R) */}
-                <div className="space-y-1">
-                  <Label htmlFor="employee-out-of-pocket" className="text-xs font-semibold text-focus">
-                    Reimbursement claim (out of pocket) (₱)
-                  </Label>
-                  <Input
-                    id="employee-out-of-pocket"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0.00"
-                    value={employeeOutOfPocketAmount}
-                    onFocus={() => {
-                      if (employeeOutOfPocketAmount === '0') setEmployeeOutOfPocketAmount('')
-                    }}
-                    onChange={(e) => {
-                      const val = sanitizeDecimalInput(e.target.value)
-                      setEmployeeOutOfPocketAmount(val)
-                      const parsedO = parseFloat(val)
-                      const validO = isNaN(parsedO) ? 0 : parsedO
-                      const compC = Math.max(0, Math.round((grandTotal - validO) * 100) / 100)
-                      setCompanyFundedAmount(compC > 0 ? String(compC) : '')
-                      if (fieldErrors.companyFunded) {
-                        setFieldErrors((prev) => {
-                          const n = { ...prev }
-                          delete n.companyFunded
-                          return n
-                        })
-                      }
-                    }}
-                    className={cn(
-                      'h-10 rounded-xl border bg-white text-xs font-semibold text-focus shadow-2xs tabular-nums',
-                      fieldErrors.companyFunded ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                    )}
-                  />
-                  <p className="text-[10.5px] text-muted-fg">
-                    {employeeOutOfPocket === 0 && grandTotal > 0
-                      ? '₱0.00 out of pocket — skips Finance/Audit approval queue.'
-                      : 'Goes to Finance & Audit approval for employee reimbursement.'}
-                  </p>
-                </div>
-              </div>
-
-              {employeeOutOfPocket === 0 && grandTotal > 0 && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-[11px] text-emerald-800 font-medium">
-                  Covered 100% by company petty cash: deducts immediately with no Finance endorsement or bank payout needed, and tracks under Audit Status.
-                </div>
-              )}
-
-              {/* Finance Funding Bank Selection (direct endorsement to Internal Audit) */}
-              {isFinance && !(employeeOutOfPocket === 0 && grandTotal > 0) && (
-                <div className="pt-2.5 border-t border-stroke/20 space-y-3">
-                  <div className="space-y-1">
-                    <Label htmlFor="reimbursement-funding-bank" className="text-xs font-semibold text-focus flex items-center gap-1.5">
-                      <Landmark className="w-3.5 h-3.5 text-primary shrink-0" />
-                      <span>Funding Bank Account</span>
-                      {employeeOutOfPocket === 0 && grandTotal > 0 ? (
-                        <span className="text-[10.5px] font-normal text-muted-fg">(Optional for float-only settlement)</span>
-                      ) : (
-                        <span className="text-red-500">*</span>
-                      )}
-                    </Label>
-                    {effectiveBanksLoading && effectiveBankAccounts.length === 0 ? (
-                      <Skeleton className="h-10 w-full rounded-xl" aria-label="Loading bank accounts" />
-                    ) : effectiveBanksError && effectiveBankAccounts.length === 0 ? (
-                      <div className="h-10 px-3 rounded-xl border border-rose-200 bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
-                        <span className="truncate" title={effectiveBanksError}>Couldn't load bank accounts.</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (onRetryBanks) onRetryBanks()
-                            void fetchFallbackBanks(true)
-                          }}
-                          className="shrink-0 font-semibold underline underline-offset-2 hover:text-rose-800 cursor-pointer"
-                        >
-                          Retry
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <Dropdown
-                          id="reimbursement-funding-bank"
-                          value={fundingBankId}
-                          onChange={(val) => {
-                            setFundingBankId(String(val))
-                            if (fieldErrors.fundingBank) {
-                              setFieldErrors((prev) => {
-                                const next = { ...prev }
-                                delete next.fundingBank
-                                return next
-                              })
-                            }
-                          }}
-                          placeholder="Choose the bank that funds this reimbursement..."
-                          options={[
-                            {
-                              value: PETTY_CASH_FUNDING,
-                              label: `${PETTY_CASH_FUNDING_LABEL}${requestingCompany ? ` [${requestingCompany}]` : ''}`,
-                            },
-                            ...(requestingCompany
-                              ? effectiveBankAccounts.filter((acc) => isAccountOwnedBy(acc, requestingCompany))
-                              : effectiveBankAccounts
-                            ).map((acc) => ({
-                              value: acc.id,
-                              label: `${acc.bankName} (${acc.accountName}) [${acc.companyName}]`,
-                            })),
-                          ]}
-                          error={fieldErrors.fundingBank}
-                          aria-label="Funding Bank"
-                        />
-                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-fg pointer-events-none" />
-                      </div>
-                    )}
-                    <FormFieldError error={fieldErrors.fundingBank} />
-                  </div>
-                </div>
-              )}
-
-              {/* Pre-recorded expense checkbox */}
-              <div className="pt-2 border-t border-stroke/20 space-y-2">
-                <label className="flex items-start gap-2.5 cursor-pointer text-xs font-medium text-focus">
-                  <input
-                    type="checkbox"
-                    checked={isPreRecorded}
-                    onChange={(e) => {
-                      setIsPreRecorded(e.target.checked)
-                      if (!e.target.checked) {
-                        setExistingExpenseId('')
-                        setSelectedEligibleExpense(null)
-                        setExpenseSearchQuery('')
-                        setIsExpenseDropdownOpen(false)
-                        if (fieldErrors.existingExpenseId) {
-                          setFieldErrors((prev) => {
-                            const n = { ...prev }
-                            delete n.existingExpenseId
-                            return n
-                          })
-                        }
-                      } else {
-                        setIsExpenseDropdownOpen(true)
-                      }
-                    }}
-                    className="mt-0.5 rounded border-stroke/50 text-primary focus:ring-primary w-4 h-4 cursor-pointer"
-                  />
-                  <div>
-                    <span className="font-semibold">Pre recorded in Expenses module</span>
-                    <p className="text-[11px] text-muted-fg font-normal">
-                      Check this if company cash was already recorded in expenses (prevents duplicate float deduction).
-                    </p>
-                  </div>
-                </label>
-
-                {isPreRecorded && (
-                  <div ref={expenseDropdownRef} className="pl-6 space-y-1.5 relative">
-                    <Label htmlFor="eligible-expense-search" className="text-xs font-semibold text-focus flex items-center justify-between">
-                      <span>
-                        Pre-recorded Petty Cash expense <span className="text-red-500">*</span>
-                      </span>
-                      {requestingCompany && (
-                        <span className="text-[10.5px] font-normal text-muted-fg">
-                          Scoped to {requestingCompany}
-                        </span>
-                      )}
-                    </Label>
-
-                    {selectedEligibleExpense ? (
-                      <div
-                        className={cn(
-                          'flex items-center justify-between gap-2 px-3 py-2 rounded-xl border bg-white text-xs shadow-2xs',
-                          fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-emerald-300 bg-emerald-50/40'
-                        )}
-                      >
-                        <div className="min-w-0">
-                          <div className="font-semibold text-focus truncate">
-                            #{selectedEligibleExpense.expenseId} · {selectedEligibleExpense.particulars || 'Petty Cash Expense'}
-                          </div>
-                          <div className="text-[11px] text-muted-fg flex items-center gap-2 mt-0.5">
-                            <span>{selectedEligibleExpense.expenseDate}</span>
-                            {selectedEligibleExpense.category && <span>· {selectedEligibleExpense.category}</span>}
-                            {selectedEligibleExpense.referenceNo && <span>· {selectedEligibleExpense.referenceNo}</span>}
-                            <span className="font-semibold text-emerald-700 tabular-nums">
-                              · {formatPHP(selectedEligibleExpense.amount)}
-                            </span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedEligibleExpense(null)
-                            setExistingExpenseId('')
-                            setIsExpenseDropdownOpen(true)
-                          }}
-                          className="p-1 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 shrink-0 cursor-pointer"
-                          title="Change selected expense"
-                          aria-label="Clear selected expense"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                        <Input
-                          id="eligible-expense-search"
-                          type="text"
-                          autoComplete="off"
-                          placeholder={`Search unclaimed Petty Cash expenses for ${requestingCompany || 'company'}...`}
-                          value={expenseSearchQuery}
-                          onFocus={() => setIsExpenseDropdownOpen(true)}
-                          onChange={(e) => {
-                            setExpenseSearchQuery(e.target.value)
-                            setIsExpenseDropdownOpen(true)
-                          }}
-                          className={cn(
-                            'h-9 pl-8 pr-8 rounded-xl border bg-white text-xs font-medium text-focus shadow-2xs',
-                            fieldErrors.existingExpenseId ? 'border-red-500 ring-1 ring-red-500' : 'border-stroke/50'
-                          )}
-                        />
-                        <ChevronDown className="w-3.5 h-3.5 text-muted-fg absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-
-                        {isExpenseDropdownOpen && (
-                          <div className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-stroke/40 bg-white shadow-lg p-1 space-y-0.5">
-                            {eligibleLoading ? (
-                              <div className="p-2 space-y-1.5">
-                                <Skeleton className="h-8 w-full rounded-lg" />
-                                <Skeleton className="h-8 w-full rounded-lg" />
-                              </div>
-                            ) : eligibleError ? (
-                              <div className="p-2.5 rounded-lg bg-rose-50 text-xs text-rose-700 flex items-center justify-between gap-2">
-                                <span className="truncate">{eligibleError}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => void loadEligibleExpenses(expenseSearchQuery)}
-                                  className="font-semibold underline underline-offset-2 shrink-0 cursor-pointer"
-                                >
-                                  Retry
-                                </button>
-                              </div>
-                            ) : eligibleExpenses.length === 0 ? (
-                              <div className="p-3 text-xs text-muted-fg text-center">
-                                {expenseSearchQuery.trim()
-                                  ? `No unclaimed Petty Cash expenses matching "${expenseSearchQuery.trim()}".`
-                                  : `No unclaimed Petty Cash expenses found for ${requestingCompany || 'this company'}.`}
-                              </div>
-                            ) : (
-                              eligibleExpenses.map((exp) => (
-                                <button
-                                  key={exp.expenseId}
-                                  type="button"
-                                  onClick={() => handleSelectEligibleExpense(exp)}
-                                  className="w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 focus:bg-slate-50 transition-colors flex items-center justify-between gap-2 cursor-pointer"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="text-xs font-semibold text-focus truncate">
-                                      #{exp.expenseId} · {exp.particulars || 'Petty Cash Expense'}
-                                    </div>
-                                    <div className="text-[10.5px] text-muted-fg truncate">
-                                      {exp.expenseDate}
-                                      {exp.category ? ` · ${exp.category}` : ''}
-                                      {exp.referenceNo ? ` · ${exp.referenceNo}` : ''}
-                                    </div>
-                                  </div>
-                                  <span className="text-xs font-bold text-emerald-700 tabular-nums shrink-0">
-                                    {formatPHP(exp.amount)}
-                                  </span>
-                                </button>
-                              ))
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    <FormFieldError error={fieldErrors.existingExpenseId} />
-                  </div>
-                )}
-              </div>
             </div>
 
             {/* 4. Receipt / Proof Upload (OPTIONAL) */}
@@ -1913,7 +1300,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
                   isLoading={isSubmitting}
                   className="h-11 px-6 rounded-[10px] text-xs font-semibold cursor-pointer"
                 >
-                  <span>{isReviewing ? 'Submit Reimbursement' : 'Review Reimbursement'}</span>
+                  <span>{isReviewing ? 'Submit Petty Expense' : 'Review Petty Expense'}</span>
                 </Button>
               </div>
             </div>

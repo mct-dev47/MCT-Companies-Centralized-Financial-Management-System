@@ -1899,8 +1899,8 @@ export const TenantPage: React.FC = () => {
                                   <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                     <div className="inline-flex items-center justify-center">
                                       <RowActionsMenu
-                                        canEdit
-                                        canDelete
+                                        canEdit={!rec.isLocked}
+                                        canDelete={!rec.isLocked}
                                         onEdit={() => handleOpenEditRecord(rec)}
                                         onDelete={() => setRemoveTarget({ kind: 'record', record: rec })}
                                         editLabel="Edit Payment"
@@ -2598,6 +2598,16 @@ export const TenantPage: React.FC = () => {
                           const isFlagged = tenant.auditStatus === 'Flagged'
 
                           if (!isVerified && !isFlagged) {
+                            if (tenant.isLocked) {
+                              return (
+                                <span
+                                  title="Locked: a payment on this lease is already in Sales and has been Verified by an Auditor"
+                                  className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 whitespace-nowrap cursor-help"
+                                >
+                                  Sales Verified
+                                </span>
+                              )
+                            }
                             return <span className="text-xs text-muted-fg/40 font-mono">-</span>
                           }
 
@@ -2787,15 +2797,27 @@ export const TenantPage: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  disabled={Boolean(activeTenant.isLocked)}
+                  title={
+                    activeTenant.isLocked
+                      ? "Locked: a payment on this lease is already in Sales and has been Verified by an Auditor"
+                      : undefined
+                  }
                   onClick={(e) => {
+                    if (activeTenant.isLocked) return
                     handleOpenDelete(activeTenant, e)
                     setMenuOpenTenantId(null)
                     setMenuPosition(null)
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors text-left',
+                    activeTenant.isLocked
+                      ? 'text-muted-fg/50 cursor-not-allowed'
+                      : 'text-rose-600 hover:bg-rose-50 cursor-pointer'
+                  )}
                 >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Delete Lease</span>
+                  <Trash2 className={cn('w-3.5 h-3.5 shrink-0', activeTenant.isLocked ? 'text-muted-fg/50' : 'text-rose-600')} />
+                  <span>{activeTenant.isLocked ? 'Delete Locked (Sales Verified)' : 'Delete Lease'}</span>
                 </button>
               </>
             )}

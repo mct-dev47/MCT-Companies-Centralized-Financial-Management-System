@@ -382,11 +382,22 @@ class TenantService:
         rows = self.db.query(User.user_id, User.name).filter(User.user_id.in_(valid_ids)).all()
         return {r[0]: r[1] for r in rows}
 
+    def _verified_sale_ids(self, sale_ids: List[Any]) -> set[int]:
+        """IDs of linked sales an Auditor has already Verified (those payments and leases are locked)."""
+        ids = sorted({int(sid) for sid in sale_ids if sid is not None})
+        if not ids:
+            return set()
+        from app.models.finance import Sale
+
+        rows = self.db.query(Sale.sales_id, Sale.audit_status).filter(Sale.sales_id.in_(ids)).all()
+        return {int(sid) for sid, st in rows if links.is_verified(st)}
+
     def to_out(
         self,
         row: Dict[str, Any],
         names: Optional[Dict[int, str]] = None,
         user_names: Optional[Dict[int, str]] = None,
+        verified_sale_ids: Optional[set[int]] = None,
     ) -> Dict[str, Any]:
         payments = row.get("payments") or []
         paid = round2(sum(float(p.get("amount") or 0) for p in payments if p.get("status") != "Missed"))
@@ -397,6 +408,8 @@ class TenantService:
             if row.get("created_by") is not None:
                 user_ids.append(row.get("created_by"))
             user_names = self._user_names(user_ids)
+        if verified_sale_ids is None:
+            verified_sale_ids = self._verified_sale_ids([p.get("sale_id") for p in payments])
         out = {k: row.get(k) for k in LEASE_COLUMNS}
         for key in ("rent_amount", "penalty_rate", "total_amount_payable"):
             out[key] = float(out[key]) if out.get(key) is not None else None
@@ -407,15 +420,18 @@ class TenantService:
         out["amount_paid"] = paid
         out["remaining_balance"] = max(0.0, round2(total - paid))
         out["created_by_name"] = user_names.get(row.get("created_by"))
-        out["payments"] = [
+        out_payments = [
             {
                 **{k: p.get(k) for k in PAYMENT_COLUMNS},
                 "amount": float(p.get("amount") or 0),
                 "created_at": _iso(p.get("created_at")),
                 "created_by_name": user_names.get(p.get("created_by")),
+                "is_locked": p.get("sale_id") is not None and int(p.get("sale_id")) in verified_sale_ids,
             }
             for p in payments
         ]
+        out["payments"] = out_payments
+        out["is_locked"] = any(p["is_locked"] for p in out_payments)
         return out
 
     # -- reads ------------------------------------------------------------
@@ -423,14 +439,18 @@ class TenantService:
         rows = self._run("list_leases", company_ids)
         names = self._company_names(sorted({r["company_id"] for r in rows}))
         user_ids = set()
+        sale_ids = []
         for r in rows:
             if r.get("created_by") is not None:
                 user_ids.add(r.get("created_by"))
             for p in r.get("payments") or []:
                 if p.get("created_by") is not None:
                     user_ids.add(p.get("created_by"))
+                if p.get("sale_id") is not None:
+                    sale_ids.append(p.get("sale_id"))
         user_names = self._user_names(list(user_ids))
-        return [self.to_out(r, names, user_names) for r in rows]
+        verified_sale_ids = self._verified_sale_ids(sale_ids)
+        return [self.to_out(r, names, user_names, verified_sale_ids) for r in rows]
 
     def get_row(self, lease_id: int, user: AuthenticatedUser) -> Dict[str, Any]:
         row = self._run("get_lease", lease_id)

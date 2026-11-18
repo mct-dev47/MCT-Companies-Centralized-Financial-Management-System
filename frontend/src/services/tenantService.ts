@@ -27,6 +27,8 @@ export interface DailyRentRecord {
   createdByName?: string
   /** The Sale that credited this payment to the bank (spec 0045). That Sale is the payment's row in Transactions. */
   saleId?: string
+  /** True when the linked Sale in Sales has already been Verified by an Auditor. */
+  isLocked?: boolean
 }
 
 export interface TenantLease {
@@ -55,6 +57,8 @@ export interface TenantLease {
   auditRemarks?: string
   audited_at?: string
   auditedAt?: string
+  /** True when any payment's linked Sale in Sales has already been Verified by an Auditor. */
+  isLocked?: boolean
 }
 
 /** The lease fields the New Lease and Edit forms send. */
@@ -157,6 +161,7 @@ export function mapLease(b: any): TenantLease {
     auditedBy: b.audited_by || undefined,
     auditRemarks: b.audit_remarks || undefined,
     audited_at: b.audited_at || undefined,
+    isLocked: Boolean(b.is_locked),
     dailyPayments: (b.payments || []).map(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (p: any): DailyRentRecord => ({
@@ -173,6 +178,7 @@ export function mapLease(b: any): TenantLease {
         createdBy: p.created_by ?? undefined,
         createdByName: p.created_by_name || undefined,
         saleId: p.sale_id != null ? String(p.sale_id) : undefined,
+        isLocked: Boolean(p.is_locked),
       })
     ),
   }
