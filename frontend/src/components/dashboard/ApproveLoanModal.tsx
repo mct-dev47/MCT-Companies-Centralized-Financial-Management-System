@@ -282,7 +282,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
                           </span>
                         </div>
                         <div className="text-[11px] text-muted-fg flex items-center gap-2">
-                          <span>•••• {selectedBank.accountNumber.slice(-4)}</span>
+                          <span>{selectedBank.accountType}</span>
                           <span>•</span>
                           <span className="text-emerald-600 font-semibold">
                             Balance: {formatPHP(selectedBank.currentBalance)}
@@ -339,7 +339,7 @@ export const ApproveLoanModal: React.FC<ApproveLoanModalProps> = ({
                               <span className="font-medium text-blue-700 bg-blue-100/60 px-1.5 py-0.2 rounded text-[10px]">
                                 {acc.companyName}
                               </span>
-                              <span>•••• {acc.accountNumber.slice(-4)}</span>
+                              <span>{acc.accountType}</span>
                               <span>•</span>
                               <span className="text-emerald-600 font-semibold">
                                 {formatPHP(acc.currentBalance)}

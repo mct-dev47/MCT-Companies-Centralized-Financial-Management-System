@@ -117,7 +117,8 @@ import { Link } from 'react-router-dom'
 
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
-import { getParticularsSummary } from '@/utils/particularsUtils'
+import { getParticularsSummary, stripBankSystemPrefix } from '@/utils/particularsUtils'
+import { formatToMMDDYYYY } from '@/utils/dateUtils'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 
@@ -247,7 +248,7 @@ const CompanyOwnerChecklist: React.FC<{
   )
 }
 
-const ITEMS_PER_PAGE = 8
+const ITEMS_PER_PAGE = 50
 
 export const BankManagementPage: React.FC = () => {
 
@@ -558,8 +559,6 @@ export const BankManagementPage: React.FC = () => {
 
     accountName: '',
 
-    accountNumber: '',
-
     cardLabel: '',
 
     companyNames: [
@@ -573,8 +572,6 @@ export const BankManagementPage: React.FC = () => {
     startingBalance: '',
 
     colorTheme: 'red' as 'red' | 'grey',
-
-    notes: '',
 
   })
 
@@ -699,7 +696,7 @@ export const BankManagementPage: React.FC = () => {
 
   }, [roleScopedAccounts, selectedAccountId, accounts, isCompanyScoped, isAggregatedView, selectedCompany])
 
-  // Edit form state with accountName, branch, startingBalance (view-only), currentBalance, and notes
+  // Edit form state with accountName, branch, startingBalance (view-only), and currentBalance
 
   const [editAccountForm, setEditAccountForm] = React.useState({
 
@@ -710,8 +707,6 @@ export const BankManagementPage: React.FC = () => {
     startingBalance: 0,
 
     currentBalance: '',
-
-    notes: '',
 
     companyNames: [] as string[],
 
@@ -732,8 +727,6 @@ export const BankManagementPage: React.FC = () => {
         startingBalance: activeAccount.startingBalance,
 
         currentBalance: activeAccount.currentBalance.toString(),
-
-        notes: activeAccount.notes || '',
 
       })
 
@@ -796,8 +789,6 @@ export const BankManagementPage: React.FC = () => {
         accountName: editAccountForm.accountName.trim(),
 
         branch: editAccountForm.branch.trim(),
-
-        notes: editAccountForm.notes.trim(),
 
       }, user?.role)
 
@@ -1212,8 +1203,6 @@ export const BankManagementPage: React.FC = () => {
 
         accountName: addBankForm.accountName.trim(),
 
-        accountNumber: addBankForm.accountNumber.trim() || undefined,
-
         companyName: companyAssigned,
 
         companyNames: chosenOwners,
@@ -1227,8 +1216,6 @@ export const BankManagementPage: React.FC = () => {
         startingBalance: startingNum,
 
         colorTheme: addBankForm.colorTheme,
-
-        notes: addBankForm.notes.trim(),
 
       }, user?.role)
 
@@ -1278,15 +1265,11 @@ export const BankManagementPage: React.FC = () => {
 
           accountName: '',
 
-          accountNumber: '',
-
           cardLabel: '',
 
           startingBalance: '',
 
           branch: prev.branch,
-
-          notes: '',
 
         }))
 
@@ -1304,8 +1287,6 @@ export const BankManagementPage: React.FC = () => {
 
           accountName: '',
 
-          accountNumber: '',
-
           cardLabel: '',
 
           companyNames: isCompanyScoped ? [assignedCompany] : (selectedCompany !== 'All Companies' ? [selectedCompany] : []),
@@ -1317,8 +1298,6 @@ export const BankManagementPage: React.FC = () => {
           startingBalance: '',
 
           colorTheme: 'red',
-
-          notes: '',
 
         })
 
@@ -1502,7 +1481,14 @@ export const BankManagementPage: React.FC = () => {
 
     const headers = ['Date', ...(showCompanyColumn ? ['Company'] : []), 'Cheque No.', 'Particulars', 'Withdrawal', 'Deposit', 'Category', 'Current Balance']
 
-    const rows = filteredTransactions.map((t) => [
+    const rows = filteredTransactions.map((t) => {
+      const cleaned = stripBankSystemPrefix(t.particulars)
+      const summary = getParticularsSummary(cleaned)
+      const displayParticulars =
+        summary.firstItemName && summary.firstItemName !== '—'
+          ? summary.firstItemName
+          : cleaned || t.category || '—'
+      return [
 
       t.date,
 
@@ -1510,7 +1496,7 @@ export const BankManagementPage: React.FC = () => {
 
       t.chequeNo || '—',
 
-      `"${t.particulars.replace(/"/g, '""')}"`,
+      `"${displayParticulars.replace(/"/g, '""')}"`,
 
       t.withdrawal ? t.withdrawal : '',
 
@@ -1520,7 +1506,8 @@ export const BankManagementPage: React.FC = () => {
 
       t.runningBalance,
 
-    ])
+    ]
+    })
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
 
@@ -1566,7 +1553,14 @@ export const BankManagementPage: React.FC = () => {
 
           .map(
 
-            (t) => `
+            (t) => {
+              const cleaned = stripBankSystemPrefix(t.particulars)
+              const summary = getParticularsSummary(cleaned)
+              const displayParticulars =
+                summary.firstItemName && summary.firstItemName !== '—'
+                  ? summary.firstItemName
+                  : cleaned || t.category || '—'
+              return `
 
           <tr>
 
@@ -1574,7 +1568,7 @@ export const BankManagementPage: React.FC = () => {
 
             <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px; font-weight: 600;">${t.chequeNo || '—'}</td>
 
-            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${t.particulars}</td>
+            <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${displayParticulars}</td>
 
             <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; text-align: right; color: #e11d48; font-weight: 600;">${t.withdrawal ? `₱${t.withdrawal.toLocaleString('en-PH', { minimumFractionDigits: 2 })}` : '—'}</td>
 
@@ -1587,6 +1581,7 @@ export const BankManagementPage: React.FC = () => {
           </tr>
 
         `
+            }
 
           )
 
@@ -1624,7 +1619,7 @@ export const BankManagementPage: React.FC = () => {
 
           <h1>MCT Financial Management - Bank Management</h1>
 
-          <p>Bank Statement for <strong>${activeAccount.companyName}</strong> · Bank: <strong>${activeAccount.bankName} (${activeAccount.accountNumber})</strong> · Current Balance: <strong>₱${activeAccount.currentBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong></p>
+          <p>Bank Statement for <strong>${activeAccount.companyName}</strong> · Bank: <strong>${activeAccount.bankName} (${activeAccount.accountName})</strong> · Current Balance: <strong>₱${activeAccount.currentBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</strong></p>
 
           <table>
 
@@ -2230,7 +2225,7 @@ export const BankManagementPage: React.FC = () => {
 
               <span className="text-xs font-mono text-white/70">
 
-                {isAggregatedView ? `${roleScopedAccounts.length} Registered Accounts` : `•••• ${activeAccount?.accountNumber?.slice(-4)}`}
+                {isAggregatedView ? `${roleScopedAccounts.length} Registered Accounts` : `${activeAccount?.accountType || 'Bank'} Account`}
 
               </span>
 
@@ -3211,19 +3206,26 @@ export const BankManagementPage: React.FC = () => {
                   description={tableSearchQuery ? 'Try clearing your search query' : 'Deposit or withdraw funds to record transactions'}
                 />
               ) : (
-                paginatedTransactions.map((tx) => (
+                paginatedTransactions.map((tx) => {
+                  const cleanedParticulars = stripBankSystemPrefix(tx.particulars)
+                  const summary = getParticularsSummary(cleanedParticulars)
+                  const displayParticulars =
+                    summary.firstItemName && summary.firstItemName !== '—'
+                      ? summary.firstItemName
+                      : cleanedParticulars || tx.category || '—'
+                  return (
                   <TableRow
                     key={tx.id}
                     onClick={() => {
                       setViewingBankTx({
                         id: tx.id,
-                        refNo: tx.chequeNo || tx.id,
+                        refNo: tx.chequeNo || '',
                         chequeNo: tx.chequeNo || '',
                         date: tx.date,
                         type: tx.withdrawal && tx.withdrawal > 0 ? 'Expense' : 'Sales',
                         company: (tx as any).companyName || activeAccount?.companyName || selectedCompany || 'MCT Group of Companies',
-                        description: tx.particulars,
-                        particulars: tx.particulars,
+                        description: cleanedParticulars,
+                        particulars: cleanedParticulars,
                         amount: tx.deposit || tx.withdrawal || 0,
                         withdrawal: tx.withdrawal || 0,
                         deposit: tx.deposit || 0,
@@ -3241,7 +3243,7 @@ export const BankManagementPage: React.FC = () => {
                   >
                     {/* Date */}
                     <TableCell className="px-2.5 sm:px-3 py-3 font-mono text-xs text-muted-fg whitespace-nowrap">
-                      {tx.date}
+                      {formatToMMDDYYYY(tx.date) || tx.date}
                     </TableCell>
 
                     {/* Cheque No */}
@@ -3250,10 +3252,17 @@ export const BankManagementPage: React.FC = () => {
                     </TableCell>
 
                     {/* Particulars */}
-                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={tx.particulars}>
-                      <span className="font-semibold text-focus truncate block">
-                        {getBankParticularsShortTitle(tx.particulars, tx.category)}
-                      </span>
+                    <TableCell className="px-2.5 sm:px-3 py-2.5 text-xs text-focus truncate" title={cleanedParticulars || tx.category || '—'}>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-semibold text-focus truncate">
+                          {displayParticulars}
+                        </span>
+                        {summary.count > 1 && (
+                          <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                            +{summary.count - 1} more
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
 
                     {/* Withdrawal */}
@@ -3278,7 +3287,8 @@ export const BankManagementPage: React.FC = () => {
                       ₱ {tx.runningBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
                     </TableCell>
                   </TableRow>
-                ))
+                  )
+                })
               )}
             </TableBody>
           </Table>
@@ -3678,7 +3688,7 @@ export const BankManagementPage: React.FC = () => {
 
                 <DialogDescription className="text-xs text-muted-fg">
 
-                  Crediting funds to {activeAccount?.companyName} ({activeAccount?.accountNumber}).
+                  Crediting funds to {activeAccount?.companyName} ({activeAccount?.accountName}).
 
                 </DialogDescription>
 
@@ -4270,7 +4280,7 @@ export const BankManagementPage: React.FC = () => {
         open={isFinance && !!accountToDelete}
         onOpenChange={(open) => { if (!open && !isDeletingAccount) setAccountToDelete(null) }}
         title="Delete Bank Account"
-        description={`Permanently delete ${accountToDelete?.bankName} (${accountToDelete?.accountNumber})? All associated records will be deleted. This action cannot be undone.`}
+        description={`Permanently delete ${accountToDelete?.bankName} (${accountToDelete?.accountName})? All associated records will be deleted. This action cannot be undone.`}
         confirmLabel="Delete Account"
         cancelLabel="Cancel"
         variant="destructive"
@@ -4442,28 +4452,6 @@ export const BankManagementPage: React.FC = () => {
                 />
 
               </div>
-
-            </div>
-
-            <div>
-
-              <label className="text-xs font-semibold text-focus block mb-1">
-
-                Notes & Instructions
-
-              </label>
-
-              <Input
-
-                value={editAccountForm.notes}
-
-                onChange={(e) => setEditAccountForm({ ...editAccountForm, notes: e.target.value })}
-
-                placeholder="Operating settlement instructions or remarks"
-
-                className="h-10 text-xs sm:text-sm rounded-xl"
-
-              />
 
             </div>
 
@@ -4694,18 +4682,6 @@ export const BankManagementPage: React.FC = () => {
               <span className="font-extrabold text-emerald-700 text-sm mt-0.5 block">
 
                 {formatPHP(activeAccount?.currentBalance || 0)}
-
-              </span>
-
-            </div>
-
-            <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 sm:col-span-2">
-
-              <span className="text-[11px] text-muted-fg font-medium block">Registered Notes & Purpose</span>
-
-              <span className="text-focus/90 text-xs mt-1 block">
-
-                {activeAccount?.notes || 'Operating settlement account for general corporate treasury management.'}
 
               </span>
 

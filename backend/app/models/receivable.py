@@ -22,7 +22,6 @@ class Receivable(Base):
     customer_type = Column(String(50), nullable=False, default="External")  # 'Internal' or 'External'
     sale_id = Column(Integer, ForeignKey("sales.sales_id", ondelete="CASCADE"), nullable=True, index=True)
     sale_line_index = Column(Integer, nullable=True)
-    expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True, index=True)
     transaction_date = Column(Date, nullable=False)
     items_summary = Column(Text, nullable=False)
     total_amount = Column(Numeric(15, 2), nullable=False)
@@ -41,7 +40,6 @@ class Receivable(Base):
         order_by="desc(ReceivablePayment.payment_date), desc(ReceivablePayment.payment_id)",
     )
     sale = relationship("Sale", foreign_keys=[sale_id], backref=backref("receivables", cascade="all, delete", passive_deletes=True))
-    expense = relationship("Expense", foreign_keys=[expense_id], backref="receivables")
 
 
 class ReceivablePayment(Base):

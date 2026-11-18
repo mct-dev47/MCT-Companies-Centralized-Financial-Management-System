@@ -43,17 +43,6 @@ import {
   notifySuccess,
 } from '@/utils/errorUtils'
 
-// Helper to parse date string like "Oct 6, 2026 · 9:15 AM" or "2026-10-05 08:14"
-function parseDateForFilter(dateStr: string): Date | null {
-  if (!dateStr) return null
-  const datePart = dateStr.includes('·')
-    ? dateStr.split('·')[0].trim()
-    : dateStr.split(' ')[0].trim()
-  const parsed = Date.parse(datePart)
-  if (!isNaN(parsed)) return new Date(parsed)
-  return null
-}
-
 // Log values come from the database
 export const ActivityLogPage: React.FC = () => {
   const [logs, setLogs] = React.useState<ActivityLogItem[]>([])
@@ -92,7 +81,8 @@ export const ActivityLogPage: React.FC = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
-  const itemsPerPage = 10
+  const [itemsPerPage, setItemsPerPage] = React.useState(50)
+  const [totalLogs, setTotalLogs] = React.useState(0)
 
   // Close export dropdown on click outside
   React.useEffect(() => {
@@ -110,8 +100,15 @@ export const ActivityLogPage: React.FC = () => {
 
   const fetchLogs = React.useCallback(async () => {
     try {
-      const data = await activityLogService.getActivityLogs()
-      setLogs(data)
+      const { items, total } = await activityLogService.getActivityLogsPaginated({
+        limit: itemsPerPage,
+        offset: (currentPage - 1) * itemsPerPage,
+        search: searchQuery || undefined,
+        startDate: dateRange.startDate || undefined,
+        endDate: dateRange.endDate || undefined,
+      })
+      setLogs(items)
+      setTotalLogs(total)
       setLoadError('')
     } catch (err) {
       setLoadError(
@@ -124,7 +121,7 @@ export const ActivityLogPage: React.FC = () => {
       setLoading(false)
       setIsRefreshing(false)
     }
-  }, [])
+  }, [currentPage, itemsPerPage, searchQuery, dateRange.startDate, dateRange.endDate])
 
   React.useEffect(() => {
     setLoading(true)
@@ -155,48 +152,13 @@ export const ActivityLogPage: React.FC = () => {
     }
   }
 
-  // Filter logs by search and date range
-  const filteredLogs = React.useMemo(() => {
-    let result = logs
+  const filteredLogs = logs
 
-    // Search query
-    const q = searchQuery.toLowerCase().trim()
-    if (q) {
-      result = result.filter(
-        (l) =>
-          l.company.toLowerCase().includes(q) ||
-          l.user.toLowerCase().includes(q) ||
-          l.action.toLowerCase().includes(q) ||
-          l.module.toLowerCase().includes(q) ||
-          l.target.toLowerCase().includes(q) ||
-          (l.recordRef && l.recordRef.toLowerCase().includes(q)) ||
-          l.ipAddress.toLowerCase().includes(q) ||
-          l.time.toLowerCase().includes(q)
-      )
-    }
-
-    // Date range filter
-    if (dateRange.startDate && dateRange.endDate) {
-      const start = new Date(`${dateRange.startDate}T00:00:00`)
-      const end = new Date(`${dateRange.endDate}T23:59:59`)
-      result = result.filter((l) => {
-        const lDate = parseDateForFilter(l.time)
-        if (!lDate) return true
-        return lDate >= start && lDate <= end
-      })
-    }
-
-    return result
-  }, [logs, searchQuery, dateRange])
-
-  // Pagination calculations
-  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / itemsPerPage))
+  // Pagination calculations (server-side)
+  const totalPages = Math.max(1, Math.ceil(totalLogs / itemsPerPage))
   const startIndex = (currentPage - 1) * itemsPerPage
-  const endIndex = Math.min(startIndex + itemsPerPage, filteredLogs.length)
-  const displayedLogs = React.useMemo(
-    () => filteredLogs.slice(startIndex, endIndex),
-    [filteredLogs, startIndex, endIndex]
-  )
+  const endIndex = Math.min(startIndex + logs.length, totalLogs)
+  const displayedLogs = logs
 
   const handleClearFilters = () => {
     setSearchQuery('')
@@ -208,9 +170,19 @@ export const ActivityLogPage: React.FC = () => {
     searchQuery.trim().length > 0 ||
     (dateRange.startDate !== null && dateRange.endDate !== null)
 
-  // Export CSV handler
-  const handleExportCsv = () => {
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, dateRange.startDate, dateRange.endDate])
+
+  // Export CSV handler (fetches full matching dataset, not just current page)
+  const handleExportCsv = async () => {
     try {
+      const exportLogs = await activityLogService.getActivityLogs({
+        search: searchQuery || undefined,
+        startDate: dateRange.startDate || undefined,
+        endDate: dateRange.endDate || undefined,
+        limit: 1000,
+      })
       const headers = [
         'Company',
         'User',
@@ -221,7 +193,7 @@ export const ActivityLogPage: React.FC = () => {
         'Severity',
         'Time',
       ]
-      const rows = filteredLogs.map((l) => [
+      const rows = exportLogs.map((l) => [
         csvCell(l.company),
         csvCell(l.user),
         csvCell(l.action),
@@ -251,18 +223,29 @@ export const ActivityLogPage: React.FC = () => {
     }
   }
 
-  // Export PDF handler
-  const handleExportPdf = () => {
+  // Export PDF handler (fetches full matching dataset, not just current page)
+  const handleExportPdf = async () => {
     const printWindow = window.open('', '_blank')
     if (!printWindow) {
       notifyWarning('Pop-up blocked. Please allow pop-ups for this site to export PDF.')
       return
     }
+    let exportLogs = filteredLogs
+    try {
+      exportLogs = await activityLogService.getActivityLogs({
+        search: searchQuery || undefined,
+        startDate: dateRange.startDate || undefined,
+        endDate: dateRange.endDate || undefined,
+        limit: 1000,
+      })
+    } catch {
+      // fall back to currently loaded logs if full fetch fails
+    }
 
     const rowsHtml =
-      filteredLogs.length === 0
+      exportLogs.length === 0
         ? `<tr><td colspan="8" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No activity logs found for this selection.</td></tr>`
-        : filteredLogs
+        : exportLogs
             .map(
               (l) => `
         <tr>
@@ -617,10 +600,14 @@ export const ActivityLogPage: React.FC = () => {
         <TablePagination
           currentPage={currentPage}
           totalPages={totalPages}
-          totalItems={filteredLogs.length}
+          totalItems={totalLogs}
           startIndex={startIndex}
           endIndex={endIndex}
           pageSize={itemsPerPage}
+          onPageSizeChange={(sz) => {
+            setItemsPerPage(sz)
+            setCurrentPage(1)
+          }}
           itemLabel="activity records"
           onPageChange={setCurrentPage}
         />

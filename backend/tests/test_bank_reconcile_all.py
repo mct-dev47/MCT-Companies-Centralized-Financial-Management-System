@@ -22,9 +22,9 @@ def _db():
     engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
-    db.add(Company(company_id=1, company_name="Hotel", starting_balance=Decimal("0")))
+    db.add(Company(company_id=1, company_name="Hotel"))
     db.add(BankAccount(
-        id="bnk-010", bank_name="CHINABANK", account_name="Main", account_number="1", company_name="Hotel",
+        id="bnk-010", bank_name="CHINABANK", account_name="Main", company_name="Hotel",
         starting_balance=Decimal("20000.00"), current_balance=Decimal("19999.00"),  # drifted stored balance
     ))
     db.commit()
@@ -118,7 +118,7 @@ def test_startup_repair_keeps_entries_when_sales_table_is_empty():
 
 def test_supervisor_scope_only_reconciles_their_companies():
     db = _db()
-    db.add(Company(company_id=2, company_name="Other", starting_balance=Decimal("0")))
+    db.add(Company(company_id=2, company_name="Other"))
     db.add_all([
         _sale(104, "Paid", "Deposited", "1349", "Room [Paid]"),
         Sale(sales_id=200, company_id=2, transaction_date=date(2026, 11, 6), amount=Decimal("500"),

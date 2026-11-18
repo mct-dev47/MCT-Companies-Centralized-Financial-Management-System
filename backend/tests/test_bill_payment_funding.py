@@ -31,21 +31,21 @@ def _db():
     )
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
-    db.add(Company(company_id=1, company_name="Acme", starting_balance=Decimal("0.00")))
-    db.add(Company(company_id=2, company_name="Other Co", starting_balance=Decimal("0.00")))
+    db.add(Company(company_id=1, company_name="Acme"))
+    db.add(Company(company_id=2, company_name="Other Co"))
     db.add(BankAccount(
-        id="bnk-001", bank_name="BDO", account_name="Acme Main", account_number="0001",
+        id="bnk-001", bank_name="BDO", account_name="Acme Main", 
         company_name="Acme", company_id=1,
         starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
     ))
     db.add(BankAccount(
-        id="bnk-other", bank_name="BPI", account_name="Other", account_number="0002",
+        id="bnk-other", bank_name="BPI", account_name="Other", 
         company_name="Other Co", company_id=2,
         starting_balance=Decimal("5000.00"), current_balance=Decimal("5000.00"),
     ))
     db.add(PettyCashTopUp(
         company_id=1, amount=Decimal("500.00"), topup_date=date.today(),
-        status="Approved", request_type="topup", reference_no="PC-1",
+        status="Approved", request_type="topup",
     ))
     db.add(Bill(
         bill_id=1, company_id=1, bill_name="Meralco", amount=Decimal("300.00"),

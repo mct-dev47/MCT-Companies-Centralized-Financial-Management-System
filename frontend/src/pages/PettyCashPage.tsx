@@ -82,6 +82,7 @@ import {
   PETTY_CASH_FUNDING_LABEL,
   type PettyCashLedgerEntry,
 } from '@/services/pettyCashService'
+import { expenseService } from '@/services/expenseService'
 import { saveAuditReview, reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { websocketService } from '@/services/websocketService'
 
@@ -133,11 +134,15 @@ function isBlankStatusEntry(entry: PettyCashTransaction | null | undefined): boo
 function formatToShortDate(val?: string | null): string {
   if (!val) return '—'
   const trimmed = String(val).trim()
-  if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(trimmed)) return trimmed
-  const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
-  if (mLong) return `${mLong[1]}/${mLong[2]}/${mLong[3].slice(2)}`
   const mIso = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
-  if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1].slice(2)}`
+  if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1]}`
+  const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
+  if (mLong) return `${mLong[1].padStart(2, '0')}/${mLong[2].padStart(2, '0')}/${mLong[3]}`
+  const mTwo = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(trimmed)
+  if (mTwo) {
+    const yy = Number(mTwo[3]) >= 70 ? `19${mTwo[3]}` : `20${mTwo[3]}`
+    return `${mTwo[1].padStart(2, '0')}/${mTwo[2].padStart(2, '0')}/${yy}`
+  }
   return trimmed
 }
 
@@ -272,7 +277,7 @@ export const PettyCashPage: React.FC = () => {
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
-  const itemsPerPage = 10
+  const itemsPerPage = 50
 
   // Modals state
   const [isTopUpModalOpen, setIsTopUpModalOpen] = React.useState(false)
@@ -493,19 +498,28 @@ export const PettyCashPage: React.FC = () => {
       editEntry.requestType === 'replenishment_disbursement' ||
       Boolean(editEntry.paidBy)
     try {
-      await pettyCashService.updateTopUp(editEntry.recordId, {
-        amount: numericAmount,
-        description: editDescription.trim(),
-        ...(showsClaimFields ? { paid_by: editPaidBy.trim(), category: editCategory.trim() } : {}),
-      })
+      if (editEntry.expenseId != null || (editEntry.id && String(editEntry.id).startsWith('expense-'))) {
+        const expId = editEntry.expenseId || editEntry.recordId
+        await expenseService.updateExpense(expId, {
+          withdrawal: numericAmount,
+          particulars: editDescription.trim(),
+          ...(editCategory.trim() ? { category: editCategory.trim() } : {}),
+        })
+      } else {
+        await pettyCashService.updateTopUp(editEntry.recordId, {
+          amount: numericAmount,
+          description: editDescription.trim(),
+          ...(showsClaimFields ? { paid_by: editPaidBy.trim(), category: editCategory.trim() } : {}),
+        })
+      }
       setEditEntry(null)
       await loadData()
-      setApprovalFeedback('Petty cash request updated successfully.')
+      setApprovalFeedback('Petty cash transaction updated successfully.')
       setTimeout(() => setApprovalFeedback(null), 5000)
     } catch (err: any) {
-      const msg = formatUserFriendlyErrorMessage(err, 'Failed to update request.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to update transaction.')
       setEditError(msg)
-      notifyError(err, 'Failed to update request.')
+      notifyError(err, 'Failed to update transaction.')
     } finally {
       setIsEditing(false)
     }
@@ -521,15 +535,20 @@ export const PettyCashPage: React.FC = () => {
     setIsDeleting(true)
     setDeleteError('')
     try {
-      await pettyCashService.deleteTopUp(deleteConfirmEntry.recordId)
+      if (deleteConfirmEntry.expenseId != null || (deleteConfirmEntry.id && String(deleteConfirmEntry.id).startsWith('expense-'))) {
+        const expId = deleteConfirmEntry.expenseId || deleteConfirmEntry.recordId
+        await expenseService.deleteExpense(expId)
+      } else {
+        await pettyCashService.deleteTopUp(deleteConfirmEntry.recordId)
+      }
       setDeleteConfirmEntry(null)
       await loadData()
-      setApprovalFeedback('Petty cash request deleted successfully.')
+      setApprovalFeedback('Petty cash transaction deleted successfully.')
       setTimeout(() => setApprovalFeedback(null), 5000)
     } catch (err: any) {
-      const msg = formatUserFriendlyErrorMessage(err, 'Failed to delete request.')
+      const msg = formatUserFriendlyErrorMessage(err, 'Failed to delete transaction.')
       setDeleteError(msg)
-      notifyError(err, 'Failed to delete request.')
+      notifyError(err, 'Failed to delete transaction.')
     } finally {
       setIsDeleting(false)
     }
@@ -1818,15 +1837,6 @@ export const PettyCashPage: React.FC = () => {
               <div className="rounded-2xl border border-slate-200/80 bg-white p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5">
                 <div className="min-w-0">
                   <span className="text-xs font-medium text-muted-fg block">
-                    Reference No.
-                  </span>
-                  <span className="font-mono text-sm font-semibold text-focus break-all mt-0.5 block">
-                    {targetEntry.referenceNumber || targetEntry.id || '—'}
-                  </span>
-                </div>
-
-                <div className="min-w-0">
-                  <span className="text-xs font-medium text-muted-fg block">
                     Subsidiary / Company
                   </span>
                   <span className="text-sm font-semibold text-focus break-words mt-0.5 block">
@@ -2454,42 +2464,6 @@ export const PettyCashPage: React.FC = () => {
               {/* Footer Actions */}
               <div className="flex items-center justify-between pt-3 border-t border-stroke/20 gap-2 flex-wrap">
 
-
-                {/* Pending Finance: Allow Edit / Delete for unendorsed requests */}
-                {(targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') &&
-                  !isAudit && !isOwner && !isAdmin && (
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const item = targetEntry
-                          setIsSummaryModalOpen(false)
-                          handleOpenEdit(item)
-                        }}
-                        className="h-9 px-3 text-xs font-semibold flex items-center gap-1.5"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        <span>Edit Request</span>
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const item = targetEntry
-                          setIsSummaryModalOpen(false)
-                          handleOpenDelete(item)
-                        }}
-                        className="h-9 px-3 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 border-rose-200 flex items-center gap-1.5"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Request</span>
-                      </Button>
-                    </div>
-                  )}
-
                 {/* Finance Team Actions: Endorse to Audit or Reject */}
                 {!isAudit && isFinanceOrAdmin && (targetEntry.status === 'Pending Finance Endorsement' || targetEntry.status === 'Pending Finance Approval') && (
                   <div className="flex items-center gap-2">
@@ -3053,11 +3027,13 @@ export const PettyCashPage: React.FC = () => {
         title={
           deleteConfirmEntry?.requestType === 'reimbursement' || deleteConfirmEntry?.requestType === 'replenishment_disbursement'
             ? 'Delete Reimbursement Request'
+            : deleteConfirmEntry?.type === 'expense' || deleteConfirmEntry?.expenseId != null
+            ? 'Delete Petty Cash Expense'
             : 'Delete Petty Cash Request'
         }
         description={
           <>
-            Are you sure you want to delete this pending request? This action cannot be undone.
+            Are you sure you want to delete this petty cash transaction? This action cannot be undone.
             {deleteError && (
               <div className="mt-2 p-2.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 text-left">
                 {deleteError}
@@ -3220,6 +3196,47 @@ export const PettyCashPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
+            {!isAudit && !isOwner && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenEdit(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
+                >
+                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Edit Reimbursement'
+                      : 'Edit Transaction'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeMenuPetty
+                    setOpenMenuPettyId(null)
+                    setMenuPosition(null)
+                    setActiveMenuPetty(null)
+                    handleOpenDelete(target)
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                  <span>
+                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
+                      ? 'Delete Reimbursement'
+                      : 'Delete Transaction'}
+                  </span>
+                </button>
+              </>
+            )}
+
             {canAuditActions ? (
               getAuditableExpenseId(activeMenuPetty) != null ? (
                 <>
@@ -3256,50 +3273,9 @@ export const PettyCashPage: React.FC = () => {
                   <span>Review & Approve</span>
                 </button>
               ) : null
-            ) : !isOwner &&
-              !isAdmin &&
-              !isBlankStatusEntry(activeMenuPetty) &&
-              (activeMenuPetty.status === 'Pending Finance Endorsement' ||
-                activeMenuPetty.status === 'Pending Finance Approval') ? (
-              <>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const target = activeMenuPetty
-                    setOpenMenuPettyId(null)
-                    setMenuPosition(null)
-                    setActiveMenuPetty(null)
-                    handleOpenEdit(target)
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer border-t border-slate-100 mt-1 pt-1.5"
-                >
-                  <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                  <span>
-                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
-                      ? 'Edit Reimbursement'
-                      : 'Edit Petty Cash Request'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const target = activeMenuPetty
-                    setOpenMenuPettyId(null)
-                    setMenuPosition(null)
-                    setActiveMenuPetty(null)
-                    handleOpenDelete(target)
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>
-                    {activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment_disbursement'
-                      ? 'Delete Reimbursement'
-                      : 'Delete Petty Cash Request'}
-                  </span>
-                </button>
-              </>
-            ) : canExecuteFinancialActions && !isBlankStatusEntry(activeMenuPetty) && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment') ? (
+            ) : null}
+
+            {canExecuteFinancialActions && !isBlankStatusEntry(activeMenuPetty) && (activeMenuPetty.requestType === 'reimbursement' || activeMenuPetty.requestType === 'replenishment') ? (
               <>
                 {/* Zero excess claim */}
                 {activeMenuPetty.status === 'Approved' &&

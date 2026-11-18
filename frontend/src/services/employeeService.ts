@@ -8,14 +8,9 @@ export type { ActivityLogItem }
 export interface Company {
   id: string
   name: string
-  email?: string
   address: string
-  contactPerson?: string
-  contactPersonEmail?: string
   contactNumber: string
   telephoneNumber: string
-  startingBalance: number
-  currentBalance?: number
   pettyCash?: number
   status: 'Active' | 'Inactive'
   createdAt: string
@@ -41,14 +36,9 @@ export interface EmployeeUser {
 
 export interface CreateCompanyPayload {
   name: string
-  email?: string
   address: string
-  contactPerson?: string
-  contactPersonEmail?: string
   contactNumber: string
   telephoneNumber?: string
-  startingBalance: number
-  currentBalance?: number
   pettyCash?: number
   logoUrl?: string
   logoFile?: File
@@ -196,7 +186,6 @@ function mapCompany(value: unknown): Company {
     location: string
     contact_number: string | null
     phone: string | null
-    starting_balance: number
     petty_cash?: number
     created_at: string | null
     logo_url?: string | null
@@ -207,7 +196,6 @@ function mapCompany(value: unknown): Company {
     address: company.location,
     contactNumber: company.contact_number || '',
     telephoneNumber: company.phone || '',
-    startingBalance: Number(company.starting_balance) || 0,
     pettyCash: Number(company.petty_cash) || 0,
     status: 'Active',
     createdAt: company.created_at || '',
@@ -278,6 +266,34 @@ function mapNotificationSettings(value: unknown): CompanyNotificationSettings {
 }
 
 export const employeeService = {
+  async getUsersPaginated(params: {
+    page?: number
+    limit?: number
+    search?: string
+    sortBy?: 'recent' | 'asc' | 'desc'
+    companyId?: number
+  } = {}): Promise<{ items: EmployeeUser[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.sortBy) sp.set('sort_by', params.sortBy)
+    if (params.companyId !== undefined) sp.set('company_id', String(params.companyId))
+    const qs = sp.toString()
+    const response = await fetch(`/api/v1/users${qs ? `?${qs}` : ''}`, {
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) {
+      throw new Error(await getApiError(response))
+    }
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = await mapApiResponse(response, (value) =>
+      (value as unknown[]).map(mapUser)
+    )
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   async getUsers(): Promise<EmployeeUser[]> {
     const response = await fetch('/api/v1/users', {
       headers: getAuthHeaders(),
@@ -288,6 +304,29 @@ export const employeeService = {
     return await mapApiResponse(response, (value) =>
       (value as unknown[]).map(mapUser)
     )
+  },
+
+  async getCompaniesPaginated(params: {
+    page?: number
+    limit?: number
+    search?: string
+    sortBy?: 'recent' | 'asc' | 'desc'
+  } = {}): Promise<{ items: Company[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.sortBy) sp.set('sort_by', params.sortBy)
+    const qs = sp.toString()
+    const response = await fetch(`/api/v1/companies${qs ? `?${qs}` : ''}`, {
+      headers: getAuthHeaders(),
+    })
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = await mapApiResponse(response, (value) =>
+      (value as unknown[]).map(mapCompany)
+    )
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
   },
 
   async getCompanies(): Promise<Company[]> {
@@ -503,7 +542,6 @@ export const employeeService = {
       location: payload.address,
       contact_number: payload.contactNumber || null,
       phone: payload.telephoneNumber || null,
-      starting_balance: Number(payload.startingBalance) || 0,
       petty_cash: Number(payload.pettyCash) || 0,
       logo_url: payload.logoUrl && !payload.logoUrl.startsWith('data:') ? payload.logoUrl : null,
     })
@@ -514,7 +552,6 @@ export const employeeService = {
       formData.append('location', payload.address)
       formData.append('contact_number', payload.contactNumber || '')
       formData.append('phone', payload.telephoneNumber || '')
-      formData.append('starting_balance', String(Number(payload.startingBalance) || 0))
       formData.append('petty_cash', String(Number(payload.pettyCash) || 0))
       formData.append('picture', payload.logoFile)
       endpoint = '/api/v1/companies/with-picture'
@@ -540,7 +577,6 @@ export const employeeService = {
     if (payload.address !== undefined) body.location = payload.address
     if (payload.contactNumber !== undefined) body.contact_number = payload.contactNumber || null
     if (payload.telephoneNumber !== undefined) body.phone = payload.telephoneNumber || null
-    if (payload.startingBalance !== undefined) body.starting_balance = payload.startingBalance
     if (payload.pettyCash !== undefined) body.petty_cash = payload.pettyCash
     if (payload.logoUrl !== undefined && !payload.logoUrl.startsWith('data:')) {
       body.logo_url = payload.logoUrl

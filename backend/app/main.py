@@ -180,6 +180,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=EXPLICIT_CORS_METHODS,
     allow_headers=EXPLICIT_CORS_HEADERS,
+    expose_headers=["X-Total-Count"],
 )
 app.add_middleware(RequestTimeoutMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)

@@ -20,7 +20,6 @@ def db_session():
                 company_id=1,
                 company_name="JK Property and Ventures",
                 location="Manila",
-                starting_balance=Decimal("100000.00"),
                 petty_cash=Decimal("10000.00"),
             )
             db.add(comp)
@@ -107,7 +106,6 @@ def test_petty_cash_approval_creates_bank_withdrawal(db_session: Session):
             company_name=company.company_name,
             bank_name="Test BDO Bank",
             account_name="Petty Cash Source Account",
-            account_number="1234567890",
             starting_balance=Decimal("50000.00"),
             current_balance=Decimal("50000.00"),
             account_type="Checking",

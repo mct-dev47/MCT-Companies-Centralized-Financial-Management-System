@@ -69,7 +69,6 @@ class PettyCashTopUpCreate(StrictBaseModel):
     company_name: Optional[str] = Field(None, min_length=1, max_length=100)
     amount: Decimal = Field(..., ge=0, decimal_places=2)
     topup_date: date
-    reference_no: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=1000)
     status: Optional[str] = Field("Pending Finance Endorsement", max_length=100)
     created_by: Optional[int] = None
@@ -130,7 +129,6 @@ class PettyCashDisbursementCreate(StrictBaseModel):
     company_name: Optional[str] = Field(None, min_length=1, max_length=100)
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     topup_date: date
-    reference_no: Optional[str] = Field(None, max_length=100)
     description: Optional[str] = Field(None, max_length=1000)
     paid_by: Optional[str] = Field(None, max_length=100)
     category: Optional[str] = Field(None, max_length=100)
@@ -192,7 +190,6 @@ class PettyCashTopUpOut(BaseModel):
     company_name: Optional[str] = None
     amount: Decimal
     topup_date: date
-    reference_no: Optional[str] = None
     description: Optional[str] = None
     bank_account_id: Optional[str] = None
     status: str = "Pending Finance Endorsement"
@@ -325,7 +322,6 @@ class PettyCashMovementOut(BaseModel):
     """
 
     topup_id: int
-    reference_no: Optional[str] = None
     topup_date: date
     amount: Decimal
     description: Optional[str] = None
@@ -372,7 +368,6 @@ class PettyCashLedgerEntry(BaseModel):
     entry_date: date
     description: str
     category: Optional[str] = None
-    reference_no: Optional[str] = None
     amount_requested: Decimal = Decimal("0.00")
     amount_in: Decimal
     amount_out: Decimal
@@ -458,5 +453,4 @@ class EligibleExpenseOut(BaseModel):
     particulars: str
     category: Optional[str] = None
     amount: Decimal
-    reference_no: Optional[str] = None
 

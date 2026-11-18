@@ -52,8 +52,7 @@ ALTER TABLE petty_cash_topups ADD COLUMN IF NOT EXISTS transfer_received_by VARC
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL;
 
--- 3. Add linked_topup_id and partial unique index on expenses
+-- 3. Add linked_topup_id on expenses
 ALTER TABLE expenses ADD COLUMN IF NOT EXISTS linked_topup_id BIGINT NULL REFERENCES petty_cash_topups(topup_id);
 CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL;
 

@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.websocket import ws_manager
-from app.models.finance import Expense, Sale
+from app.models.finance import Sale
 from app.models.receivable import Receivable, ReceivablePayment
 from app.services.bank_service import BankService
 
@@ -531,7 +531,7 @@ class SalesReceivablesSyncService:
                 company_name=company_name,
                 # The sale's own bank wins; never fall back to "whichever account the company has first"
                 account_id=account_id or pick("bank_account_id", "bank_account_id"),
-                particulars=f"Sales Collection: {particulars}",
+                particulars=particulars,
                 reference_no=cheque or None,
                 tx_date=tx_date.strftime("%m/%d/%y") if hasattr(tx_date, "strftime") else None,
                 legacy_particulars=legacy_particulars or particulars,
@@ -775,25 +775,11 @@ class SalesReceivablesSyncService:
         if skip_counterpart_sync:
             return
 
-        new_rec_total = _to_decimal(rec.total_amount, Decimal("0.00"))
-        prior_total = _to_decimal(old_total_amount, new_rec_total) if old_total_amount is not None else new_rec_total
-
-        if rec.expense_id:
-            exp = self.db.query(Expense).filter(Expense.expense_id == rec.expense_id).first()
-            if exp:
-                if deleted:
-                    rem_exp = max(Decimal("0.00"), _to_decimal(exp.amount) - prior_total)
-                    if rem_exp <= Decimal("0.005"):
-                        self.db.delete(exp)
-                    else:
-                        exp.amount = rem_exp
-                elif old_total_amount is not None:
-                    diff = new_rec_total - prior_total
-                    if diff != Decimal("0.00"):
-                        exp.amount = max(Decimal("0.00"), _to_decimal(exp.amount) + diff)
-
         if not rec.sale_id:
             return
+
+        new_rec_total = _to_decimal(rec.total_amount, Decimal("0.00"))
+        prior_total = _to_decimal(old_total_amount, new_rec_total) if old_total_amount is not None else new_rec_total
 
         sale_id = int(rec.sale_id)
         sb_row, local_sale = self._fetch_authoritative_sale(sale_id)

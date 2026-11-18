@@ -48,8 +48,8 @@ def env(monkeypatch):
 
     with Session() as seed:
         seed.add_all([
-            Company(company_id=1, company_name="JK Property and Ventures", location="Manila", starting_balance=0),
-            Company(company_id=2, company_name="Other Company", location="Cebu", starting_balance=0),
+            Company(company_id=1, company_name="JK Property and Ventures", location="Manila"),
+            Company(company_id=2, company_name="Other Company", location="Cebu"),
         ])
         seed.commit()
 

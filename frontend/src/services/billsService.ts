@@ -406,13 +406,41 @@ export function getBillPaymentOptions(
 // ==========================================
 
 export const billsService = {
+  async getBillsPaginated(params: {
+    companyFilter?: string
+    page?: number
+    limit?: number
+  } = {}): Promise<{ items: BillItem[]; total: number }> {
+    try {
+      const sp = new URLSearchParams()
+      if (params.companyFilter && params.companyFilter !== 'All Companies') {
+        sp.set('company_name', params.companyFilter)
+        sp.set('company', params.companyFilter)
+      }
+      if (params.page !== undefined) sp.set('page', String(params.page))
+      if (params.limit !== undefined) sp.set('limit', String(params.limit))
+      const qs = sp.toString()
+      const response = await fetch(`/api/v1/bills${qs ? `?${qs}` : ''}`, { headers: backendHeaders() })
+      if (!response.ok) {
+        throw await getBackendError(response, 'Unable to load bills. Please try again.')
+      }
+      const totalHeader = response.headers.get('X-Total-Count')
+      const data: BackendBill[] = await response.json()
+      const items = data.map(mapBackendBill)
+      const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+      return { items, total }
+    } catch (err: any) {
+      throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to load bills. Please try again.'))
+    }
+  },
+
   async getBills(companyFilter?: string): Promise<BillItem[]> {
     try {
       const query =
         companyFilter && companyFilter !== 'All Companies'
           ? `?company_name=${encodeURIComponent(companyFilter)}&company=${encodeURIComponent(companyFilter)}`
           : ''
-      const response = await fetch(`/api/v1/bills${query}`, { headers: backendHeaders() })
+      const response = await fetch(`/api/v1/bills/export${query}`, { headers: backendHeaders() })
       if (!response.ok) {
         throw await getBackendError(response, 'Unable to load bills. Please try again.')
       }

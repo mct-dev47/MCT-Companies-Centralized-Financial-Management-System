@@ -86,7 +86,6 @@ class TestPasswordResetAndSetupSecurity(unittest.TestCase):
             company_id=1,
             company_name="MCT Test Corp",
             location="Manila",
-            starting_balance=50000,
         )
         self.db.add(company)
 

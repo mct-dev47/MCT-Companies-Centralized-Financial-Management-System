@@ -3,8 +3,9 @@ from typing import List, Optional
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
+import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.core.business_time import business_today
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
@@ -36,6 +37,7 @@ class _SkipBackup(Exception):
     """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 from app.core.dependencies import (
     AuditorUser,
@@ -147,6 +149,13 @@ def get_sales(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
+    search: Optional[str] = Query(None, description="Search particulars or cheque number"),
+    payment_status: Optional[str] = Query(None, description="Filter by payment status"),
+    deposit_status: Optional[str] = Query(None, description="Filter by deposit status"),
+    bank_account_id: Optional[str] = Query(None, description="Filter by bank account ID"),
+    sort_by: Optional[str] = Query("transaction_date", description="Sort field"),
+    sort_dir: Optional[str] = Query("desc", description="Sort direction (asc or desc)"),
+    response: Response = None,
     pagination: PaginationParams = Depends(),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
@@ -162,134 +171,294 @@ def get_sales(
         start_date = None
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(payment_status, "default"):
+        payment_status = None
+    if hasattr(deposit_status, "default"):
+        deposit_status = None
+    if hasattr(bank_account_id, "default"):
+        bank_account_id = None
+    if hasattr(sort_by, "default"):
+        sort_by = "transaction_date"
+    if hasattr(sort_dir, "default"):
+        sort_dir = "desc"
 
-    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
+    query = _build_sales_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        payment_status=payment_status,
+        deposit_status=deposit_status,
+        bank_account_id=bank_account_id,
+    )
+    if query is None:
+        if response is not None:
+            response.headers["X-Total-Count"] = "0"
+        return []
+
+    total = query.count()
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+
+    sort_col_map = {
+        "transaction_date": Sale.transaction_date,
+        "amount": Sale.amount,
+        "sales_id": Sale.sales_id,
+        "created_at": Sale.created_at,
+    }
+    sort_col = sort_col_map.get((sort_by or "transaction_date").lower(), Sale.transaction_date)
+    if (sort_dir or "desc").lower() == "asc":
+        order_clauses = (sort_col.asc(), Sale.sales_id.asc())
+    else:
+        order_clauses = (sort_col.desc(), Sale.sales_id.desc())
+
+    rows = query.order_by(*order_clauses).offset(pagination.offset).limit(pagination.limit).all()
+
+    return _with_paid_amounts(db, [
+        SaleOut(
+            sales_id=sale.sales_id,
+            company_id=sale.company_id,
+            company_name=c_name or "Unknown Company",
+            category_id=sale.category_id,
+            category_name=cat_name or "None",
+            payment_method=sale.payment_method,
+            payment_status=sale.payment_status or "Paid",
+            deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+            deposit_date=sale.deposit_date,
+            transaction_date=sale.transaction_date,
+            cheque_no=sale.cheque_no,
+            amount=sale.amount,
+            particulars=sale.particulars or "",
+            created_at=sale.created_at,
+            updated_at=sale.updated_at,
+            remarks=getattr(sale, "remarks", None),
+            **audit_fields(sale)
+        )
+        for sale, c_name, cat_name in rows
+    ])
+
+
+def _build_sales_query(
+    db: Session,
+    current_user: AuthenticatedUser,
+    company_id: Optional[int] = None,
+    company_name: Optional[str] = None,
+    category_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    search: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    deposit_status: Optional[str] = None,
+    bank_account_id: Optional[str] = None,
+):
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(payment_status, "default"):
+        payment_status = None
+    if hasattr(deposit_status, "default"):
+        deposit_status = None
+    if hasattr(bank_account_id, "default"):
+        bank_account_id = None
+
+    user_role = (current_user.get("role") or "").lower()
+    is_privileged = user_role in ("admin", "audit", "auditor", "owner") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
 
-    use_sb = SalesReceivablesSyncService(db)._use_supabase()
-
-    try:
-        if not use_sb:
-            raise RuntimeError("In-memory SQLite session")
-        client = get_supabase_admin_client()
-        company_map, cat_map = get_supabase_mappings(client)
-
-        sb_query = client.table("sales").select("*")
-
-        # Company filter & access check
-        resolved_company_id = normalize_company_id(company_id)
-        if resolved_company_id:
-            check_company_access(current_user, resolved_company_id)
-            sb_query = sb_query.eq("company_id", resolved_company_id)
-        elif company_name and company_name.lower() != "all companies":
-            resolved_comp = resolve_company(db, company_name=company_name)
-            target_cid = resolved_comp.company_id
-            check_company_access(current_user, target_cid)
-            sb_query = sb_query.eq("company_id", target_cid)
-        elif user_company_ids:
-            if len(user_company_ids) == 1:
-                sb_query = sb_query.eq("company_id", user_company_ids[0])
-            else:
-                sb_query = sb_query.in_("company_id", user_company_ids)
-        elif not is_privileged:
-            return []
-        if category_id:
-            sb_query = sb_query.eq("category_id", category_id)
-        if start_date:
-            sb_query = sb_query.gte("transaction_date", start_date.isoformat())
-        if end_date:
-            sb_query = sb_query.lte("transaction_date", end_date.isoformat())
-
-        sb_query = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True)
-        res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
-        rows = res.data or []
-
-        return _with_paid_amounts(db, [
-            SaleOut(
-                sales_id=row["sales_id"],
-                company_id=row.get("company_id"),
-                company_name=company_map.get(row.get("company_id")) or "Unknown Company",
-                category_id=row.get("category_id"),
-                category_name=cat_map.get(row.get("category_id")) or "None",
-                payment_method=row.get("payment_method"),
-                payment_status=row.get("payment_status") or "Paid",
-                deposit_status=row.get("deposit_status") or ("Deposited" if (row.get("payment_status") or "Paid") == "Paid" else "Not Deposited"),
-                deposit_date=row.get("deposit_date"),
-                transaction_date=row.get("transaction_date"),
-                cheque_no=row.get("cheque_number") or row.get("cheque_no") or row.get("reference_no"),
-                amount=row.get("amount") or 0.0,
-                particulars=row.get("particulars") or row.get("description") or "",
-                created_at=row.get("created_at"),
-                updated_at=row.get("updated_at"),
-                remarks=row.get("remarks"),
-                **audit_fields(row)
-            )
-            for row in rows
-        ])
-    except HTTPException:
-        raise
-    except Exception:
-        # Fallback to local SQLite if Supabase is unavailable
-        query = (
-            db.query(
-                Sale,
-                Company.company_name.label("company_name"),
-                Category.name.label("category_name")
-            )
-            .outerjoin(Company, Sale.company_id == Company.company_id)
-            .outerjoin(Category, Sale.category_id == Category.category_id)
+    query = (
+        db.query(
+            Sale,
+            Company.company_name.label("company_name"),
+            Category.name.label("category_name")
         )
+        .outerjoin(Company, Sale.company_id == Company.company_id)
+        .outerjoin(Category, Sale.category_id == Category.category_id)
+    )
 
-        if company_id:
-            check_company_access(current_user, company_id)
-            query = query.filter(Sale.company_id == company_id)
-        elif company_name and company_name.lower() != "all companies":
-            try:
-                resolved_comp = resolve_company(db, company_name=company_name)
-                check_company_access(current_user, resolved_comp.company_id)
-                query = query.filter(Sale.company_id == resolved_comp.company_id)
-            except HTTPException:
-                raise
-            except Exception:
-                query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
-        elif user_company_ids:
-            query = query.filter(Sale.company_id.in_(user_company_ids))
-        elif not is_privileged:
-            return []
+    resolved_cid = normalize_company_id(company_id) if company_id else None
+    if resolved_cid:
+        check_company_access(current_user, resolved_cid)
+        query = query.filter(Sale.company_id == resolved_cid)
+    elif company_name and company_name.lower() != "all companies":
+        try:
+            resolved_comp = resolve_company(db, company_name=company_name)
+            check_company_access(current_user, resolved_comp.company_id)
+            query = query.filter(Sale.company_id == resolved_comp.company_id)
+        except HTTPException:
+            raise
+        except Exception:
+            query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
+            if not is_privileged:
+                query = query.filter(Sale.company_id.in_(user_company_ids))
+    elif user_company_ids:
+        query = query.filter(Sale.company_id.in_(user_company_ids))
+    elif not is_privileged:
+        return None
 
-        if category_id:
-            query = query.filter(Sale.category_id == category_id)
-        if start_date:
-            query = query.filter(Sale.transaction_date >= start_date)
-        if end_date:
-            query = query.filter(Sale.transaction_date <= end_date)
-
-        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
-
-        return _with_paid_amounts(db, [
-            SaleOut(
-                sales_id=sale.sales_id,
-                company_id=sale.company_id,
-                company_name=c_name,
-                category_id=sale.category_id,
-                category_name=cat_name or "None",
-                payment_method=sale.payment_method,
-                payment_status=sale.payment_status or "Paid",
-                deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
-                deposit_date=sale.deposit_date,
-                transaction_date=sale.transaction_date,
-                cheque_no=sale.cheque_no,
-                amount=sale.amount,
-                particulars=sale.particulars or "",
-                created_at=sale.created_at,
-                updated_at=sale.updated_at,
-                remarks=getattr(sale, "remarks", None),
-                **audit_fields(sale)
+    if category_id:
+        query = query.filter(Sale.category_id == category_id)
+    if start_date:
+        query = query.filter(Sale.transaction_date >= start_date)
+    if end_date:
+        query = query.filter(Sale.transaction_date <= end_date)
+    if payment_status and payment_status.lower() != "all":
+        query = query.filter(func.lower(Sale.payment_status) == payment_status.strip().lower())
+    if deposit_status and deposit_status.lower() != "all":
+        query = query.filter(func.lower(Sale.deposit_status) == deposit_status.strip().lower())
+    if bank_account_id and bank_account_id.lower() != "all":
+        query = query.filter(Sale.bank_account_id == bank_account_id)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Sale.particulars.ilike(term),
+                Sale.cheque_no.ilike(term),
+                Sale.payment_method.ilike(term),
             )
-            for sale, c_name, cat_name in rows
-        ])
+        )
+    return query
+
+
+@router.get("/export", response_model=List[SaleOut], summary="Export all matching sales transactions")
+def export_sales(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
+    deposit_status: Optional[str] = Query(None),
+    bank_account_id: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    query = _build_sales_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        payment_status=payment_status,
+        deposit_status=deposit_status,
+        bank_account_id=bank_account_id,
+    )
+    if query is None:
+        return []
+    rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
+    return _with_paid_amounts(db, [
+        SaleOut(
+            sales_id=sale.sales_id,
+            company_id=sale.company_id,
+            company_name=c_name or "Unknown Company",
+            category_id=sale.category_id,
+            category_name=cat_name or "None",
+            payment_method=sale.payment_method,
+            payment_status=sale.payment_status or "Paid",
+            deposit_status=sale.deposit_status or ("Deposited" if (sale.payment_status or "Paid") == "Paid" else "Not Deposited"),
+            deposit_date=sale.deposit_date,
+            transaction_date=sale.transaction_date,
+            cheque_no=sale.cheque_no,
+            amount=sale.amount,
+            particulars=sale.particulars or "",
+            created_at=sale.created_at,
+            updated_at=sale.updated_at,
+            remarks=getattr(sale, "remarks", None),
+            **audit_fields(sale),
+        )
+        for sale, c_name, cat_name in rows
+    ])
+
+
+@router.get("/summary", summary="Get full-dataset sales KPIs and category breakdown")
+def get_sales_summary(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
+    deposit_status: Optional[str] = Query(None),
+    bank_account_id: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    query = _build_sales_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        payment_status=payment_status,
+        deposit_status=deposit_status,
+        bank_account_id=bank_account_id,
+    )
+    if query is None:
+        return {"total_count": 0, "total_amount": 0.0, "deposited_amount": 0.0, "pending_amount": 0.0, "categories": []}
+
+    rows = query.with_entities(
+        Sale.sales_id,
+        Sale.amount,
+        Sale.particulars,
+        Sale.deposit_status,
+        Sale.payment_status,
+        Category.name,
+    ).all()
+    paid_by_sale = SalesReceivablesSyncService(db).compute_paid_amounts(
+        (sid, parts or "", amt) for sid, amt, parts, _, _, _ in rows
+    )
+    total_amount = Decimal("0.00")
+    deposited_amount = Decimal("0.00")
+    pending_amount = Decimal("0.00")
+    cat_totals: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    for sid, amt, parts, dep_status, pay_status, cat_name in rows:
+        amt_d = Decimal(str(amt or 0))
+        total_amount += amt_d
+        is_dep = (dep_status or "").strip().lower() == "deposited" if dep_status else (pay_status or "Paid") == "Paid"
+        paid_d = paid_by_sale.get(sid, compute_paid_amount_from_particulars(parts or "", amt_d))
+        if is_dep:
+            deposited_amount += paid_d
+            if amt_d > paid_d:
+                pending_amount += amt_d - paid_d
+        else:
+            pending_amount += amt_d
+        cat_totals[cat_name or "Uncategorized"] += amt_d
+
+    categories = [
+        {"category": k, "amount": float(v)}
+        for k, v in sorted(cat_totals.items(), key=lambda x: (-x[1], x[0].lower()))
+    ]
+    return {
+        "total_count": len(rows),
+        "total_amount": float(total_amount),
+        "deposited_amount": float(deposited_amount),
+        "pending_amount": float(pending_amount),
+        "categories": categories,
+    }
 
 
 def _to_date(val) -> Optional[date]:
@@ -346,101 +515,44 @@ def get_sales_daily_summary(
         start_date = None
     if hasattr(end_date, "default") or not isinstance(end_date, date):
         end_date = None
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(status, "default"):
+        status = None
 
-    is_privileged = (current_user.get("role") or "").lower() in ("audit", "auditor")
-    user_company_ids = current_user.get("company_ids") or []
-    if not is_privileged and not user_company_ids and current_user.get("company_id"):
-        user_company_ids = [current_user["company_id"]]
+    is_deposit_view = (view_type or "").lower() == "deposit"
+    query = _build_sales_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        payment_status=status if (isinstance(status, str) and status.lower() != "all") else None,
+        deposit_status="Deposited" if is_deposit_view else None,
+    )
+    if query is None:
+        return []
 
-    use_sb = SalesReceivablesSyncService(db)._use_supabase()
-    raw_records = []
+    rows = (
+        query.with_entities(
+            Sale.sales_id,
+            Sale.transaction_date,
+            Sale.amount,
+            Sale.particulars,
+            Sale.audit_status,
+            Sale.deposit_status,
+        )
+        .order_by(Sale.transaction_date.desc(), Sale.sales_id.desc())
+        .all()
+    )
 
-    try:
-        if not use_sb:
-            raise RuntimeError("In-memory SQLite session")
-        client = get_supabase_admin_client()
+    paid_by_sale = SalesReceivablesSyncService(db).compute_paid_amounts(
+        (sid, parts or "", amt) for sid, _, amt, parts, _, _ in rows if sid is not None
+    )
 
-        sb_query = client.table("sales").select("*")
-
-        resolved_company_id = normalize_company_id(company_id)
-        if resolved_company_id:
-            check_company_access(current_user, resolved_company_id)
-            sb_query = sb_query.eq("company_id", resolved_company_id)
-        elif company_name and company_name.lower() != "all companies":
-            resolved_comp = resolve_company(db, company_name=company_name)
-            target_cid = resolved_comp.company_id
-            check_company_access(current_user, target_cid)
-            sb_query = sb_query.eq("company_id", target_cid)
-        elif user_company_ids:
-            if len(user_company_ids) == 1:
-                sb_query = sb_query.eq("company_id", user_company_ids[0])
-            else:
-                sb_query = sb_query.in_("company_id", user_company_ids)
-        elif not is_privileged:
-            return []
-
-        if category_id:
-            sb_query = sb_query.eq("category_id", category_id)
-        if start_date:
-            sb_query = sb_query.gte("transaction_date", start_date.isoformat())
-        if end_date:
-            sb_query = sb_query.lte("transaction_date", end_date.isoformat())
-
-        res = sb_query.order("transaction_date", desc=True).order("sales_id", desc=True).execute()
-        rows = res.data or []
-        for r in rows:
-            raw_records.append({
-                "sales_id": r.get("sales_id"),
-                "transaction_date": r.get("transaction_date"),
-                "amount": r.get("amount") or 0.0,
-                "particulars": r.get("particulars") or r.get("description") or "",
-                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
-                "audit_status": r.get("audit_status") or "Pending Audit",
-                "deposit_status": r.get("deposit_status"),
-            })
-    except HTTPException:
-        raise
-    except Exception:
-        query = db.query(Sale)
-        if company_id:
-            check_company_access(current_user, company_id)
-            query = query.filter(Sale.company_id == company_id)
-        elif company_name and company_name.lower() != "all companies":
-            try:
-                resolved_comp = resolve_company(db, company_name=company_name)
-                check_company_access(current_user, resolved_comp.company_id)
-                query = query.filter(Sale.company_id == resolved_comp.company_id)
-            except HTTPException:
-                raise
-            except Exception:
-                query = query.join(Company, Sale.company_id == Company.company_id).filter(
-                    func.lower(Company.company_name) == func.lower(company_name.strip())
-                )
-        elif user_company_ids:
-            query = query.filter(Sale.company_id.in_(user_company_ids))
-        elif not is_privileged:
-            return []
-
-        if category_id:
-            query = query.filter(Sale.category_id == category_id)
-        if start_date:
-            query = query.filter(Sale.transaction_date >= start_date)
-        if end_date:
-            query = query.filter(Sale.transaction_date <= end_date)
-
-        rows = query.order_by(Sale.transaction_date.desc(), Sale.sales_id.desc()).all()
-        for s in rows:
-            raw_records.append({
-                "sales_id": s.sales_id,
-                "transaction_date": s.transaction_date,
-                "amount": s.amount,
-                "particulars": s.particulars or "",
-                "cheque_no": s.cheque_no or "",
-                "audit_status": s.audit_status or "Pending Audit",
-                "deposit_status": s.deposit_status,
-            })
-
-    # Group by date
     daily_groups = defaultdict(lambda: {
         "count": 0,
         "gross_total": Decimal("0.00"),
@@ -448,28 +560,13 @@ def get_sales_daily_summary(
         "audit_statuses": []
     })
 
-    search_term = (search or "").strip().lower()
-    is_deposit_view = (view_type or "").lower() == "deposit"
-    # Partial receivable payments count as realized cash, same as the bank
-    paid_by_sale = SalesReceivablesSyncService(db).compute_paid_amounts(
-        (r["sales_id"], r["particulars"], r["amount"]) for r in raw_records if r.get("sales_id") is not None
-    )
-
-    for r in raw_records:
-        rec_date = _to_date(r["transaction_date"])
+    for sid, rec_date, amt_raw, parts_raw, audit_st, dep_raw in rows:
+        rec_date = _to_date(rec_date)
         if not rec_date:
             continue
 
-        parts = r["particulars"]
-        chq = r["cheque_no"]
-
-        if search_term:
-            if search_term not in parts.lower() and search_term not in chq.lower():
-                continue
-
-        amt = Decimal(str(r["amount"] or 0))
-        dep_raw = r.get("deposit_status")
-        # In Scenario A: Only records marked 'Deposited' count toward realized/deposited cash
+        parts = parts_raw or ""
+        amt = Decimal(str(amt_raw or 0))
         if dep_raw is not None and str(dep_raw).strip():
             is_deposited = str(dep_raw).strip().lower() == "deposited"
         else:
@@ -477,8 +574,8 @@ def get_sales_daily_summary(
 
         if not is_deposited:
             realized = Decimal("0.00")
-        elif r.get("sales_id") is not None and int(r["sales_id"]) in paid_by_sale:
-            realized = paid_by_sale[int(r["sales_id"])]
+        elif sid is not None and int(sid) in paid_by_sale:
+            realized = paid_by_sale[int(sid)]
         else:
             realized = compute_paid_amount_from_particulars(parts, amt)
 
@@ -490,9 +587,9 @@ def get_sales_daily_summary(
         daily_groups[rec_date]["count"] += 1
         daily_groups[rec_date]["gross_total"] += gross
         daily_groups[rec_date]["realized_cash"] += realized
-        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+        daily_groups[rec_date]["audit_statuses"].append(audit_st or "Pending Audit")
 
-    result = [
+    return [
         DailySalesSummaryOut(
             date=d,
             day_of_week=d.strftime("%A"),
@@ -503,7 +600,6 @@ def get_sales_daily_summary(
         )
         for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
     ]
-    return result
 
 
 
@@ -577,6 +673,8 @@ def create_sale(
     if not cat_str:
         _reject_petty_cash_category_id(db, sale_in.category_id, use_sb)
     effective_bank_id = getattr(sale_in, "bank_account_id", None)
+    created_row = None
+    sb_sales_id = None
 
     try:
         if not use_sb:
@@ -664,8 +762,6 @@ def create_sale(
                 local_comp = Company(
                     company_id=target_company_id,
                     company_name=target_company_name,
-                    starting_balance=0.00,
-                    current_balance=0.00
                 )
                 db.add(local_comp)
                 db.commit()
@@ -755,7 +851,34 @@ def create_sale(
 
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        # If the row was already inserted into Supabase, NEVER fall back to inserting
+        # a duplicate into SQLite/Postgres. Return the created sale record.
+        if created_row and sb_sales_id:
+            logger.warning("Sale %s was successfully saved in Supabase, but a post-save step failed: %s", sb_sales_id, e)
+            try:
+                return SaleOut(
+                    sales_id=created_row["sales_id"],
+                    company_id=created_row.get("company_id"),
+                    company_name=target_company_name,
+                    category_id=created_row.get("category_id"),
+                    category_name=category_name,
+                    payment_method=payment_method_str,
+                    payment_status=created_row.get("payment_status") or sale_in.payment_status or "Paid",
+                    deposit_status=created_row.get("deposit_status") or sale_in.deposit_status or "Not Deposited",
+                    deposit_date=created_row.get("deposit_date") or sale_in.deposit_date,
+                    transaction_date=created_row.get("transaction_date"),
+                    cheque_no=created_row.get("cheque_number") or cheque,
+                    amount=created_row.get("amount"),
+                    particulars=created_row.get("particulars"),
+                    created_at=created_row.get("created_at"),
+                    updated_at=created_row.get("updated_at"),
+                    remarks=created_row.get("remarks"),
+                    **audit_fields(created_row)
+                )
+            except Exception:
+                return get_sale(sales_id=sb_sales_id, current_user=current_user, db=db)
+
         # The insert may have succeeded before a later step failed, or a parallel request with the same
         # client_ref won the race: return that sale instead of inserting a second one
         existing = _find_sale_by_client_ref(db, sale_in.client_ref)

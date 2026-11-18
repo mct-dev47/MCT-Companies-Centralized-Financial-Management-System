@@ -39,7 +39,7 @@ export function formatToYYYYMMDD(date: Date): string {
 }
 
 /**
- * Formats any date input into human-readable "MMM D, YYYY" (e.g. "Oct 31, 2026")
+ * Formats any date input into uniform "MM/DD/YYYY" (e.g. "10/31/2026")
  */
 export function formatDisplayDate(dateInput: string | Date | null | undefined): string {
   if (!dateInput) return '—'
@@ -48,13 +48,7 @@ export function formatDisplayDate(dateInput: string | Date | null | undefined): 
     return typeof dateInput === 'string' ? dateInput : '—'
   }
   const [y, m, d] = iso.split('-')
-  const date = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10))
-  if (isNaN(date.getTime())) return iso
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  return `${m.padStart(2, '0')}/${d.padStart(2, '0')}/${y}`
 }
 
 /**
@@ -155,7 +149,7 @@ export function formatToMMDDYYYY(iso: string | null | undefined): string {
   const normalized = normalizeDateToYYYYMMDD(iso)
   const parts = normalized.split('-')
   if (parts.length === 3) {
-    return `${parts[1]}/${parts[2]}/${parts[0]}`
+    return `${parts[1].padStart(2, '0')}/${parts[2].padStart(2, '0')}/${parts[0]}`
   }
   return iso
 }

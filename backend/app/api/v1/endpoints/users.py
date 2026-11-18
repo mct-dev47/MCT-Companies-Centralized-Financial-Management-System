@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -20,11 +20,51 @@ MAX_USER_PICTURE_BYTES = 5 * 1024 * 1024
 @router.get("", response_model=list[UserResponse], summary="List application users")
 def get_users(
     _: AdminUser,
+    response: Response = None,
     company_id: int | None = Query(default=None, gt=0),
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default="recent"),
+    page: int | None = Query(default=None, ge=1),
+    limit: int | None = Query(default=None, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(sort_by, "default"):
+        sort_by = "recent"
+    if hasattr(page, "default"):
+        page = None
+    if hasattr(limit, "default"):
+        limit = None
     try:
-        return UserService(db).list_users(company_id=company_id)
+        items = UserService(db).list_users(company_id=company_id)
+        if search and search.strip():
+            term = search.strip().lower()
+            items = [
+                u for u in items
+                if term in (u.name or "").lower()
+                or term in (u.email or "").lower()
+                or term in (u.role or "").lower()
+                or term in (getattr(u, "company_name", None) or "").lower()
+                or any(term in (cn or "").lower() for cn in (getattr(u, "company_names", None) or []))
+            ]
+        if sort_by == "asc":
+            items.sort(key=lambda u: ((u.name or "").lower(), u.user_id))
+        elif sort_by == "desc":
+            items.sort(key=lambda u: ((u.name or "").lower(), u.user_id), reverse=True)
+        else:
+            items.sort(key=lambda u: u.user_id, reverse=True)
+        total = len(items)
+        if response is not None:
+            response.headers["X-Total-Count"] = str(total)
+        if page is not None or limit is not None:
+            pg = page or 1
+            sz = limit or 50
+            start = (pg - 1) * sz
+            return items[start:start + sz]
+        return items
     except UserServiceError as error:
         raise _service_http_error(error) from error
 

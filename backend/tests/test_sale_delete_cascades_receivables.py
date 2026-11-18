@@ -22,7 +22,7 @@ def _db():
 
 def test_deleting_sale_deletes_its_receivables_and_payments_but_keeps_standalone_ones():
     db = _db()
-    db.add(Company(company_id=1, company_name="A", starting_balance=Decimal("0")))
+    db.add(Company(company_id=1, company_name="A"))
     db.flush()
     sale = Sale(company_id=1, transaction_date=date(2026, 11, 9), amount=Decimal("300"), particulars="Room", payment_method="Cash")
     db.add(sale)

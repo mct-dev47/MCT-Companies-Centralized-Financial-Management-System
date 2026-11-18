@@ -66,7 +66,6 @@ class ReceivableBase(StrictBaseModel):
     company_name: Optional[str] = Field(None, max_length=255)
     sale_id: Optional[int] = None
     sale_line_index: Optional[int] = Field(None, ge=0)
-    expense_id: Optional[int] = None
     transaction_date: Optional[date] = None
     items_summary: str = Field(..., min_length=1, max_length=1000)
     total_amount: Decimal = Field(..., ge=0, decimal_places=2)

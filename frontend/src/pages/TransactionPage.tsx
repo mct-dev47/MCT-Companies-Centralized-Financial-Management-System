@@ -113,16 +113,58 @@ const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
   if ((tx.depositStatus || tx.deposit_status) !== 'Deposited') return null
   const day = String(tx.deposit_date || tx.depositDate || '').slice(0, 10)
   const [y, m, d] = day.split('-')
-  return y && m && d ? `${m}/${d}/${y.slice(2)}` : null
+  return y && m && d ? `${m.padStart(2, '0')}/${d.padStart(2, '0')}/${y}` : null
 }
 
 const isAwaitingAudit = (status?: string | null): boolean =>
   (status || '').trim().toLowerCase() === 'pending audit approval'
 
-/** YYYY-MM-DD -> MM/DD/YY, the same display format the other ledger rows use. */
-const toLedgerDate = (iso: string): string => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || '')
-  return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : iso
+/** Any date input -> MM/DD/YYYY, uniform display format. */
+const toLedgerDate = (iso: string | null | undefined): string => {
+  if (!iso) return '—'
+  const trimmed = String(iso).trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
+  if (m) return `${m[2]}/${m[3]}/${m[1]}`
+  const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
+  if (mLong) return `${mLong[1].padStart(2, '0')}/${mLong[2].padStart(2, '0')}/${mLong[3]}`
+  const mTwo = /^(\d{1,2})\/(\d{1,2})\/(\d{2})$/.exec(trimmed)
+  if (mTwo) {
+    const yy = Number(mTwo[3]) >= 70 ? `19${mTwo[3]}` : `20${mTwo[3]}`
+    return `${mTwo[1].padStart(2, '0')}/${mTwo[2].padStart(2, '0')}/${yy}`
+  }
+  const normalized = normalizeDateToYYYYMMDD(trimmed)
+  if (normalized && /^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const [y, mon, d] = normalized.split('-')
+    return `${mon.padStart(2, '0')}/${d.padStart(2, '0')}/${y}`
+  }
+  return trimmed
+}
+
+/** Resolves grouping/sorting date (deposit date for deposited sales, expense date for expenses, fallback to sale date for undeposited sales). */
+const getRowGroupDateIso = (tx: DashboardTransactionItem): string => {
+  if (tx.type === 'Sales') {
+    const isDeposited = tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited'
+    const depDay = String(tx.deposit_date || tx.depositDate || '').slice(0, 10)
+    const normalizedDep = depDay ? normalizeDateToYYYYMMDD(depDay) : ''
+    if (isDeposited && normalizedDep) return normalizedDep
+    const saleIso = getRowSaleDateIso(tx)
+    if (saleIso) return saleIso
+    return normalizeDateToYYYYMMDD(tx.date) || '1970-01-01'
+  }
+  return normalizeDateToYYYYMMDD(tx.date) || tx.date || '1970-01-01'
+}
+
+/** Extracts encoding/creation timestamp as epoch milliseconds for sorting tie-breakers. */
+const getTxEncodedTimestamp = (tx: DashboardTransactionItem): number => {
+  if (tx.createdAt) {
+    const parsed = Date.parse(tx.createdAt)
+    if (!isNaN(parsed)) return parsed
+  }
+  if (tx.updatedAt) {
+    const parsed = Date.parse(tx.updatedAt)
+    if (!isNaN(parsed)) return parsed
+  }
+  return 0
 }
 
 /** The company has a real lender (not "Pending Finance Assignment" or an external lender). */
@@ -211,15 +253,8 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
 /**
  * One petty cash top up or reimbursement becomes:
  *  - for top up: funded by another company: a Deposit for the requesting company, a Withdrawal for the funder
- *  - for top up: funded from the company's own bank account: a single Withdrawal, and no Deposit
- *  - for reimbursement: a Withdrawal for the company/funder reflecting employee payout or float disbursement
- * Every petty cash row is a read only mirror (petty cash is audited on its own page).
  */
-/**
- * Money that moves through the company's petty cash box, never a bank: petty cash expenses, and
- * petty cash top ups / payouts with no funding bank. Listed under All Banks, but kept out of every
- * bank balance, day total and passbook check, because the bank never held it.
- */
+
 const isPettyCashLedgerRow = (t: DashboardTransactionItem): boolean => {
   if (t.type === 'Expense') return (t.paymentMethod || '').trim().toLowerCase().includes('petty cash')
   return t.type === 'Petty Cash' && !t.bankAccountId
@@ -259,7 +294,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
 
   if (isReimbursement) {
     const claimant = m.paidBy || 'Employee'
-    const desc = m.description || `Petty cash reimbursement for ${claimant} (${m.refNo})`
+    const desc = m.description || `Petty cash reimbursement for ${claimant}`
 
     if (m.isOwnAccount || !m.fundingCompanyId || m.fundingCompanyName === m.companyName) {
       return [
@@ -275,7 +310,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
       ]
     }
 
-    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName} (${m.refNo})`
+    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName}`
     return [
       {
         ...base,
@@ -299,7 +334,7 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
   }
 
   if (m.isOwnAccount) {
-    const particulars = `Petty cash top up funded from own bank account (${m.refNo})`
+    const particulars = 'Petty cash top up funded from own bank account'
     return [
       {
         ...base,
@@ -313,8 +348,8 @@ const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] =>
     ]
   }
 
-  const received = `Petty cash top up from ${m.fundingCompanyName} (${m.refNo})`
-  const funded = `Petty cash top up funded for ${m.companyName} (${m.refNo})`
+  const received = `Petty cash top up from ${m.fundingCompanyName}`
+  const funded = `Petty cash top up funded for ${m.companyName}`
   return [
     {
       ...base,
@@ -373,16 +408,6 @@ const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAcco
     }
   }
 
-  // 5. Account number match (last 4 digits or full number)
-  const accNum = (account.accountNumber || '').replace(/\D/g, '')
-  if (accNum.length >= 4) {
-    const last4 = accNum.slice(-4)
-    const combinedText = `${tx.particulars || ''} ${tx.description || ''} ${tx.chequeNo || ''} ${tx.refNo || ''}`
-    if (combinedText.includes(accNum) || combinedText.includes(last4)) {
-      return true
-    }
-  }
-
   return false
 }
 
@@ -435,7 +460,6 @@ const BankAccountFilterDropdown: React.FC<BankAccountFilterDropdownProps> = ({
       return (
         a.bankName.toLowerCase().includes(q) ||
         a.accountName.toLowerCase().includes(q) ||
-        (a.accountNumber && a.accountNumber.toLowerCase().includes(q)) ||
         (a.companyName && a.companyName.toLowerCase().includes(q))
       )
     })
@@ -777,7 +801,6 @@ export const TransactionPage: React.FC = () => {
   }, [selectedBankAccount, effectiveTargetCompany, getStartingBalanceForCompany, bankAccounts])
 
   const isOwner = userRole === 'owner'
-  const isFinanceOnly = isFinance && !isAudit && !isAdmin && !isOwner
   const isViewOnlyUser = isOwner
   const showActionColumn = !isOwner
   const canAudit = (isAdmin || isAudit) && !isOwner
@@ -786,7 +809,7 @@ export const TransactionPage: React.FC = () => {
     userRole.includes('company') ||
     (!isAudit && !isFinance && !isOwner)
   const isBusinessWriter =
-    (isSupervisor || isAdmin) &&
+    (isSupervisor || isFinance || isAdmin) &&
     !isAudit &&
     !isOwner
 
@@ -878,12 +901,10 @@ export const TransactionPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = React.useState<
     | 'All'
     | 'Deposited'
-    | 'Awaiting'
     | 'Unpaid Sales'
     | 'Paid'
     | 'Pending'
     | 'Unpaid'
-    | 'On hold'
     | 'Pending Audit'
     | 'Audited'
     | 'Flagged'
@@ -899,8 +920,6 @@ export const TransactionPage: React.FC = () => {
       { value: 'Pending', label: 'Pending' },
       { value: 'Unpaid', label: 'Unpaid' },
       { value: 'Deposited', label: 'Deposited' },
-      { value: 'Awaiting', label: 'Awaiting Deposit' },
-      { value: 'On hold', label: 'On Hold' },
     ],
     []
   )
@@ -916,23 +935,13 @@ export const TransactionPage: React.FC = () => {
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
 
-  const itemsPerPage = 12
+  const itemsPerPage = 50
 
   // View mode / group-by choice persisted across tabs (Step 4 expands with Transaction grouping)
   const [salesViewMode, setSalesViewMode] = React.useState<'all' | 'daily_summary'>('all')
   const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
   const toggleDateExpansion = (date: string) =>
     setExpandedDates((prev) => (prev.has(date) ? new Set() : new Set([date])))
-
-  const [expandedDepositRows, setExpandedDepositRows] = React.useState<Set<string>>(new Set())
-  const toggleDepositRow = React.useCallback((key: string) => {
-    setExpandedDepositRows((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }, [])
 
   // Modal inspection
   const [selectedTx, setSelectedTx] = React.useState<DashboardTransactionItem | null>(null)
@@ -1211,16 +1220,16 @@ export const TransactionPage: React.FC = () => {
           // Keep original gross t.amount intact for Amount vs Deposit Amount columns.
           const depDay = String(t.deposit_date || t.depositDate || '').slice(0, 10)
           const [y, m, d] = depDay.split('-')
-          const depositDisplayDate = y && m && d ? `${m}/${d}/${y.slice(2)}` : t.date
+          const depositDisplayDate = y && m && d ? `${m.padStart(2, '0')}/${d.padStart(2, '0')}/${y}` : toLedgerDate(t.date)
           return { ...t, date: depositDisplayDate, paidAmount: depositVal, deposit: depositVal, withdrawal: 0 }
         }
         if (t.type === 'Income') {
           const depositVal = (t.deposit || 0) > 0 ? t.deposit : (t.amount || t.paidAmount || 0)
-          return { ...t, amount: depositVal, deposit: depositVal, withdrawal: 0 }
+          return { ...t, date: toLedgerDate(t.date), amount: depositVal, deposit: depositVal, withdrawal: 0 }
         }
         if (t.type === 'Expense') {
           const withdrawalVal = (t.paidAmount || 0) > 0 ? t.paidAmount! : (t.withdrawal || t.amount || 0)
-          return { ...t, amount: withdrawalVal, deposit: 0, withdrawal: withdrawalVal }
+          return { ...t, date: toLedgerDate(t.date), amount: withdrawalVal, deposit: 0, withdrawal: withdrawalVal }
         }
         return t
       })
@@ -1254,18 +1263,21 @@ export const TransactionPage: React.FC = () => {
     return posted
   }, [bankAccounts])
 
-  /** Order within one bank ledger day: when the money moved (bank posting time), oldest first. */
+  /** Order within one bank ledger day: when the money moved (bank posting time or encoding time), oldest first. */
   const compareLedgerTime = React.useCallback(
     (a: DashboardTransactionItem, b: DashboardTransactionItem) => {
       const time = (t: DashboardTransactionItem) => {
-        const posted = bankPostedAt.get(String(t.id))
+        const rawId = String(t.id)
+        const expKey = rawId.startsWith('exp_') ? rawId : `exp_${rawId}`
+        const posted = bankPostedAt.get(rawId) ?? (t.type === 'Expense' ? bankPostedAt.get(expKey) : undefined)
         if (posted !== undefined) return posted
-        // No bank entry: the last update (e.g. when it was marked Paid), else when it was created
-        const fallback = Date.parse((t.type === 'Sales' && t.updatedAt) || t.createdAt || '')
-        return isNaN(fallback) ? 0 : fallback
+        return getTxEncodedTimestamp(t)
       }
       const diff = time(a) - time(b)
-      return diff !== 0 ? diff : String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
+      if (diff !== 0) return diff
+      const encDiff = getTxEncodedTimestamp(a) - getTxEncodedTimestamp(b)
+      if (encDiff !== 0) return encDiff
+      return String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
     },
     [bankPostedAt]
   )
@@ -1488,14 +1500,7 @@ export const TransactionPage: React.FC = () => {
   )
 
   const formatToShortDate = React.useCallback((val: string | null | undefined): string => {
-    if (!val) return '—'
-    const trimmed = String(val).trim()
-    if (/^\d{1,2}\/\d{1,2}\/\d{2}$/.test(trimmed)) return trimmed
-    const mLong = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trimmed)
-    if (mLong) return `${mLong[1]}/${mLong[2]}/${mLong[3].slice(2)}`
-    const mIso = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
-    if (mIso) return `${mIso[2]}/${mIso[3]}/${mIso[1].slice(2)}`
-    return trimmed
+    return toLedgerDate(val)
   }, [])
 
   const getBankLedgerParticulars = React.useCallback((tx: DashboardTransactionItem) => {
@@ -1512,21 +1517,26 @@ export const TransactionPage: React.FC = () => {
     const items = tx.items && tx.items.length > 0 ? tx.items : []
     const salesCount = items.length > 0 ? items.length : 1
 
-    let title = 'Transaction'
-    if (displayType === 'Bill') {
-      title = 'Bill payment'
-    } else if (displayType === 'Expense') {
-      title = 'Expense payment'
-    } else if (displayType === 'Petty Cash') {
-      title = 'Petty cash release'
-    } else if (displayType === 'Sales') {
-      title = `Bank deposit · ${salesCount} ${salesCount === 1 ? 'sale' : 'sales'}`
-    } else if (displayType === 'Loan') {
-      title = (tx.withdrawal || 0) > 0 ? 'Loan disbursement' : 'Loan repayment'
-    } else if (displayType === 'Income') {
-      title = 'Rental collection'
-    } else if (tx.particulars) {
-      title = getCleanParticularsTitle(tx.particulars, tx.items, tx.amount).title
+    const rawParticulars = tx.particulars || tx.description || ''
+    const clean = getCleanParticularsTitle(rawParticulars, tx.items, tx.amount)
+    let title = clean.title && clean.title !== '—' ? clean.title : ''
+
+    if (!title) {
+      if (displayType === 'Bill') {
+        title = 'Bill payment'
+      } else if (displayType === 'Expense') {
+        title = 'Expense payment'
+      } else if (displayType === 'Petty Cash') {
+        title = 'Petty cash release'
+      } else if (displayType === 'Sales') {
+        title = 'Sales deposit'
+      } else if (displayType === 'Loan') {
+        title = (tx.withdrawal || 0) > 0 ? 'Loan disbursement' : 'Loan repayment'
+      } else if (displayType === 'Income') {
+        title = 'Rental collection'
+      } else {
+        title = 'Transaction'
+      }
     }
 
     const company = tx.company
@@ -1537,7 +1547,7 @@ export const TransactionPage: React.FC = () => {
     const ref = tx.refNo || tx.chequeNo || '—'
     const subtitle = company ? `${company} · ${ref}` : ref
 
-    return { displayType, title, subtitle, salesCount }
+    return { displayType, title, subtitle, salesCount, itemCount: clean.itemCount }
   }, [])
 
   const matchesTypeFilter = React.useCallback(
@@ -1555,7 +1565,6 @@ export const TransactionPage: React.FC = () => {
       if (statusFilter === 'All') return true
       const lc = deriveTransactionLifecycle(t)
       if (statusFilter === 'Deposited') return t.type === 'Sales' && lc.bucket === 'deposited'
-      if (statusFilter === 'Awaiting') return t.type === 'Sales' && lc.bucket === 'awaiting'
       if (statusFilter === 'Unpaid Sales') return t.type === 'Sales' && lc.bucket === 'unpaid'
       if (statusFilter === 'Paid') return lc.paymentStatus === 'Paid'
       if (statusFilter === 'Pending') {
@@ -1564,7 +1573,6 @@ export const TransactionPage: React.FC = () => {
       if (statusFilter === 'Unpaid') {
         return lc.paymentStatus === 'Unpaid' || lc.paymentStatus === 'Overdue'
       }
-      if (statusFilter === 'On hold') return lc.paymentStatus === 'On hold'
       if (statusFilter === 'Pending Audit') return lc.isAuditPending
       if (statusFilter === 'Audited') return t.auditStatus === 'Verified'
       if (statusFilter === 'Flagged') return t.auditStatus === 'Flagged'
@@ -1742,23 +1750,30 @@ export const TransactionPage: React.FC = () => {
       )
     }
 
-    // Date range (All Transactions filters by sale/expense transaction date)
+    // Date range (All Transactions filters by deposit date for deposited sales / expense date for expenses; undeposited by sale date)
     if (dateRange.startDate && dateRange.endDate) {
       list = list.filter((t) =>
-        isDateInRange(getRowSaleDateIso(t) || t.date, dateRange.startDate, dateRange.endDate)
+        isDateInRange(getRowGroupDateIso(t), dateRange.startDate, dateRange.endDate)
       )
     }
 
-    // Sort by transaction date (sales date for Sales, expense date for Expenses)
+    // Sort by transaction date (deposit date for deposited sales, expense date for expenses, sale date for undeposited)
     list = [...list].sort((a, b) => {
-      const dateA = getRowSaleDateIso(a) || normalizeDateToYYYYMMDD(a.date)
-      const dateB = getRowSaleDateIso(b) || normalizeDateToYYYYMMDD(b.date)
+      const dateA = getRowGroupDateIso(a)
+      const dateB = getRowGroupDateIso(b)
       const cmp = dateB.localeCompare(dateA)
       if (cmp !== 0) {
         return sortOrder === 'desc' ? cmp : -cmp
       }
-      const timeCmp = (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
-      return sortOrder === 'desc' ? timeCmp : -timeCmp
+      const timeA = getTxEncodedTimestamp(a)
+      const timeB = getTxEncodedTimestamp(b)
+      const timeCmp = timeB - timeA
+      if (timeCmp !== 0) {
+        return sortOrder === 'desc' ? timeCmp : -timeCmp
+      }
+      return sortOrder === 'desc'
+        ? String(b.id).localeCompare(String(a.id), undefined, { numeric: true })
+        : String(a.id).localeCompare(String(b.id), undefined, { numeric: true })
     })
 
     return list
@@ -1820,7 +1835,6 @@ export const TransactionPage: React.FC = () => {
           date: string
           bankKey: string
           bankName: string
-          accountNumber?: string
           totalDeposit: number
           totalWithdrawal: number
           netMovement: number
@@ -1833,7 +1847,7 @@ export const TransactionPage: React.FC = () => {
     const sourceTransactions = activeTab === 'deposit' ? filteredDepositTransactions : filteredSalesTransactions
     const groupMeta = new Map<string, { date: string; company: string }>()
     sourceTransactions.forEach((tx) => {
-      const dateKey = normalizeDateToYYYYMMDD(tx.date) || tx.date || 'Unknown Date'
+      const dateKey = getRowGroupDateIso(tx)
       const matchedBank = resolveTxBank(tx)
       // A bank owned by several companies gets its own day row per company; single-owner banks stay one row per day.
       const company = isSharedAccount(matchedBank) ? (tx.company || '').trim() || 'Unassigned' : ''
@@ -1847,14 +1861,12 @@ export const TransactionPage: React.FC = () => {
       const isPetty = isPettyCashLedgerRow(tx)
       const bankKey = isPetty ? '__petty_cash__' : matchedBank ? String(matchedBank.id) : (tx.bankName || tx.paymentMethod || 'General Fund')
       const bankName = isPetty ? 'Petty Cash' : matchedBank ? matchedBank.bankName : (tx.bankName || (tx.paymentMethod ? `${tx.paymentMethod}` : 'General Fund'))
-      const accountNumber = isPetty ? undefined : matchedBank?.accountNumber
 
       if (!banksMap.has(bankKey)) {
         banksMap.set(bankKey, {
           date: dateKey,
           bankKey,
           bankName,
-          accountNumber,
           totalDeposit: 0,
           totalWithdrawal: 0,
           netMovement: 0,
@@ -1907,7 +1919,7 @@ export const TransactionPage: React.FC = () => {
   const showDayCompanyColumn = dailySummaryGroups.some((g) => !!g.company)
   const showDayBalanceColumn = activeTab === 'deposit'
   const dayColCount = activeTab === 'deposit'
-    ? (showActionColumn ? 8 : 7)
+    ? (showActionColumn ? 7 : 6)
     : (showDayCompanyColumn ? 7 : 6) +
       (showDayBalanceColumn ? 1 : 0) +
       (showActionColumn ? 1 : 0)
@@ -2010,11 +2022,9 @@ export const TransactionPage: React.FC = () => {
     }
 
     if (statusFilter !== 'All') {
-      const statusDisplay =
-        statusFilter === 'Awaiting' ? 'Awaiting Deposit / Transfer' : statusFilter
       chips.push({
         key: 'status',
-        label: `Status: ${statusDisplay}`,
+        label: `Status: ${statusFilter}`,
         onClear: () => {
           setStatusFilter('All')
           setDepositCurrentPage(1)
@@ -2106,12 +2116,11 @@ export const TransactionPage: React.FC = () => {
     handleRowClick(tx)
   }
 
-  // Supervisors can edit an unaudited sale or expense in the spreadsheet editor.
-  // Finance is view only here (it can only add remarks on unaudited records).
+  // Supervisors and Finance can edit an unaudited sale or expense in the spreadsheet editor.
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
-    !isFinanceOnly &&
+    (isSupervisor || isFinance || isAdmin) &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     !tx.sourceModule &&
@@ -2188,15 +2197,25 @@ export const TransactionPage: React.FC = () => {
     setIsMarkAuditModalOpen(true)
   }
 
+  // One-click audit from the row menu: marks the row audited with no remarks, skipping the dialog
+  const handleMenuQuickAuditNoRemarks = (tx: DashboardTransactionItem) => {
+    setOpenMenuTxId(null)
+    setMenuPosition(null)
+    setActiveMenuTx(null)
+    void submitMarkAudit(tx, undefined)
+  }
+
   const handleConfirmQuickMarkAudit = async () => {
     if (!markAuditTargetTx) return
+    await submitMarkAudit(markAuditTargetTx, markAuditRemarks.trim() || undefined)
+  }
+
+  const submitMarkAudit = async (tx: DashboardTransactionItem, trimmedNotes: string | undefined) => {
     setIsSubmittingAudit(true)
-    const tx = markAuditTargetTx
-    const trimmedNotes = markAuditRemarks.trim() || undefined
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
-      year: '2-digit',
+      year: 'numeric',
     })
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
@@ -2262,7 +2281,7 @@ export const TransactionPage: React.FC = () => {
     const notes = dayAuditRemarks.trim() || undefined
     setIsSubmittingDayAudit(true)
 
-    const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
+    const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const keys = new Set(targets.map((t) => `${t.type}:${t.id}`))
 
@@ -2316,7 +2335,7 @@ export const TransactionPage: React.FC = () => {
     const today = new Date().toLocaleDateString('en-US', {
       month: '2-digit',
       day: '2-digit',
-      year: '2-digit',
+      year: 'numeric',
     })
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
@@ -2391,16 +2410,21 @@ export const TransactionPage: React.FC = () => {
   const handleExportCsv = () => {
     const isDeposit = activeTab === 'deposit'
     const headers = isDeposit
-      ? ['DEPOSIT DATE', 'COMPANY', 'TYPE', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
-      : ['SALES DATE', 'DEPOSIT DAY', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
+      ? ['TRANSACTION DATE', 'SALES DATE', 'COMPANY', 'CHEQUE NO.', 'PARTICULARS', 'CATEGORY', 'DEPOSIT', 'WITHDRAWAL', 'BALANCE', 'AUDIT STATUS']
+      : ['TRANSACTION DATE', 'SALES DATE', 'COMPANY', 'TYPE', 'REF NO.', 'PARTICULARS', 'PAYMENT METHOD', 'DEPOSIT', 'WITHDRAWAL', 'NET AMOUNT', 'STATUS', 'AUDIT STATUS']
 
     const rows = (isDeposit ? filteredDepositTransactions : filteredSalesTransactions).map((t) => {
       const { deposit, withdrawal } = getRowAmounts(t)
+      const isSales = t.type === 'Sales'
+      const isDeposited = isSales && (t.depositStatus === 'Deposited' || t.deposit_status === 'Deposited')
+      const txDate = isSales ? (isDeposited ? (getDepositDayShort(t) || formatToShortDate(t.date)) : '') : toLedgerDate(t.date)
+      const salesDate = isSales ? toLedgerDate(getRowSaleDateIso(t)) : ''
+
       if (isDeposit) {
         return [
-          csvCell(t.date),
+          csvCell(formatToShortDate(t.date)),
+          csvCell(isSales ? formatToShortDate(t.saleDate || t.rawDate) : ''),
           csvCell(t.company),
-          csvCell(t.type),
           csvCell(t.chequeNo || '—'),
           csvCell(t.particulars || t.description),
           csvCell(t.category),
@@ -2411,8 +2435,8 @@ export const TransactionPage: React.FC = () => {
         ]
       }
       return [
-        csvCell(t.date),
-        csvCell(getDepositDayShort(t) || ''),
+        csvCell(txDate),
+        csvCell(salesDate),
         csvCell(t.company),
         csvCell(t.type),
         csvCell(t.refNo || '—'),
@@ -2462,12 +2486,17 @@ export const TransactionPage: React.FC = () => {
         : records
             .map((tx) => {
               const { deposit, withdrawal } = getRowAmounts(tx)
+              const isSales = tx.type === 'Sales'
+              const isDeposited = isSales && (tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited')
+              const txDate = isSales ? (isDeposited ? (getDepositDayShort(tx) || formatToShortDate(tx.date)) : '—') : toLedgerDate(tx.date)
+              const salesDate = isSales ? toLedgerDate(getRowSaleDateIso(tx)) : '—'
+
               if (isDeposit) {
                 return `
         <tr>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.date)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(formatToShortDate(tx.date))}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(isSales ? formatToShortDate(tx.saleDate || tx.rawDate) : '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.company || '—')}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.type)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${escapeHtml(tx.chequeNo || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.particulars || tx.description)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.category)}</td>
@@ -2480,8 +2509,8 @@ export const TransactionPage: React.FC = () => {
               }
               return `
         <tr>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.date)}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(getDepositDayShort(tx) || '—')}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(txDate)}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(salesDate)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.company || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.type)}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${escapeHtml(tx.refNo || '—')}</td>
@@ -2527,10 +2556,10 @@ export const TransactionPage: React.FC = () => {
           <table>
             <thead>
               <tr>
-                <th>${isDeposit ? 'Deposit Date' : 'Sales Date'}</th>
-                ${!isDeposit ? '<th>Deposit Day</th>' : ''}
+                <th>Transaction Date</th>
+                <th>Sales Date</th>
                 <th>Company</th>
-                <th>Type</th>
+                ${!isDeposit ? '<th>Type</th>' : ''}
                 <th>${isDeposit ? 'Cheque No.' : 'Ref No.'}</th>
                 <th>Particulars</th>
                 <th>${isDeposit ? 'Category' : 'Payment Method'}</th>
@@ -2783,7 +2812,7 @@ export const TransactionPage: React.FC = () => {
       <div className="space-y-3">
         {/* Row 1: Company + Bank + Status + Date Range + All Records / By Day toggle */}
           <div className="flex flex-col lg:flex-row lg:flex-wrap items-stretch lg:items-center justify-between gap-2.5 w-full">
-            <div className="flex flex-1 flex-wrap sm:flex-nowrap items-center gap-2.5 min-w-0">
+            <div className="flex flex-1 flex-wrap items-center gap-2.5 min-w-0">
               {/* Active Company Locked Indicator */}
               <div
                 className="inline-flex items-center gap-2 min-h-[44px] h-11 px-4 rounded-[10px] border border-stroke/50 bg-surface/70 text-focus text-xs sm:text-sm font-semibold shadow-xs select-none"
@@ -2847,14 +2876,14 @@ export const TransactionPage: React.FC = () => {
                 const focusedTxs = visibleDayGroups.flatMap((g) => g.banks.flatMap((b) => b.transactions))
                 const focusedDate = visibleDayGroups.map((g) => g.date).join(', ')
                 const pendingCount = getDayAuditTargets(focusedTxs).length
-                const disabledTitle = 'Every transaction on this day is already audited or flagged'
+                // Nothing left to audit on this day: hide the buttons instead of showing them disabled
+                if (pendingCount === 0) return null
                 return (
                   <>
                     <Button
                       type="button"
-                      disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
-                      title={pendingCount === 0 ? disabledTitle : `Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
+                      title={`Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
                       className="min-h-[44px] h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -2863,9 +2892,8 @@ export const TransactionPage: React.FC = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={pendingCount === 0}
                       onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
-                      title={pendingCount === 0 ? disabledTitle : `Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
+                      title={`Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
                       className="min-h-[44px] h-11 px-4 rounded-[10px] border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <AlertCircle className="w-4 h-4 shrink-0" />
@@ -2919,7 +2947,7 @@ export const TransactionPage: React.FC = () => {
             <Table className="w-full min-w-[760px] lg:min-w-0 table-fixed">
               <colgroup>
                 {(activeTab === 'deposit'
-                  ? (showActionColumn ? [16, 12, 14, 14, 15, 12, 13, 4] : [18, 13, 15, 15, 16, 11, 12])
+                  ? (showActionColumn ? [18, 14, 17, 17, 17, 11, 6] : [20, 16, 18, 18, 18, 10])
                   : (showActionColumn
                     ? showDayBalanceColumn
                       ? showDayCompanyColumn
@@ -2962,9 +2990,6 @@ export const TransactionPage: React.FC = () => {
                     </TableHead>
                     <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
                       AUDIT STATUS
-                    </TableHead>
-                    <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
-                      PASSBOOK CHECK
                     </TableHead>
                     {showActionColumn && (
                       <TableHead className="px-1 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-center">
@@ -3026,9 +3051,7 @@ export const TransactionPage: React.FC = () => {
                       const dayDepositsTotal = Math.round(dayDeposits.reduce((acc, t) => acc + (t.deposit || t.amount || 0), 0) * 100) / 100
                       const dayWithdrawalsTotal = Math.round(dayWithdrawals.reduce((acc, t) => acc + (t.withdrawal || t.amount || 0), 0) * 100) / 100
 
-                      const dateFormatted = validDate
-                        ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                        : group.date
+                      const dateFormatted = formatToShortDate(group.date)
 
                       return (
                         <React.Fragment key={group.id}>
@@ -3107,22 +3130,7 @@ export const TransactionPage: React.FC = () => {
                               </span>
                             </TableCell>
 
-                            {/* 7. PASSBOOK CHECK */}
-                            <TableCell className="px-2.5 sm:px-3 py-3 text-left text-xs whitespace-nowrap">
-                              <div className="flex items-center">
-                                {isBalanced ? (
-                                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
-                                    ✓ Balanced
-                                  </span>
-                                ) : (
-                                  <span className="text-amber-700 font-semibold inline-flex items-center gap-1">
-                                    ⚠ {formatPHP(Math.abs(passbookDiff))} {passbookDiff < 0 ? 'short' : 'over'}
-                                  </span>
-                                )}
-                              </div>
-                            </TableCell>
-
-                            {/* 8. ACTION */}
+                            {/* 7. ACTION */}
                             {showActionColumn && (
                               <TableCell className="px-1 py-3 text-center" onClick={(e) => e.stopPropagation()}>
                                 <Button
@@ -3157,34 +3165,30 @@ export const TransactionPage: React.FC = () => {
                           {/* Expanded Content for By Day Bank Ledger */}
                           {isExpanded && (
                             <TableRow className="bg-slate-50/40 border-b border-slate-200 hover:bg-slate-50/40">
-                              <TableCell colSpan={showActionColumn ? 8 : 7} className="p-3 sm:p-4">
+                              <TableCell colSpan={showActionColumn ? 7 : 6} className="p-3 sm:p-4">
                                 <div className="space-y-3.5">
-                                  {/* Formula Banner */}
-                                  <div
-                                    className={cn(
-                                      'rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border',
-                                      isBalanced
-                                        ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                                        : 'bg-amber-50/70 border-amber-200 text-amber-900'
-                                    )}
-                                  >
-                                    <div className="space-y-1">
-                                      <div>
-                                        Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
+                                  {/* Formula Banner: only shown when the day does not balance
+                                      (the Passbook Check column already says "Balanced" otherwise) */}
+                                  {!isBalanced && (
+                                    <div className="rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border bg-amber-50/70 border-amber-200 text-amber-900">
+                                      <div className="space-y-1">
+                                        <div>
+                                          Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
+                                        </div>
+                                        <div>
+                                          Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
+                                          {`(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
+                                        </div>
+                                        {check.issues.length > 0 && (
+                                          <ul className="list-disc pl-5 font-medium">
+                                            {check.issues.map((issue, i) => (
+                                              <li key={i}>{issue}</li>
+                                            ))}
+                                          </ul>
+                                        )}
                                       </div>
-                                      <div>
-                                        Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
-                                        {isBalanced ? '✓ matches' : `(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
-                                      </div>
-                                      {!isBalanced && check.issues.length > 0 && (
-                                        <ul className="list-disc pl-5 font-medium">
-                                          {check.issues.map((issue, i) => (
-                                            <li key={i}>{issue}</li>
-                                          ))}
-                                        </ul>
-                                      )}
                                     </div>
-                                  </div>
+                                  )}
 
                                   {/* Transactions table on this day */}
                                   <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -3236,7 +3240,7 @@ export const TransactionPage: React.FC = () => {
                                         ) : (
                                           dayTxs.map((tx) => {
                                             const txKey = `${tx.type}:${tx.id}`
-                                            const { displayType, title: ledgerTitle, subtitle } = getBankLedgerParticulars(tx)
+                                            const { displayType, title: ledgerTitle, subtitle, itemCount } = getBankLedgerParticulars(tx)
                                             const { deposit: depAmt, withdrawal: withAmt } = getRowAmounts(tx)
                                             const matchedBank = resolveTxBank(tx)
                                             const bankMethod = matchedBank?.bankName || tx.bankName || tx.paymentMethod || 'Cash'
@@ -3260,17 +3264,19 @@ export const TransactionPage: React.FC = () => {
                                                 {/* 2. BANK / METHOD */}
                                                 <td className="px-2.5 py-2.5 align-top text-xs text-focus/90 font-medium truncate">
                                                   <div className="truncate font-medium">{bankMethod}</div>
-                                                  {matchedBank?.accountNumber && (
-                                                    <div className="text-[10px] text-muted-fg font-mono truncate">
-                                                      {matchedBank.accountNumber}
-                                                    </div>
-                                                  )}
                                                 </td>
 
                                                 {/* 3. PARTICULARS */}
-                                                <td className="px-2.5 py-2.5 align-top text-xs">
-                                                  <div className="font-semibold text-focus leading-snug">
-                                                    {ledgerTitle}
+                                                <td className="px-2.5 py-2.5 align-top text-xs" title={tx.particulars || tx.description}>
+                                                  <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                                    <span className="font-semibold text-focus break-words leading-snug">
+                                                      {ledgerTitle}
+                                                    </span>
+                                                    {itemCount > 1 && (
+                                                      <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                                        +{itemCount - 1} more
+                                                      </span>
+                                                    )}
                                                   </div>
                                                   {isSalesRow && depositDiff !== 0 && (
                                                     <div className="mt-0.5 text-[10px] font-medium text-amber-700">
@@ -3410,9 +3416,7 @@ export const TransactionPage: React.FC = () => {
                                 <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
                               )}
                               <span className="text-xs font-bold text-focus truncate">
-                                {validDate
-                                  ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                                  : group.date}
+                                {formatToShortDate(group.date)}
                               </span>
                             </div>
                           </TableCell>
@@ -3555,7 +3559,7 @@ export const TransactionPage: React.FC = () => {
                                     {dayTxs.map((tx) => {
                                       const { deposit, withdrawal } = getRowAmounts(tx)
                                       const lifecycle = deriveTransactionLifecycle(tx)
-                                      const { displayType, title: ledgerTitle, subtitle } = getBankLedgerParticulars(tx)
+                                      const { displayType, title: ledgerTitle, subtitle, itemCount } = getBankLedgerParticulars(tx)
                                       const matchedBank = resolveTxBank(tx)
                                       const bankMethod = matchedBank?.bankName || tx.bankName || tx.paymentMethod || 'Cash'
                                       const isSalesRow = displayType === 'Sales'
@@ -3582,17 +3586,19 @@ export const TransactionPage: React.FC = () => {
                                           {/* 2. BANK/METHOD */}
                                           <td className="px-2.5 sm:px-3 py-2.5 align-top text-xs text-focus/90 font-medium truncate">
                                             <div className="truncate font-medium">{bankMethod}</div>
-                                            {matchedBank?.accountNumber && (
-                                              <div className="text-[10px] text-muted-fg font-mono truncate">
-                                                {matchedBank.accountNumber}
-                                              </div>
-                                            )}
                                           </td>
 
                                           {/* 3. PARTICULARS */}
-                                          <td className="px-2.5 sm:px-3 py-2.5 align-top text-xs">
-                                            <div className="font-semibold text-focus leading-snug">
-                                              {ledgerTitle}
+                                          <td className="px-2.5 sm:px-3 py-2.5 align-top text-xs" title={tx.particulars || tx.description}>
+                                            <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                              <span className="font-semibold text-focus break-words leading-snug">
+                                                {ledgerTitle}
+                                              </span>
+                                              {itemCount > 1 && (
+                                                <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                                  +{itemCount - 1} more
+                                                </span>
+                                              )}
                                             </div>
                                           </td>
 
@@ -3725,10 +3731,10 @@ export const TransactionPage: React.FC = () => {
           <Table className="w-full min-w-[860px] lg:min-w-0 table-fixed">
             <colgroup>
               {(activeTab === 'deposit'
-                ? (showActionColumn ? [11, 9, 10, 26, 13, 11, 11, 6, 3] : [11, 10, 11, 28, 13, 12, 12, 7])
+                ? (showActionColumn ? [12, 11, 10, 24, 12, 11, 11, 6, 3] : [12, 12, 11, 26, 13, 12, 12, 7])
                 : showActionColumn
-                ? [9, 23, 8, 11, 9, 9, 11, 14, 6]
-                : [9, 25, 9, 12, 9, 9, 12, 15]
+                ? [11, 11, 22, 9, 11, 9, 11, 10, 6]
+                : [12, 12, 24, 10, 12, 10, 12, 8]
               ).map((w, i) => (
                 <col key={i} style={{ width: `${w}%` }} />
               ))}
@@ -3737,10 +3743,10 @@ export const TransactionPage: React.FC = () => {
               {activeTab === 'deposit' ? (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
                   <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
-                    DATE
+                    TRANSACTION DATE
                   </TableHead>
                   <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
-                    TYPE
+                    SALES DATE
                   </TableHead>
                   <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHEQUE NO.
@@ -3772,7 +3778,10 @@ export const TransactionPage: React.FC = () => {
               ) : (
                 <TableRow className="border-b border-slate-200/80 bg-slate-50/70 hover:bg-slate-50/70">
                   <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
-                    DATE
+                    TRANSACTION DATE
+                  </TableHead>
+                  <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
+                    SALES DATE
                   </TableHead>
                   <TableHead className="px-2.5 sm:px-3 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     PARTICULARS
@@ -3785,12 +3794,6 @@ export const TransactionPage: React.FC = () => {
                   </TableHead>
                   <TableHead className="px-2 py-3 text-[11px] font-semibold uppercase tracking-wider text-muted-fg text-left">
                     CHEQUE NO.
-                  </TableHead>
-                  <TableHead
-                    className="px-2 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-left"
-                    title="Day the sale's money was deposited or transferred; empty until deposited"
-                  >
-                    DEPOSIT DATE
                   </TableHead>
                   <TableHead
                     className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold uppercase tracking-wider text-muted-fg text-right"
@@ -3812,10 +3815,10 @@ export const TransactionPage: React.FC = () => {
 
             <TableBody>
               {loading ? (
-                <TableSkeleton rows={8} columns={activeTab === 'deposit' ? (showActionColumn ? 9 : 8) : (8 + (showActionColumn ? 1 : 0))} />
+                <TableSkeleton rows={8} columns={showActionColumn ? 9 : 8} />
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
-                  colSpan={activeTab === 'deposit' ? (showActionColumn ? 9 : 8) : (8 + (showActionColumn ? 1 : 0))}
+                  colSpan={showActionColumn ? 9 : 8}
                   title={`No ${activeTab === 'deposit' ? 'bank ledger' : 'transaction'} records found`}
                   message="No records match your active company, date range, or search criteria."
                 />
@@ -3844,247 +3847,153 @@ export const TransactionPage: React.FC = () => {
                   const txKey = `${tx.type}:${tx.id}`
 
                   if (activeTab === 'deposit') {
-                    const isExpanded = expandedDepositRows.has(txKey)
-                    const { displayType, title: ledgerTitle, subtitle } = getBankLedgerParticulars(tx)
+                    const { displayType, title: ledgerTitle, subtitle, itemCount: ledgerItemCount } = getBankLedgerParticulars(tx)
                     const dateShort = formatToShortDate(tx.date)
-
                     const isSalesRow = tx.type === 'Sales'
-                    const depositSalesItems = tx.items && tx.items.length > 0
-                      ? tx.items.map((it: any) => ({
-                          salesDate: formatToShortDate(tx.saleDate || tx.date),
-                          particulars: it.particulars || it.name || tx.particulars || 'Sale item',
-                          method: it.paymentMethod || tx.paymentMethod || 'GCash',
-                          // Sale lines carry their money in `total`
-                          amount: Number(it.total ?? it.amount) || 0,
-                          depositDate: formatToShortDate(tx.depositDate || tx.deposit_date || tx.date),
-                          status: it.status || 'Deposited',
-                        }))
-                      : [
-                          {
-                            salesDate: formatToShortDate(tx.saleDate || tx.date),
-                            particulars: title || tx.particulars || 'Sales deposit',
-                            method: tx.paymentMethod || 'GCash',
-                            amount: depositAmt || tx.amount || 0,
-                            depositDate: formatToShortDate(tx.depositDate || tx.deposit_date || tx.date),
-                            status: 'Deposited',
-                          },
-                        ]
-
-                    const totalSalesAmt = depositSalesItems.reduce((sum, it) => sum + (it.amount || 0), 0)
-                    // Verified against the bank entries posted for this sale, not against its own lines
+                    const salesDateShort = isSalesRow ? formatToShortDate(tx.saleDate || tx.rawDate) : null
                     const depositDiff = isSalesRow ? getSaleBankDiff(tx, depositAmt) : 0
 
                     return (
-                      <React.Fragment key={txKey}>
-                        <TableRow
-                          onClick={() => {
-                            if (isSalesRow) {
-                              toggleDepositRow(txKey)
-                            } else {
-                              handleRowClick(tx)
-                            }
-                          }}
-                          className={cn(
-                            'border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer',
-                            isExpanded && 'bg-slate-50/40'
+                      <TableRow
+                        key={txKey}
+                        onClick={() => handleRowClick(tx)}
+                        className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
+                      >
+                        {/* 1. TRANSACTION DATE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
+                          <span>{dateShort}</span>
+                        </TableCell>
+
+                        {/* 2. SALES DATE */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium whitespace-nowrap">
+                          {salesDateShort ? (
+                            <span className="text-focus">{salesDateShort}</span>
+                          ) : (
+                            <span className="text-muted-fg/40 font-normal">—</span>
                           )}
-                        >
-                          {/* 1. DATE with optional Chevron for Sales */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-medium text-focus whitespace-nowrap">
-                            <div className="flex items-center gap-1">
-                              {isSalesRow ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    toggleDepositRow(txKey)
-                                  }}
-                                  className="p-0.5 -ml-1 text-muted-fg hover:text-focus rounded transition-colors"
-                                  aria-label={isExpanded ? 'Collapse deposit sales' : 'Expand deposit sales'}
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown className="w-3.5 h-3.5 text-primary" />
-                                  ) : (
-                                    <ChevronRight className="w-3.5 h-3.5 text-muted-fg" />
-                                  )}
-                                </button>
-                              ) : null}
-                              <span>{dateShort}</span>
-                            </div>
-                          </TableCell>
+                        </TableCell>
 
-                          {/* 2. TYPE */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs">
-                            <span className="text-xs font-medium text-focus">
-                              {displayType}
-                            </span>
-                          </TableCell>
+                        {/* 3. CHEQUE NO. */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
+                          {tx.chequeNo || '—'}
+                        </TableCell>
 
-                          {/* 3. CHEQUE NO. */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs font-mono text-focus/80 truncate">
-                            {tx.chequeNo || '—'}
-                          </TableCell>
-
-                          {/* 4. PARTICULARS */}
-                          <TableCell className="px-2.5 sm:px-3 py-3 text-xs">
-                            <div className="font-semibold text-focus leading-snug truncate">
+                        {/* 4. PARTICULARS */}
+                        <TableCell className="px-2.5 sm:px-3 py-3 text-xs" title={tx.particulars || tx.description}>
+                          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                            <span className="font-semibold text-focus break-words leading-snug">
                               {ledgerTitle}
-                            </div>
-                          </TableCell>
-
-                          {/* 5. DEPOSIT */}
-                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs text-right tabular-nums whitespace-nowrap">
-                            {depositAmt > 0 ? (
-                              <div>
-                                <div className="font-bold text-emerald-700">+{formatPHP(depositAmt)}</div>
-                                {isSalesRow && depositDiff !== 0 && (
-                                  <div className="text-[11px] font-medium leading-tight text-amber-700">
-                                    ⚠ bank {formatPHP(Math.abs(depositDiff))} {depositDiff < 0 ? 'short' : 'over'}
-                                  </div>
-                                )}
-                              </div>
-                            ) : (
-                              <span className="text-muted-fg/40 font-normal">—</span>
-                            )}
-                          </TableCell>
-
-                          {/* 6. WITHDRAWAL */}
-                          <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
-                            {withdrawalAmt > 0 ? (
-                              `−${formatPHP(withdrawalAmt)}`
-                            ) : (
-                              <span className="text-muted-fg/40 font-normal">—</span>
-                            )}
-                          </TableCell>
-
-                          {/* 7. BANK BALANCE */}
-                          <TableCell
-                            className={cn(
-                              'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
-                              (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
-                            )}
-                            title={isPettyRow ? 'Paid from petty cash, so the bank balance does not change' : 'Balance of the bank'}
-                          >
-                            {isPettyRow ? (
-                              <span className="font-medium text-muted-fg">— Petty cash</span>
-                            ) : (rowBalance ?? 0) < 0 ? (
-                              `−${formatPHP(Math.abs(rowBalance ?? 0))}`
-                            ) : (
-                              formatPHP(rowBalance ?? 0)
-                            )}
-                          </TableCell>
-
-                          {/* 8. AUDIT STATUS */}
-                          <TableCell className="px-2 py-3 text-center whitespace-nowrap">
-                            <span
-                              className={cn(
-                                'text-xs font-semibold whitespace-nowrap',
-                                tx.auditStatus === 'Verified'
-                                  ? 'text-emerald-700'
-                                  : tx.auditStatus === 'Flagged'
-                                  ? 'text-rose-700'
-                                  : 'text-amber-700'
-                              )}
-                            >
-                              {tx.auditStatus === 'Verified' ? 'Audited' : tx.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
                             </span>
-                          </TableCell>
+                            {ledgerItemCount > 1 && (
+                              <span className="shrink-0 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-[#960C01]/10 text-[#960C01] border border-[#960C01]/20">
+                                +{ledgerItemCount - 1} more
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
 
-                          {/* 9. ACTION 3 dots */}
-                          {showActionColumn && (
-                            <TableCell
-                              className="px-1 py-2.5 text-center whitespace-nowrap"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  if (openMenuTxId === txKey) {
-                                    setOpenMenuTxId(null)
-                                    setMenuPosition(null)
-                                    setActiveMenuTx(null)
-                                  } else {
-                                    const rect = e.currentTarget.getBoundingClientRect()
-                                    const openUpward = rect.bottom + 160 > window.innerHeight
-                                    setMenuPosition({
-                                      top: openUpward ? rect.top - 6 : rect.bottom + 6,
-                                      right: Math.max(12, window.innerWidth - rect.right),
-                                      openUpward,
-                                    })
-                                    setActiveMenuTx(tx)
-                                    setOpenMenuTxId(txKey)
-                                  }
-                                }}
-                                className="h-8 w-8 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors mx-auto"
-                                title="Actions"
-                                aria-label="Open action menu"
-                              >
-                                <MoreVertical className="w-4 h-4" />
-                              </Button>
-                            </TableCell>
-                          )}
-                        </TableRow>
-
-                        {/* Expanded sub-table for Sales Deposit (Image 1 Row 5) */}
-                        {isExpanded && isSalesRow && (
-                          <TableRow className="bg-slate-50/40 border-b border-slate-200">
-                            <TableCell colSpan={showActionColumn ? 9 : 8} className="p-3 sm:p-4">
-                              <div className="bg-white rounded-xl border border-slate-200/80 p-3.5 sm:p-4 shadow-xs">
-                                <div className="text-xs font-bold text-focus mb-2.5">
-                                  Sales in deposit {tx.refNo || '—'}
+                        {/* 5. DEPOSIT */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs text-right tabular-nums whitespace-nowrap">
+                          {depositAmt > 0 ? (
+                            <div>
+                              <div className="font-bold text-emerald-700">+{formatPHP(depositAmt)}</div>
+                              {isSalesRow && depositDiff !== 0 && (
+                                <div className="text-[11px] font-medium leading-tight text-amber-700">
+                                  ⚠ bank {formatPHP(Math.abs(depositDiff))} {depositDiff < 0 ? 'short' : 'over'}
                                 </div>
-                                <table className="w-full text-left text-xs">
-                                  <thead className="bg-slate-50 text-muted-fg font-semibold uppercase text-[10px] tracking-wider border-b border-slate-100">
-                                    <tr>
-                                      <th className="px-2.5 py-2 font-semibold">SALES DATE</th>
-                                      <th className="px-2.5 py-2 font-semibold">PARTICULARS</th>
-                                      <th className="px-2.5 py-2 font-semibold">METHOD</th>
-                                      <th className="px-2.5 py-2 text-right font-semibold">AMOUNT</th>
-                                      <th className="px-2.5 py-2 font-semibold">DEPOSIT DATE</th>
-                                      <th className="px-2.5 py-2 text-center font-semibold">STATUS</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100">
-                                    {depositSalesItems.map((item, idx) => (
-                                      <tr key={idx} className="hover:bg-slate-50/50">
-                                        <td className="px-2.5 py-2 whitespace-nowrap text-focus/80">{item.salesDate}</td>
-                                        <td className="px-2.5 py-2 text-focus font-medium">{item.particulars}</td>
-                                        <td className="px-2.5 py-2 text-focus/80">{item.method}</td>
-                                        <td className="px-2.5 py-2 text-right font-medium text-focus tabular-nums">{formatPHP(item.amount)}</td>
-                                        <td className="px-2.5 py-2 whitespace-nowrap text-focus/80">{item.depositDate}</td>
-                                        <td className="px-2.5 py-2 text-center">
-                                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                            {item.status}
-                                          </span>
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                  <tfoot className="border-t border-slate-200 text-xs font-semibold">
-                                    <tr>
-                                      <td colSpan={3} className="px-2.5 py-2.5 text-focus font-bold">
-                                        {depositSalesItems.length} {depositSalesItems.length === 1 ? 'sale' : 'sales'} = {formatPHP(totalSalesAmt)}
-                                      </td>
-                                      <td colSpan={3} className="px-2.5 py-2.5 text-right font-bold">
-                                        {depositDiff === 0 ? null : depositDiff < 0 ? (
-                                          <span className="text-amber-700">⚠ Bank is {formatPHP(Math.abs(depositDiff))} short of this deposit</span>
-                                        ) : (
-                                          <span className="text-amber-700">⚠ Bank holds {formatPHP(depositDiff)} more than this deposit</span>
-                                        )}
-                                      </td>
-                                    </tr>
-                                  </tfoot>
-                                </table>
-                              </div>
-                            </TableCell>
-                          </TableRow>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-fg/40 font-normal">—</span>
+                          )}
+                        </TableCell>
+
+                        {/* 6. WITHDRAWAL */}
+                        <TableCell className="pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap text-rose-700">
+                          {withdrawalAmt > 0 ? (
+                            `−${formatPHP(withdrawalAmt)}`
+                          ) : (
+                            <span className="text-muted-fg/40 font-normal">—</span>
+                          )}
+                        </TableCell>
+
+                        {/* 7. BANK BALANCE */}
+                        <TableCell
+                          className={cn(
+                            'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap',
+                            (rowBalance ?? 0) < 0 ? 'text-rose-600' : 'text-focus'
+                          )}
+                          title={isPettyRow ? 'Paid from petty cash, so the bank balance does not change' : 'Balance of the bank'}
+                        >
+                          {isPettyRow ? (
+                            <span className="font-medium text-muted-fg">— Petty cash</span>
+                          ) : (rowBalance ?? 0) < 0 ? (
+                            `−${formatPHP(Math.abs(rowBalance ?? 0))}`
+                          ) : (
+                            formatPHP(rowBalance ?? 0)
+                          )}
+                        </TableCell>
+
+                        {/* 8. AUDIT STATUS */}
+                        <TableCell className="px-2 py-3 text-center whitespace-nowrap">
+                          <span
+                            className={cn(
+                              'text-xs font-semibold whitespace-nowrap',
+                              tx.auditStatus === 'Verified'
+                                ? 'text-emerald-700'
+                                : tx.auditStatus === 'Flagged'
+                                ? 'text-rose-700'
+                                : 'text-amber-700'
+                            )}
+                          >
+                            {tx.auditStatus === 'Verified' ? 'Audited' : tx.auditStatus === 'Flagged' ? 'Flagged' : 'Pending'}
+                          </span>
+                        </TableCell>
+
+                        {/* 9. ACTION 3 dots */}
+                        {showActionColumn && (
+                          <TableCell
+                            className="px-1 py-2.5 text-center whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (openMenuTxId === txKey) {
+                                  setOpenMenuTxId(null)
+                                  setMenuPosition(null)
+                                  setActiveMenuTx(null)
+                                } else {
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  const openUpward = rect.bottom + 160 > window.innerHeight
+                                  setMenuPosition({
+                                    top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                    right: Math.max(12, window.innerWidth - rect.right),
+                                    openUpward,
+                                  })
+                                  setActiveMenuTx(tx)
+                                  setOpenMenuTxId(txKey)
+                                }
+                              }}
+                              className="h-8 w-8 p-0 rounded-lg text-focus/75 hover:text-focus hover:bg-slate-100 cursor-pointer flex items-center justify-center transition-colors mx-auto"
+                              title="Actions"
+                              aria-label="Open action menu"
+                            >
+                              <MoreVertical className="w-4 h-4" />
+                            </Button>
+                          </TableCell>
                         )}
-                      </React.Fragment>
+                      </TableRow>
                     )
                   }
+
+                  const isSales = tx.type === 'Sales'
+                  const isDeposited = isSales && (tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited')
+                  const txDateDisplay = isSales ? (isDeposited && depDateShort ? depDateShort : '—') : toLedgerDate(tx.date)
+                  const salesDateDisplay = isSales ? saleDateShort : '—'
 
                   return (
                     <TableRow
@@ -4093,12 +4002,25 @@ export const TransactionPage: React.FC = () => {
                       title="Click to view transaction details and audit history"
                       className="border-b border-slate-100 hover:bg-slate-50/60 transition-colors cursor-pointer"
                     >
-                      {/* 1. Date */}
+                      {/* 1. TRANSACTION DATE */}
                       <TableCell className="px-2 py-3 text-xs font-medium text-focus whitespace-nowrap align-top">
-                        {saleDateShort}
+                        {txDateDisplay === '—' ? (
+                          <span className="text-muted-fg/40 font-normal">—</span>
+                        ) : (
+                          <span>{txDateDisplay}</span>
+                        )}
                       </TableCell>
 
-                      {/* 2. Particulars (No company, no ref, clean particulars) */}
+                      {/* 2. SALES DATE */}
+                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
+                        {salesDateDisplay === '—' ? (
+                          <span className="text-muted-fg/40 font-normal">—</span>
+                        ) : (
+                          <span className="text-focus">{salesDateDisplay}</span>
+                        )}
+                      </TableCell>
+
+                      {/* 3. Particulars (No company, no ref, clean particulars) */}
                       <TableCell className="px-2.5 sm:px-3 py-3 text-xs text-focus/90 align-top" title={tx.particulars || tx.description}>
                         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                           <span className="font-semibold text-focus break-words leading-snug">
@@ -4117,12 +4039,12 @@ export const TransactionPage: React.FC = () => {
                         </div>
                       </TableCell>
 
-                      {/* 3. Method */}
+                      {/* 4. Method */}
                       <TableCell className="px-2 py-3 text-xs text-focus/90 font-medium truncate align-top">
                         {tx.paymentMethod || 'Cash'}
                       </TableCell>
 
-                      {/* 4. Signed Gross Amount */}
+                      {/* 5. Signed Gross Amount */}
                       <TableCell
                         className={cn(
                           'pl-2 pr-3 sm:pr-4 py-3 text-xs font-bold text-right tabular-nums whitespace-nowrap align-top',
@@ -4132,18 +4054,9 @@ export const TransactionPage: React.FC = () => {
                         {formatSignedTransactionAmount(tx, rowAmt, formatPHP)}
                       </TableCell>
 
-                      {/* 5. Cheque No. */}
+                      {/* 6. Cheque No. */}
                       <TableCell className="px-2 py-3 text-xs font-mono text-focus/80 truncate align-top">
                         {tx.chequeNo || '—'}
-                      </TableCell>
-
-                      {/* 6. Deposit Date */}
-                      <TableCell className="px-2 py-3 text-xs font-medium whitespace-nowrap align-top">
-                        {depDateShort ? (
-                          <span className="text-emerald-700">{depDateShort}</span>
-                        ) : (
-                          <span className="text-muted-fg/50">—</span>
-                        )}
                       </TableCell>
 
                       {/* 7. Deposit Amount */}
@@ -4238,7 +4151,7 @@ export const TransactionPage: React.FC = () => {
         onOpenChange={setIsModalOpen}
         transaction={selectedTx}
         onTransactionUpdated={handleTransactionUpdated}
-        editable={!isAdmin && !isOwner && !isFinanceOnly}
+        editable={!isAdmin && !isOwner}
         viewOnly={isOwner}
       />
 
@@ -4332,6 +4245,18 @@ export const TransactionPage: React.FC = () => {
                 {activeMenuTx.auditStatus !== 'Verified' && (
                   <button
                     type="button"
+                    disabled={isSubmittingAudit}
+                    onClick={() => handleMenuQuickAuditNoRemarks(activeMenuTx)}
+                    className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 transition-colors text-left cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Audit without remarks</span>
+                  </button>
+                )}
+
+                {activeMenuTx.auditStatus !== 'Verified' && (
+                  <button
+                    type="button"
                     onClick={() => handleMenuOpenDiscrepancy(activeMenuTx)}
                     className="w-full min-h-[40px] flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-700 hover:bg-rose-50 transition-colors text-left cursor-pointer"
                   >
@@ -4352,8 +4277,8 @@ export const TransactionPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
-            {/* 3. Supervisor / Admin: Edit */}
-            {(isSupervisor || isAdmin) && !isAudit && !isFinance && canEditTx(activeMenuTx) && (
+            {/* 3. Supervisor / Finance / Admin: Edit */}
+            {(isSupervisor || isFinance || isAdmin) && !isAudit && canEditTx(activeMenuTx) && (
               <button
                 type="button"
                 onClick={() => handleMenuEdit(activeMenuTx)}
@@ -4383,8 +4308,8 @@ export const TransactionPage: React.FC = () => {
               </button>
             )}
 
-            {/* 5. Supervisor / Admin: Delete */}
-            {(isSupervisor || isAdmin) && !isAudit && !isFinance && (
+            {/* 5. Supervisor / Finance / Admin: Delete */}
+            {(isSupervisor || isFinance || isAdmin) && !isAudit && canShowDeleteOption(activeMenuTx) && (
               <div className="border-t border-slate-100 mt-1 pt-1">
                 <button
                   type="button"
@@ -4410,8 +4335,15 @@ export const TransactionPage: React.FC = () => {
         description={
           deleteConfirmTx ? (
             <span>
-              Are you sure you want to delete 1 item (Ref:{' '}
-              <strong className="font-mono">{deleteConfirmTx.refNo}</strong>) totaling{' '}
+              Are you sure you want to delete{' '}
+              <strong>{deleteConfirmTx.particulars || deleteConfirmTx.description || 'this record'}</strong>
+              {deleteConfirmTx.refNo ? (
+                <>
+                  {' '}
+                  (Ref: <strong className="font-mono">{deleteConfirmTx.refNo}</strong>)
+                </>
+              ) : null}{' '}
+              totaling{' '}
               <strong>
                 {formatPHP(
                   Math.abs(deleteConfirmTx.amount || deleteConfirmTx.withdrawal || deleteConfirmTx.deposit || 0)

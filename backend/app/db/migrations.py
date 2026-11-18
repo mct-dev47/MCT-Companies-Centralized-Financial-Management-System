@@ -88,12 +88,19 @@ def _run_postgresql_migrations(conn) -> list[str]:
     ).first()
 
     if not result_0038:
-        # Pre-flight check for duplicate reference_no in expenses
-        dup_rows = conn.execute(
-            text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
-        ).fetchall()
-        if dup_rows:
-            logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
+        # Pre-flight check for duplicate reference_no in expenses (only if column still exists)
+        has_exp_ref = conn.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = 'expenses' AND column_name = 'reference_no'"
+            )
+        ).first()
+        if has_exp_ref:
+            dup_rows = conn.execute(
+                text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
+            ).fetchall()
+            if dup_rows:
+                logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
 
         script_0038 = MIGRATIONS_DIR / "0038_petty_cash_excess_reimbursements.postgres.sql"
         if script_0038.exists():
@@ -593,6 +600,143 @@ def _run_postgresql_migrations(conn) -> list[str]:
         except Exception as exc:
             logger.error("Migration 0065_dashboard_and_multi_tenant_indexes failed and was skipped: %s", exc)
 
+    # 32. 0067: drop unused company & bank_accounts columns and link bank_accounts.company_id -> company(company_id)
+    result_0067 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0067_company_bank_schema_cleanup'")
+    ).first()
+
+    if not result_0067:
+        has_company = conn.execute(text("SELECT to_regclass('public.company')")).scalar() is not None
+        has_bank = conn.execute(text("SELECT to_regclass('public.bank_accounts')")).scalar() is not None
+        with conn.begin_nested():
+            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+            if has_company:
+                for col in ("contact_person", "email", "current_balance", "starting_balance"):
+                    conn.execute(text(f"ALTER TABLE company DROP COLUMN IF EXISTS {col} CASCADE"))
+            if has_bank:
+                for col in ("account_number", "notes"):
+                    conn.execute(text(f"ALTER TABLE bank_accounts DROP COLUMN IF EXISTS {col} CASCADE"))
+                if has_company:
+                    conn.execute(
+                        text(
+                            "UPDATE bank_accounts SET company_id = NULL "
+                            "WHERE company_id IS NOT NULL AND company_id NOT IN (SELECT company_id FROM company)"
+                        )
+                    )
+                    conn.execute(text("ALTER TABLE bank_accounts ALTER COLUMN company_id TYPE BIGINT"))
+                    has_fk = conn.execute(
+                        text(
+                            "SELECT 1 FROM pg_constraint c "
+                            "JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey) "
+                            "WHERE c.conrelid = 'bank_accounts'::regclass AND c.contype = 'f' AND a.attname = 'company_id'"
+                        )
+                    ).first()
+                    if not has_fk:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE bank_accounts ADD CONSTRAINT fk_bank_accounts_company_id "
+                                "FOREIGN KEY (company_id) REFERENCES company(company_id) ON DELETE SET NULL"
+                            )
+                        )
+            conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0067_company_bank_schema_cleanup')"))
+        applied.append("0067_company_bank_schema_cleanup")
+        logger.info("Migration 0067_company_bank_schema_cleanup applied successfully.")
+
+    # 33. 0068: drop unused budget & cash_inflow tables, receivables.expense_id, and loan.interest_type
+    result_0068 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0068_schema_cleanup_unused_tables_and_columns'")
+    ).first()
+
+    if not result_0068:
+        has_receivables = conn.execute(text("SELECT to_regclass('public.receivables')")).scalar() is not None
+        has_loan = conn.execute(text("SELECT to_regclass('public.loan')")).scalar() is not None
+        with conn.begin_nested():
+            conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+            conn.execute(text("DROP TABLE IF EXISTS budget CASCADE"))
+            conn.execute(text("DROP TABLE IF EXISTS cash_inflow CASCADE"))
+            if has_receivables:
+                conn.execute(text("ALTER TABLE receivables DROP COLUMN IF EXISTS expense_id CASCADE"))
+            if has_loan:
+                conn.execute(text("ALTER TABLE loan DROP COLUMN IF EXISTS interest_type CASCADE"))
+            conn.execute(
+                text("INSERT INTO schema_migrations (version) VALUES ('0068_schema_cleanup_unused_tables_and_columns')")
+            )
+        applied.append("0068_schema_cleanup_unused_tables_and_columns")
+        logger.info("Migration 0068_schema_cleanup_unused_tables_and_columns applied successfully.")
+
+    # 34. 0066: company categories & dashboard indexes (wire previously unexecuted script)
+    result_0066 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0066_company_categories_dashboard_indexes'")
+    ).first()
+    if not result_0066:
+        script_0066 = MIGRATIONS_DIR / "0066_company_categories_dashboard_indexes.postgres.sql"
+        if script_0066.exists():
+            with conn.begin_nested():
+                for stmt in _sql_statements(script_0066.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0066_company_categories_dashboard_indexes')"))
+            applied.append("0066_company_categories_dashboard_indexes")
+            logger.info("Migration 0066_company_categories_dashboard_indexes applied successfully.")
+
+    # 35. 0069: drop unused zero-row tables
+    result_0069 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0069_drop_unused_tables'")
+    ).first()
+    if not result_0069:
+        script_0069 = MIGRATIONS_DIR / "0069_drop_unused_tables.postgres.sql"
+        if script_0069.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0069.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0069_drop_unused_tables')"))
+            applied.append("0069_drop_unused_tables")
+            logger.info("Migration 0069_drop_unused_tables applied successfully.")
+
+    # 36. 0070: harden foreign keys, drop duplicate indexes, add composite pagination indexes
+    result_0070 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0070_foreign_keys_and_index_cleanup'")
+    ).first()
+    if not result_0070:
+        script_0070 = MIGRATIONS_DIR / "0070_foreign_keys_and_index_cleanup.postgres.sql"
+        if script_0070.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text(script_0070.read_text(encoding="utf-8")))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0070_foreign_keys_and_index_cleanup')"))
+            applied.append("0070_foreign_keys_and_index_cleanup")
+            logger.info("Migration 0070_foreign_keys_and_index_cleanup applied successfully.")
+
+    # 37. 0071: permanently drop deprecated unused tables with cascade
+    result_0071 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0071_drop_deprecated_tables'")
+    ).first()
+    if not result_0071:
+        script_0071 = MIGRATIONS_DIR / "0071_drop_deprecated_tables.postgres.sql"
+        if script_0071.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0071.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0071_drop_deprecated_tables')"))
+            applied.append("0071_drop_deprecated_tables")
+            logger.info("Migration 0071_drop_deprecated_tables applied successfully.")
+
+    # 38. 0072: drop system-generated reference_no columns from expenses, petty_cash_topups, and sales
+    result_0072 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0072_drop_reference_no_columns'")
+    ).first()
+    if not result_0072:
+        script_0072 = MIGRATIONS_DIR / "0072_drop_reference_no_columns.postgres.sql"
+        if script_0072.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0072.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0072_drop_reference_no_columns')"))
+            applied.append("0072_drop_reference_no_columns")
+            logger.info("Migration 0072_drop_reference_no_columns applied successfully.")
+
     conn.commit()
     return applied
 
@@ -657,13 +801,15 @@ def _run_sqlite_migrations(conn) -> list[str]:
             text("SELECT name FROM sqlite_master WHERE type='table' AND name='petty_cash_topups'")
         ).first()
 
-        # Pre-flight check for duplicate reference_no in expenses
+        # Pre-flight check for duplicate reference_no in expenses (only if column still exists)
         if exp_table_exists:
-            dup_rows = conn.execute(
-                text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
-            ).fetchall()
-            if dup_rows:
-                logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
+            exp_res_pre = conn.execute(text("PRAGMA table_info(expenses)")).fetchall()
+            if "reference_no" in {row[1] for row in exp_res_pre}:
+                dup_rows = conn.execute(
+                    text("SELECT reference_no, COUNT(*) FROM expenses WHERE reference_no IS NOT NULL GROUP BY reference_no HAVING COUNT(*) > 1")
+                ).fetchall()
+                if dup_rows:
+                    logger.warning("Pre-flight check found duplicate reference numbers in expenses: %s", dup_rows)
 
         # Inspect petty_cash_topups columns if table exists
         if pct_table_exists:
@@ -715,9 +861,6 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 text("CREATE UNIQUE INDEX IF NOT EXISTS idx_topups_existing_expense_id ON petty_cash_topups(existing_expense_id) WHERE existing_expense_id IS NOT NULL")
             )
         if exp_table_exists:
-            conn.execute(
-                text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL")
-            )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)")
             )
@@ -1423,6 +1566,212 @@ def _run_sqlite_migrations(conn) -> list[str]:
                     logger.warning("SQLite index migration 0065 skipped statement: %s", exc)
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0065_dashboard_and_multi_tenant_indexes')"))
         applied.append("0065_dashboard_and_multi_tenant_indexes")
+
+    # 31. 0067: drop unused company & bank_accounts columns
+    result_0067 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0067_company_bank_schema_cleanup'")
+    ).first()
+    if not result_0067:
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        if "company" in existing_tables:
+            comp_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(company)")).fetchall()}
+            for col in ("contact_person", "email", "current_balance", "starting_balance"):
+                if col in comp_cols:
+                    conn.execute(text(f"ALTER TABLE company DROP COLUMN {col}"))
+        if "bank_accounts" in existing_tables:
+            bank_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_accounts)")).fetchall()}
+            for col in ("account_number", "notes"):
+                if col in bank_cols:
+                    conn.execute(text(f"ALTER TABLE bank_accounts DROP COLUMN {col}"))
+            if "company_id" in bank_cols and "company" in existing_tables:
+                conn.execute(
+                    text(
+                        "UPDATE bank_accounts SET company_id = NULL "
+                        "WHERE company_id IS NOT NULL AND company_id NOT IN (SELECT company_id FROM company)"
+                    )
+                )
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0067_company_bank_schema_cleanup')"))
+        applied.append("0067_company_bank_schema_cleanup")
+
+    # 32. 0068: drop unused budget & cash_inflow tables, receivables.expense_id, and loan.interest_type
+    result_0068 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0068_schema_cleanup_unused_tables_and_columns'")
+    ).first()
+    if not result_0068:
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        conn.execute(text("DROP TABLE IF EXISTS budget"))
+        conn.execute(text("DROP TABLE IF EXISTS cash_inflow"))
+        if "receivables" in existing_tables:
+            rec_info = conn.execute(text("PRAGMA table_info(receivables)")).fetchall()
+            rec_cols = {row[1] for row in rec_info}
+            if "expense_id" in rec_cols:
+                preserved_indexes = []
+                for idx_row in conn.execute(text("PRAGMA index_list(receivables)")).fetchall():
+                    idx_name = idx_row[1]
+                    idx_cols = [c[2] for c in conn.execute(text(f'PRAGMA index_info("{idx_name}")')).fetchall()]
+                    if "expense_id" in idx_cols:
+                        continue
+                    idx_sql = conn.execute(
+                        text("SELECT sql FROM sqlite_master WHERE type='index' AND name = :name"),
+                        {"name": idx_name},
+                    ).scalar()
+                    if idx_sql:
+                        preserved_indexes.append(idx_sql)
+
+                col_defs = []
+                col_names = []
+                for _, name, col_type, notnull, dflt_val, pk in rec_info:
+                    if name == "expense_id":
+                        continue
+                    col_names.append(name)
+                    parts = [f'"{name}"', col_type or "TEXT"]
+                    if pk:
+                        parts.append("PRIMARY KEY AUTOINCREMENT" if "INT" in (col_type or "").upper() else "PRIMARY KEY")
+                    else:
+                        if notnull:
+                            parts.append("NOT NULL")
+                        if dflt_val is not None:
+                            parts.append(f"DEFAULT {dflt_val}")
+                    if name == "client_ref":
+                        parts.append("UNIQUE")
+                    col_defs.append(" ".join(parts))
+
+                if "company_id" in col_names and "company" in existing_tables:
+                    col_defs.append("FOREIGN KEY(company_id) REFERENCES company(company_id) ON DELETE CASCADE")
+                if "sale_id" in col_names and "sales" in existing_tables:
+                    col_defs.append("FOREIGN KEY(sale_id) REFERENCES sales(sales_id) ON DELETE CASCADE")
+
+                cols_csv = ", ".join(f'"{c}"' for c in col_names)
+                if conn.in_transaction():
+                    conn.commit()
+                fk_was_on = conn.execute(text("PRAGMA foreign_keys")).scalar()
+                if fk_was_on:
+                    conn.execute(text("PRAGMA foreign_keys = OFF"))
+                try:
+                    conn.execute(text(f"CREATE TABLE receivables_new ({', '.join(col_defs)})"))
+                    conn.execute(text(f"INSERT INTO receivables_new ({cols_csv}) SELECT {cols_csv} FROM receivables"))
+                    conn.execute(text("DROP TABLE receivables"))
+                    conn.execute(text("ALTER TABLE receivables_new RENAME TO receivables"))
+                    for idx_sql in preserved_indexes:
+                        conn.execute(text(idx_sql))
+                    conn.commit()
+                finally:
+                    if fk_was_on:
+                        if conn.in_transaction():
+                            conn.commit()
+                        conn.execute(text("PRAGMA foreign_keys = ON"))
+        if "loan" in existing_tables:
+            loan_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loan)")).fetchall()}
+            if "interest_type" in loan_cols:
+                conn.execute(text("ALTER TABLE loan DROP COLUMN interest_type"))
+        conn.execute(
+            text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0068_schema_cleanup_unused_tables_and_columns')")
+        )
+        applied.append("0068_schema_cleanup_unused_tables_and_columns")
+
+    # 33. 0066: company categories & dashboard indexes
+    result_0066 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0066_company_categories_dashboard_indexes'")
+    ).first()
+    if not result_0066:
+        script_0066 = MIGRATIONS_DIR / "0066_company_categories_dashboard_indexes.sqlite.sql"
+        if script_0066.exists():
+            existing_tables = {
+                row[0].lower()
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            }
+            for stmt in _sql_statements(script_0066.read_text(encoding="utf-8")):
+                match = re.search(r"\bON\s+([a-zA-Z0-9_]+)", stmt, re.IGNORECASE)
+                if match and match.group(1).lower() not in existing_tables:
+                    continue
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0066 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0066_company_categories_dashboard_indexes')"))
+        applied.append("0066_company_categories_dashboard_indexes")
+
+    # 34. 0069: drop unused zero-row tables
+    result_0069 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0069_drop_unused_tables'")
+    ).first()
+    if not result_0069:
+        script_0069 = MIGRATIONS_DIR / "0069_drop_unused_tables.sqlite.sql"
+        if script_0069.exists():
+            for stmt in _sql_statements(script_0069.read_text(encoding="utf-8")):
+                conn.execute(text(stmt))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0069_drop_unused_tables')"))
+        applied.append("0069_drop_unused_tables")
+
+    # 35. 0070: drop duplicate indexes and add composite pagination indexes
+    result_0070 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0070_foreign_keys_and_index_cleanup'")
+    ).first()
+    if not result_0070:
+        script_0070 = MIGRATIONS_DIR / "0070_foreign_keys_and_index_cleanup.sqlite.sql"
+        if script_0070.exists():
+            existing_tables = {
+                row[0].lower()
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+            }
+            for stmt in _sql_statements(script_0070.read_text(encoding="utf-8")):
+                match = re.search(r"\bON\s+([a-zA-Z0-9_]+)", stmt, re.IGNORECASE)
+                if match and match.group(1).lower() not in existing_tables:
+                    continue
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0070 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0070_foreign_keys_and_index_cleanup')"))
+        applied.append("0070_foreign_keys_and_index_cleanup")
+
+    # 36. 0071: permanently drop deprecated unused tables
+    result_0071 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0071_drop_deprecated_tables'")
+    ).first()
+    if not result_0071:
+        script_0071 = MIGRATIONS_DIR / "0071_drop_deprecated_tables.sqlite.sql"
+        if script_0071.exists():
+            for stmt in _sql_statements(script_0071.read_text(encoding="utf-8")):
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0071 skipped statement: %s", exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0071_drop_deprecated_tables')"))
+        applied.append("0071_drop_deprecated_tables")
+
+    # 37. 0072: drop system-generated reference_no columns from expenses, petty_cash_topups, and sales
+    result_0072 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0072_drop_reference_no_columns'")
+    ).first()
+    if not result_0072:
+        script_0072 = MIGRATIONS_DIR / "0072_drop_reference_no_columns.sqlite.sql"
+        if script_0072.exists():
+            for stmt in _sql_statements(script_0072.read_text(encoding="utf-8")):
+                try:
+                    conn.execute(text(stmt))
+                except Exception as exc:
+                    logger.warning("SQLite migration 0072 skipped statement: %s", exc)
+        existing_tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        for tbl in ("expenses", "petty_cash_topups", "sales"):
+            if tbl in existing_tables:
+                cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({tbl})")).fetchall()}
+                if "reference_no" in cols:
+                    try:
+                        conn.execute(text(f"ALTER TABLE {tbl} DROP COLUMN reference_no"))
+                    except Exception as exc:
+                        logger.warning("SQLite migration 0072 failed dropping %s.reference_no: %s", tbl, exc)
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0072_drop_reference_no_columns')"))
+        applied.append("0072_drop_reference_no_columns")
 
     conn.commit()
     return applied

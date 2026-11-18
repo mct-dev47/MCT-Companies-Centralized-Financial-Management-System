@@ -69,8 +69,8 @@ def env(monkeypatch):
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
 
-    company = Company(company_name="MCT Kitchen", starting_balance=Decimal("0.00"))
-    other = Company(company_name="Other Co", starting_balance=Decimal("0.00"))
+    company = Company(company_name="MCT Kitchen")
+    other = Company(company_name="Other Co")
     db.add_all([company, other])
     db.flush()
     db.add(PettyCashWallet(company_id=company.company_id, low_balance_threshold=Decimal("500.00")))

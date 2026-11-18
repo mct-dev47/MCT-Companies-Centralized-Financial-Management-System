@@ -136,7 +136,6 @@ def init_db():
     import app.models.user
     import app.models.audit_log
     import app.models.loan
-    import app.models.staff_credit
     import app.models.bills
     import app.models.petty_cash
     import app.models.intercompany_transfer
@@ -152,40 +151,51 @@ def init_db():
     from app.models.company import Company
 
 
+    from sqlalchemy import inspect as sa_inspect
     from sqlalchemy.exc import ProgrammingError, OperationalError
 
+    is_prod = (getattr(settings, "ENVIRONMENT", "development") or "development").strip().lower() == "production"
+
     try:
-        try:
-            run_migrations(engine)
-        except Exception as me:
-            logger.warning(f"Migration runner encountered an issue: {me}. Falling back to metadata inspection.")
-        Base.metadata.create_all(bind=engine)
-    except (ProgrammingError, OperationalError) as e:
-        if "already exists" not in str(e).lower():
+        run_migrations(engine)
+    except Exception as me:
+        if is_prod:
+            logger.critical("Migration runner failed in production: %s", me)
             raise
+        logger.warning(f"Migration runner encountered an issue: {me}. Falling back to metadata inspection.")
 
-        from sqlalchemy import inspect as sa_inspect
+    should_create_all = engine.dialect.name != "postgresql"
+    if not should_create_all:
+        existing_tables = set(sa_inspect(engine).get_table_names())
+        should_create_all = "schema_migrations" not in existing_tables or len(existing_tables) <= 1
 
-        existing = set(sa_inspect(engine).get_table_names())
-        missing = [t for t in Base.metadata.sorted_tables if t.name not in existing]
-        if missing:
-            logger.warning(
-                "Schema partially exists; creating %d missing table(s): %s",
-                len(missing),
-                ", ".join(t.name for t in missing),
-            )
-            for table in missing:
-                try:
-                    table.create(bind=engine, checkfirst=True)
-                except (ProgrammingError, OperationalError) as te:
-                    if "already exists" not in str(te).lower():
-                        raise
-                    logger.warning("Skipping existing object for table %s: %s", table.name, te)
-        else:
-            logger.warning(
-                "All tables already exist (likely provisioned out-of-band); "
-                "skipping create and continuing startup."
-            )
+    if should_create_all:
+        try:
+            Base.metadata.create_all(bind=engine)
+        except (ProgrammingError, OperationalError) as e:
+            if "already exists" not in str(e).lower():
+                raise
+
+            existing = set(sa_inspect(engine).get_table_names())
+            missing = [t for t in Base.metadata.sorted_tables if t.name not in existing]
+            if missing:
+                logger.warning(
+                    "Schema partially exists; creating %d missing table(s): %s",
+                    len(missing),
+                    ", ".join(t.name for t in missing),
+                )
+                for table in missing:
+                    try:
+                        table.create(bind=engine, checkfirst=True)
+                    except (ProgrammingError, OperationalError) as te:
+                        if "already exists" not in str(te).lower():
+                            raise
+                        logger.warning("Skipping existing object for table %s: %s", table.name, te)
+            else:
+                logger.warning(
+                    "All tables already exist (likely provisioned out-of-band); "
+                    "skipping create and continuing startup."
+                )
 
     
     try:
@@ -346,10 +356,6 @@ def init_db():
                 if "linked_topup_id" not in exp_cols:
                     conn.execute(text("ALTER TABLE expenses ADD COLUMN linked_topup_id INTEGER"))
                 try:
-                    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL"))
-                except Exception:
-                    pass
-                try:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
                 except Exception:
                     pass
@@ -368,17 +374,6 @@ def init_db():
             _repair_db.close()
     except Exception as e:
         logger.warning(f"Bank integrity repair skipped on init: {e}")
-
-    try:
-        from app.services.company_service import CompanyService
-
-        _comp_db = SessionLocal()
-        try:
-            CompanyService(_comp_db).reconcile_existing_company_starting_balances()
-        finally:
-            _comp_db.close()
-    except Exception as e:
-        logger.warning(f"Company bank starting balance reconciliation skipped on init: {e}")
 
     import threading
 
@@ -403,13 +398,11 @@ def init_db():
                                 continue
                             existing = db.query(Company).filter(Company.company_id == cid).first()
                             p_cash = Decimal(str(sc.get("petty_cash") or 0.0))
-                            s_bal = Decimal(str(sc.get("starting_balance") or 0.0))
                             if existing:
                                 existing.company_name = sc.get("company_name") or existing.company_name
                                 existing.location = sc.get("location") or existing.location
                                 existing.contact_number = sc.get("contact_number")
                                 existing.phone = sc.get("phone")
-                                existing.starting_balance = s_bal
                                 existing.petty_cash = p_cash
                                 existing.logo_url = sc.get("logo_url")
                             else:
@@ -419,16 +412,10 @@ def init_db():
                                     location=sc.get("location"),
                                     contact_number=sc.get("contact_number"),
                                     phone=sc.get("phone"),
-                                    starting_balance=s_bal,
                                     petty_cash=p_cash,
                                     logo_url=sc.get("logo_url"),
                                 ))
                         db.commit()
-                        try:
-                            from app.services.company_service import CompanyService
-                            CompanyService(db).reconcile_existing_company_starting_balances()
-                        except Exception as rec_err:
-                            logger.warning(f"Could not reconcile company bank starting balances after supabase sync: {rec_err}")
                     finally:
                         db.close()
                 return

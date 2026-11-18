@@ -76,7 +76,7 @@ export const CompanyBankSelect: React.FC<CompanyBankSelectProps> = ({
         {accounts.map((acc) => (
           <option key={acc.id} value={String(acc.id)}>
             {acc.bankName}
-            {acc.accountNumber ? ` (••${String(acc.accountNumber).slice(-4)})` : ''} — {formatPHP(Number(acc.currentBalance) || 0)}
+            {acc.accountName ? ` (${acc.accountName})` : ''} — {formatPHP(Number(acc.currentBalance) || 0)}
           </option>
         ))}
       </select>

@@ -25,7 +25,7 @@ def test_update_receivable_allows_partial_status():
     Session = sessionmaker(bind=engine)
     session = Session()
 
-    company = Company(company_id=1, company_name="MCT", starting_balance=Decimal("1000.00"))
+    company = Company(company_id=1, company_name="MCT")
     session.add(company)
     session.commit()
 

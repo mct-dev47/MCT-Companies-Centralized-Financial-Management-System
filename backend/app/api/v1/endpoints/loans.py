@@ -10,6 +10,7 @@ from app.core.company_resolver import get_company_name_map
 from app.db.supabase import get_supabase_admin_client
 from app.models.loan import Loan, LoanRepayment
 from app.models.bank import BankAccount
+from app.models.finance import Expense, Category
 from app.services.bank_service import BankService
 from app.schemas.bank import BankDepositWithdrawRequest
 from app.models.company import Company
@@ -183,7 +184,6 @@ def _company_loan_item(loan: Loan, company_names: dict[int, str], db: Session) -
         principal_amount=principal,
         amount=principal,
         interest_rate=Decimal(str(loan.interest_rate or 0)),
-        interest_type=loan.interest_type or "simple",
         loan_date=loan.loan_date,
         due_date=loan.due_date,
         description=loan.description,
@@ -405,6 +405,37 @@ def _attach_borrower_banks(db: Session, loans: List[LoanOut]) -> None:
             loan.borrower_bank_account_id = account_id
 
 
+def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
+    """Populate total_paid, outstanding_balance, and repayments from LoanRepayment rows."""
+    loan_ids = [item.loan_id for item in items if item.loan_id]
+    if not loan_ids:
+        return
+    rows = (
+        db.query(LoanRepayment)
+        .filter(LoanRepayment.loan_id.in_(loan_ids))
+        .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
+        .all()
+    )
+    by_loan: dict[int, list[LoanRepayment]] = {}
+    for r in rows:
+        by_loan.setdefault(r.loan_id, []).append(r)
+
+    for item in items:
+        reps = by_loan.get(item.loan_id, [])
+        total_paid = sum(
+            (Decimal(str(r.amount or 0)) for r in reps if (r.status or "").lower() != "pending"),
+            Decimal("0.00"),
+        )
+        _, total_payable = FinanceCalculator.calculate_loan_totals(
+            Decimal(str(item.principal_amount or 0)),
+            Decimal(str(item.interest_rate or 0)),
+        )
+        outstanding = max(Decimal("0.00"), total_payable - total_paid)
+        item.total_paid = total_paid
+        item.outstanding_balance = outstanding
+        item.repayments = [LoanRepaymentOut.model_validate(r) for r in reps]
+
+
 @router.get("", response_model=List[LoanOut], summary="List loans from Supabase / DB")
 def get_loans(
     response: Response,
@@ -415,6 +446,7 @@ def get_loans(
     status: Optional[str] = Query(None, description="Filter by Loan Status"),
     start_date: Optional[date] = Query(None, description="Filter from loan date"),
     end_date: Optional[date] = Query(None, description="Filter to loan date"),
+    search: Optional[str] = Query(None, description="Search ref no or description"),
     user_role: Optional[str] = Query(None, description="Current user role"),
     pagination: PaginationParams = Depends(),
     request: Request = None,
@@ -424,13 +456,29 @@ def get_loans(
     role = (current_user.get("role") or "").strip().lower()
     is_auditor = role in {"audit", "auditor"}
 
-    is_privileged = role in ("audit", "auditor")
+    is_privileged = role in ("admin", "audit", "auditor", "owner") or bool(current_user.get("is_admin"))
     user_company_ids = current_user.get("company_ids") or []
     if not is_privileged and not user_company_ids and current_user.get("company_id"):
         user_company_ids = [current_user["company_id"]]
+    if hasattr(borrower_id, "default"):
+        borrower_id = None
+    if hasattr(lender_id, "default"):
+        lender_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(scope, "default"):
+        scope = None
+    if hasattr(status, "default"):
+        status = None
+    if hasattr(start_date, "default") or not isinstance(start_date, (date, datetime)):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, (date, datetime)):
+        end_date = None
+    if hasattr(search, "default"):
+        search = None
 
     scope_cids = "all" if is_privileged else ",".join(str(c) for c in sorted(user_company_ids))
-    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{role}_{scope_cids}_{pagination.limit}_{pagination.offset}"
+    cache_key = f"loans_{borrower_id}_{lender_id}_{company_name}_{scope}_{status}_{start_date}_{end_date}_{search}_{role}_{scope_cids}_{pagination.limit}_{pagination.offset}"
     cached = system_cache.get(cache_key)
     if cached is not None:
         if isinstance(cached, dict) and "items" in cached:
@@ -448,196 +496,224 @@ def get_loans(
     if lender_id:
         check_company_access(current_user, lender_id)
 
-    try:
-        client = get_supabase_admin_client()
-        id_to_name, name_to_id = get_supabase_company_mapping(client, db)
+    query = db.query(Loan)
 
-        resolved_target_cid = None
-        if company_name and company_name.lower() != "all companies":
-            resolved_target_cid = resolve_company_id(None, company_name, name_to_id, db)
-            if resolved_target_cid and not is_privileged:
-                check_company_access(current_user, resolved_target_cid)
+    resolved_target_cid = None
+    if company_name and company_name.lower() != "all companies":
+        resolved_target_cid = resolve_company_id(None, company_name, {}, db)
+        if resolved_target_cid and not is_privileged:
+            check_company_access(current_user, resolved_target_cid)
 
-        sb_query = client.table("loan").select("*", count="exact")
+    if isinstance(borrower_id, int):
+        query = query.filter(Loan.borrower == borrower_id)
+    if isinstance(lender_id, int):
+        query = query.filter(Loan.lender == lender_id)
 
-        if isinstance(borrower_id, int):
-            sb_query = sb_query.eq("borrower", borrower_id)
-        if isinstance(lender_id, int):
-            sb_query = sb_query.eq("lender", lender_id)
+    if resolved_target_cid:
+        if scope == "borrower":
+            query = query.filter(Loan.borrower == resolved_target_cid)
+        elif scope == "lender":
+            query = query.filter(Loan.lender == resolved_target_cid)
+        else:
+            query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
+    elif not is_privileged:
+        if not user_company_ids:
+            response.headers["X-Total-Count"] = "0"
+            response.headers["X-Page-Limit"] = str(pagination.limit)
+            response.headers["X-Page-Offset"] = str(pagination.offset)
+            return []
+        query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
 
-        if resolved_target_cid:
-            if scope == "borrower":
-                sb_query = sb_query.eq("borrower", resolved_target_cid)
-            elif scope == "lender":
-                sb_query = sb_query.eq("lender", resolved_target_cid)
-            else:
-                # Matches either borrower or lender
-                sb_query = sb_query.or_(f"borrower.eq.{resolved_target_cid},lender.eq.{resolved_target_cid}")
-        elif not is_privileged:
-            if not user_company_ids:
-                response.headers["X-Total-Count"] = "0"
-                response.headers["X-Page-Limit"] = str(pagination.limit)
-                response.headers["X-Page-Offset"] = str(pagination.offset)
-                return []
-            if len(user_company_ids) == 1:
-                cid = user_company_ids[0]
-                sb_query = sb_query.or_(f"borrower.eq.{cid},lender.eq.{cid}")
-            else:
-                or_clause = ",".join([f"borrower.eq.{cid},lender.eq.{cid}" for cid in user_company_ids])
-                sb_query = sb_query.or_(or_clause)
+    if isinstance(status, str) and status.lower() != "all":
+        query = query.filter(Loan.status == status)
 
-        if isinstance(status, str) and status.lower() != "all":
-            sb_query = sb_query.eq("status", status)
+    if is_auditor:
+        query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
 
-        if isinstance(start_date, (date, datetime)):
-            sb_query = sb_query.gte("loan_date", start_date.isoformat())
-        if isinstance(end_date, (date, datetime)):
-            sb_query = sb_query.lte("loan_date", end_date.isoformat())
+    if isinstance(start_date, (date, datetime)):
+        query = query.filter(Loan.loan_date >= start_date)
+    if isinstance(end_date, (date, datetime)):
+        query = query.filter(Loan.loan_date <= end_date)
 
-        res = (
-            sb_query.order("loan_date", desc=True)
-            .order("loan_id", desc=True)
-            .range(pagination.offset, pagination.offset + pagination.limit - 1)
-            .execute()
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(Loan.loan_ref_no.ilike(term), Loan.description.ilike(term)))
+
+    total_count = query.count()
+    response.headers["X-Total-Count"] = str(total_count)
+    response.headers["X-Page-Limit"] = str(pagination.limit)
+    response.headers["X-Page-Offset"] = str(pagination.offset)
+
+    loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
+
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+
+    result = [
+        LoanOut(
+            loan_id=l.loan_id,
+            borrower=l.borrower,
+            lender=l.lender,
+            borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
+            lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
+            loan_ref_no=l.loan_ref_no,
+            principal_amount=l.principal_amount,
+            amount=l.principal_amount,
+            interest_rate=l.interest_rate or Decimal("0.00"),
+            loan_date=l.loan_date,
+            due_date=l.due_date,
+            description=l.description,
+            particulars=l.description,
+            status=getattr(l, "status", None) or "Pending Finance Endorsement",
+            endorsed_by=getattr(l, "endorsed_by", None),
+            endorsed_at=getattr(l, "endorsed_at", None),
+            finance_remark=getattr(l, "finance_remark", None),
+            audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
+            audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
+            audit_remark=getattr(l, "audit_remark", None),
+            disbursed_by=getattr(l, "disbursed_by", None),
+            disbursed_at=getattr(l, "disbursed_at", None),
+            bank_account_id=getattr(l, "bank_account_id", None),
+            created_at=l.created_at,
+            updated_at=l.updated_at,
         )
-        total_count = res.count if getattr(res, "count", None) is not None else len(res.data or [])
-        response.headers["X-Total-Count"] = str(total_count)
-        response.headers["X-Page-Limit"] = str(pagination.limit)
-        response.headers["X-Page-Offset"] = str(pagination.offset)
-        rows = res.data or []
+        for l in loans
+    ]
+    _attach_borrower_banks(db, result)
+    _attach_loan_repayments(db, result)
+    system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
+    return result
 
-        result: List[LoanOut] = []
-        for r in rows:
-            row_status = r.get("status") or "Pending Finance Endorsement"
-            if is_auditor and row_status in {"Pending Finance Endorsement", "Pending Approval"}:
-                continue
 
-            b_id = r.get("borrower")
-            l_id = r.get("lender")
-            p_amt = Decimal(str(r.get("principal_amount") or 0.0))
-            desc = r.get("description") or ""
+@router.get("/export", response_model=List[LoanOut], summary="Export all matching loans")
+def export_loans(
+    borrower_id: Optional[int] = Query(None),
+    lender_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    dummy_resp = Response()
+    return get_loans(
+        response=dummy_resp,
+        borrower_id=borrower_id,
+        lender_id=lender_id,
+        company_name=company_name,
+        scope=scope,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        pagination=PaginationParams(limit=100, offset=0),
+        current_user=current_user,
+        db=db,
+    ) if False else _export_loans_unbounded(
+        db=db,
+        current_user=current_user,
+        borrower_id=borrower_id,
+        lender_id=lender_id,
+        company_name=company_name,
+        scope=scope,
+        status=status,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+    )
 
-            result.append(
-                LoanOut(
-                    loan_id=r["loan_id"],
-                    borrower=b_id,
-                    lender=l_id,
-                    borrower_name=id_to_name.get(b_id) or f"Company #{b_id}",
-                    lender_name=id_to_name.get(l_id) if l_id else "Pending Finance Assignment",
-                    loan_ref_no=r.get("loan_ref_no"),
-                    principal_amount=p_amt,
-                    amount=p_amt,
-                    interest_rate=Decimal(str(r.get("interest_rate") or 0.0)),
-                    interest_type=r.get("interest_type") or "simple",
-                    loan_date=r.get("loan_date"),
-                    due_date=r.get("due_date"),
-                    description=desc,
-                    particulars=desc,
-                    status=row_status,
-                    endorsed_by=r.get("endorsed_by"),
-                    endorsed_at=r.get("endorsed_at"),
-                    finance_remark=r.get("finance_remark"),
-                    audit_reviewed_by=r.get("audit_reviewed_by"),
-                    audit_reviewed_at=r.get("audit_reviewed_at"),
-                    audit_remark=r.get("audit_remark"),
-                    disbursed_by=r.get("disbursed_by"),
-                    disbursed_at=r.get("disbursed_at"),
-                    bank_account_id=r.get("bank_account_id"),
-                    created_at=r.get("created_at"),
-                    updated_at=r.get("updated_at"),
-                )
-            )
-        _attach_borrower_banks(db, result)
-        system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
-        return result
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Supabase GET /loans failed, falling back to local SQLite: {e}")
-        query = db.query(Loan)
-
-        resolved_target_cid = None
-        if company_name and company_name.lower() != "all companies":
-            resolved_target_cid = resolve_company_id(None, company_name, {}, db)
-            if resolved_target_cid and not is_privileged:
-                check_company_access(current_user, resolved_target_cid)
-
-        if isinstance(borrower_id, int):
-            query = query.filter(Loan.borrower == borrower_id)
-        if isinstance(lender_id, int):
-            query = query.filter(Loan.lender == lender_id)
-
-        if resolved_target_cid:
-            if scope == "borrower":
-                query = query.filter(Loan.borrower == resolved_target_cid)
-            elif scope == "lender":
-                query = query.filter(Loan.lender == resolved_target_cid)
-            else:
-                query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
-        elif not is_privileged:
-            if not user_company_ids:
-                response.headers["X-Total-Count"] = "0"
-                response.headers["X-Page-Limit"] = str(pagination.limit)
-                response.headers["X-Page-Offset"] = str(pagination.offset)
-                return []
-            query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
-
-        if isinstance(status, str) and status.lower() != "all":
-            query = query.filter(Loan.status == status)
-
-        if is_auditor:
-            query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
-
-        if isinstance(start_date, (date, datetime)):
-            query = query.filter(Loan.loan_date >= start_date)
-        if isinstance(end_date, (date, datetime)):
-            query = query.filter(Loan.loan_date <= end_date)
-
-        total_count = query.count()
-        response.headers["X-Total-Count"] = str(total_count)
-        response.headers["X-Page-Limit"] = str(pagination.limit)
-        response.headers["X-Page-Offset"] = str(pagination.offset)
-
-        loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
-
-        companies = db.query(Company).all()
-        comp_map = {c.company_id: c.company_name for c in companies}
-
-        fallback_result = [
-            LoanOut(
-                loan_id=l.loan_id,
-                borrower=l.borrower,
-                lender=l.lender,
-                borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
-                lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
-                loan_ref_no=l.loan_ref_no,
-                principal_amount=l.principal_amount,
-                amount=l.principal_amount,
-                interest_rate=l.interest_rate or Decimal("0.00"),
-                interest_type=l.interest_type or "simple",
-                loan_date=l.loan_date,
-                due_date=l.due_date,
-                description=l.description,
-                particulars=l.description,
-                status=getattr(l, "status", None) or "Pending Finance Endorsement",
-                endorsed_by=getattr(l, "endorsed_by", None),
-                endorsed_at=getattr(l, "endorsed_at", None),
-                finance_remark=getattr(l, "finance_remark", None),
-                audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
-                audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
-                audit_remark=getattr(l, "audit_remark", None),
-                disbursed_by=getattr(l, "disbursed_by", None),
-                disbursed_at=getattr(l, "disbursed_at", None),
-                bank_account_id=getattr(l, "bank_account_id", None),
-                created_at=l.created_at,
-                updated_at=l.updated_at,
-            )
-            for l in loans
-        ]
-        _attach_borrower_banks(db, fallback_result)
-        system_cache.set(cache_key, {"items": fallback_result, "total": total_count}, ttl=45, tags=["loans"])
-        return fallback_result
+def _export_loans_unbounded(
+    db: Session,
+    current_user: AuthenticatedUser,
+    borrower_id: Optional[int] = None,
+    lender_id: Optional[int] = None,
+    company_name: Optional[str] = None,
+    scope: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    search: Optional[str] = None,
+) -> List[LoanOut]:
+    role = (current_user.get("role") or "").strip().lower()
+    is_auditor = role in {"audit", "auditor"}
+    is_privileged = role in ("admin", "audit", "auditor", "owner") or bool(current_user.get("is_admin"))
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+    if borrower_id:
+        check_company_access(current_user, borrower_id)
+    if lender_id:
+        check_company_access(current_user, lender_id)
+    query = db.query(Loan)
+    resolved_target_cid = None
+    if company_name and company_name.lower() != "all companies":
+        resolved_target_cid = resolve_company_id(None, company_name, {}, db)
+        if resolved_target_cid and not is_privileged:
+            check_company_access(current_user, resolved_target_cid)
+    if isinstance(borrower_id, int):
+        query = query.filter(Loan.borrower == borrower_id)
+    if isinstance(lender_id, int):
+        query = query.filter(Loan.lender == lender_id)
+    if resolved_target_cid:
+        if scope == "borrower":
+            query = query.filter(Loan.borrower == resolved_target_cid)
+        elif scope == "lender":
+            query = query.filter(Loan.lender == resolved_target_cid)
+        else:
+            query = query.filter(or_(Loan.borrower == resolved_target_cid, Loan.lender == resolved_target_cid))
+    elif not is_privileged:
+        if not user_company_ids:
+            return []
+        query = query.filter(or_(Loan.borrower.in_(user_company_ids), Loan.lender.in_(user_company_ids)))
+    if isinstance(status, str) and status.lower() != "all":
+        query = query.filter(Loan.status == status)
+    if is_auditor:
+        query = query.filter(~Loan.status.in_(["Pending Finance Endorsement", "Pending Approval"]))
+    if isinstance(start_date, (date, datetime)):
+        query = query.filter(Loan.loan_date >= start_date)
+    if isinstance(end_date, (date, datetime)):
+        query = query.filter(Loan.loan_date <= end_date)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(or_(Loan.loan_ref_no.ilike(term), Loan.description.ilike(term)))
+    loans = query.order_by(Loan.loan_date.desc(), Loan.loan_id.desc()).all()
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+    result = [
+        LoanOut(
+            loan_id=l.loan_id,
+            borrower=l.borrower,
+            lender=l.lender,
+            borrower_name=comp_map.get(l.borrower) or f"Company #{l.borrower}",
+            lender_name=comp_map.get(l.lender) if l.lender else "Pending Finance Assignment",
+            loan_ref_no=l.loan_ref_no,
+            principal_amount=l.principal_amount,
+            amount=l.principal_amount,
+            interest_rate=l.interest_rate or Decimal("0.00"),
+            loan_date=l.loan_date,
+            due_date=l.due_date,
+            description=l.description,
+            particulars=l.description,
+            status=getattr(l, "status", None) or "Pending Finance Endorsement",
+            endorsed_by=getattr(l, "endorsed_by", None),
+            endorsed_at=getattr(l, "endorsed_at", None),
+            finance_remark=getattr(l, "finance_remark", None),
+            audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
+            audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
+            audit_remark=getattr(l, "audit_remark", None),
+            disbursed_by=getattr(l, "disbursed_by", None),
+            disbursed_at=getattr(l, "disbursed_at", None),
+            bank_account_id=getattr(l, "bank_account_id", None),
+            created_at=l.created_at,
+            updated_at=l.updated_at,
+        )
+        for l in loans
+    ]
+    _attach_borrower_banks(db, result)
+    _attach_loan_repayments(db, result)
+    return result
 
 
 @router.post("", response_model=LoanOut, status_code=status.HTTP_201_CREATED, summary="Create a new loan record")
@@ -686,7 +762,6 @@ def create_loan(
         "loan_ref_no": ref_no,
         "principal_amount": float(loan_in.principal_amount),
         "interest_rate": float(loan_in.interest_rate or 0.0),
-        "interest_type": loan_in.interest_type or "simple",
         "loan_date": loan_in.loan_date.isoformat(),
         "due_date": loan_in.due_date.isoformat() if loan_in.due_date else None,
         "description": desc,
@@ -713,7 +788,6 @@ def create_loan(
             loan_ref_no=ref_no,
             principal_amount=loan_in.principal_amount,
             interest_rate=loan_in.interest_rate or Decimal("0.00"),
-            interest_type=loan_in.interest_type or "simple",
             loan_date=loan_in.loan_date,
             due_date=loan_in.due_date,
             description=desc,
@@ -755,7 +829,6 @@ def create_loan(
         principal_amount=loan_in.principal_amount,
         amount=loan_in.principal_amount,
         interest_rate=loan_in.interest_rate or Decimal("0.00"),
-        interest_type=loan_in.interest_type or "simple",
         loan_date=loan_in.loan_date,
         due_date=loan_in.due_date,
         description=desc,
@@ -882,7 +955,6 @@ def update_loan(
             principal_amount=p_amt,
             amount=p_amt,
             interest_rate=Decimal(str(final_row.get("interest_rate") or 0.0)),
-            interest_type=final_row.get("interest_type") or "simple",
             loan_date=final_row.get("loan_date"),
             due_date=final_row.get("due_date"),
             description=final_row.get("description"),
@@ -1057,7 +1129,6 @@ def endorse_loan(
         principal_amount=p_amt,
         amount=p_amt,
         interest_rate=Decimal(str(update_payload.get("interest_rate") or final_source.get("interest_rate") or (sql_loan.interest_rate if sql_loan else 0.0))),
-        interest_type=final_source.get("interest_type") or "simple",
         loan_date=final_source.get("loan_date") or (sql_loan.loan_date if sql_loan else None),
         due_date=endorse_in.due_date or final_source.get("due_date") or (sql_loan.due_date if sql_loan else None),
         description=final_source.get("description") or (sql_loan.description if sql_loan else None),
@@ -1261,7 +1332,6 @@ def audit_review_loan(
         principal_amount=p_amt,
         amount=p_amt,
         interest_rate=Decimal(str(final_source.get("interest_rate") or (sql_loan.interest_rate if sql_loan else 0.0))),
-        interest_type=final_source.get("interest_type") or "simple",
         loan_date=final_source.get("loan_date") or (sql_loan.loan_date if sql_loan else None),
         due_date=final_source.get("due_date") or (sql_loan.due_date if sql_loan else None),
         description=final_source.get("description") or (sql_loan.description if sql_loan else None),
@@ -1386,7 +1456,6 @@ def disburse_loan(
         principal_amount=p_amt,
         amount=p_amt,
         interest_rate=Decimal(str(pick("interest_rate") or 0)),
-        interest_type=pick("interest_type") or "simple",
         loan_date=pick("loan_date"),
         due_date=pick("due_date"),
         description=pick("description"),
@@ -1507,7 +1576,6 @@ def approve_loan(
         "loan_ref_no": sql_loan.loan_ref_no,
         "principal_amount": float(sql_loan.principal_amount),
         "interest_rate": float(sql_loan.interest_rate or 0.0),
-        "interest_type": sql_loan.interest_type,
         "loan_date": sql_loan.loan_date,
         "due_date": sql_loan.due_date,
         "description": sql_loan.description,
@@ -1533,7 +1601,6 @@ def approve_loan(
         principal_amount=p_amt,
         amount=p_amt,
         interest_rate=Decimal(str(final_source.get("interest_rate") or 0.0)),
-        interest_type=final_source.get("interest_type") or "simple",
         loan_date=final_source.get("loan_date"),
         due_date=final_source.get("due_date"),
         description=final_source.get("description"),
@@ -1663,23 +1730,123 @@ def create_loan_repayment(
 
     new_remaining = statement.current_remaining_balance - repayment_in.amount
 
-    repayment_data = repayment_in.model_dump()
+    repayment_data = repayment_in.model_dump(exclude={"bank_account_id", "payment_method"})
     repayment_data["loan_id"] = loan_id
     repayment_data["remaining_balance"] = new_remaining
+    chosen_payment_method = repayment_in.payment_method or "Cash"
+    chosen_borrower_bank_id = repayment_in.bank_account_id
 
     repayment = LoanRepayment(**repayment_data)
+    repayment.payment_method = chosen_payment_method
     db.add(repayment)
+
+    # Update loan status in SQLAlchemy (and Supabase if configured)
+    new_loan_status = "Paid" if new_remaining <= Decimal("0.00") else "Partially Paid"
+    loan.status = new_loan_status
+
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+    b_name = comp_map.get(loan.borrower) or f"Company #{loan.borrower}"
+    l_name = comp_map.get(loan.lender) if loan.lender else "Lender"
+    loan_ref = loan.loan_ref_no or f"LN-{loan_id}"
+    raw_desc = (loan.description or "").strip()
+    clean_particular = raw_desc[5:].strip() if raw_desc.lower().startswith("loan:") else (raw_desc or "Loan Facility")
+    pay_date_str = repayment_in.payment_date.strftime("%m/%d/%y")
+
+    bank_svc = BankService(db)
+    # 1. Deduct from Borrower's bank account
+    borrower_acc = None
+    if chosen_borrower_bank_id:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.id == chosen_borrower_bank_id).first()
+    if not borrower_acc:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
+    if not borrower_acc:
+        borrower_acc = bank_svc.find_account_for_company(b_name)
+    if borrower_acc:
+        bank_svc.withdraw(
+            borrower_acc.id,
+            BankDepositWithdrawRequest(
+                amount=repayment_in.amount,
+                date=pay_date_str,
+                particulars=f"Loan Repayment: {clean_particular} (to {l_name})",
+                category="Loan Repayment",
+                reference_no=repayment_in.reference_no or loan_ref,
+            ),
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
+
+    # 2. Credit Lender's funding bank account
+    lender_acc = None
+    if getattr(loan, "bank_account_id", None):
+        lender_acc = db.query(BankAccount).filter(BankAccount.id == loan.bank_account_id).first()
+    if not lender_acc and loan.lender:
+        lender_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.lender).first()
+    if not lender_acc and loan.lender:
+        lender_acc = bank_svc.find_account_for_company(l_name)
+    if lender_acc:
+        bank_svc.deposit(
+            lender_acc.id,
+            BankDepositWithdrawRequest(
+                amount=repayment_in.amount,
+                date=pay_date_str,
+                particulars=f"Loan Repayment: {clean_particular} (from {b_name})",
+                category="Loan Repayment",
+                reference_no=repayment_in.reference_no or loan_ref,
+            ),
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": lender_acc.id}})
+
+    # 3. Record Expense for Borrower company (reflected in Expenses & Transactions)
+    loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan Repayment")).first()
+    if not loan_cat:
+        loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan%")).first()
+    if not loan_cat:
+        loan_cat = Category(category_name="Loan Repayment", category_type="Expense")
+        db.add(loan_cat)
+        db.flush()
+
+    expense_rec = Expense(
+        company_id=loan.borrower,
+        category_id=loan_cat.category_id,
+        payment_method=chosen_payment_method,
+        created_by=current_user.get("user_id"),
+        expense_date=repayment_in.payment_date,
+        cheque_no=repayment_in.reference_no or loan_ref,
+        amount=repayment_in.amount,
+        amount_paid=repayment_in.amount,
+        description=f"Loan Repayment: {clean_particular} (to {l_name})",
+        remarks=repayment_in.notes,
+        bank_account_id=borrower_acc.id if borrower_acc else None,
+    )
+    db.add(expense_rec)
+
     db.commit()
     db.refresh(repayment)
+
+    try:
+        sb_client = get_supabase_admin_client()
+        if sb_client:
+            sb_client.table("loan").update({"status": new_loan_status}).eq("loan_id", loan_id).execute()
+    except Exception as exc:
+        print(f"Supabase loan status update on repayment failed: {exc}")
 
     log_transaction(
         db, AuditAction.LOAN_UPDATED,
         user_id=None, company_id=loan.borrower,
         ip_address=request.client.host if request.client else "unknown",
         record_id=loan_id, record_type="loan_repayment",
-        extra={"repayment_id": repayment.loan_repayment_id, "amount": float(repayment.amount), "remaining_balance": float(new_remaining)},
+        extra={
+            "repayment_id": repayment.loan_repayment_id,
+            "amount": float(repayment.amount),
+            "remaining_balance": float(new_remaining),
+            "borrower_bank_id": borrower_acc.id if borrower_acc else None,
+            "lender_bank_id": lender_acc.id if lender_acc else None,
+            "expense_id": expense_rec.expense_id,
+        },
     )
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("bank_accounts")
+    system_cache.invalidate_tag("expenses")
     system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
+    ws_manager.broadcast_sync({"type": "EXPENSE_CREATED"})
     return repayment

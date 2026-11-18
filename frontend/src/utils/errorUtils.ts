@@ -77,7 +77,15 @@ export function formatUserFriendlyErrorMessage(
     if (data && typeof data === 'object') {
       if (data.code) code = String(data.code)
       if (data.retry_after) retryAfter = Number(data.retry_after)
-      if (typeof data.detail === 'string') {
+      if (Array.isArray(data.errors) && data.errors.length > 0) {
+        rawMessage = data.errors
+          .map((e: any) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+            const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+            return field ? `${field}: ${msg}` : msg
+          })
+          .join('; ')
+      } else if (typeof data.detail === 'string') {
         rawMessage = data.detail
       } else if (Array.isArray(data.detail)) {
         rawMessage = data.detail.map((d: any) => d?.msg || String(d)).join(', ')
@@ -86,7 +94,15 @@ export function formatUserFriendlyErrorMessage(
       }
     }
     if (!rawMessage) {
-      if (typeof anyErr.detail === 'string') {
+      if (Array.isArray(anyErr.errors) && anyErr.errors.length > 0) {
+        rawMessage = anyErr.errors
+          .map((e: any) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+            const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+            return field ? `${field}: ${msg}` : msg
+          })
+          .join('; ')
+      } else if (typeof anyErr.detail === 'string') {
         rawMessage = anyErr.detail
       } else if (Array.isArray(anyErr.detail)) {
         rawMessage = anyErr.detail.map((d: any) => d?.msg || String(d)).join(', ')
@@ -130,6 +146,13 @@ export function formatUserFriendlyErrorMessage(
       case 'INTERNAL_SERVER_ERROR':
         return 'Something went wrong. Please try again later.'
       case 'VALIDATION_ERROR':
+        if (
+          rawMessage &&
+          rawMessage !== 'Invalid request parameters. Please verify your submission.' &&
+          !rawMessage.toLowerCase().includes('object')
+        ) {
+          return rawMessage.replace(/HTTP \d+ \w+:\s*/i, '').trim()
+        }
         return 'Please check the entered values and ensure all required fields are correct.'
     }
   }

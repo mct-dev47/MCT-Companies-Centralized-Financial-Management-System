@@ -53,6 +53,7 @@ def _resolve_requested_company_id(
 @router.get("", response_model=List[ReceivableOut])
 def list_receivables(
     user: BusinessReader,
+    response: Response = None,
     db: Session = Depends(get_db),
     company_id: Optional[int] = Query(None),
     company_name: Optional[str] = Query(None),
@@ -70,7 +71,7 @@ def list_receivables(
     scoped_cids = get_authorized_company_scope(user, resolved_cid)
 
     service = ReceivablesService(db)
-    return service.list_receivables(
+    rows, total = service.list_receivables_with_count(
         company_id=resolved_cid,
         company_ids=scoped_cids,
         company_name=company_name if resolved_cid is None else None,
@@ -81,6 +82,37 @@ def list_receivables(
         search=search,
         limit=pagination.limit,
         offset=pagination.offset,
+    )
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    return rows
+
+
+@router.get("/export", response_model=List[ReceivableOut])
+def export_receivables(
+    user: BusinessReader,
+    db: Session = Depends(get_db),
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    customer_type: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None, alias="status"),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    resolved_cid = _resolve_requested_company_id(db, company_id, company_name)
+    scoped_cids = get_authorized_company_scope(user, resolved_cid)
+    return ReceivablesService(db).list_receivables(
+        company_id=resolved_cid,
+        company_ids=scoped_cids,
+        company_name=company_name if resolved_cid is None else None,
+        customer_type=customer_type,
+        payment_status=payment_status,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        limit=None,
+        offset=0,
     )
 
 

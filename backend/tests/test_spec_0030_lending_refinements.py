@@ -69,7 +69,6 @@ def db_session():
     filcap = Company(
         company_id=7,
         company_name="FilCap Prime Holdings Corp.",
-        starting_balance=Decimal("1000000.00"),
     )
     session.add(filcap)
     session.commit()

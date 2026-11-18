@@ -63,8 +63,8 @@ class TestSpec0044Roadmap(unittest.TestCase):
         self.db.query(Loan).delete()
         self.db.query(Company).delete()
 
-        comp1 = Company(company_id=1, company_name="Alpha Corp", starting_balance=Decimal("10000.00"))
-        comp2 = Company(company_id=2, company_name="Beta Corp", starting_balance=Decimal("10000.00"))
+        comp1 = Company(company_id=1, company_name="Alpha Corp")
+        comp2 = Company(company_id=2, company_name="Beta Corp")
         self.db.add_all([comp1, comp2])
         self.db.commit()
 
@@ -103,7 +103,6 @@ class TestSpec0044Roadmap(unittest.TestCase):
                     loan_ref_no=f"LN-0044-{i}",
                     principal_amount=Decimal("5000.00"),
                     interest_rate=Decimal("2.50"),
-                    interest_type="simple",
                     loan_date=date(2026, 11, i),
                     due_date=date(2026, 12, i),
                     description=f"Working capital {i}",

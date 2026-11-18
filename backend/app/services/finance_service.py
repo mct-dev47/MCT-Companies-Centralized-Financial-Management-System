@@ -2,12 +2,11 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 from datetime import date
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import case, func
 
-from app.models.finance import Sale, Expense, CashInflow, Budget
+from app.models.finance import Sale, Expense
 from app.models.loan import Loan, LoanRepayment
 from app.schemas.financial_calc import CompanyFinancialSummary, GroupFinancialSummary
-from app.schemas.budget import BudgetVarianceOut
 from app.schemas.loan import LoanStatementOut, LoanRepaymentOut
 from app.services.petty_cash_service import PETTY_CASH_METHOD, PettyCashService
 
@@ -85,24 +84,6 @@ class FinanceCalculator:
         remaining = total_loan_payable - total_repayments
         return quantize_currency(max(Decimal("0.00"), remaining))
 
-    @staticmethod
-    def calculate_budget_variance(allocated_amount: Decimal, actual_spent: Decimal) -> dict:
-        """
-        Actual Spent = Total Expenses for category within selected period
-        Remaining Budget = Allocated Budget - Actual Spent
-        Budget Utilization (%) = (Actual Spent / Allocated Budget) * 100
-        Over Budget = Yes if Actual Spent > Allocated Budget
-        """
-        allocated = quantize_currency(allocated_amount)
-        spent = quantize_currency(actual_spent)
-        remaining = quantize_currency(allocated - spent)
-        utilization = (float(spent) / float(allocated) * 100.0) if allocated > 0 else 0.0
-        return {
-            "remaining_budget": remaining,
-            "utilization_percentage": round(utilization, 2),
-            "is_over_budget": spent > allocated
-        }
-
 
 class FinanceService:
     """
@@ -126,13 +107,8 @@ class FinanceService:
             sales_q = sales_q.filter(Sale.transaction_date <= end_date)
         total_revenue = quantize_currency(sales_q.scalar())
 
-        # 2. Other Cash Inflows (Capital injections, grants, misc deposits)
-        inflow_q = self.db.query(func.coalesce(func.sum(CashInflow.amount), 0)).filter(CashInflow.company_id == company_id)
-        if start_date:
-            inflow_q = inflow_q.filter(CashInflow.transaction_date >= start_date)
-        if end_date:
-            inflow_q = inflow_q.filter(CashInflow.transaction_date <= end_date)
-        other_cash_inflows = quantize_currency(inflow_q.scalar())
+        # 2. Other Cash Inflows (cash_inflow table removed; kept as 0.00 for summary schema compatibility)
+        other_cash_inflows = Decimal("0.00")
 
         # 3. Expenses & Expenses Paid
         exp_q = self.db.query(
@@ -211,6 +187,115 @@ class FinanceService:
             total_loans_repaid=total_loans_repaid
         )
 
+    def get_group_financial_summaries(
+        self,
+        company_ids: List[int],
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> List[CompanyFinancialSummary]:
+        if not company_ids:
+            return []
+
+        sales_q = self.db.query(
+            Sale.company_id,
+            func.coalesce(func.sum(Sale.amount), 0),
+        ).filter(Sale.company_id.in_(company_ids))
+        if start_date:
+            sales_q = sales_q.filter(Sale.transaction_date >= start_date)
+        if end_date:
+            sales_q = sales_q.filter(Sale.transaction_date <= end_date)
+        sales_by_co = {int(cid): quantize_currency(amt) for cid, amt in sales_q.group_by(Sale.company_id).all()}
+
+        non_petty_paid = case(
+            (func.lower(func.coalesce(Expense.payment_method, "")) != PETTY_CASH_METHOD, func.coalesce(Expense.amount_paid, 0)),
+            else_=0,
+        )
+        exp_q = self.db.query(
+            Expense.company_id,
+            func.coalesce(func.sum(Expense.amount), 0),
+            func.coalesce(func.sum(non_petty_paid), 0),
+        ).filter(Expense.company_id.in_(company_ids))
+        if start_date:
+            exp_q = exp_q.filter(Expense.expense_date >= start_date)
+        if end_date:
+            exp_q = exp_q.filter(Expense.expense_date <= end_date)
+        exp_by_co = {
+            int(cid): (quantize_currency(tot), quantize_currency(paid))
+            for cid, tot, paid in exp_q.group_by(Expense.company_id).all()
+        }
+
+        topups_by_co = PettyCashService(self.db).topups_totals_in_period_by_company(company_ids, start_date, end_date)
+
+        borrowed_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.borrower, func.coalesce(func.sum(Loan.principal_amount), 0))
+            .filter(Loan.borrower.in_(company_ids))
+            .group_by(Loan.borrower)
+            .all()
+        }
+        lent_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.lender, func.coalesce(func.sum(Loan.principal_amount), 0))
+            .filter(Loan.lender.in_(company_ids))
+            .group_by(Loan.lender)
+            .all()
+            if cid is not None
+        }
+        repaid_by_co = {
+            int(cid): quantize_currency(amt)
+            for cid, amt in self.db.query(Loan.borrower, func.coalesce(func.sum(LoanRepayment.amount), 0))
+            .join(Loan)
+            .filter(Loan.borrower.in_(company_ids))
+            .group_by(Loan.borrower)
+            .all()
+        }
+
+        summaries: List[CompanyFinancialSummary] = []
+        for cid in company_ids:
+            total_revenue = sales_by_co.get(cid, Decimal("0.00"))
+            total_expenses, expenses_paid = exp_by_co.get(cid, (Decimal("0.00"), Decimal("0.00")))
+            transfers_to_petty_cash = quantize_currency(topups_by_co.get(cid, Decimal("0.00")))
+            total_loans_borrowed = borrowed_by_co.get(cid, Decimal("0.00"))
+            total_loans_lent = lent_by_co.get(cid, Decimal("0.00"))
+            total_loans_repaid = repaid_by_co.get(cid, Decimal("0.00"))
+
+            net_profit = FinanceCalculator.calculate_net_profit(total_revenue, total_expenses)
+            profit_margin = FinanceCalculator.calculate_profit_margin(total_revenue, net_profit)
+            cash_flow = FinanceCalculator.calculate_cash_flow(
+                cash_received_from_sales=total_revenue,
+                other_cash_inflows=Decimal("0.00"),
+                loans_received=total_loans_borrowed,
+                expenses_paid=expenses_paid,
+                loan_repayments=total_loans_repaid,
+                other_cash_outflows=transfers_to_petty_cash,
+            )
+            summaries.append(
+                CompanyFinancialSummary(
+                    company_id=cid,
+                    period_start=start_date,
+                    period_end=end_date,
+                    total_revenue=total_revenue,
+                    total_expenses=total_expenses,
+                    total_expenses_paid=expenses_paid,
+                    net_profit=net_profit,
+                    profit_margin_percentage=profit_margin,
+                    cash_received_from_sales=total_revenue,
+                    other_cash_inflows=Decimal("0.00"),
+                    loans_received=total_loans_borrowed,
+                    total_cash_inflow=cash_flow["total_cash_inflow"],
+                    expenses_paid=expenses_paid,
+                    loan_repayments_made=total_loans_repaid,
+                    other_cash_outflows=transfers_to_petty_cash,
+                    transfers_to_petty_cash=transfers_to_petty_cash,
+                    total_cash_outflow=cash_flow["total_cash_outflow"],
+                    net_cash_flow=cash_flow["net_cash_flow"],
+                    total_loans_borrowed=total_loans_borrowed,
+                    total_loans_lent=total_loans_lent,
+                    total_loans_repaid=total_loans_repaid,
+                )
+            )
+        return summaries
+
     def get_list_summaries_for_companies(
         self,
         company_ids: List[int],
@@ -252,33 +337,6 @@ class FinanceService:
             }
         return result
 
-    def get_budget_variance(self, budget_id: int) -> Optional[BudgetVarianceOut]:
-        budget = self.db.query(Budget).filter(Budget.budget_id == budget_id).first()
-        if not budget:
-            return None
-
-        spent = self.db.query(func.coalesce(func.sum(Expense.amount), 0)).filter(
-            Expense.company_id == budget.company_id,
-            Expense.category_id == budget.category_id,
-            Expense.expense_date >= budget.start_date,
-            Expense.expense_date <= budget.end_date
-        ).scalar()
-
-        variance = FinanceCalculator.calculate_budget_variance(budget.amount, Decimal(spent))
-
-        return BudgetVarianceOut(
-            budget_id=budget.budget_id,
-            company_id=budget.company_id,
-            category_id=budget.category_id,
-            allocated_budget=budget.amount,
-            actual_spent=quantize_currency(spent),
-            remaining_budget=variance["remaining_budget"],
-            utilization_percentage=variance["utilization_percentage"],
-            is_over_budget=variance["is_over_budget"],
-            start_date=budget.start_date,
-            end_date=budget.end_date
-        )
-
     def get_loan_statement(self, loan_id: int) -> Optional[LoanStatementOut]:
         loan = self.db.query(Loan).filter(Loan.loan_id == loan_id).first()
         if not loan:
@@ -299,7 +357,6 @@ class FinanceService:
             lender=loan.lender,
             principal_amount=loan.principal_amount,
             interest_rate=rate,
-            interest_type=loan.interest_type or "simple",
             interest_amount=interest_amount,
             total_loan_payable=total_payable,
             total_amount_repaid=quantize_currency(total_repaid),

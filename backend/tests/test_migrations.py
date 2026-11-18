@@ -103,6 +103,169 @@ class TestMigrations(unittest.TestCase):
         self.assertIn("user_invitations", inspector.get_table_names())
         self.assertIn("invitation_outbox", inspector.get_table_names())
 
+    def test_migration_0067_drops_legacy_columns_and_nulls_orphan_company_id(self):
+        """Verify 0067 drops unused company and bank_accounts columns and nulls orphan company_id."""
+        with self.engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE company (
+                    company_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_name VARCHAR(100) NOT NULL,
+                    location VARCHAR(100) NOT NULL,
+                    contact_person VARCHAR(100),
+                    email VARCHAR(100),
+                    current_balance NUMERIC(15, 2),
+                    starting_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE bank_accounts (
+                    id VARCHAR(100) PRIMARY KEY,
+                    bank_name VARCHAR(255) NOT NULL,
+                    account_name VARCHAR(255) NOT NULL,
+                    account_number VARCHAR(100) NOT NULL DEFAULT '0000',
+                    company_name VARCHAR(255) NOT NULL,
+                    company_id INTEGER,
+                    notes TEXT
+                );
+            """))
+            conn.execute(text("INSERT INTO company (company_id, company_name, location, starting_balance) VALUES (1, 'Valid Co', 'Manila', 100.00)"))
+            conn.execute(text("INSERT INTO bank_accounts (id, bank_name, account_name, company_name, company_id) VALUES ('bnk-1', 'BDO', 'Main', 'Valid Co', 1)"))
+            conn.execute(text("INSERT INTO bank_accounts (id, bank_name, account_name, company_name, company_id) VALUES ('bnk-2', 'BPI', 'Orphan', 'Missing Co', 999)"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0067_company_bank_schema_cleanup", applied)
+
+        inspector = inspect(self.engine)
+        company_cols = {col["name"] for col in inspector.get_columns("company")}
+        bank_cols = {col["name"] for col in inspector.get_columns("bank_accounts")}
+        for dropped in ("contact_person", "email", "current_balance", "starting_balance"):
+            self.assertNotIn(dropped, company_cols)
+        for dropped in ("account_number", "notes"):
+            self.assertNotIn(dropped, bank_cols)
+
+        with self.engine.connect() as conn:
+            valid_cid = conn.execute(text("SELECT company_id FROM bank_accounts WHERE id = 'bnk-1'")).scalar()
+            orphan_cid = conn.execute(text("SELECT company_id FROM bank_accounts WHERE id = 'bnk-2'")).scalar()
+            self.assertEqual(valid_cid, 1)
+            self.assertIsNone(orphan_cid)
+
+    def test_migration_0068_drops_unused_tables_and_columns(self):
+        """Verify 0068 drops budget and cash_inflow tables plus receivables.expense_id and loan.interest_type safely with FKs and rows."""
+        with self.engine.begin() as conn:
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            conn.execute(text("CREATE TABLE company (company_id INTEGER PRIMARY KEY AUTOINCREMENT, company_name VARCHAR(100) NOT NULL);"))
+            conn.execute(text("CREATE TABLE sales (sales_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, transaction_date DATE, deposit_status VARCHAR(50), deposit_date DATE);"))
+            conn.execute(text("CREATE TABLE expenses (expense_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100));"))
+            conn.execute(text("CREATE TABLE budget (budget_id INTEGER PRIMARY KEY AUTOINCREMENT, amount NUMERIC(15, 2));"))
+            conn.execute(text("CREATE TABLE cash_inflow (cash_transaction_id INTEGER PRIMARY KEY AUTOINCREMENT, amount NUMERIC(15, 2));"))
+            conn.execute(text("""
+                CREATE TABLE receivables (
+                    receivable_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id INTEGER NOT NULL,
+                    sale_id INTEGER,
+                    expense_id INTEGER,
+                    customer_name VARCHAR(255) NOT NULL DEFAULT 'Walk-in',
+                    total_amount NUMERIC(15, 2) NOT NULL DEFAULT 100.00,
+                    FOREIGN KEY(company_id) REFERENCES company(company_id) ON DELETE CASCADE,
+                    FOREIGN KEY(sale_id) REFERENCES sales(sales_id) ON DELETE CASCADE,
+                    FOREIGN KEY(expense_id) REFERENCES expenses(expense_id) ON DELETE SET NULL
+                );
+            """))
+            conn.execute(text("CREATE INDEX ix_receivables_expense_id ON receivables (expense_id);"))
+            conn.execute(text("CREATE INDEX ix_receivables_sale_id ON receivables (sale_id);"))
+            conn.execute(text("""
+                CREATE TABLE receivable_payments (
+                    payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receivable_id INTEGER NOT NULL,
+                    amount NUMERIC(15, 2) NOT NULL,
+                    FOREIGN KEY(receivable_id) REFERENCES receivables(receivable_id) ON DELETE CASCADE
+                );
+            """))
+            conn.execute(text("""
+                CREATE TABLE loan (
+                    loan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    principal_amount NUMERIC(15, 2),
+                    interest_type VARCHAR(50) DEFAULT 'simple'
+                );
+            """))
+            conn.execute(text("INSERT INTO company (company_id, company_name) VALUES (1, 'Alpha')"))
+            conn.execute(text("INSERT INTO sales (sales_id, company_id) VALUES (10, 1)"))
+            conn.execute(text("INSERT INTO expenses (expense_id, company_id) VALUES (20, 1)"))
+            conn.execute(text("INSERT INTO receivables (receivable_id, company_id, sale_id, expense_id, customer_name, total_amount) VALUES (100, 1, 10, 20, 'Juan', 250.00)"))
+            conn.execute(text("INSERT INTO receivable_payments (payment_id, receivable_id, amount) VALUES (1000, 100, 50.00)"))
+
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys = ON"))
+            conn.commit()
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0068_schema_cleanup_unused_tables_and_columns", applied)
+
+        # Idempotency check: second run must succeed cleanly without reapplying
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0068_schema_cleanup_unused_tables_and_columns", applied_second)
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        self.assertNotIn("budget", tables)
+        self.assertNotIn("cash_inflow", tables)
+        self.assertNotIn("expense_id", {col["name"] for col in inspector.get_columns("receivables")})
+        self.assertNotIn("interest_type", {col["name"] for col in inspector.get_columns("loan")})
+
+        with self.engine.connect() as conn:
+            rec_row = conn.execute(text("SELECT receivable_id, company_id, sale_id, customer_name FROM receivables WHERE receivable_id = 100")).fetchone()
+            self.assertIsNotNone(rec_row)
+            self.assertEqual(tuple(rec_row), (100, 1, 10, "Juan"))
+            pay_count = conn.execute(text("SELECT COUNT(*) FROM receivable_payments WHERE receivable_id = 100")).scalar()
+            self.assertEqual(pay_count, 1)
+            idx_names = {row[1] for row in conn.execute(text("PRAGMA index_list(receivables)")).fetchall()}
+            self.assertIn("ix_receivables_sale_id", idx_names)
+            self.assertNotIn("ix_receivables_expense_id", idx_names)
+
+    def test_0071_permanently_drops_deprecated_tables(self):
+        """Verify migration 0071 ensures staff_credits, staff_credits_repayment, budget, cash_inflow are dropped."""
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS staff_credits (staff_credit_id INTEGER PRIMARY KEY);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS staff_credits_repayment (repayment_id INTEGER PRIMARY KEY, staff_credit_id INTEGER);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS budget (budget_id INTEGER PRIMARY KEY);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS cash_inflow (cash_transaction_id INTEGER PRIMARY KEY);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0071_drop_deprecated_tables", applied)
+
+        inspector = inspect(self.engine)
+        tables = set(inspector.get_table_names())
+        for dropped in ("staff_credits", "staff_credits_repayment", "budget", "cash_inflow", "login_rate_limits"):
+            self.assertNotIn(dropped, tables)
+
+    def test_0072_drops_reference_no_columns(self):
+        """Verify migration 0072 drops idx_expenses_reference_no and reference_no columns from expenses, petty_cash_topups, and sales."""
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE expenses (expense_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100), description TEXT);"))
+            conn.execute(text("CREATE UNIQUE INDEX idx_expenses_reference_no ON expenses(reference_no) WHERE reference_no IS NOT NULL;"))
+            conn.execute(text("CREATE TABLE petty_cash_topups (topup_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, reference_no VARCHAR(100), description TEXT);"))
+            conn.execute(text("CREATE TABLE sales (sales_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL, transaction_date DATE, deposit_status VARCHAR(50), deposit_date DATE, reference_no VARCHAR(100), particulars TEXT);"))
+            conn.execute(text("INSERT INTO expenses (expense_id, company_id, reference_no, description) VALUES (1, 1, 'REF-20261117', 'Supplies');"))
+            conn.execute(text("INSERT INTO petty_cash_topups (topup_id, company_id, reference_no, description) VALUES (1, 1, 'PC-1', 'Topup');"))
+            conn.execute(text("INSERT INTO sales (sales_id, company_id, reference_no, particulars) VALUES (1, 1, 'SL-1', 'Room');"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0072_drop_reference_no_columns", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0072_drop_reference_no_columns", applied_second)
+
+        inspector = inspect(self.engine)
+        for tbl in ("expenses", "petty_cash_topups", "sales"):
+            self.assertNotIn("reference_no", {col["name"] for col in inspector.get_columns(tbl)})
+
+        with self.engine.connect() as conn:
+            idx_names = {row[1] for row in conn.execute(text("PRAGMA index_list(expenses)")).fetchall()}
+            self.assertNotIn("idx_expenses_reference_no", idx_names)
+            self.assertEqual(conn.execute(text("SELECT description FROM expenses WHERE expense_id = 1")).scalar(), "Supplies")
+            self.assertEqual(conn.execute(text("SELECT description FROM petty_cash_topups WHERE topup_id = 1")).scalar(), "Topup")
+            self.assertEqual(conn.execute(text("SELECT particulars FROM sales WHERE sales_id = 1")).scalar(), "Room")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,10 +24,10 @@ def _setup(sale_day=None):
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
     day = sale_day or date.today()
-    db.add(Company(company_id=1, company_name="MCT Kitchen", location="Manila", starting_balance=Decimal("0.00")))
+    db.add(Company(company_id=1, company_name="MCT Kitchen", location="Manila"))
     for bid, name in (("bnk-001", "BDO"), ("bnk-002", "BPI")):
         db.add(BankAccount(
-            id=bid, bank_name=name, account_name="Main", account_number="0000-" + bid,
+            id=bid, bank_name=name, account_name="Main", 
             company_name="MCT Kitchen", company_id=1,
             starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
         ))

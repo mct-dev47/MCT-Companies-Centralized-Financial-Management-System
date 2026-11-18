@@ -71,7 +71,7 @@ def test_timeline_sql_prefilter_does_not_load_unrelated_rows(db):
 
 
 def test_company_directory_is_cached_and_invalidated_on_write(db):
-    db.add_all([Company(company_name="Alpha Holdings", starting_balance=0), Company(company_name="Beta Retail", starting_balance=0)])
+    db.add_all([Company(company_name="Alpha Holdings"), Company(company_name="Beta Retail")])
     db.commit()
 
     statements = []
@@ -87,13 +87,13 @@ def test_company_directory_is_cached_and_invalidated_on_write(db):
     assert first == second
     assert len(statements) == 1, "second lookup should be served from cache"
 
-    db.add(Company(company_name="Gamma Foods", starting_balance=0))
+    db.add(Company(company_name="Gamma Foods"))
     db.commit()
     assert "Gamma Foods" in get_company_name_map(db).values()
 
 
 def test_resolve_company_matches_by_name_via_cache(db):
-    db.add_all([Company(company_name="Alpha Holdings", starting_balance=0), Company(company_name="Beta Retail Corp", starting_balance=0)])
+    db.add_all([Company(company_name="Alpha Holdings"), Company(company_name="Beta Retail Corp")])
     db.commit()
 
     assert resolve_company(db, company_name="beta retail").company_name == "Beta Retail Corp"

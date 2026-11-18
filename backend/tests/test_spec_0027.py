@@ -59,7 +59,6 @@ def env():
                 company_id=1,
                 company_name="MyCity.Kitchen Corporation",
                 location="Manila",
-                starting_balance=10000,
             )
         )
         seed.commit()

@@ -36,15 +36,6 @@ export const createCompanySchema = z.object({
       message: 'Telephone number must be exactly 8 digits',
     })
     .optional(),
-  startingBalance: z.preprocess(
-    (val) => (val === '' || val === null || val === undefined ? 0 : val),
-    z.coerce
-      .number({
-        invalid_type_error: 'Starting balance must be a valid number',
-      })
-      .min(0, 'Starting balance must be 0 or greater')
-      .default(0)
-  ),
   pettyCash: z.preprocess(
     (val) => (val === '' || val === null || val === undefined ? 0 : val),
     z.coerce
@@ -55,11 +46,6 @@ export const createCompanySchema = z.object({
       .default(0)
   ),
   logoUrl: z.string().optional(),
-  // Optional legacy fields for backward compatibility
-  email: z.string().trim().optional(),
-  contactPerson: z.string().trim().optional(),
-  contactPersonEmail: z.string().trim().optional(),
-  currentBalance: z.number().min(0).optional(),
 })
 
 export type CreateCompanyFormValues = z.infer<typeof createCompanySchema>

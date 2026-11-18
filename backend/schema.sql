@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS company (
     location VARCHAR(100) NOT NULL,
     contact_number VARCHAR(11),
     phone VARCHAR(8),
-    starting_balance NUMERIC(15, 2) NOT NULL,
     petty_cash NUMERIC(15, 2) DEFAULT 0.00,
     logo_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -60,20 +59,7 @@ CREATE TABLE IF NOT EXISTS category (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 6. Cash Inflow Table
-CREATE TABLE IF NOT EXISTS cash_inflow (
-    cash_transaction_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    transaction_date DATE NOT NULL,
-    transaction_type VARCHAR(100) NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    reference_no VARCHAR(100),
-    description TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 7. Sales Table
+-- 6. Sales Table
 CREATE TABLE IF NOT EXISTS sales (
     sales_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL,
@@ -91,7 +77,7 @@ CREATE TABLE IF NOT EXISTS sales (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 8. Expenses Table
+-- 7. Expenses Table
 CREATE TABLE IF NOT EXISTS expenses (
     expense_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL,
@@ -99,7 +85,6 @@ CREATE TABLE IF NOT EXISTS expenses (
     created_by BIGINT,
     payment_method VARCHAR(100),
     expense_date DATE NOT NULL,
-    reference_no VARCHAR(100),
     amount NUMERIC(15, 2) NOT NULL,
     amount_paid NUMERIC(15, 2) DEFAULT 0.00,
     description TEXT,
@@ -107,21 +92,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 9. Budget Table
-CREATE TABLE IF NOT EXISTS budget (
-    budget_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    category_id BIGINT REFERENCES category(category_id) ON DELETE CASCADE,
-    amount NUMERIC(15, 2) NOT NULL,
-    period_type VARCHAR(50) NOT NULL,
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
-    description TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 10. Loan Table
+-- 8. Loan Table
 CREATE TABLE IF NOT EXISTS loan (
     loan_id BIGSERIAL PRIMARY KEY,
     borrower BIGINT NOT NULL,
@@ -129,7 +100,6 @@ CREATE TABLE IF NOT EXISTS loan (
     loan_ref_no VARCHAR(100) UNIQUE,
     principal_amount NUMERIC(15, 2) NOT NULL,
     interest_rate NUMERIC(5, 2) DEFAULT 0.00,
-    interest_type VARCHAR(50) DEFAULT 'simple',
     loan_date DATE NOT NULL,
     due_date DATE,
     description TEXT,
@@ -154,37 +124,7 @@ CREATE TABLE IF NOT EXISTS loans_repayments (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 12. Staff Credits Table
-CREATE TABLE IF NOT EXISTS staff_credits (
-    staff_credit_id BIGSERIAL PRIMARY KEY,
-    company_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    credit_date DATE NOT NULL,
-    due_date DATE,
-    status VARCHAR(50) DEFAULT 'active',
-    purpose TEXT,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 13. Staff Credits Repayment Table
-CREATE TABLE IF NOT EXISTS staff_credits_repayment (
-    repayment_id BIGSERIAL PRIMARY KEY,
-    staff_credit_id BIGINT REFERENCES staff_credits(staff_credit_id) ON DELETE CASCADE,
-    payment_date DATE NOT NULL,
-    amount NUMERIC(15, 2) NOT NULL,
-    payment_method VARCHAR(50),
-    reference_no VARCHAR(100),
-    status VARCHAR(50) DEFAULT 'completed',
-    received_at TIMESTAMPTZ,
-    notes TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 14. Bills Table
+-- 10. Bills Table
 CREATE TABLE IF NOT EXISTS bills (
     bill_id BIGSERIAL PRIMARY KEY,
     company_id BIGINT NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
@@ -221,7 +161,6 @@ CREATE TABLE IF NOT EXISTS petty_cash_topups (
     company_id BIGINT NOT NULL REFERENCES company(company_id) ON DELETE CASCADE,
     amount NUMERIC(15, 2) NOT NULL,
     topup_date DATE NOT NULL,
-    reference_no VARCHAR(100),
     description TEXT,
     created_by BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -241,9 +180,8 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
     id VARCHAR(100) PRIMARY KEY,
     bank_name VARCHAR(255) NOT NULL,
     account_name VARCHAR(255) NOT NULL,
-    account_number VARCHAR(100) NOT NULL,
     company_name VARCHAR(255) NOT NULL,
-    company_id INTEGER,
+    company_id BIGINT REFERENCES company(company_id) ON DELETE SET NULL,
     company_names TEXT,
     card_label VARCHAR(255),
     account_type VARCHAR(50) NOT NULL DEFAULT 'Checking',
@@ -251,7 +189,6 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
     starting_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
     current_balance NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
     color_theme VARCHAR(20) NOT NULL DEFAULT 'red',
-    notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

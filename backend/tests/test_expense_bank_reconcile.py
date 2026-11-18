@@ -18,10 +18,10 @@ def _db():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
-    db.add(Company(company_id=1, company_name="Acme", starting_balance=Decimal("0.00")))
+    db.add(Company(company_id=1, company_name="Acme"))
     for acc_id in ("bnk-001", "bnk-002"):
         db.add(BankAccount(
-            id=acc_id, bank_name="BDO", account_name=acc_id, account_number=acc_id,
+            id=acc_id, bank_name="BDO", account_name=acc_id, 
             company_name="Acme", starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
         ))
     db.commit()
@@ -63,7 +63,9 @@ def test_paid_expense_debits_exactly_the_paid_amount():
     reconcile_expense_bank(db, expense_id=e.expense_id)
     assert _balance(db) == Decimal("700.00")
     reconcile_expense_bank(db, expense_id=e.expense_id)  # running again changes nothing
-    assert db.query(BankTransaction).count() == 1
+    txs = db.query(BankTransaction).all()
+    assert len(txs) == 1
+    assert txs[0].particulars == "Meralco (1x @ ₱300.00 = ₱300.00) [Paid]"
 
 
 def test_mixed_expense_debits_only_paid_lines_then_follows_edits_and_delete():

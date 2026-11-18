@@ -334,6 +334,35 @@ class LendingServiceGateway {
   /**
    * Fetch borrowers list strictly from backend Supabase database.
    */
+  async getFacilitiesPaginated(params: {
+    companyId?: number
+    page?: number
+    limit?: number
+    search?: string
+    status?: string
+  } = {}): Promise<{ items: LendingFacility[]; total: number }> {
+    try {
+      const sp = new URLSearchParams()
+      if (params.companyId) sp.set('company_id', String(params.companyId))
+      if (params.page !== undefined) sp.set('page', String(params.page))
+      if (params.limit !== undefined) sp.set('limit', String(params.limit))
+      if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+      if (params.status && params.status !== 'All') sp.set('status', params.status)
+      const qs = sp.toString()
+      const res = await fetch(`/api/v1/lending/borrowers${qs ? `?${qs}` : ''}`, { headers: getAuthHeaders() })
+      if (res.ok) {
+        const totalHeader = res.headers.get('X-Total-Count')
+        const data = await res.json()
+        const items = Array.isArray(data) ? data : []
+        const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+        return { items, total }
+      }
+    } catch (err) {
+      console.warn('LendingServiceGateway.getFacilitiesPaginated backend request failed:', err)
+    }
+    return { items: [], total: 0 }
+  }
+
   async getFacilities(companyId?: number): Promise<LendingFacility[]> {
     try {
       const query = companyId ? `?company_id=${companyId}` : ''

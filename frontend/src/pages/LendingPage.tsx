@@ -81,7 +81,7 @@ type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 const COMPANY_NAME = 'FilCap Prime Holdings Corp.'
 
-const ITEMS_PER_PAGE = 10 // Total no. of borrowers in table view
+const ITEMS_PER_PAGE = 50 // Total no. of borrowers in table view
 const HISTORY_ITEMS_PER_PAGE = 13 // Total no. of payment records in payment history table (fills all allocated space)
 
 const formatAuditTimestamp = (dateVal?: string | null, isoVal?: string | null): string => {

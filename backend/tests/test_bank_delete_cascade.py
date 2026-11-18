@@ -23,7 +23,7 @@ def _db():
         bank_cascade.install_sqlite_triggers(conn)
     db = sessionmaker(bind=engine)()
     db.add(BankAccount(
-        id="bnk-010", bank_name="CHINABANK", account_name="Main", account_number="1", company_name="Hotel",
+        id="bnk-010", bank_name="CHINABANK", account_name="Main", company_name="Hotel",
         starting_balance=Decimal("20000.00"), current_balance=Decimal("20000.00"),
     ))
     db.add_all([

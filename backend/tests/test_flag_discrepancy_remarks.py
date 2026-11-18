@@ -33,7 +33,7 @@ def env(monkeypatch):
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
     db.add_all([
-        Company(company_id=1, company_name="Company Alpha", starting_balance=Decimal("0")),
+        Company(company_id=1, company_name="Company Alpha"),
         Sale(sales_id=1, company_id=1, transaction_date=date(2026, 11, 10), amount=Decimal("250.00"),
              particulars="Room [Paid]", payment_method="Cash", payment_status="Paid", deposit_status="Not Deposited"),
         Expense(expense_id=1, company_id=1, expense_date=date(2026, 11, 10), amount=Decimal("80.00"),

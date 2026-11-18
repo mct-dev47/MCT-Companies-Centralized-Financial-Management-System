@@ -14,6 +14,8 @@ export interface TablePaginationProps {
   /** 0-based exclusive end index, or omit to compute from `pageSize` */
   endIndex?: number
   pageSize?: number
+  pageSizeOptions?: number[]
+  onPageSizeChange?: (size: number) => void
   onPageChange: (page: number) => void
   /** Singular/plural noun, defaults to 'records' */
   itemLabel?: string
@@ -32,7 +34,9 @@ export const TablePagination: React.FC<TablePaginationProps> = ({
   totalRecords,
   startIndex,
   endIndex,
-  pageSize = 10,
+  pageSize = 50,
+  pageSizeOptions = [25, 50, 100],
+  onPageSizeChange,
   onPageChange,
   itemLabel = 'records',
   disabled = false,
@@ -62,6 +66,25 @@ export const TablePagination: React.FC<TablePaginationProps> = ({
       </span>
 
       <div className="flex items-center gap-2 self-end sm:self-auto">
+        {onPageSizeChange && (
+          <label className="flex items-center gap-1.5 text-xs text-muted-fg mr-1">
+            <span>Rows:</span>
+            <select
+              value={pageSize}
+              disabled={disabled}
+              onChange={(e) => onPageSizeChange(Number(e.target.value))}
+              aria-label="Rows per page"
+              className="h-8 rounded-lg border border-stroke/40 bg-card px-2 text-xs text-focus focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-40"
+            >
+              {pageSizeOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <span className="text-xs text-muted-fg italic">
           Page {safeCurrent} out of {safeTotalPages}
         </span>

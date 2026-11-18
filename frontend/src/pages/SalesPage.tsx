@@ -114,7 +114,7 @@ import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGr
 import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
-const ITEMS_PER_PAGE = 10
+const ITEMS_PER_PAGE = 50
 
 export const SalesPage: React.FC = () => {
   const navigate = useNavigate()
@@ -122,6 +122,7 @@ export const SalesPage: React.FC = () => {
   const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
+  const isOwner = userRole === 'owner'
   const isCompanyUser =
     (userRole === 'company' || userRole === 'supervisor') && !isAudit
   const isFinance = userRole === 'finance'
@@ -134,9 +135,9 @@ export const SalesPage: React.FC = () => {
   const isCompanyScoped = isStrictlyCompanyScoped
   const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
-  const isOwner = userRole === 'owner'
   const canAuditActions = (isAudit || isAdminUser) && !isOwner
   const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
+  const canMutateRecord = (isSupervisor || isCompanyUser || isFinance) && !isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
 
@@ -455,7 +456,7 @@ export const SalesPage: React.FC = () => {
   }
 
   const handleConfirmDelete = async () => {
-    if (!deleteConfirmSale || isAdmin) return
+    if (!deleteConfirmSale || !canMutateRecord) return
     setIsDeleting(true)
     try {
       if (deleteConfirmSale.id.startsWith('utang-')) {
@@ -478,7 +479,7 @@ export const SalesPage: React.FC = () => {
   }
 
   const handleConfirmDeleteDay = async () => {
-    if (!deleteConfirmDay || isAdmin) return
+    if (!deleteConfirmDay || !canMutateRecord) return
     setIsDeleting(true)
     try {
       for (const item of deleteConfirmDay.items) {
@@ -870,7 +871,6 @@ export const SalesPage: React.FC = () => {
         // 4. Search query
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim()
-          const matchRef = (item.refNo || '').toLowerCase().includes(q)
           const matchCheque = (item.chequeNo || '').toLowerCase().includes(q)
           const matchParticulars = (item.particulars || '')
             .toLowerCase()
@@ -885,7 +885,6 @@ export const SalesPage: React.FC = () => {
           ).includes(q)
 
           if (
-            !matchRef &&
             !matchCheque &&
             !matchParticulars &&
             !matchPaymentMethod &&
@@ -940,7 +939,11 @@ export const SalesPage: React.FC = () => {
     [...list].sort((a, b) => {
       const cmp = getDay(b).localeCompare(getDay(a))
       if (cmp !== 0) return cmp
-      return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
+      const timeA = a.createdAt ? Date.parse(a.createdAt) : 0
+      const timeB = b.createdAt ? Date.parse(b.createdAt) : 0
+      const timeCmp = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA)
+      if (timeCmp !== 0) return timeCmp
+      return String(b.id).localeCompare(String(a.id), undefined, { numeric: true })
     })
 
   const baseFilteredSales = React.useMemo(
@@ -1515,7 +1518,7 @@ export const SalesPage: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search particulars, Ref No., Cheque No., company, method…"
+              placeholder="Search particulars, Cheque No., company, method…"
               className="min-h-[44px] h-11 pl-11 pr-4 rounded-[10px] border border-stroke/50 bg-white text-sm text-focus placeholder:text-muted-fg/80 shadow-xs focus-visible:ring-2 focus-visible:ring-focus w-full"
             />
           </div>
@@ -1921,7 +1924,7 @@ export const SalesPage: React.FC = () => {
                                                     Bank deposit · {itemsCount} {itemsCount === 1 ? 'sale' : 'sales'}
                                                   </div>
                                                   <div className="mt-0.5 text-[11px] text-muted-fg truncate">
-                                                    {(sale.company || '') + (sale.refNo ? ` · ${sale.refNo}` : '')}
+                                                    {sale.company || ''}
                                                   </div>
                                                   {depositDiff !== 0 && (
                                                     <div className="mt-0.5 text-[10px] font-medium text-amber-700">
@@ -2070,7 +2073,7 @@ export const SalesPage: React.FC = () => {
                               onSave={saveDayRemark}
                               entries={group.items.map((s) => ({
                                 id: s.id,
-                                ref: s.chequeNo || s.refNo,
+                                ref: s.chequeNo || '',
                                 particulars: s.particulars,
                                 amount: tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit,
                                 status: s.status,
@@ -2185,9 +2188,6 @@ export const SalesPage: React.FC = () => {
                                                   {sale.company}
                                                 </div>
                                               )}
-                                              <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                                                {sale.refNo || (sale as any).reference_no || '—'}
-                                              </div>
                                             </td>
                                             <td className="px-3 py-2 text-focus/90 font-medium truncate align-top">
                                               {sale.paymentMethod || 'Cash'}
@@ -2388,9 +2388,8 @@ export const SalesPage: React.FC = () => {
                     const depAmt = getRealizedCashForSale(sale) || sale.deposit || 0
                     const depositDiff = Math.round((depAmt - (sale.deposit || depAmt)) * 100) / 100
                     const saleDateShort = formatToShortDate(sale.deposit_date || sale.depositDate || sale.rawDate || sale.date)
-                    const refNo = sale.refNo || (sale as any).reference_no || '—'
                     const company = sale.company || ''
-                    const subtitle = company ? `${company} · ${refNo}` : refNo
+                    const subtitle = company || '—'
 
                     return (
                       <React.Fragment key={sale.id}>
@@ -2531,7 +2530,7 @@ export const SalesPage: React.FC = () => {
                             <TableCell colSpan={9} className="p-3 sm:p-4">
                               <div className="bg-white rounded-xl border border-slate-200/80 p-3 sm:p-4 shadow-xs">
                                 <div className="text-xs font-bold text-focus mb-2">
-                                  Sales in deposit {refNo}
+                                  Sales in deposit
                                 </div>
                                 <table className="w-full text-left text-xs">
                                   <thead className="bg-slate-50 text-muted-fg font-semibold uppercase text-[10px] tracking-wider border-b border-slate-100">
@@ -2631,9 +2630,6 @@ export const SalesPage: React.FC = () => {
                             {sale.company}
                           </div>
                         )}
-                        <div className="mt-0.5 text-[11px] text-muted-fg font-mono truncate">
-                          {sale.refNo || (sale as any).reference_no || '—'}
-                        </div>
                       </TableCell>
 
                       {/* 3. Method */}
@@ -2780,7 +2776,7 @@ export const SalesPage: React.FC = () => {
       />
 
       {/* Delete Confirmation Dialog */}
-      {!isAdmin && (
+      {canMutateRecord && (
         <ConfirmModal
           open={Boolean(deleteConfirmSale)}
           onOpenChange={(open) => !open && setDeleteConfirmSale(null)}
@@ -2788,8 +2784,7 @@ export const SalesPage: React.FC = () => {
           description={
             <>
               Are you sure you want to delete this sale entry{' '}
-              <strong className="text-focus">{deleteConfirmSale?.particulars}</strong> (
-              {deleteConfirmSale?.refNo}) for{' '}
+              <strong className="text-focus">{deleteConfirmSale?.particulars}</strong> for{' '}
               <strong className="text-focus">
                 {deleteConfirmSale?.deposit ? formatPHP(deleteConfirmSale.deposit) : ''}
               </strong>
@@ -2806,7 +2801,7 @@ export const SalesPage: React.FC = () => {
       )}
 
       {/* Delete Day Confirmation Dialog */}
-      {!isAdmin && (
+      {canMutateRecord && (
         <ConfirmModal
           open={Boolean(deleteConfirmDay)}
           onOpenChange={(open) => !open && setDeleteConfirmDay(null)}
@@ -2850,7 +2845,7 @@ export const SalesPage: React.FC = () => {
         transaction={selectedTx}
         sale={selectedSale}
         onSaleUpdated={handleSaleUpdated}
-        editable={!isAdmin && selectedSale?.auditStatus !== 'Verified'}
+        editable={canMutateRecord && selectedSale?.auditStatus !== 'Verified'}
         statusFilter={effectiveParticularsStatusFilter}
       />
 
@@ -2909,14 +2904,14 @@ export const SalesPage: React.FC = () => {
             )}
 
             {/* Made by Tenants or Lending: changed only on that page */}
-            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && activeMenuSale?.sourceModule && (
+            {canMutateRecord && activeMenuSale?.sourceModule && (
               <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg">
                 Recorded from {activeMenuSale.sourceModule}. Edit or remove it there.
               </p>
             )}
 
-            {/* 2. Supervisor / Admin: Edit */}
-            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && !activeMenuSale?.sourceModule && (
+            {/* 2. Supervisor / Finance: Edit unaudited record */}
+            {canMutateRecord && !activeMenuSale?.sourceModule && activeMenuSale?.auditStatus !== 'Verified' && (
               <button
                 type="button"
                 onClick={() => {
@@ -2935,8 +2930,8 @@ export const SalesPage: React.FC = () => {
               </button>
             )}
 
-            {/* 3. Supervisor / Admin: Delete */}
-            {(isSupervisor || isAdminUser) && !isAudit && !isFinance && !activeMenuSale?.sourceModule && (
+            {/* 3. Supervisor / Finance: Delete unaudited record */}
+            {canMutateRecord && !activeMenuSale?.sourceModule && activeMenuSale?.auditStatus !== 'Verified' && (
               <div className="border-t border-slate-100 mt-1 pt-1">
                 <button
                   type="button"
@@ -3020,7 +3015,7 @@ export const SalesPage: React.FC = () => {
               <span>{expandedDates.has(dayMenu.date) ? 'Hide Transactions' : 'View Transactions'}</span>
             </button>
 
-            {isCompanyUser && !isOwner && dayMenu.items.some((i) => i.sourceModule) && (
+            {canMutateRecord && dayMenu.items.some((i) => i.sourceModule) && (
               <p className="px-3 py-2 text-[11px] leading-snug text-muted-fg border-t border-slate-100 mt-1">
                 {dayMenu.items.every((i) => i.sourceModule) ? 'These records come' : 'Some records come'} from{' '}
                 {Array.from(new Set(dayMenu.items.map((i) => i.sourceModule).filter(Boolean))).join(' / ')}. Edit or
@@ -3028,13 +3023,13 @@ export const SalesPage: React.FC = () => {
               </p>
             )}
 
-            {isCompanyUser && !isOwner && dayMenu.items.some((i) => !i.sourceModule) && (
+            {canMutateRecord && dayMenu.items.some((i) => !i.sourceModule && i.auditStatus !== 'Verified') && (
               <>
                 <button
                   type="button"
                   onClick={() => {
                     // Records made by Tenants or Lending are changed only on their own page
-                    const target = dayMenu.items.find((i) => !i.sourceModule)
+                    const target = dayMenu.items.find((i) => !i.sourceModule && i.auditStatus !== 'Verified')
                     setDayMenu(null)
                     if (target) {
                       navigate('/sales/add', {
@@ -3051,7 +3046,7 @@ export const SalesPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const items = dayMenu.items.filter((i) => !i.sourceModule)
+                    const items = dayMenu.items.filter((i) => !i.sourceModule && i.auditStatus !== 'Verified')
                     const date = dayMenu.date
                     setDayMenu(null)
                     if (items && items.length > 0) {

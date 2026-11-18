@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -88,11 +88,35 @@ def calculate_terms(
 def list_borrowers(
     company_id: Optional[int] = Query(None, description="Filter by company ID (FILCAP only)"),
     borrower: Optional[str] = Query(None, description="Filter by borrower name"),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    search: Optional[str] = Query(None),
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    response: Response = None,
     user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user, company_id)
-    return LendingService.get_borrowers(db=db, borrower_query=borrower)
+    items = LendingService.get_borrowers(db=db, borrower_query=borrower)
+    if status_filter and status_filter.strip().lower() != "all":
+        sf = status_filter.strip().lower()
+        items = [b for b in items if (getattr(b, "status", "") or "").lower() == sf]
+    if search and search.strip():
+        term = search.strip().lower()
+        items = [
+            b for b in items
+            if term in (getattr(b, "borrower_name", "") or "").lower()
+            or term in (getattr(b, "borrower_ref_no", "") or "").lower()
+        ]
+    total = len(items)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    if page is not None or limit is not None:
+        pg = page or 1
+        sz = limit or 50
+        start = (pg - 1) * sz
+        return items[start:start + sz]
+    return items
 
 
 @router.get(
@@ -228,10 +252,13 @@ def list_transactions(
     payment_method: Optional[str] = Query(None, description="Filter by payment method"),
     date_from: Optional[str] = Query(None, description="Filter transactions starting from date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="Filter transactions up to date (YYYY-MM-DD)"),
+    page: Optional[int] = Query(None, ge=1),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     _enforce_lending_access(user)
-    return LendingService.get_transactions(
+    items = LendingService.get_transactions(
         db=db,
         borrower_id=borrower_id,
         transaction_type=transaction_type,
@@ -239,6 +266,15 @@ def list_transactions(
         date_from=date_from,
         date_to=date_to,
     )
+    total = len(items)
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
+    if page is not None or limit is not None:
+        pg = page or 1
+        sz = limit or 50
+        start = (pg - 1) * sz
+        return items[start:start + sz]
+    return items
 
 
 @router.get(

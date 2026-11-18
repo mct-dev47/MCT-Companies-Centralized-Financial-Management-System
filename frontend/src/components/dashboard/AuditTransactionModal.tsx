@@ -1456,14 +1456,16 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
             {/* 2. Key Details Grid (Label-above-value for easy scanning) */}
             <div className="rounded-2xl border border-slate-200/80 bg-white p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3.5">
-              <div className="min-w-0">
-                <span className="text-xs font-medium text-muted-fg block">
-                  Reference No.
-                </span>
-                <span className="font-mono text-sm font-semibold text-focus break-all mt-0.5 block">
-                  {displayRefNo}
-                </span>
-              </div>
+              {isLoan && displayRefNo && displayRefNo !== '—' && (
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-muted-fg block">
+                    Reference No.
+                  </span>
+                  <span className="font-mono text-sm font-semibold text-focus break-all mt-0.5 block">
+                    {displayRefNo}
+                  </span>
+                </div>
+              )}
 
               <div className="min-w-0">
                 <span className="text-xs font-medium text-muted-fg block">

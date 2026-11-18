@@ -90,13 +90,11 @@ def alert_settings_env(monkeypatch):
             company_id=1,
             company_name="JK Property and Ventures",
             location="Manila",
-            starting_balance=Decimal("250000.00"),
         )
         c2 = Company(
             company_id=2,
             company_name="MCT Lending Corp",
             location="Cebu",
-            starting_balance=Decimal("250000.00"),
         )
         seed.add_all([c1, c2])
 

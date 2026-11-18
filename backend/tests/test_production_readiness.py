@@ -208,7 +208,6 @@ class TestProductionReadiness(unittest.TestCase):
                 id="bnk-001",
                 bank_name="BDO",
                 account_name="MCT Main",
-                account_number="1234-5678",
                 company_name="MCT",
                 starting_balance=Decimal("1000.00"),
                 current_balance=Decimal("1000.00"),

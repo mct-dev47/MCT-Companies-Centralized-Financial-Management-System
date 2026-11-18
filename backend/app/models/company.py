@@ -13,11 +13,16 @@ class Company(Base):
     location = Column(String(100), nullable=True, default="Manila")
     contact_number = Column(String(11), nullable=True)
     phone = Column(String(8), nullable=True)
-    starting_balance = Column(Numeric(15, 2), nullable=False)
     petty_cash = Column(Numeric(15, 2), nullable=True, default=0.0)
     logo_url = Column(String(500), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    bank_accounts = relationship(
+        "BankAccount",
+        back_populates="company",
+        passive_deletes=True,
+    )
 
     notification_settings = relationship(
         "CompanyNotificationSettings",

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ErrorBanner } from '@/components/common'
+import { ErrorBanner, TablePagination } from '@/components/common'
 import { DropdownFilter, type DropdownFilterOption } from '@/components/common/DropdownFilter'
 import { CreateCompanyModal } from '@/components/employee/CreateCompanyModal'
 import { ViewCompanyModal } from '@/components/employee/ViewCompanyModal'
@@ -52,12 +52,22 @@ export const EmployeePage: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Load companies
+  const [currentPage, setCurrentPage] = React.useState(1)
+  const [pageSize, setPageSize] = React.useState(50)
+  const [totalCompanies, setTotalCompanies] = React.useState(0)
+
   const loadData = React.useCallback(async () => {
     try {
       setLoading(true)
       setLoadError(null)
-      const companyList = await employeeService.getCompanies()
-      setCompanies(companyList)
+      const { items, total } = await employeeService.getCompaniesPaginated({
+        page: currentPage,
+        limit: pageSize,
+        search: searchQuery || undefined,
+        sortBy,
+      })
+      setCompanies(items)
+      setTotalCompanies(total)
     } catch (err) {
       setLoadError(
         formatUserFriendlyErrorMessage(
@@ -68,7 +78,11 @@ export const EmployeePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [currentPage, pageSize, searchQuery, sortBy])
+
+  React.useEffect(() => {
+    setCurrentPage(1)
+  }, [searchQuery, sortBy])
 
   React.useEffect(() => {
     void loadData()
@@ -87,37 +101,7 @@ export const EmployeePage: React.FC = () => {
     document.title = 'Company Management - MCT Centralized Financial System'
   }, [])
 
-  // Filtered and sorted companies
-  const filteredCompanies = React.useMemo(() => {
-    let result = [...companies]
-
-    const q = searchQuery.toLowerCase().trim()
-    if (q) {
-      result = result.filter(
-        (c) =>
-          c.name.toLowerCase().includes(q) ||
-          (c.address && c.address.toLowerCase().includes(q)) ||
-          (c.contactNumber && c.contactNumber.toLowerCase().includes(q)) ||
-          (c.telephoneNumber && c.telephoneNumber.toLowerCase().includes(q))
-      )
-    }
-
-    return result.sort((a, b) => {
-      if (sortBy === 'asc') {
-        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
-      }
-      if (sortBy === 'desc') {
-        return b.name.localeCompare(a.name, undefined, { sensitivity: 'base', numeric: true })
-      }
-      // 'recent': newest created first
-      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0
-      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0
-      if (timeA !== timeB && !isNaN(timeA) && !isNaN(timeB)) {
-        return timeB - timeA
-      }
-      return Number(b.id) - Number(a.id)
-    })
-  }, [companies, searchQuery, sortBy])
+  const filteredCompanies = companies
 
   const handleCardClickCompany = (comp: Company) => {
     setSelectedCompany(comp)
@@ -316,6 +300,20 @@ export const EmployeePage: React.FC = () => {
               </div>
             ))}
           </div>
+        )}
+        {!loading && totalCompanies > 0 && (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={Math.max(1, Math.ceil(totalCompanies / pageSize))}
+            totalItems={totalCompanies}
+            pageSize={pageSize}
+            onPageSizeChange={(sz) => {
+              setPageSize(sz)
+              setCurrentPage(1)
+            }}
+            itemLabel="companies"
+            onPageChange={setCurrentPage}
+          />
         )}
       </div>
 

@@ -19,6 +19,7 @@ import {
   Check,
   AlertCircle,
   Building2,
+  Landmark,
 } from 'lucide-react'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
@@ -28,6 +29,7 @@ import {
   type LoanItem,
   type CompanyOption,
 } from '@/services/loanService'
+import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
@@ -129,6 +131,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
 
   const [isLenderOpen, setIsLenderOpen] = React.useState(false)
   const lenderRef = React.useRef<HTMLDivElement>(null)
+  const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
 
   // Confirmation dialogue state
   const [isReviewing, setIsReviewing] = React.useState(false)
@@ -180,8 +183,31 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       setIsSubmitting(false)
       setError('')
       setFieldErrors({})
+
+      if (!isCompanyUser) {
+        let mounted = true
+        setBankAccounts(bankService.getCachedAccounts() || [])
+        bankService
+          .getAccounts()
+          .then((accounts) => {
+            if (mounted) setBankAccounts(accounts || [])
+          })
+          .catch(() => {})
+        return () => {
+          mounted = false
+        }
+      }
     }
-  }, [open, defaultBorrower, allCompanyNames])
+  }, [open, defaultBorrower, allCompanyNames, isCompanyUser])
+
+  const getCompanyBankSummary = React.useCallback(
+    (companyName: string) => {
+      const accounts = bankAccounts.filter((acc) => isAccountOwnedBy(acc, companyName))
+      const totalBalance = accounts.reduce((sum, acc) => sum + Number(acc.currentBalance || 0), 0)
+      return { accounts, totalBalance }
+    },
+    [bankAccounts]
+  )
 
   // Pre-validate and show confirmation dialogue
   const handleSubmit = async (e: React.FormEvent) => {
@@ -389,33 +415,79 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsLenderOpen((prev) => !prev)}
-                      className="w-full h-10 px-3 rounded-xl border border-stroke/60 bg-white hover:bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-2xs flex items-center justify-between"
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-stroke/60 bg-white hover:bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-2xs flex items-center justify-between gap-2 cursor-pointer"
                     >
-                      <div className="flex items-center gap-2 truncate">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
                         <Building2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         <span className="truncate">{lenderCompany || 'Select Lender Company…'}</span>
                       </div>
-                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                      <div className="flex items-center gap-2 shrink-0">
+                        {lenderCompany && (
+                          <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/70">
+                            {formatPHP(getCompanyBankSummary(lenderCompany).totalBalance)}
+                          </span>
+                        )}
+                        <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                      </div>
                     </button>
                     {isLenderOpen && (
-                      <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-52 overflow-y-auto">
-                        {availableLenders.map((c) => (
-                          <button
-                            key={c}
-                            type="button"
-                            onClick={() => {
-                              setLenderCompany(c)
-                              setIsLenderOpen(false)
-                            }}
-                            className={cn(
-                              'w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-left cursor-pointer',
-                              lenderCompany === c ? 'bg-emerald-50 text-emerald-800 font-semibold' : 'text-focus hover:bg-slate-50'
-                            )}
-                          >
-                            <span>{c}</span>
-                            {lenderCompany === c && <Check className="w-3.5 h-3.5 text-emerald-600 ml-2" />}
-                          </button>
-                        ))}
+                      <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-64 overflow-y-auto space-y-1">
+                        {availableLenders.map((c) => {
+                          const { accounts, totalBalance } = getCompanyBankSummary(c)
+                          const isSelected = lenderCompany === c
+                          return (
+                            <button
+                              key={c}
+                              type="button"
+                              onClick={() => {
+                                setLenderCompany(c)
+                                setIsLenderOpen(false)
+                              }}
+                              className={cn(
+                                'w-full flex flex-col gap-1 px-3 py-2 rounded-xl text-xs text-left cursor-pointer border border-transparent transition-colors',
+                                isSelected
+                                  ? 'bg-emerald-50/90 text-emerald-900 border-emerald-200/70'
+                                  : 'text-focus hover:bg-slate-50'
+                              )}
+                            >
+                              <div className="flex items-center justify-between gap-2 w-full">
+                                <span className={cn('font-semibold', isSelected ? 'text-emerald-900' : 'text-focus')}>
+                                  {c}
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span className="text-[11px] font-bold text-emerald-700">
+                                    {formatPHP(totalBalance)}
+                                  </span>
+                                  {isSelected && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+                                </div>
+                              </div>
+                              {accounts.length > 0 ? (
+                                <div className="pl-2 border-l-2 border-slate-200 space-y-0.5 mt-0.5">
+                                  {accounts.map((acc) => (
+                                    <div
+                                      key={acc.id}
+                                      className="flex items-center justify-between gap-2 text-[11px] text-muted-fg"
+                                    >
+                                      <span className="flex items-center gap-1 truncate">
+                                        <Landmark className="w-3 h-3 text-slate-400 shrink-0" />
+                                        <span className="truncate">
+                                          {acc.bankName} • {acc.accountName}
+                                        </span>
+                                      </span>
+                                      <span className="font-medium text-slate-700 shrink-0">
+                                        {formatPHP(acc.currentBalance)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-[10.5px] text-muted-fg italic pl-2">
+                                  No registered bank accounts
+                                </span>
+                              )}
+                            </button>
+                          )
+                        })}
                       </div>
                     )}
                   </div>

@@ -95,13 +95,11 @@ def notif_env(monkeypatch):
                     company_id=1,
                     company_name="JK Property and Ventures",
                     location="Manila",
-                    starting_balance=Decimal("100000.00"),
                 ),
                 Company(
                     company_id=2,
                     company_name="MCT Lending Corp",
                     location="Cebu",
-                    starting_balance=Decimal("100000.00"),
                 ),
             ]
         )
@@ -472,7 +470,6 @@ def test_petty_cash_low_and_zero_balance_notifications(notif_env):
                 amount=Decimal("3000.00"),
                 description="Replenishment",
                 status="Approved",
-                reference_no="PC-TOP-001",
             )
         )
         db.add(
@@ -481,7 +478,6 @@ def test_petty_cash_low_and_zero_balance_notifications(notif_env):
                 expense_date=today,
                 amount=Decimal("3000.00"),
                 payment_method="Petty Cash",
-                reference_no="EXP-PC-001",
                 particulars="Office supplies",
             )
         )
@@ -613,7 +609,6 @@ def _seed_scaled_dataset(db, count_per_entity: int):
                 amount=Decimal("2000.00"),
                 description=f"Topup {i}",
                 status="Pending" if i % 2 == 0 else "Approved",
-                reference_no=f"PC-SCALE-{i:04d}",
             )
         )
         db.add(
@@ -649,8 +644,8 @@ def test_zero_n_plus_one_query_scaling(monkeypatch):
         with SessionLocal() as db:
             db.add_all(
                 [
-                    Company(company_id=1, company_name="JK Property and Ventures", starting_balance=0),
-                    Company(company_id=2, company_name="MCT Lending Corp", starting_balance=0),
+                    Company(company_id=1, company_name="JK Property and Ventures"),
+                    Company(company_id=2, company_name="MCT Lending Corp"),
                 ]
             )
             db.commit()

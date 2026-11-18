@@ -113,14 +113,20 @@ class BankService:
         self.db.flush()
         self.db.execute(text("UPDATE bank_transactions SET entry_source = :s WHERE id = :id"), {"s": source, "id": tx.id})
 
-    def list_accounts(self, company_name: Optional[str] = None, company_id: Optional[int] = None) -> List[BankAccount]:
-        query = self._with_entries(self.db.query(BankAccount))
+    def list_accounts(
+        self,
+        company_name: Optional[str] = None,
+        company_id: Optional[int] = None,
+        include_transactions: bool = True,
+    ) -> List[BankAccount]:
+        query = self._with_entries(self.db.query(BankAccount)) if include_transactions else self.db.query(BankAccount)
         all_accounts = query.order_by(BankAccount.id.asc()).all()
 
         norm_name = (company_name or "").strip().lower()
         has_company_filter = bool(company_id) or (bool(norm_name) and norm_name != "all companies")
         if not has_company_filter:
-            self._attach_entry_sources(all_accounts)
+            if include_transactions:
+                self._attach_entry_sources(all_accounts)
             return all_accounts
 
         from fastapi import HTTPException
@@ -182,8 +188,54 @@ class BankService:
             return False
 
         result = [a for a in all_accounts if _matches_target(a)]
-        self._attach_entry_sources(result)
+        if include_transactions:
+            self._attach_entry_sources(result)
         return result
+
+    def list_transactions_paginated(
+        self,
+        account_id: str,
+        offset: int = 0,
+        limit: int = 50,
+        search: Optional[str] = None,
+        tx_type: Optional[str] = None,
+        sort_dir: str = "desc",
+    ) -> tuple[List[BankTransaction], int]:
+        from sqlalchemy import or_, text
+
+        query = self.db.query(BankTransaction).filter(BankTransaction.bank_account_id == account_id)
+        if tx_type:
+            t = tx_type.strip().lower()
+            if t == "deposit":
+                query = query.filter(BankTransaction.deposit > 0)
+            elif t == "withdrawal":
+                query = query.filter(BankTransaction.withdrawal > 0)
+        if search and search.strip():
+            term = f"%{search.strip()}%"
+            query = query.filter(
+                or_(
+                    BankTransaction.particulars.ilike(term),
+                    BankTransaction.cheque_no.ilike(term),
+                    BankTransaction.category.ilike(term),
+                )
+            )
+        total = query.count()
+        if (sort_dir or "desc").lower() == "asc":
+            query = query.order_by(BankTransaction.transaction_date.asc(), BankTransaction.id.asc())
+        else:
+            query = query.order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
+        rows = query.offset(offset).limit(limit).all()
+        if rows and entry_source_supported(self.db):
+            tx_ids = [r.id for r in rows]
+            placeholders = ",".join(f":id_{i}" for i in range(len(tx_ids)))
+            src_rows = self.db.execute(
+                text(f"SELECT id, entry_source FROM bank_transactions WHERE id IN ({placeholders})"),
+                {f"id_{i}": tid for i, tid in enumerate(tx_ids)},
+            ).fetchall()
+            src_map = {str(r[0]): r[1] for r in src_rows}
+            for r in rows:
+                r._entry_source = src_map.get(str(r.id))
+        return rows, total
 
     def get_account(self, account_id: str, with_entries: bool = False) -> Optional[BankAccount]:
         query = self.db.query(BankAccount)
@@ -303,8 +355,6 @@ class BankService:
                 return existing_match
 
         account_id = self._generate_account_id()
-        num_suffix = account_id.replace("bnk-", "")
-        acc_num = data.account_number.strip() if data.account_number and data.account_number.strip() else f"1092-4820-{num_suffix}"
         label = (data.card_label or data.account_name or data.company_name or "").strip()
 
         # Resolve company_id from input or company name
@@ -322,7 +372,6 @@ class BankService:
             id=account_id,
             bank_name=bank_clean,
             account_name=acct_clean,
-            account_number=acc_num,
             company_name=comp_clean,
             company_id=resolved_cid,
             company_names_json=json.dumps(owners) if len(owners) > 1 else None,
@@ -332,7 +381,6 @@ class BankService:
             starting_balance=start_bal,
             current_balance=start_bal,
             color_theme=data.color_theme or "red",
-            notes=data.notes.strip() if data.notes else None,
         )
         self.db.add(account)
         self.db.commit()
@@ -373,8 +421,6 @@ class BankService:
                 pass
         if data.branch is not None:
             account.branch = data.branch.strip()
-        if data.notes is not None:
-            account.notes = data.notes.strip()
         if data.color_theme is not None:
             account.color_theme = data.color_theme
         if data.card_label is not None:
@@ -671,6 +717,10 @@ class BankService:
                 is_reversal=not more,
                 company_name=company_name or next((t.company_name for t in linked if t.bank_account_id == account.id and t.company_name), None),
             )
+        elif len(linked) == 1 and linked[0].bank_account_id == account.id and particulars:
+            if linked[0].particulars != particulars:
+                linked[0].particulars = particulars
+                tx = linked[0]
         self.db.commit()
         if tx is not None:
             self.db.refresh(tx)
@@ -798,7 +848,9 @@ class BankService:
                     BankTransaction.source_sale_id.is_(None),
                     BankTransaction.category == "Cash",
                     BankTransaction.deposit > 0,
-                    BankTransaction.particulars == f"Sales Collection: {legacy_particulars}",
+                    BankTransaction.particulars.in_(
+                        [legacy_particulars, f"Sales Collection: {legacy_particulars}"]
+                    ),
                 )
                 .order_by(BankTransaction.created_at.desc())
                 .first()
@@ -845,7 +897,9 @@ class BankService:
                     BankTransaction.source_expense_id.is_(None),
                     BankTransaction.source_sale_id.is_(None),
                     BankTransaction.withdrawal > 0,
-                    BankTransaction.particulars == f"Expense Disbursement: {legacy_particulars}",
+                    BankTransaction.particulars.in_(
+                        [legacy_particulars, f"Expense Disbursement: {legacy_particulars}"]
+                    ),
                 )
                 .order_by(BankTransaction.created_at.desc())
                 .first()

@@ -3,8 +3,9 @@ from typing import List, Optional
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
+import logging
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from app.core.business_time import business_today
 from app.db.session import get_db
 from app.db.supabase import get_supabase_admin_client
@@ -29,6 +30,7 @@ class _SkipBackup(Exception):
     """Internal: the ORM database is the Supabase database, so the backup write is skipped."""
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 from app.core.dependencies import AuditorUser, AuthenticatedUser, BusinessReader, BusinessWriter, check_company_access, require_auditor_user, require_business_reader, require_business_writer
 from app.core.company_resolver import resolve_company, normalize_company_id
@@ -82,8 +84,8 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             target_amount=target,
             company_name=company_name,
             account_id=expense.bank_account_id,
-            particulars=f"Expense Disbursement: {expense.description}",
-            reference_no=expense.cheque_number or expense.cheque_no or expense.reference_no,
+            particulars=expense.description or "",
+            reference_no=expense.cheque_number or expense.cheque_no,
             tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
             legacy_particulars=expense.description,
         )
@@ -102,10 +104,11 @@ def get_supabase_mappings(client=None, db: Optional[Session] = None):
     if db is not None:
         try:
             from app.models.company import Company as CompanyModel
-            comps = db.query(CompanyModel).all()
-            for c in comps:
-                if c.company_id and c.company_name:
-                    company_map[c.company_id] = c.company_name
+            comps = db.query(CompanyModel.company_id, CompanyModel.company_name).all()
+            for row in comps:
+                cid, cname = (row.company_id, row.company_name) if hasattr(row, "company_id") else row
+                if cid and cname:
+                    company_map[cid] = cname
         except Exception:
             pass
     else:
@@ -113,10 +116,11 @@ def get_supabase_mappings(client=None, db: Optional[Session] = None):
             from app.db.session import SessionLocal
             from app.models.company import Company as CompanyModel
             with SessionLocal() as local_db:
-                comps = local_db.query(CompanyModel).all()
-                for c in comps:
-                    if c.company_id and c.company_name:
-                        company_map[c.company_id] = c.company_name
+                comps = local_db.query(CompanyModel.company_id, CompanyModel.company_name).all()
+                for row in comps:
+                    cid, cname = (row.company_id, row.company_name) if hasattr(row, "company_id") else row
+                    if cid and cname:
+                        company_map[cid] = cname
         except Exception:
             pass
 
@@ -139,8 +143,10 @@ def get_supabase_mappings(client=None, db: Optional[Session] = None):
 
     if not cat_map and db is not None:
         try:
-            cats = db.query(Category).all()
-            cat_map = {c.category_id: c.name for c in cats}
+            cats = db.query(Category.category_id, Category.name).all()
+            for row in cats:
+                cid, cname = (row.category_id, row.name) if hasattr(row, "category_id") else row
+                cat_map[cid] = cname
         except Exception:
             pass
 
@@ -161,6 +167,122 @@ def _current_expense_row(db: Session, expense_id: int) -> Optional[dict]:
         return {"company_id": exp.company_id, "payment_method": exp.payment_method, "amount": exp.amount}
     return None
 
+def _build_expenses_query(
+    db: Session,
+    current_user: AuthenticatedUser,
+    company_id: Optional[int] = None,
+    company_name: Optional[str] = None,
+    category_id: Optional[int] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    search: Optional[str] = None,
+    bank_account_id: Optional[str] = None,
+    payment_status: Optional[str] = None,
+):
+    if hasattr(company_id, "default"):
+        company_id = None
+    if hasattr(company_name, "default"):
+        company_name = None
+    if hasattr(category_id, "default"):
+        category_id = None
+    if hasattr(start_date, "default") or not isinstance(start_date, date):
+        start_date = None
+    if hasattr(end_date, "default") or not isinstance(end_date, date):
+        end_date = None
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(bank_account_id, "default"):
+        bank_account_id = None
+    if hasattr(payment_status, "default"):
+        payment_status = None
+
+    user_role = (current_user.get("role") or "").lower()
+    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
+    user_company_ids = current_user.get("company_ids") or []
+    if not is_privileged and not user_company_ids and current_user.get("company_id"):
+        user_company_ids = [current_user["company_id"]]
+
+    query = (
+        db.query(
+            Expense,
+            Company.company_name.label("company_name"),
+            Category.name.label("category_name")
+        )
+        .outerjoin(Company, Expense.company_id == Company.company_id)
+        .outerjoin(Category, Expense.category_id == Category.category_id)
+    )
+
+    resolved_cid = normalize_company_id(company_id) if company_id else None
+    if resolved_cid:
+        check_company_access(current_user, resolved_cid)
+        query = query.filter(Expense.company_id == resolved_cid)
+    elif company_name and company_name.lower() != "all companies":
+        try:
+            resolved_comp = resolve_company(db, company_name=company_name)
+            check_company_access(current_user, resolved_comp.company_id)
+            query = query.filter(Expense.company_id == resolved_comp.company_id)
+        except HTTPException:
+            raise
+        except Exception:
+            query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
+            if not is_privileged:
+                query = query.filter(Expense.company_id.in_(user_company_ids))
+    elif user_company_ids:
+        query = query.filter(Expense.company_id.in_(user_company_ids))
+    elif not is_privileged:
+        return None
+
+    if category_id:
+        query = query.filter(Expense.category_id == category_id)
+    if start_date:
+        query = query.filter(Expense.expense_date >= start_date)
+    if end_date:
+        query = query.filter(Expense.expense_date <= end_date)
+    if bank_account_id and bank_account_id.lower() != "all":
+        query = query.filter(Expense.bank_account_id == bank_account_id)
+    if payment_status and payment_status.lower() != "all":
+        st = payment_status.strip().lower()
+        if st == "paid":
+            query = query.filter(func.coalesce(Expense.amount_paid, 0) >= Expense.amount)
+        elif st == "partial":
+            query = query.filter(func.coalesce(Expense.amount_paid, 0) > 0, func.coalesce(Expense.amount_paid, 0) < Expense.amount)
+        elif st == "unpaid":
+            query = query.filter(func.coalesce(Expense.amount_paid, 0) <= 0)
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Expense.description.ilike(term),
+                Expense.cheque_no.ilike(term),
+                Expense.payment_method.ilike(term),
+            )
+        )
+    return query
+
+
+def _expense_to_out(exp: Expense, c_name: Optional[str], cat_name: Optional[str]) -> ExpenseOut:
+    return ExpenseOut(
+        expense_id=exp.expense_id,
+        company_id=exp.company_id,
+        company_name=c_name or "Unknown Company",
+        category_id=exp.category_id,
+        category_name=cat_name or "None",
+        payment_method=exp.payment_method,
+        created_by=exp.created_by,
+        expense_date=exp.expense_date,
+        cheque_no=exp.cheque_number or exp.cheque_no,
+        amount=exp.amount,
+        amount_paid=exp.amount_paid or Decimal("0.00"),
+        unpaid_balance=exp.amount - (exp.amount_paid or Decimal("0.00")),
+        particulars=exp.description or "",
+        description=exp.description or "",
+        created_at=exp.created_at,
+        updated_at=exp.updated_at,
+        remarks=getattr(exp, "remarks", None),
+        **audit_fields(exp),
+    )
+
+
 @router.get("", response_model=List[ExpenseOut], summary="List expense records")
 def get_expenses(
     company_id: Optional[int] = Query(None, description="Filter by Company ID"),
@@ -168,143 +290,151 @@ def get_expenses(
     category_id: Optional[int] = Query(None, description="Filter by Category ID"),
     start_date: Optional[date] = Query(None, description="Filter from date"),
     end_date: Optional[date] = Query(None, description="Filter to date"),
+    search: Optional[str] = Query(None, description="Search description, reference, or cheque number"),
+    bank_account_id: Optional[str] = Query(None, description="Filter by bank account ID"),
+    payment_status: Optional[str] = Query(None, description="Filter by payment status (paid, partial, unpaid)"),
+    sort_by: Optional[str] = Query("expense_date", description="Sort field"),
+    sort_dir: Optional[str] = Query("desc", description="Sort direction (asc or desc)"),
+    response: Response = None,
     pagination: PaginationParams = Depends(),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
     if not hasattr(pagination, "offset"):
         pagination = PaginationParams()
-    user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
-    user_company_ids = current_user.get("company_ids") or []
-    if not is_privileged and not user_company_ids and current_user.get("company_id"):
-        user_company_ids = [current_user["company_id"]]
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(bank_account_id, "default"):
+        bank_account_id = None
+    if hasattr(payment_status, "default"):
+        payment_status = None
+    if hasattr(sort_by, "default"):
+        sort_by = "expense_date"
+    if hasattr(sort_dir, "default"):
+        sort_dir = "desc"
 
-    try:
-        client = get_supabase_admin_client()
-        company_map, cat_map = get_supabase_mappings(client, db=db)
+    query = _build_expenses_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        bank_account_id=bank_account_id,
+        payment_status=payment_status,
+    )
+    if query is None:
+        if response is not None:
+            response.headers["X-Total-Count"] = "0"
+        return []
 
-        sb_query = client.table("expenses").select("*")
+    total = query.count()
+    if response is not None:
+        response.headers["X-Total-Count"] = str(total)
 
-        # Company filter & access check
-        resolved_company_id = normalize_company_id(company_id)
-        if resolved_company_id:
-            check_company_access(current_user, resolved_company_id)
-            sb_query = sb_query.eq("company_id", resolved_company_id)
-        elif company_name and company_name.lower() != "all companies":
-            resolved_comp = resolve_company(db, company_name=company_name)
-            target_cid = resolved_comp.company_id
-            check_company_access(current_user, target_cid)
-            sb_query = sb_query.eq("company_id", target_cid)
-        elif user_company_ids:
-            if len(user_company_ids) == 1:
-                sb_query = sb_query.eq("company_id", user_company_ids[0])
-            else:
-                sb_query = sb_query.in_("company_id", user_company_ids)
-        elif not is_privileged:
-            return []
+    sort_col_map = {
+        "expense_date": Expense.expense_date,
+        "amount": Expense.amount,
+        "expense_id": Expense.expense_id,
+        "created_at": Expense.created_at,
+    }
+    sort_col = sort_col_map.get((sort_by or "expense_date").lower(), Expense.expense_date)
+    if (sort_dir or "desc").lower() == "asc":
+        order_clauses = (sort_col.asc(), Expense.expense_id.asc())
+    else:
+        order_clauses = (sort_col.desc(), Expense.expense_id.desc())
 
-        if category_id:
-            sb_query = sb_query.eq("category_id", category_id)
-        if start_date:
-            sb_query = sb_query.gte("expense_date", start_date.isoformat())
-        if end_date:
-            sb_query = sb_query.lte("expense_date", end_date.isoformat())
+    rows = query.order_by(*order_clauses).offset(pagination.offset).limit(pagination.limit).all()
+    return _with_sources(db, [_expense_to_out(exp, c_name, cat_name) for exp, c_name, cat_name in rows])
 
-        sb_query = sb_query.order("expense_date", desc=True).order("expense_id", desc=True)
-        res = sb_query.range(pagination.offset, pagination.offset + pagination.limit - 1).execute()
-        rows = res.data or []
 
-        return _with_sources(db, [
-            ExpenseOut(
-                expense_id=row["expense_id"],
-                company_id=row.get("company_id"),
-                company_name=company_map.get(row.get("company_id")) or "Unknown Company",
-                category_id=row.get("category_id"),
-                category_name=cat_map.get(row.get("category_id")) or "None",
-                payment_method=row.get("payment_method"),
-                created_by=row.get("created_by"),
-                expense_date=row.get("expense_date"),
-                reference_no=row.get("reference_no"),
-                cheque_no=row.get("cheque_number") or row.get("cheque_no") or (row.get("reference_no") if not (row.get("reference_no") or "").startswith("REF-") else None),
-                amount=row.get("amount") or 0.0,
-                amount_paid=row.get("amount_paid") or 0.0,
-                unpaid_balance=Decimal(str(row.get("amount") or 0.0)) - Decimal(str(row.get("amount_paid") or 0.0)),
-                particulars=row.get("description") or "",
-                description=row.get("description") or "",
-                created_at=row.get("created_at"),
-                updated_at=row.get("updated_at"),
-                remarks=row.get("remarks"),
-                **audit_fields(row)
-            )
-            for row in rows
-        ])
-    except HTTPException:
-        raise
-    except Exception as e:
-        # Fallback to local SQLite if Supabase is unavailable
-        query = (
-            db.query(
-                Expense,
-                Company.company_name.label("company_name"),
-                Category.name.label("category_name")
-            )
-            .outerjoin(Company, Expense.company_id == Company.company_id)
-            .outerjoin(Category, Expense.category_id == Category.category_id)
-        )
+@router.get("/export", response_model=List[ExpenseOut], summary="Export all matching expense records")
+def export_expenses(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    bank_account_id: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    query = _build_expenses_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        bank_account_id=bank_account_id,
+        payment_status=payment_status,
+    )
+    if query is None:
+        return []
+    rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
+    return _with_sources(db, [_expense_to_out(exp, c_name, cat_name) for exp, c_name, cat_name in rows])
 
-        if company_id:
-            check_company_access(current_user, company_id)
-            query = query.filter(Expense.company_id == company_id)
-        elif company_name and company_name.lower() != "all companies":
-            try:
-                resolved_comp = resolve_company(db, company_name=company_name)
-                check_company_access(current_user, resolved_comp.company_id)
-                query = query.filter(Expense.company_id == resolved_comp.company_id)
-            except HTTPException:
-                raise
-            except Exception:
-                query = query.filter(func.lower(Company.company_name) == func.lower(company_name.strip()))
-                if not is_privileged:
-                    query = query.filter(Expense.company_id.in_(user_company_ids))
-        elif user_company_ids:
-            query = query.filter(Expense.company_id.in_(user_company_ids))
-        elif not is_privileged:
-            return []
 
-        if category_id:
-            query = query.filter(Expense.category_id == category_id)
-        if start_date:
-            query = query.filter(Expense.expense_date >= start_date)
-        if end_date:
-            query = query.filter(Expense.expense_date <= end_date)
+@router.get("/summary", summary="Get full-dataset expense KPIs and category breakdown")
+def get_expenses_summary(
+    company_id: Optional[int] = Query(None),
+    company_name: Optional[str] = Query(None),
+    category_id: Optional[int] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    search: Optional[str] = Query(None),
+    bank_account_id: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    query = _build_expenses_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+        bank_account_id=bank_account_id,
+        payment_status=payment_status,
+    )
+    if query is None:
+        return {"total_count": 0, "total_amount": 0.0, "paid_amount": 0.0, "unpaid_amount": 0.0, "categories": []}
 
-        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).offset(pagination.offset).limit(pagination.limit).all()
+    rows = query.with_entities(
+        Expense.amount,
+        Expense.amount_paid,
+        Category.name,
+    ).all()
+    total_amount = Decimal("0.00")
+    paid_amount = Decimal("0.00")
+    cat_totals: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+    for amt, amt_paid, cat_name in rows:
+        amt_d = Decimal(str(amt or 0))
+        paid_d = Decimal(str(amt_paid or 0))
+        total_amount += amt_d
+        paid_amount += paid_d
+        cat_totals[cat_name or "Uncategorized"] += amt_d
 
-        return _with_sources(db, [
-            ExpenseOut(
-                expense_id=exp.expense_id,
-                company_id=exp.company_id,
-                company_name=c_name,
-                category_id=exp.category_id,
-                category_name=cat_name or "None",
-                payment_method=exp.payment_method,
-                created_by=exp.created_by,
-                expense_date=exp.expense_date,
-                reference_no=exp.reference_no,
-                cheque_no=exp.cheque_number or exp.cheque_no or (exp.reference_no if not (exp.reference_no or "").startswith("REF-") else None),
-                amount=exp.amount,
-                amount_paid=exp.amount_paid or Decimal("0.00"),
-                unpaid_balance=exp.amount - (exp.amount_paid or Decimal("0.00")),
-                particulars=exp.description or "",
-                description=exp.description or "",
-                created_at=exp.created_at,
-                updated_at=exp.updated_at,
-                remarks=getattr(exp, "remarks", None),
-                **audit_fields(exp)
-            )
-            for exp, c_name, cat_name in rows
-        ])
+    categories = [
+        {"category": k, "amount": float(v)}
+        for k, v in sorted(cat_totals.items(), key=lambda x: (-x[1], x[0].lower()))
+    ]
+    return {
+        "total_count": len(rows),
+        "total_amount": float(total_amount),
+        "paid_amount": float(paid_amount),
+        "unpaid_amount": float(total_amount - paid_amount),
+        "categories": categories,
+    }
 
 
 def _with_sources(db: Session, outs: List[ExpenseOut]) -> List[ExpenseOut]:
@@ -360,108 +490,33 @@ def get_expenses_daily_summary(
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
-    if not hasattr(pagination, "offset"):
-        pagination = PaginationParams()
-    user_role = (current_user.get("role") or "").lower()
-    is_privileged = user_role in ("admin", "audit", "auditor") or bool(current_user.get("is_admin"))
-    user_company_ids = current_user.get("company_ids") or []
-    if not is_privileged and not user_company_ids and current_user.get("company_id"):
-        user_company_ids = [current_user["company_id"]]
+    if hasattr(search, "default"):
+        search = None
+    query = _build_expenses_query(
+        db=db,
+        current_user=current_user,
+        company_id=company_id,
+        company_name=company_name,
+        category_id=category_id,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+    )
+    if query is None:
+        return []
 
-    raw_records = []
-    use_sb = False
-    try:
-        from app.services.sales_receivables_sync import SalesReceivablesSyncService
-        use_sb = SalesReceivablesSyncService(db)._use_supabase()
-    except Exception:
-        use_sb = True
+    rows = (
+        query.with_entities(
+            Expense.expense_date,
+            Expense.amount,
+            Expense.amount_paid,
+            Expense.description,
+            Expense.audit_status,
+        )
+        .order_by(Expense.expense_date.desc(), Expense.expense_id.desc())
+        .all()
+    )
 
-    try:
-        if not use_sb:
-            raise RuntimeError("In-memory SQLite session")
-        client = get_supabase_admin_client()
-
-        sb_query = client.table("expenses").select("*")
-
-        resolved_company_id = normalize_company_id(company_id)
-        if resolved_company_id:
-            check_company_access(current_user, resolved_company_id)
-            sb_query = sb_query.eq("company_id", resolved_company_id)
-        elif company_name and company_name.lower() != "all companies":
-            resolved_comp = resolve_company(db, company_name=company_name)
-            target_cid = resolved_comp.company_id
-            check_company_access(current_user, target_cid)
-            sb_query = sb_query.eq("company_id", target_cid)
-        elif user_company_ids:
-            if len(user_company_ids) == 1:
-                sb_query = sb_query.eq("company_id", user_company_ids[0])
-            else:
-                sb_query = sb_query.in_("company_id", user_company_ids)
-        elif not is_privileged:
-            return []
-
-        if category_id:
-            sb_query = sb_query.eq("category_id", category_id)
-        if start_date:
-            sb_query = sb_query.gte("expense_date", start_date.isoformat())
-        if end_date:
-            sb_query = sb_query.lte("expense_date", end_date.isoformat())
-
-        res = sb_query.order("expense_date", desc=True).order("expense_id", desc=True).execute()
-        rows = res.data or []
-        for r in rows:
-            raw_records.append({
-                "expense_date": r.get("expense_date"),
-                "amount": r.get("amount") or 0.0,
-                "amount_paid": r.get("amount_paid") or 0.0,
-                "particulars": r.get("description") or r.get("particulars") or "",
-                "cheque_no": r.get("cheque_number") or r.get("cheque_no") or r.get("reference_no") or "",
-                "audit_status": r.get("audit_status") or "Pending Audit",
-            })
-    except HTTPException:
-        raise
-    except Exception:
-        query = db.query(Expense)
-        if company_id:
-            check_company_access(current_user, company_id)
-            query = query.filter(Expense.company_id == company_id)
-        elif company_name and company_name.lower() != "all companies":
-            try:
-                resolved_comp = resolve_company(db, company_name=company_name)
-                check_company_access(current_user, resolved_comp.company_id)
-                query = query.filter(Expense.company_id == resolved_comp.company_id)
-            except HTTPException:
-                raise
-            except Exception:
-                query = query.join(Company, Expense.company_id == Company.company_id).filter(
-                    func.lower(Company.company_name) == func.lower(company_name.strip())
-                )
-                if not is_privileged:
-                    query = query.filter(Expense.company_id.in_(user_company_ids))
-        elif user_company_ids:
-            query = query.filter(Expense.company_id.in_(user_company_ids))
-        elif not is_privileged:
-            return []
-
-        if category_id:
-            query = query.filter(Expense.category_id == category_id)
-        if start_date:
-            query = query.filter(Expense.expense_date >= start_date)
-        if end_date:
-            query = query.filter(Expense.expense_date <= end_date)
-
-        rows = query.order_by(Expense.expense_date.desc(), Expense.expense_id.desc()).all()
-        for e in rows:
-            raw_records.append({
-                "expense_date": e.expense_date,
-                "amount": e.amount,
-                "amount_paid": e.amount_paid or 0.0,
-                "particulars": e.description or "",
-                "cheque_no": e.cheque_number or e.cheque_no or e.reference_no or "",
-                "audit_status": e.audit_status or "Pending Audit",
-            })
-
-    # Group by date
     daily_groups = defaultdict(lambda: {
         "count": 0,
         "gross_total": Decimal("0.00"),
@@ -469,23 +524,16 @@ def get_expenses_daily_summary(
         "audit_statuses": []
     })
 
-    search_term = (search or "").strip().lower()
     is_withdraw_view = (view_type or "").lower() == "withdraw"
 
-    for r in raw_records:
-        rec_date = _to_date(r["expense_date"])
+    for rec_date, amt_raw, amt_paid_raw, desc_raw, audit_st in rows:
+        rec_date = _to_date(rec_date)
         if not rec_date:
             continue
 
-        parts = r["particulars"]
-        chq = r["cheque_no"]
-
-        if search_term:
-            if search_term not in parts.lower() and search_term not in chq.lower():
-                continue
-
-        amt = Decimal(str(r["amount"] or 0))
-        amt_paid = Decimal(str(r["amount_paid"] or 0))
+        parts = desc_raw or ""
+        amt = Decimal(str(amt_raw or 0))
+        amt_paid = Decimal(str(amt_paid_raw or 0))
         realized_from_particulars = compute_paid_amount_from_particulars(parts, amt)
         realized = max(amt_paid, realized_from_particulars)
 
@@ -497,9 +545,9 @@ def get_expenses_daily_summary(
         daily_groups[rec_date]["count"] += 1
         daily_groups[rec_date]["gross_total"] += gross
         daily_groups[rec_date]["realized_cash"] += realized
-        daily_groups[rec_date]["audit_statuses"].append(r["audit_status"])
+        daily_groups[rec_date]["audit_statuses"].append(audit_st or "Pending Audit")
 
-    result = [
+    return [
         DailyExpenseSummaryOut(
             date=d,
             day_of_week=d.strftime("%A"),
@@ -510,7 +558,6 @@ def get_expenses_daily_summary(
         )
         for d, data in sorted(daily_groups.items(), key=lambda x: x[0], reverse=True)
     ]
-    return result
 
 
 def _find_expense_by_client_ref(db: Session, client_ref: Optional[str]) -> Optional[ExistingRecord]:
@@ -537,7 +584,7 @@ def _enqueue_large_expense_alert_if_enabled(
     expense_id: int,
     amount: Decimal,
     description: str,
-    reference_no: Optional[str],
+    cheque_no: Optional[str] = None,
 ) -> None:
     if amount < LARGE_EXPENSE_THRESHOLD:
         return
@@ -549,7 +596,7 @@ def _enqueue_large_expense_alert_if_enabled(
         if not svc._is_notification_enabled_for_company(company_id, NotificationType.EXPENSE_LARGE_TRANSACTION):
             return
 
-        ref_str = f" (Ref: {reference_no})" if reference_no else ""
+        cheque_str = f" (Cheque: {cheque_no})" if cheque_no else ""
         with db.begin_nested():
             enqueue_notification_event(
                 db=db,
@@ -562,14 +609,14 @@ def _enqueue_large_expense_alert_if_enabled(
                     "amount": float(amount),
                     "title": f"Large Transaction Alert: {company_name}",
                     "message": (
-                        f"An expense of ₱{amount:,.2f} was recorded for {company_name}{ref_str} "
+                        f"An expense of ₱{amount:,.2f} was recorded for {company_name}{cheque_str} "
                         f"— {description}."
                     ),
                     "extra_data": {
                         "amount": float(amount),
                         "company_id": company_id,
                         "company_name": company_name,
-                        "reference_no": reference_no,
+                        "cheque_no": cheque_no,
                     },
                 },
                 idempotency_key=f"{NotificationType.EXPENSE_LARGE_TRANSACTION}:{company_id}:expense:{expense_id}",
@@ -615,8 +662,9 @@ def create_expense(
         raise HTTPException(status_code=422, detail="Category is required and cannot be blank.")
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
-    ref = expense_in.reference_no or (f"CHK-{cheque}" if cheque else f"REF-{expense_in.expense_date.strftime('%Y%m%d')}")
     effective_bank_id = getattr(expense_in, "bank_account_id", None)
+    created_row = None
+    sb_expense_id = None
 
     try:
         client = get_supabase_admin_client()
@@ -675,7 +723,6 @@ def create_expense(
             "payment_method": payment_method_str,
             "created_by": creator_id,
             "expense_date": expense_in.expense_date.isoformat(),
-            "reference_no": ref,
             "cheque_number": cheque,
             "amount": float(expense_in.amount),
             "amount_paid": float(expense_in.amount_paid or 0.0),
@@ -708,8 +755,6 @@ def create_expense(
                 local_comp = Company(
                     company_id=target_company_id,
                     company_name=target_company_name,
-                    starting_balance=0.00,
-                    current_balance=0.00
                 )
                 db.add(local_comp)
                 db.commit()
@@ -721,7 +766,6 @@ def create_expense(
                 payment_method=payment_method_str,
                 created_by=creator_id,
                 expense_date=expense_in.expense_date,
-                reference_no=ref,
                 cheque_no=cheque,
                 cheque_number=cheque,
                 amount=expense_in.amount,
@@ -752,7 +796,7 @@ def create_expense(
             expense_id=sb_expense_id,
             amount=expense_in.amount,
             description=parts,
-            reference_no=ref,
+            cheque_no=cheque,
         )
 
         # Particulars library + audit log don't change the response: do them after it is sent
@@ -768,7 +812,7 @@ def create_expense(
             ip_address=request.client.host if request.client else "unknown",
             record_id=sb_expense_id,
             record_type="expense",
-            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
+            audit_extra={"amount": float(expense_in.amount), "expense_date": expense_in.expense_date.isoformat(), "actor_name": actor_name},
         )
 
         try:
@@ -793,8 +837,7 @@ def create_expense(
             payment_method=payment_method_str,
             created_by=created_row.get("created_by"),
             expense_date=created_row.get("expense_date"),
-            reference_no=created_row.get("reference_no"),
-            cheque_no=created_row.get("cheque_number") or cheque or (created_row.get("reference_no") if not (created_row.get("reference_no") or "").startswith("REF-") else None),
+            cheque_no=created_row.get("cheque_number") or created_row.get("cheque_no") or cheque,
             amount=created_row.get("amount"),
             amount_paid=created_row.get("amount_paid") or 0.0,
             unpaid_balance=Decimal(str(created_row.get("amount") or 0.0)) - Decimal(str(created_row.get("amount_paid") or 0.0)),
@@ -809,6 +852,34 @@ def create_expense(
     except HTTPException:
         raise
     except Exception as e:
+        # If the row was already inserted into Supabase, NEVER fall back to inserting
+        # a duplicate into SQLite/Postgres. Return the created expense record.
+        if created_row and sb_expense_id:
+            logger.warning("Expense %s was successfully saved in Supabase, but a post-save step failed: %s", sb_expense_id, e)
+            try:
+                return ExpenseOut(
+                    expense_id=created_row["expense_id"],
+                    company_id=created_row.get("company_id"),
+                    company_name=target_company_name,
+                    category_id=created_row.get("category_id"),
+                    category_name=category_name,
+                    payment_method=payment_method_str,
+                    created_by=created_row.get("created_by"),
+                    expense_date=created_row.get("expense_date"),
+                    cheque_no=created_row.get("cheque_number") or created_row.get("cheque_no") or cheque,
+                    amount=created_row.get("amount"),
+                    amount_paid=created_row.get("amount_paid") or 0.0,
+                    unpaid_balance=Decimal(str(created_row.get("amount") or 0.0)) - Decimal(str(created_row.get("amount_paid") or 0.0)),
+                    particulars=created_row.get("description"),
+                    description=created_row.get("description"),
+                    created_at=created_row.get("created_at"),
+                    updated_at=created_row.get("updated_at"),
+                    remarks=created_row.get("remarks"),
+                    **audit_fields(created_row)
+                )
+            except Exception:
+                return get_expense(expense_id=sb_expense_id, current_user=current_user, db=db)
+
         # The insert may have succeeded before a later step failed, or a parallel request with the same
         # client_ref won the race: return that expense instead of inserting a second one
         existing = _find_expense_by_client_ref(db, expense_in.client_ref)
@@ -838,7 +909,8 @@ def create_expense(
             payment_method=(expense_in.payment_method or "").strip() or None,
             created_by=expense_in.created_by,
             expense_date=expense_in.expense_date,
-            reference_no=ref,
+            cheque_no=cheque,
+            cheque_number=cheque,
             amount=expense_in.amount,
             amount_paid=expense_in.amount_paid or Decimal("0.00"),
             description=parts,
@@ -864,7 +936,7 @@ def create_expense(
             expense_id=expense.expense_id,
             amount=expense.amount,
             description=parts,
-            reference_no=ref,
+            cheque_no=cheque,
         )
 
         # Auto-save particulars to company library
@@ -884,7 +956,7 @@ def create_expense(
             user_id=current_user.get("user_id"), company_id=target_company.company_id,
             ip_address=request.client.host if request.client else "unknown",
             record_id=expense.expense_id, record_type="expense",
-            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name, "reference_no": ref},
+            extra={"amount": float(expense.amount), "expense_date": expense.expense_date.isoformat(), "actor_name": actor_name},
         )
 
         try:
@@ -908,8 +980,7 @@ def create_expense(
             category_name=cat.name if cat else "None",
             created_by=expense.created_by,
             expense_date=expense.expense_date,
-            reference_no=expense.reference_no,
-            cheque_no=expense.cheque_number or expense.cheque_no or cheque or (expense.reference_no if not (expense.reference_no or "").startswith("REF-") else None),
+            cheque_no=expense.cheque_number or expense.cheque_no or cheque,
             amount=expense.amount,
             amount_paid=expense.amount_paid or Decimal("0.00"),
             unpaid_balance=expense.amount - (expense.amount_paid or Decimal("0.00")),
@@ -944,8 +1015,7 @@ def get_expense(
                 payment_method=row.get("payment_method"),
                 created_by=row.get("created_by"),
                 expense_date=row.get("expense_date"),
-                reference_no=row.get("reference_no"),
-                cheque_no=row.get("cheque_number") or row.get("cheque_no") or (row.get("reference_no") if not (row.get("reference_no") or "").startswith("REF-") else None),
+                cheque_no=row.get("cheque_number") or row.get("cheque_no"),
                 amount=row.get("amount") or 0.0,
                 amount_paid=row.get("amount_paid") or 0.0,
                 unpaid_balance=Decimal(str(row.get("amount") or 0.0)) - Decimal(str(row.get("amount_paid") or 0.0)),
@@ -985,8 +1055,7 @@ def get_expense(
         payment_method=exp.payment_method,
         created_by=exp.created_by,
         expense_date=exp.expense_date,
-        reference_no=exp.reference_no,
-        cheque_no=exp.cheque_number or exp.cheque_no or (exp.reference_no if not (exp.reference_no or "").startswith("REF-") else None),
+        cheque_no=exp.cheque_number or exp.cheque_no,
         amount=exp.amount,
         amount_paid=exp.amount_paid or Decimal("0.00"),
         unpaid_balance=exp.amount - (exp.amount_paid or Decimal("0.00")),
@@ -1049,10 +1118,6 @@ def update_expense(
     if cheque is not None:
         chq_val = cheque.strip() if cheque.strip() else None
         update_payload["cheque_number"] = chq_val
-        if chq_val:
-            update_payload["reference_no"] = chq_val
-    elif expense_in.reference_no is not None:
-        update_payload["reference_no"] = expense_in.reference_no.strip() if expense_in.reference_no.strip() else None
     if expense_in.remarks is not None:
         update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
@@ -1104,8 +1169,6 @@ def update_expense(
             expense.amount_paid = expense_in.amount_paid
         if "description" in update_payload:
             expense.description = update_payload["description"]
-        if "reference_no" in update_payload:
-            expense.reference_no = update_payload["reference_no"]
         if "cheque_number" in update_payload:
             expense.cheque_number = update_payload["cheque_number"]
             expense.cheque_no = update_payload["cheque_number"]
@@ -1165,8 +1228,7 @@ def update_expense(
             payment_method=updated_row.get("payment_method"),
             created_by=updated_row.get("created_by"),
             expense_date=updated_row.get("expense_date"),
-            reference_no=updated_row.get("reference_no"),
-            cheque_no=updated_row.get("cheque_number") or cheque or (updated_row.get("reference_no") if not (updated_row.get("reference_no") or "").startswith("REF-") else None),
+            cheque_no=updated_row.get("cheque_number") or updated_row.get("cheque_no") or cheque,
             amount=updated_row.get("amount"),
             amount_paid=updated_row.get("amount_paid") or 0.0,
             unpaid_balance=Decimal(str(updated_row.get("amount") or 0.0)) - Decimal(str(updated_row.get("amount_paid") or 0.0)),
@@ -1213,8 +1275,7 @@ def update_expense(
         payment_method=expense.payment_method,
         created_by=expense.created_by,
         expense_date=expense.expense_date,
-        reference_no=expense.reference_no,
-        cheque_no=expense.cheque_number or expense.cheque_no or (expense.reference_no if not (expense.reference_no or "").startswith("REF-") else None),
+        cheque_no=expense.cheque_number or expense.cheque_no,
         amount=expense.amount,
         amount_paid=expense.amount_paid or Decimal("0.00"),
         unpaid_balance=expense.amount - (expense.amount_paid or Decimal("0.00")),

@@ -65,7 +65,6 @@ def test_sales_daily_summary_aggregation(client, db_session):
         company_id=1,
         company_name="MCT Kitchen",
         location="Manila",
-        starting_balance=Decimal("0.00"),
     )
     db_session.add(company)
     db_session.commit()
@@ -131,7 +130,6 @@ def test_expenses_daily_summary_aggregation(client, db_session):
         company_id=1,
         company_name="MCT Kitchen",
         location="Manila",
-        starting_balance=Decimal("0.00"),
     )
     db_session.add(company)
     db_session.commit()
@@ -143,7 +141,6 @@ def test_expenses_daily_summary_aggregation(client, db_session):
         amount=Decimal("800.00"),
         amount_paid=Decimal("800.00"),
         description="Office supplies",
-        reference_no="VOUCH-01",
         audit_status="Verified",
     )
     exp2 = Expense(
@@ -153,7 +150,6 @@ def test_expenses_daily_summary_aggregation(client, db_session):
         amount=Decimal("400.00"),
         amount_paid=Decimal("0.00"),
         description="Kitchen repairs (Discrepancy)",
-        reference_no="VOUCH-02",
         audit_status="Discrepancy",
     )
     db_session.add_all([exp1, exp2])

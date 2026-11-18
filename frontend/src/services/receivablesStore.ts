@@ -33,7 +33,6 @@ export interface UtangSale {
   company_id?: number
   sale_id?: number | null
   sale_line_index?: number | null
-  expense_id?: number | null
   is_locked?: boolean
   date: string // YYYY-MM-DD
   customer_name: string
@@ -129,7 +128,6 @@ class ReceivablesStore {
           company_id: r.company_id,
           sale_id: r.sale_id ?? null,
           sale_line_index: r.sale_line_index ?? null,
-          expense_id: r.expense_id ?? null,
           is_locked: Boolean(r.is_locked),
           date: r.transaction_date,
           customer_name: r.customer_name,
@@ -460,9 +458,8 @@ class ReceivablesStore {
         amount,
         date,
         method,
-        // The order's own bank always wins (the server enforces the same)
         bank_account_id:
-          method === 'Payroll Deduction' ? null : targetSale.origin_bank_account_id || bank_account_id || null,
+          method === 'Payroll Deduction' ? null : bank_account_id || targetSale.origin_bank_account_id || null,
         notes: notes || undefined,
         createdAt: paymentTimestamp,
       }
@@ -512,7 +509,7 @@ class ReceivablesStore {
           date,
           method,
           bank_account_id:
-            method === 'Payroll Deduction' ? null : sale.origin_bank_account_id || bank_account_id || null,
+            method === 'Payroll Deduction' ? null : bank_account_id || sale.origin_bank_account_id || null,
           notes: notes || undefined,
           createdAt: paymentTimestamp,
         }
@@ -652,7 +649,6 @@ class ReceivablesStore {
     company_id?: number
     sale_id?: number
     sale_line_index?: number
-    expense_id?: number
   }): UtangSale {
     const saleId = `SALE-2026-${String(this.sales.length + 101).padStart(3, '0')}`
     const todayStr = params.date || getLocalTodayStr()
@@ -703,7 +699,6 @@ class ReceivablesStore {
       company_id: params.company_id,
       sale_id: params.sale_id ?? null,
       sale_line_index: params.sale_line_index ?? null,
-      expense_id: params.expense_id ?? null,
       is_locked: false,
       date: todayStr,
       customer_name: params.customer_name.trim(),
@@ -736,7 +731,6 @@ class ReceivablesStore {
         company_id: params.company_id,
         sale_id: params.sale_id,
         sale_line_index: params.sale_line_index,
-        expense_id: params.expense_id,
         date: todayStr,
       })
       .then((created) => {

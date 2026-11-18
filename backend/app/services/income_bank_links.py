@@ -217,7 +217,7 @@ def reconcile_sale(db: Session, sale_id: Optional[int]) -> None:
             credit=True,
             amount=_money(sale.amount) if deposited else Decimal("0.00"),
             account_id=sale.bank_account_id,
-            particulars=f"Sales Collection: {sale.particulars or ''}",
+            particulars=sale.particulars or "",
             reference_no=sale.cheque_no,
             tx_date=_bank_date(sale.deposit_date or sale.transaction_date),
         )
@@ -305,7 +305,7 @@ def save_release_expense(
     exp.amount_paid = _money(amount)
     exp.description = _plain(description)
     exp.payment_method = "Bank Transfer"
-    exp.reference_no = reference_no
+    exp.cheque_no = (reference_no or "").strip() or None
     exp.bank_account_id = bank_account_id
     db.flush()
     return exp.expense_id
@@ -328,8 +328,8 @@ def reconcile_expense(db: Session, expense_id: Optional[int]) -> None:
             credit=False,
             amount=_money(exp.amount),
             account_id=exp.bank_account_id,
-            particulars=f"Expense Disbursement: {exp.description or ''}",
-            reference_no=exp.reference_no,
+            particulars=exp.description or "",
+            reference_no=exp.cheque_no,
             tx_date=_bank_date(exp.expense_date),
         )
     except Exception as exc:

@@ -62,7 +62,6 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
       address: '',
       contactNumber: '09',
       telephoneNumber: '',
-      startingBalance: '' as unknown as number,
       pettyCash: '' as unknown as number,
       logoUrl: '',
     },
@@ -103,7 +102,6 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
       address: '',
       contactNumber: '09',
       telephoneNumber: '',
-      startingBalance: '' as unknown as number,
       pettyCash: '' as unknown as number,
       logoUrl: '',
     })
@@ -147,7 +145,6 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
         address: pendingValues.address,
         contactNumber: pendingValues.contactNumber,
         telephoneNumber: pendingValues.telephoneNumber || '',
-        startingBalance: Number(pendingValues.startingBalance) || 0,
         pettyCash: Number(pendingValues.pettyCash) || 0,
         logoUrl: pendingValues.logoUrl,
         logoFile: profileFile || undefined,
@@ -423,51 +420,14 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                 />
               </div>
 
-              {/* Balances Row: Starting Balance and Petty Cash side-by-side */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Starting Balance */}
-                <FormField
-                  control={form.control}
-                  name="startingBalance"
-                  render={({ field, fieldState }) => (
-                    <FormItem className="space-y-1.5">
-                      <Label htmlFor="starting-balance" className="text-xs sm:text-sm font-medium text-focus/90">
-                        Starting Balance (₱) <span className="text-muted-fg text-xs font-normal">(Optional, default 0)</span>
-                      </Label>
-                      <FormControl>
-                        <Input
-                          id="starting-balance"
-                          type="text"
-                          inputMode="decimal"
-                          placeholder="0.00"
-                          className="h-11 rounded-xl border-[0.5px] border-stroke/60 text-sm focus-visible:ring-1 focus-visible:ring-focus"
-                          aria-invalid={!!fieldState.error}
-                          value={field.value ?? ''}
-                          onKeyDown={(e) => {
-                            if (['-', '+', 'e', 'E'].includes(e.key)) {
-                              e.preventDefault()
-                            }
-                          }}
-                          onChange={(event) => {
-                            const val = sanitizeNumericInput(event.target.value)
-                            field.onChange(val)
-                          }}
-                          onBlur={field.onBlur}
-                        />
-                      </FormControl>
-                      <FormMessage className="text-xs text-error" />
-                    </FormItem>
-                  )}
-                />
-
-                {/* Petty Cash */}
-                <FormField
-                  control={form.control}
-                  name="pettyCash"
-                  render={({ field, fieldState }) => (
-                    <FormItem className="space-y-1.5">
-                      <Label htmlFor="petty-cash" className="text-xs sm:text-sm font-medium text-focus/90">
-                        Petty Cash (₱) <span className="text-muted-fg text-xs font-normal">(Optional, default 0)</span>
+              {/* Petty Cash */}
+              <FormField
+                control={form.control}
+                name="pettyCash"
+                render={({ field, fieldState }) => (
+                  <FormItem className="space-y-1.5">
+                    <Label htmlFor="petty-cash" className="text-xs sm:text-sm font-medium text-focus/90">
+                      Petty Cash (₱) <span className="text-muted-fg text-xs font-normal">(Optional, default 0)</span>
                       </Label>
                       <FormControl>
                         <Input
@@ -494,7 +454,6 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
                     </FormItem>
                   )}
                 />
-              </div>
 
               {/* Modal Actions */}
               <div className="flex items-center justify-end gap-3 pt-4">

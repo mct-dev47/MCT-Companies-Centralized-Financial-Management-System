@@ -43,13 +43,11 @@ def test_setup(db_session):
     comp_a = Company(
         company_id=101,
         company_name="Alpha Tech Inc",
-        starting_balance=Decimal("100000.00"),
     )
     # Funding Affiliate Company (Company B)
     comp_b = Company(
         company_id=102,
         company_name="Beta Logistics Corp",
-        starting_balance=Decimal("100000.00"),
     )
     db_session.add_all([comp_a, comp_b])
     db_session.flush()
@@ -61,7 +59,6 @@ def test_setup(db_session):
         company_name=comp_a.company_name,
         bank_name="BDO Unibank",
         account_name="Alpha Checking",
-        account_number="101-0001",
         current_balance=Decimal("20000.00"),
         starting_balance=Decimal("20000.00"),
     )
@@ -72,7 +69,6 @@ def test_setup(db_session):
         company_name=comp_b.company_name,
         bank_name="BPI",
         account_name="Beta Funding",
-        account_number="102-0001",
         current_balance=Decimal("50000.00"),
         starting_balance=Decimal("50000.00"),
     )
@@ -223,7 +219,6 @@ def test_ac2_ac3_prerecorded_expense_validation_and_deduplication(db_session, te
         expense_date=date.today(),
         description="Pre-recorded supplies",
         payment_method="Petty Cash",
-        reference_no="EXP-PRE-001",
     )
     db_session.add(pre_exp)
     db_session.commit()
@@ -271,14 +266,22 @@ def test_ac2_ac3_prerecorded_expense_validation_and_deduplication(db_session, te
     assert pre_exp.linked_topup_id == claim.topup_id
 
     # Confirm only one new expense was created: the 3000.00 reimbursement expense
-    reimb_exp = db_session.query(Expense).filter(Expense.reference_no == f"REIMB-{claim.topup_id}").first()
+    reimb_exp = (
+        db_session.query(Expense)
+        .filter(Expense.linked_topup_id == claim.topup_id, Expense.payment_method == "Bank Reimbursement")
+        .first()
+    )
     assert reimb_exp is not None
     assert reimb_exp.amount == Decimal("3000.00")
     assert reimb_exp.payment_method == "Bank Reimbursement"
 
-    # Confirm no duplicate PC-EXP was created
-    dup_pc = db_session.query(Expense).filter(Expense.reference_no == f"PC-EXP-{claim.topup_id}").first()
-    assert dup_pc is None
+    # Confirm no duplicate Petty Cash expense was created
+    pc_count = (
+        db_session.query(Expense)
+        .filter(Expense.linked_topup_id == claim.topup_id, Expense.payment_method == "Petty Cash")
+        .count()
+    )
+    assert pc_count == 1  # only the pre-recorded expense linked to this claim
 
 
 def test_ac4_zero_excess_finalization(db_session, test_setup):
@@ -305,7 +308,7 @@ def test_ac4_zero_excess_finalization(db_session, test_setup):
     assert claim.petty_cash_expense_id is not None
 
     # PC-EXP expense was created immediately and deducted from float
-    pc_exp = db_session.query(Expense).filter(Expense.reference_no == f"PC-EXP-{claim.topup_id}").first()
+    pc_exp = db_session.query(Expense).filter(Expense.expense_id == claim.petty_cash_expense_id).first()
     assert pc_exp is not None
     assert pc_exp.amount == Decimal("5000.00")
     assert pc_exp.payment_method == "Petty Cash"
@@ -315,7 +318,12 @@ def test_ac4_zero_excess_finalization(db_session, test_setup):
     # Finalize settlement remains idempotent and does not duplicate Expense
     settled = svc.finalize_settlement(claim.topup_id)
     assert settled.status == "Settled"
-    assert db_session.query(Expense).filter(Expense.reference_no == f"PC-EXP-{claim.topup_id}").count() == 1
+    assert (
+        db_session.query(Expense)
+        .filter(Expense.linked_topup_id == claim.topup_id, Expense.payment_method == "Petty Cash")
+        .count()
+        == 1
+    )
 
     # Ledger shows only replenishment_disbursement with blank status & Pending Audit audit_status
     ledger = svc.list_ledger(company=comp_a)
@@ -563,7 +571,11 @@ def test_ac14_insufficient_bank_balance_fails_cleanly(db_session, test_setup):
     assert topup_row.amount_reimbursed == Decimal("0.00")
     db_session.refresh(bank_a)
     assert bank_a.current_balance == Decimal("1000.00")
-    reimb_exp = db_session.query(Expense).filter(Expense.reference_no == f"REIMB-{claim.topup_id}").first()
+    reimb_exp = (
+        db_session.query(Expense)
+        .filter(Expense.linked_topup_id == claim.topup_id, Expense.payment_method == "Bank Reimbursement")
+        .first()
+    )
     assert reimb_exp is None
 
 

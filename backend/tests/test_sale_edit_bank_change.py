@@ -26,7 +26,7 @@ FINANCE_USER = {"user_id": 10, "email": "finance@mct.test", "role": "finance", "
 
 
 def _bank(id_, company="Company Alpha", company_id=1):
-    return BankAccount(id=id_, bank_name="CHINABANK", account_name=id_, account_number="0000" + id_[-1],
+    return BankAccount(id=id_, bank_name="CHINABANK", account_name=id_, 
                        company_name=company, company_id=company_id,
                        starting_balance=Decimal("0"), current_balance=Decimal("0"))
 
@@ -38,8 +38,8 @@ def env():
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = SessionLocal()
     db.add_all([
-        Company(company_id=1, company_name="Company Alpha", starting_balance=Decimal("0")),
-        Company(company_id=2, company_name="Company Beta", starting_balance=Decimal("0")),
+        Company(company_id=1, company_name="Company Alpha"),
+        Company(company_id=2, company_name="Company Beta"),
         _bank("bank-a"), _bank("bank-b"), _bank("bank-beta", "Company Beta", 2),
         Sale(sales_id=1, company_id=1, transaction_date=date(2026, 11, 10), deposit_date=date(2026, 11, 10),
              amount=Decimal("500.00"), particulars="Room [Paid]", payment_method="Cash",

@@ -34,7 +34,6 @@ class BankTransactionOut(BankTransactionBase):
 class BankAccountBase(BaseModel):
     bank_name: str
     account_name: str
-    account_number: Optional[str] = None
     company_name: str
     company_id: Optional[int] = None
     # Every owner company (a bank can have several). Omitted/empty = just company_name.
@@ -44,7 +43,6 @@ class BankAccountBase(BaseModel):
     branch: Optional[str] = "Central Corporate Branch"
     starting_balance: Decimal = Decimal("0.00")
     color_theme: str = "red"
-    notes: Optional[str] = None
 
 
 class BankAccountCreate(BankAccountBase):
@@ -54,7 +52,6 @@ class BankAccountCreate(BankAccountBase):
 class BankAccountUpdate(BaseModel):
     bank_name: Optional[str] = None
     account_name: Optional[str] = None
-    account_number: Optional[str] = None
     company_name: Optional[str] = None
     company_id: Optional[int] = None
     company_names: Optional[List[str]] = None
@@ -62,7 +59,6 @@ class BankAccountUpdate(BaseModel):
     account_type: Optional[str] = None
     branch: Optional[str] = None
     color_theme: Optional[str] = None
-    notes: Optional[str] = None
 
 
 class BankDepositWithdrawRequest(BaseModel):

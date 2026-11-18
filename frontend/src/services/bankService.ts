@@ -27,7 +27,6 @@ export interface BankAccount {
   id: string
   bankName: string
   accountName: string
-  accountNumber: string
   companyName: string
   /** Every owner company of this account, primary first. More than one = shared account. */
   companyNames: string[]
@@ -40,7 +39,6 @@ export interface BankAccount {
   colorTheme: 'red' | 'grey'
   transactions: BankTransaction[]
   createdAt?: string
-  notes?: string
 }
 
 /** A bank is shared when more than one company owns it. */
@@ -72,7 +70,6 @@ export function preferSoleOwnedBanks<T extends Pick<BankAccount, 'companyName' |
 export interface NewBankAccountInput {
   bankName: string
   accountName: string
-  accountNumber?: string
   companyName: string
   companyNames?: string[]
   companyId?: number
@@ -81,7 +78,6 @@ export interface NewBankAccountInput {
   branch?: string
   startingBalance?: number
   colorTheme?: 'red' | 'grey'
-  notes?: string
 }
 
 export interface DepositWithdrawInput {
@@ -197,7 +193,6 @@ function mapAccountFromBackend(raw: any): BankAccount {
     id: raw.id,
     bankName: raw.bank_name,
     accountName: raw.account_name,
-    accountNumber: raw.account_number,
     companyName: raw.company_name,
     companyNames:
       Array.isArray(raw.company_names) && raw.company_names.length > 0
@@ -212,7 +207,6 @@ function mapAccountFromBackend(raw: any): BankAccount {
     colorTheme: (raw.color_theme as any) || 'red',
     transactions: txs,
     createdAt: raw.created_at ? String(raw.created_at).split('T')[0] : undefined,
-    notes: raw.notes || undefined,
   }
 }
 
@@ -263,6 +257,34 @@ async function fetchAccountsFromNetwork(companyName?: string): Promise<BankAccou
 }
 
 export const bankService = {
+  async getTransactionsPaginated(
+    accountId: string,
+    params: {
+      page?: number
+      limit?: number
+      search?: string
+      txType?: string
+      sortDir?: 'asc' | 'desc'
+    } = {}
+  ): Promise<{ items: BankTransaction[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.txType && params.txType !== 'all') sp.set('tx_type', params.txType)
+    if (params.sortDir) sp.set('sort_dir', params.sortDir)
+    const qs = sp.toString()
+    const res = await fetch(`/api/v1/bank-accounts/${encodeURIComponent(accountId)}/transactions${qs ? `?${qs}` : ''}`, {
+      headers: backendHeaders(),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    const data = await res.json()
+    const totalHeader = res.headers.get('X-Total-Count')
+    const items = Array.isArray(data) ? data.map(mapTransactionFromBackend) : []
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
   invalidateCache(): void {
     clearBankCache()
   },
@@ -330,7 +352,6 @@ export const bankService = {
     const payload = {
       bank_name: input.bankName,
       account_name: input.accountName,
-      account_number: input.accountNumber || undefined,
       company_name: input.companyName,
       company_names: input.companyNames && input.companyNames.length > 0 ? input.companyNames : undefined,
       company_id: input.companyId,
@@ -339,7 +360,6 @@ export const bankService = {
       branch: input.branch || 'Central Corporate Branch',
       starting_balance: input.startingBalance || 0,
       color_theme: input.colorTheme || 'red',
-      notes: input.notes || undefined,
     }
 
     const res = await fetch('/api/v1/bank-accounts', {
@@ -361,7 +381,6 @@ export const bankService = {
     const payload: Record<string, any> = {}
     if (input.bankName) payload.bank_name = input.bankName
     if (input.accountName) payload.account_name = input.accountName
-    if (input.accountNumber) payload.account_number = input.accountNumber
     if (input.companyName) payload.company_name = input.companyName
     if (input.companyNames) payload.company_names = input.companyNames
     if (input.companyId !== undefined) payload.company_id = input.companyId
@@ -369,7 +388,6 @@ export const bankService = {
     if (input.accountType) payload.account_type = input.accountType
     if (input.branch) payload.branch = input.branch
     if (input.colorTheme) payload.color_theme = input.colorTheme
-    if (input.notes !== undefined) payload.notes = input.notes
 
     const res = await fetch(`/api/v1/bank-accounts/${encodeURIComponent(id)}`, {
       method: 'PUT',

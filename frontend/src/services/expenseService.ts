@@ -9,6 +9,9 @@ import {
   deriveRecordStatusFromParticulars,
 } from '@/utils/particularsUtils'
 
+/** Strip `exp_` or dashboard `expense_` prefix so API calls always receive the numeric expense ID. */
+const stripExpensePrefix = (id: string): string => String(id).replace(/^(exp|expense)_/, '')
+
 export class ExpenseValidationError extends Error {
   constructor(message: string) {
     super(message)
@@ -108,11 +111,11 @@ function saveStoredExpenses(items: ExpenseItem[]): void {
 
 function mapBackendExpenseToItem(exp: any): ExpenseItem {
   const rawDateStr = exp.expense_date || '2026-10-01'
-  let displayDate = '10/01/26'
+  let displayDate = '10/01/2026'
   if (rawDateStr) {
     const parts = rawDateStr.split('-')
     if (parts.length === 3) {
-      displayDate = `${parts[1]}/${parts[2]}/${parts[0].slice(2)}`
+      displayDate = `${parts[1].padStart(2, '0')}/${parts[2].padStart(2, '0')}/${parts[0]}`
     }
   }
 
@@ -135,7 +138,7 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
 
   return {
     id: expId,
-    refNo: exp.reference_no || exp.ref_no || `REF-${exp.expense_id || '001'}`,
+    refNo: exp.cheque_no || exp.cheque_number || '',
     chequeNo: exp.cheque_no || exp.cheque_number || '',
     date: displayDate,
     rawDate: rawDateStr,
@@ -157,7 +160,7 @@ function mapBackendExpenseToItem(exp: any): ExpenseItem {
     remarks: exp.remarks || undefined,
     sourceModule: exp.source_module || undefined,
     createdBy: exp.created_by ? String(exp.created_by) : (exp.created_by_name || 'Finance Staff'),
-    createdAt: exp.created_at || new Date().toISOString(),
+    createdAt: exp.created_at || exp.createdAt || undefined,
     updatedAt: exp.updated_at || undefined,
     updatedBy: exp.updated_by || exp.updated_by_name || undefined,
   }
@@ -278,6 +281,113 @@ export const expenseService = {
     return { category_id: Date.now(), name: cleaned }
   },
 
+  async getExpensesPaginated(params: {
+    company?: string
+    page?: number
+    limit?: number
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
+  } = {}): Promise<{ items: ExpenseItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.sort_by) sp.set('sort_by', params.sort_by)
+    if (params.sort_dir) sp.set('sort_dir', params.sort_dir)
+
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load expenses')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data.map(mapBackendExpenseToItem) : []
+    const totalHeader = res.headers.get('X-Total-Count')
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
+  async getExpensesSummary(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+  } = {}): Promise<{
+    total_count: number
+    total_amount: number
+    paid_amount: number
+    unpaid_amount: number
+    categories: { category: string; amount: number }[]
+  }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses/summary${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load expenses summary')
+    return await res.json()
+  },
+
+  async exportExpensesData(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    bank_account_id?: string
+    payment_status?: string
+  } = {}): Promise<ExpenseItem[]> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/expenses/export${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to export expenses')
+    const data = await res.json()
+    return Array.isArray(data) ? data.map(mapBackendExpenseToItem) : []
+  },
+
   async getExpenses(params?: {
     company?: string
     start_date?: string
@@ -304,7 +414,7 @@ export const expenseService = {
       if (params?.end_date) query.append('end_date', params.end_date)
       if (params?.category_id) query.append('category_id', String(params.category_id))
 
-      const url = `/api/v1/expenses${query.toString() ? `?${query.toString()}` : ''}`
+      const url = `/api/v1/expenses/export${query.toString() ? `?${query.toString()}` : ''}`
       const res = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
@@ -356,9 +466,11 @@ export const expenseService = {
       }
     }
 
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-    const refNo = `REF-${rawDate.replace(/-/g, '')}-${randomSuffix}`
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+    const clientRef =
+      input.clientRef && input.clientRef.length >= 8
+        ? input.clientRef.slice(0, 64)
+        : `exp_${input.clientRef || Date.now()}_${Math.random().toString(36).substring(2, 9)}`.slice(0, 64)
 
     try {
       const token =
@@ -375,10 +487,9 @@ export const expenseService = {
         category: input.category,
         payment_method: input.paymentMethod || null,
         cheque_no: input.chequeNo || null,
-        reference_no: refNo,
         bank_account_id: input.bankAccountId || undefined,
         remarks: input.remarks || undefined,
-        client_ref: input.clientRef || undefined,
+        client_ref: clientRef,
       }
 
       const res = await fetch('/api/v1/expenses', {
@@ -411,7 +522,15 @@ export const expenseService = {
       } else {
         const errData = await res.json().catch(() => ({}))
         let errorMsg = 'Failed to record expense entry.'
-        if (typeof errData.detail === 'string') {
+        if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+          errorMsg = errData.errors
+            .map((e: any) => {
+              const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+              const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+              return field ? `${field}: ${msg}` : msg
+            })
+            .join('; ')
+        } else if (typeof errData.detail === 'string') {
           errorMsg = errData.detail
         } else if (Array.isArray(errData.detail)) {
           errorMsg = errData.detail
@@ -425,7 +544,7 @@ export const expenseService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new HttpError(errorMsg, res.status)
+        throw new HttpError(errorMsg, res.status, errData)
       }
     } catch (err: any) {
       if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
@@ -444,7 +563,7 @@ export const expenseService = {
     }
   ): Promise<ExpenseItem | null> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const withdrawalVal =
       updates.withdrawal !== undefined
         ? updates.withdrawal
@@ -548,7 +667,7 @@ export const expenseService = {
     }
   ): Promise<ExpenseItem> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const index = inMemoryExpenses.findIndex(
       (e) => e.id === id || e.id === `exp_${numericId}`
     )
@@ -591,7 +710,7 @@ export const expenseService = {
 
   async updateExpenseRemarks(id: string, remarks: string): Promise<ExpenseItem> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
@@ -623,7 +742,7 @@ export const expenseService = {
 
   async deleteExpense(id: string): Promise<boolean> {
     this.invalidateCache()
-    const numericId = id.replace(/^exp_/, '')
+    const numericId = stripExpensePrefix(id)
     try {
       const token =
         typeof window !== 'undefined'
@@ -663,7 +782,7 @@ export const expenseService = {
     // `auditedBy` is kept in the signature for existing callers; the server ignores it.
     void auditedBy
     try {
-      const numericId = id.replace(/^exp_/, '')
+      const numericId = stripExpensePrefix(id)
       const saved = await saveAuditReview('expenses', numericId, auditStatus, auditNotes)
       const mapped = mapBackendExpenseToItem(saved)
       const index = inMemoryExpenses.findIndex(
@@ -691,7 +810,6 @@ export const expenseService = {
   exportCsv(items: ExpenseItem[], filename = 'expense_report.csv') {
     const headers = [
       'Date',
-      'Ref No',
       'Cheque No',
       'Particulars',
       'Withdrawal',
@@ -703,7 +821,6 @@ export const expenseService = {
 
     const rows = items.map((e) => [
       e.date,
-      e.refNo,
       e.chequeNo || '—',
       `"${e.particulars.replace(/"/g, '""')}"`,
       e.withdrawal,

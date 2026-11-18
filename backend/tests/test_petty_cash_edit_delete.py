@@ -34,7 +34,7 @@ def test_env(monkeypatch):
     engine, SessionLocal = _make_test_env()
     db = SessionLocal()
 
-    company = Company(company_name="MCT Kitchen", starting_balance=Decimal("0.00"))
+    company = Company(company_name="MCT Kitchen")
     db.add(company)
     db.flush()
 

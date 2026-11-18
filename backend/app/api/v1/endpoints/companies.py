@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import PurePosixPath
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import (
@@ -84,13 +84,50 @@ def _extract_allowed_company_ids(current_user: AuthenticatedUser) -> Optional[se
 @router.get("", response_model=list[CompanyOut], summary="List all MCT companies")
 def get_companies(
     current_user: CurrentUser,
+    response: Response = None,
+    search: str | None = Query(default=None),
+    sort_by: str | None = Query(default="recent"),
+    page: int | None = Query(default=None, ge=1),
+    limit: int | None = Query(default=None, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(sort_by, "default"):
+        sort_by = "recent"
+    if hasattr(page, "default"):
+        page = None
+    if hasattr(limit, "default"):
+        limit = None
     try:
         allowed_ids = _extract_allowed_company_ids(current_user)
         if allowed_ids is not None and not allowed_ids:
+            if response is not None:
+                response.headers["X-Total-Count"] = "0"
             return []
-        return CompanyService(db).list_companies(company_ids=allowed_ids)
+        items = CompanyService(db).list_companies(company_ids=allowed_ids)
+        if search and search.strip():
+            term = search.strip().lower()
+            items = [
+                c for c in items
+                if term in (getattr(c, "name", None) or getattr(c, "company_name", None) or "").lower()
+                or term in (getattr(c, "location", None) or "").lower()
+            ]
+        if sort_by == "asc":
+            items.sort(key=lambda c: ((getattr(c, "name", None) or getattr(c, "company_name", None) or "").lower(), getattr(c, "id", None) or getattr(c, "company_id", 0)))
+        elif sort_by == "desc":
+            items.sort(key=lambda c: ((getattr(c, "name", None) or getattr(c, "company_name", None) or "").lower(), getattr(c, "id", None) or getattr(c, "company_id", 0)), reverse=True)
+        else:
+            items.sort(key=lambda c: getattr(c, "id", None) or getattr(c, "company_id", 0), reverse=True)
+        total = len(items)
+        if response is not None:
+            response.headers["X-Total-Count"] = str(total)
+        if page is not None or limit is not None:
+            pg = page or 1
+            sz = limit or 50
+            start = (pg - 1) * sz
+            return items[start:start + sz]
+        return items
     except CompanyServiceError as error:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -175,7 +212,6 @@ def get_authorized_companies(
             location=c.location,
             contact_number=c.contact_number,
             phone=c.phone,
-            starting_balance=float(c.starting_balance),
             petty_cash=float(c.petty_cash or 0.0),
             logo_url=c.logo_url,
             role=user_role_label,
@@ -232,10 +268,6 @@ def create_company(
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
     })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
-    })
     return result
 
 
@@ -252,7 +284,6 @@ async def create_company_with_picture(
     location: str = Form(...),
     contact_number: str | None = Form(None),
     phone: str | None = Form(None),
-    starting_balance: Decimal = Form(Decimal("0.00")),
     petty_cash: Decimal = Form(Decimal("0.00")),
     picture: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -265,7 +296,6 @@ async def create_company_with_picture(
         location=location,
         contact_number=contact_number,
         phone=phone,
-        starting_balance=starting_balance,
         petty_cash=petty_cash,
     )
     try:
@@ -292,10 +322,6 @@ async def create_company_with_picture(
     ws_manager.broadcast_sync({
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "created"},
-    })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
     })
     return result
 
@@ -335,10 +361,6 @@ def update_company(
     ws_manager.broadcast_sync({
         "type": "COMPANY_UPDATED",
         "payload": {"company_id": result.id, "company_name": result.name, "action": "updated"},
-    })
-    ws_manager.broadcast_sync({
-        "type": "BANK_UPDATED",
-        "payload": {"company_id": result.id, "company_name": result.name},
     })
     return result
 

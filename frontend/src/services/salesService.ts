@@ -9,6 +9,9 @@ import {
   deriveRecordStatusFromParticulars,
 } from '@/utils/particularsUtils'
 
+/** Strip dashboard prefix (`sale_`) so API calls always receive the numeric sale ID. */
+const stripSalePrefix = (id: string): string => String(id).replace(/^sale_/, '')
+
 export interface SalesItem {
   id: string
   refNo: string
@@ -90,10 +93,10 @@ function mapBackendSaleToItem(b: any): SalesItem {
     b.transaction_date || (b.created_at ? b.created_at.split('T')[0] : '2026-10-01')
   const [year, month, day] = rawDate.split('-')
   const displayDate =
-    month && day ? `${month}/${day}/${year?.slice(2) || '26'}` : rawDate
+    month && day ? `${month.padStart(2, '0')}/${day.padStart(2, '0')}/${year}` : rawDate
   const amt = Number(b.amount) || 0
 
-  let chequeNo = b.cheque_no || b.chequeNo || b.reference_no || ''
+  let chequeNo = b.cheque_no || b.chequeNo || ''
   let particulars = b.particulars || b.description || 'Sales Entry'
   if (!chequeNo && particulars.includes('[Cheque:')) {
     const parts = particulars.split('[Cheque:')
@@ -128,7 +131,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
 
   return {
     id: saleId,
-    refNo: chequeNo || `REF-${b.sales_id}`,
+    refNo: chequeNo || '',
     chequeNo: chequeNo || undefined,
     date: displayDate,
     rawDate: rawDate,
@@ -158,7 +161,7 @@ function mapBackendSaleToItem(b: any): SalesItem {
     auditDate: b.audited_at ? formatCreatedAt(b.audited_at) : undefined,
     auditNotes: b.audit_remarks || undefined,
     createdBy: b.created_by || b.created_by_name || 'Finance Staff',
-    createdAt: b.created_at || new Date().toISOString(),
+    createdAt: b.created_at || b.createdAt || undefined,
     updatedAt: b.updated_at || undefined,
     updatedBy: b.updated_by || b.updated_by_name || undefined,
     bankAccountId: b.bank_account_id || b.bankAccountId || undefined,
@@ -220,6 +223,119 @@ export const salesService = {
     return []
   },
 
+  async getSalesPaginated(params: {
+    company?: string
+    page?: number
+    limit?: number
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+    sort_by?: string
+    sort_dir?: 'asc' | 'desc'
+  } = {}): Promise<{ items: SalesItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.page !== undefined) sp.set('page', String(params.page))
+    if (params.limit !== undefined) sp.set('limit', String(params.limit))
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    if (params.sort_by) sp.set('sort_by', params.sort_by)
+    if (params.sort_dir) sp.set('sort_dir', params.sort_dir)
+
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load sales')
+    const data = await res.json()
+    const items = Array.isArray(data) ? data.map(mapBackendSaleToItem) : []
+    const totalHeader = res.headers.get('X-Total-Count')
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
+  },
+
+  async getSalesSummary(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+  } = {}): Promise<{
+    total_count: number
+    total_amount: number
+    deposited_amount: number
+    pending_amount: number
+    categories: { category: string; amount: number }[]
+  }> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales/summary${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to load sales summary')
+    return await res.json()
+  },
+
+  async exportSalesData(params: {
+    company?: string
+    start_date?: string
+    end_date?: string
+    category_id?: number
+    search?: string
+    payment_status?: string
+    deposit_status?: string
+    bank_account_id?: string
+  } = {}): Promise<SalesItem[]> {
+    const sp = new URLSearchParams()
+    if (params.company && params.company !== 'All Companies') sp.set('company_name', params.company)
+    if (params.start_date) sp.set('start_date', params.start_date)
+    if (params.end_date) sp.set('end_date', params.end_date)
+    if (params.category_id) sp.set('category_id', String(params.category_id))
+    if (params.search && params.search.trim()) sp.set('search', params.search.trim())
+    if (params.payment_status && params.payment_status !== 'All') sp.set('payment_status', params.payment_status)
+    if (params.deposit_status && params.deposit_status !== 'All') sp.set('deposit_status', params.deposit_status)
+    if (params.bank_account_id && params.bank_account_id !== 'All') sp.set('bank_account_id', params.bank_account_id)
+    const token =
+      typeof window !== 'undefined' ? sessionStorage.getItem('mct_access_token') : null
+    const res = await fetch(`/api/v1/sales/export${sp.toString() ? `?${sp.toString()}` : ''}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    })
+    if (!res.ok) throw new Error('Failed to export sales')
+    const data = await res.json()
+    return Array.isArray(data) ? data.map(mapBackendSaleToItem) : []
+  },
+
   async getSales(company?: string, forceRefresh = false): Promise<SalesItem[]> {
     const cacheKey = company || 'All Companies'
     if (!forceRefresh) {
@@ -232,8 +348,8 @@ export const salesService = {
     try {
       const url =
         company && company !== 'All Companies'
-          ? `/api/v1/sales?company_name=${encodeURIComponent(company)}`
-          : '/api/v1/sales'
+          ? `/api/v1/sales/export?company_name=${encodeURIComponent(company)}`
+          : '/api/v1/sales/export'
 
       const token =
         typeof window !== 'undefined'
@@ -294,6 +410,10 @@ export const salesService = {
       }
     }
     const cleanAmount = Math.round(Number(input.amount || 0) * 100) / 100
+    const clientRef =
+      input.clientRef && input.clientRef.length >= 8
+        ? input.clientRef.slice(0, 64)
+        : `sale_${input.clientRef || Date.now()}_${Math.random().toString(36).substring(2, 9)}`.slice(0, 64)
 
     const payload = {
       company: input.company,
@@ -309,7 +429,7 @@ export const salesService = {
       chequeNo: input.chequeNo || undefined,
       bank_account_id: input.bankAccountId || undefined,
       remarks: input.remarks || undefined,
-      client_ref: input.clientRef || undefined,
+      client_ref: clientRef,
     }
 
     try {
@@ -347,12 +467,20 @@ export const salesService = {
       } else {
         const errData = await res.json().catch(() => ({}))
         let errorMsg = 'Failed to record sales entry.'
-        if (typeof errData.detail === 'string') {
+        if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+          errorMsg = errData.errors
+            .map((e: any) => {
+              const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+              const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+              return field ? `${field}: ${msg}` : msg
+            })
+            .join('; ')
+        } else if (typeof errData.detail === 'string') {
           errorMsg = errData.detail
         } else if (Array.isArray(errData.detail)) {
           errorMsg = errData.detail
             .map((d: any) => {
-              const field = Array.isArray(d.loc) ? d.loc.slice(1).join('.') : ''
+              const field = Array.isArray(d.loc) ? d.loc.filter((x: any) => x !== 'body').join('.') : ''
               return field ? `${field}: ${d.msg}` : (d.msg || JSON.stringify(d))
             })
             .join('; ')
@@ -361,7 +489,7 @@ export const salesService = {
         } else if (typeof errData.message === 'string') {
           errorMsg = errData.message
         }
-        throw new HttpError(errorMsg, res.status)
+        throw new HttpError(errorMsg, res.status, errData)
       }
     } catch (err: any) {
       if (err instanceof HttpError || (err.message && !err.message.includes('fetch'))) {
@@ -407,12 +535,13 @@ export const salesService = {
     }
 
     try {
+      const numericId = stripSalePrefix(id)
       const token =
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
 
-      const res = await fetch(`/api/v1/sales/${id}`, {
+      const res = await fetch(`/api/v1/sales/${numericId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -443,12 +572,26 @@ export const salesService = {
         } else if (input.status) {
           mapped.status = input.status
         }
-        inMemorySales = inMemorySales.map((s) => (s.id === id ? mapped : s))
+        inMemorySales = inMemorySales.map((s) =>
+          s.id === numericId || s.id === id ? mapped : s
+        )
         this.invalidateCache()
         return mapped
       }
       const errData = await res.json().catch(() => ({}))
-      throw new Error(typeof errData.detail === 'string' ? errData.detail : 'Failed to update sales entry.')
+      let errorMsg = 'Failed to update sales entry.'
+      if (Array.isArray(errData.errors) && errData.errors.length > 0) {
+        errorMsg = errData.errors
+          .map((e: any) => {
+            const field = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.') : ''
+            const msg = e.msg ? String(e.msg).replace(/^Value error,\s*/i, '') : 'Invalid value'
+            return field ? `${field}: ${msg}` : msg
+          })
+          .join('; ')
+      } else if (typeof errData.detail === 'string') {
+        errorMsg = errData.detail
+      }
+      throw new HttpError(errorMsg, res.status, errData)
     } catch (err) {
       if (err instanceof TypeError) throw new Error(SERVER_UNREACHABLE)
       throw err
@@ -462,12 +605,13 @@ export const salesService = {
     bankAccountId?: string
   ): Promise<SalesItem> {
     this.invalidateCache()
+    const numericId = stripSalePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
 
-    const res = await fetch(`/api/v1/sales/${id}/deposit-status`, {
+    const res = await fetch(`/api/v1/sales/${numericId}/deposit-status`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -509,12 +653,13 @@ export const salesService = {
 
   async updateSaleRemarks(id: string, remarks: string): Promise<SalesItem> {
     this.invalidateCache()
+    const numericId = stripSalePrefix(id)
     const token =
       typeof window !== 'undefined'
         ? sessionStorage.getItem('mct_access_token')
         : null
 
-    const res = await fetch(`/api/v1/sales/${id}/remarks`, {
+    const res = await fetch(`/api/v1/sales/${numericId}/remarks`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
@@ -538,12 +683,13 @@ export const salesService = {
   async deleteSale(id: string): Promise<boolean> {
     this.invalidateCache()
     try {
+      const numericId = stripSalePrefix(id)
       const token =
         typeof window !== 'undefined'
           ? sessionStorage.getItem('mct_access_token')
           : null
 
-      const res = await fetch(`/api/v1/sales/${id}`, {
+      const res = await fetch(`/api/v1/sales/${numericId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
@@ -552,7 +698,7 @@ export const salesService = {
       })
       // 404 = already gone on the server, which is what the caller wants
       if (res.ok || res.status === 404) {
-        inMemorySales = inMemorySales.filter((s) => s.id !== id)
+        inMemorySales = inMemorySales.filter((s) => s.id !== numericId && s.id !== id)
         this.invalidateCache()
         return true
       }
@@ -575,10 +721,11 @@ export const salesService = {
     // `auditedBy` is kept in the signature for existing callers; the server ignores it.
     void auditedBy
     try {
-      const saved = await saveAuditReview('sales', id, auditStatus, auditNotes)
+      const numericId = stripSalePrefix(id)
+      const saved = await saveAuditReview('sales', numericId, auditStatus, auditNotes)
       const mapped = mapBackendSaleToItem(saved)
       inMemorySales = inMemorySales.map((s) =>
-        s.id === id
+        s.id === numericId || s.id === id
           ? {
               ...s,
               auditStatus: mapped.auditStatus,
@@ -588,7 +735,7 @@ export const salesService = {
             }
           : s
       )
-      return inMemorySales.find((s) => s.id === id) || mapped
+      return inMemorySales.find((s) => s.id === numericId || s.id === id) || mapped
     } finally {
       // Success or failure, the next read must come from the server.
       this.invalidateCache()
@@ -598,7 +745,6 @@ export const salesService = {
   exportCsv(items: SalesItem[], filename = 'sales_report.csv') {
     const headers = [
       'Date',
-      'Ref No',
       'Cheque No',
       'Particulars',
       'Withdrawal',
@@ -610,7 +756,6 @@ export const salesService = {
 
     const rows = items.map((s) => [
       s.date,
-      s.refNo,
       s.chequeNo || '—',
       `"${s.particulars.replace(/"/g, '""')}"`,
       s.withdrawal,

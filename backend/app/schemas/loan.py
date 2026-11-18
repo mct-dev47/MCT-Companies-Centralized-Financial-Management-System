@@ -5,11 +5,12 @@ from decimal import Decimal
 
 # --- Loan Repayment ---
 class LoanRepaymentBase(BaseModel):
-    loan_id: int
+    loan_id: Optional[int] = None
     recorded_by: Optional[int] = None
     payment_date: date
     due_date: Optional[date] = None
     bank_account_id: Optional[str] = Field(None, description="Chosen source bank account ID")
+    payment_method: Optional[str] = Field(default="Cash", description="Payment method used")
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     reference_no: Optional[str] = None
     status: str = Field(default="completed", description="pending, completed, overdue")
@@ -37,7 +38,6 @@ class LoanBase(BaseModel):
     bank_account_id: Optional[str] = None
     principal_amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Principal amount must be at least 1.00 (cannot be 0 or letters)")
     interest_rate: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2, description="Interest percentage e.g. 5.00 for 5%")
-    interest_type: str = Field(default="simple", description="simple or compound")
     loan_date: date
     due_date: Optional[date] = None
     description: Optional[str] = None
@@ -61,7 +61,6 @@ class LoanUpdate(BaseModel):
     principal_amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     interest_rate: Optional[Decimal] = Field(None, ge=0, decimal_places=2)
-    interest_type: Optional[str] = None
     loan_date: Optional[date] = None
     due_date: Optional[date] = None
     description: Optional[str] = None
@@ -105,6 +104,9 @@ class LoanOut(LoanBase):
     disbursed_at: Optional[datetime] = None
     # The borrower's bank that received the money on disbursement (bank_account_id is the lender's).
     borrower_bank_account_id: Optional[str] = None
+    total_paid: Decimal = Decimal("0.00")
+    outstanding_balance: Optional[Decimal] = None
+    repayments: List[LoanRepaymentOut] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -116,7 +118,6 @@ class LoanStatementOut(BaseModel):
     lender: int
     principal_amount: Decimal
     interest_rate: Decimal
-    interest_type: str
     interest_amount: Decimal
     total_loan_payable: Decimal
     total_amount_repaid: Decimal

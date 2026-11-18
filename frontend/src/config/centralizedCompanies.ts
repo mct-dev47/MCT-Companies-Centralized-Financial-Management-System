@@ -4,7 +4,6 @@ export interface AuthorizedCompany {
   location: string
   contact_number?: string | null
   phone?: string | null
-  starting_balance: number
   petty_cash?: number
   logo_url?: string | null
   role: string

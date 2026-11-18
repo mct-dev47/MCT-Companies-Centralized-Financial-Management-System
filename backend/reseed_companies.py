@@ -55,9 +55,6 @@ def run_migration():
                 conn.execute(text(f"UPDATE expenses SET company_id = {temp_id} WHERE company_id = {old_id}"))
                 conn.execute(text(f"UPDATE loan SET borrower = {temp_id} WHERE borrower = {old_id}"))
                 conn.execute(text(f"UPDATE loan SET lender = {temp_id} WHERE lender = {old_id}"))
-                conn.execute(text(f"UPDATE budget SET company_id = {temp_id} WHERE company_id = {old_id}"))
-                conn.execute(text(f"UPDATE cash_inflow SET company_id = {temp_id} WHERE company_id = {old_id}"))
-                conn.execute(text(f"UPDATE staff_credits SET company_id = {temp_id} WHERE company_id = {old_id}"))
 
             print("Step 3: Updating intermediate IDs to final chronological IDs (1..14)...")
             for old_id, new_id in ID_MAPPING.items():
@@ -75,9 +72,6 @@ def run_migration():
                 conn.execute(text(f"UPDATE expenses SET company_id = {new_id} WHERE company_id = {temp_id}"))
                 conn.execute(text(f"UPDATE loan SET borrower = {new_id} WHERE borrower = {temp_id}"))
                 conn.execute(text(f"UPDATE loan SET lender = {new_id} WHERE lender = {temp_id}"))
-                conn.execute(text(f"UPDATE budget SET company_id = {new_id} WHERE company_id = {temp_id}"))
-                conn.execute(text(f"UPDATE cash_inflow SET company_id = {new_id} WHERE company_id = {temp_id}"))
-                conn.execute(text(f"UPDATE staff_credits SET company_id = {new_id} WHERE company_id = {temp_id}"))
 
             print("Step 4: Recreating foreign key constraints...")
             conn.execute(text("ALTER TABLE users ADD CONSTRAINT users_company_id_fkey FOREIGN KEY (company_id) REFERENCES company(company_id) ON DELETE SET NULL;"))

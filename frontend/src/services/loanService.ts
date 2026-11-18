@@ -22,7 +22,6 @@ export interface LoanItem {
   rawDate: string // e.g. "2026-10-01"
   dueDate?: string // e.g. "2026-12-31"
   interestRate?: number // e.g. 5.0 (%)
-  interestType?: string // e.g. "simple"
   particulars: string
   category: string
   amount: number
@@ -176,13 +175,23 @@ function mapBackendLoanToItem(l: any): LoanItem {
     rawDate: rawDateStr,
     dueDate: l.due_date || '',
     interestRate: Number(l.interest_rate || 0),
-    interestType: l.interest_type || 'simple',
     particulars: l.particulars || l.description || 'Inter-company term financing facility',
     category: l.category || 'In-house',
     amount: amt,
     totalPaid,
     outstandingBalance: outstanding,
-    repayments: l.repayments || [],
+    repayments: Array.isArray(l.repayments)
+      ? l.repayments.map((r: any) => ({
+          id: String(r.id || r.loan_repayment_id || `rep_${Date.now()}`),
+          paymentDate: r.paymentDate || r.payment_date || '',
+          amount: Number(r.amount || 0),
+          remainingBalance: Number(r.remainingBalance ?? r.remaining_balance ?? 0),
+          referenceNo: r.referenceNo || r.reference_no || '',
+          paymentMethod: r.paymentMethod || r.payment_method || 'Cash',
+          notes: r.notes || '',
+          createdAt: r.createdAt || r.created_at || new Date().toISOString(),
+        }))
+      : [],
     borrowerId: l.borrower,
     borrower: bName,
     lenderId: l.lender,
@@ -413,8 +422,13 @@ export const loanService = {
       if (params?.status && params.status !== 'All') query.append('status', params.status)
       if (params?.start_date) query.append('start_date', params.start_date)
       if (params?.end_date) query.append('end_date', params.end_date)
+      if ((params as any)?.page !== undefined) query.append('page', String((params as any).page))
+      if ((params as any)?.limit !== undefined) query.append('limit', String((params as any).limit))
+      if ((params as any)?.search) query.append('search', String((params as any).search))
 
-      const url = `/api/v1/loans${query.toString() ? `?${query.toString()}` : ''}`
+      const hasPagination = (params as any)?.page !== undefined || (params as any)?.limit !== undefined
+      const endpointPath = hasPagination ? '/api/v1/loans' : '/api/v1/loans/export'
+      const url = `${endpointPath}${query.toString() ? `?${query.toString()}` : ''}`
       const res = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
@@ -452,7 +466,6 @@ export const loanService = {
         lender_company: input.lenderCompany,
         principal_amount: input.amount,
         interest_rate: input.interestRate || 0.0,
-        interest_type: 'simple',
         loan_date: input.date,
         due_date: input.dueDate || null,
         description: input.particulars,
@@ -632,6 +645,7 @@ export const loanService = {
       paymentDate: string
       referenceNo?: string
       paymentMethod?: string
+      bankAccountId?: string
       notes?: string
     }
   ): Promise<LoanItem> {
@@ -641,27 +655,35 @@ export const loanService = {
         ? sessionStorage.getItem('mct_access_token')
         : null
 
+    let savedRepayment: any = null
     if (/^\d+$/.test(numericId)) {
-      try {
-        const res = await fetch(`/api/v1/loans/${numericId}/repayments`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({
-            amount: repayment.amount,
-            payment_date: repayment.paymentDate,
-            reference_no: repayment.referenceNo || null,
-            notes: repayment.notes || null,
-          }),
-        })
-        if (res.ok) {
-          // Success from backend
+      const res = await fetch(`/api/v1/loans/${numericId}/repayments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          loan_id: Number(numericId),
+          amount: repayment.amount,
+          payment_date: repayment.paymentDate,
+          reference_no: repayment.referenceNo || null,
+          payment_method: repayment.paymentMethod || 'Cash',
+          bank_account_id: repayment.bankAccountId || null,
+          notes: repayment.notes || null,
+        }),
+      })
+      if (!res.ok) {
+        let errMsg = 'Failed to record loan repayment.'
+        try {
+          const errBody = await res.json()
+          errMsg = errBody.detail || errMsg
+        } catch {
+          // ignore json parse error
         }
-      } catch (err) {
-        console.warn('Backend POST /loans/.../repayments failed, recording locally:', err)
+        throw new Error(errMsg)
       }
+      savedRepayment = await res.json().catch(() => null)
     }
 
     const index = inMemoryLoans.findIndex((l) => l.id === id || l.id === `loan_${numericId}`)
@@ -675,14 +697,14 @@ export const loanService = {
     const newStatus = newRemaining <= 0 ? 'Paid' : 'Partially Paid'
 
     const repRecord: LoanRepaymentRecord = {
-      id: `rep_${Date.now()}`,
-      paymentDate: repayment.paymentDate,
-      amount: Number(repayment.amount),
-      remainingBalance: newRemaining,
-      referenceNo: repayment.referenceNo || `REP-${Date.now().toString().slice(-4)}`,
+      id: savedRepayment?.loan_repayment_id ? String(savedRepayment.loan_repayment_id) : `rep_${Date.now()}`,
+      paymentDate: savedRepayment?.payment_date || repayment.paymentDate,
+      amount: Number(savedRepayment?.amount ?? repayment.amount),
+      remainingBalance: Number(savedRepayment?.remaining_balance ?? newRemaining),
+      referenceNo: savedRepayment?.reference_no || repayment.referenceNo || `REP-${Date.now().toString().slice(-4)}`,
       paymentMethod: repayment.paymentMethod || 'Cash',
-      notes: repayment.notes || '',
-      createdAt: new Date().toISOString(),
+      notes: savedRepayment?.notes ?? repayment.notes ?? '',
+      createdAt: savedRepayment?.created_at || new Date().toISOString(),
     }
 
     const updatedLoan: LoanItem = {
@@ -697,6 +719,9 @@ export const loanService = {
 
     inMemoryLoans[index] = updatedLoan
     saveStoredLoans(inMemoryLoans)
+    websocketService.emitLocal('LOANS_UPDATED')
+    websocketService.emitLocal('BANK_UPDATED')
+    websocketService.emitLocal('EXPENSE_CREATED')
     return updatedLoan
   },
 

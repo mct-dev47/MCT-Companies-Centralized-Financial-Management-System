@@ -28,7 +28,7 @@ def _db(guard=True):
         with engine.begin() as conn:
             sale_status_guard.install_sqlite_trigger(conn)
     db = sessionmaker(bind=engine)()
-    db.add(BankAccount(id="bnk-010", bank_name="CB", account_name="Main", account_number="1", company_name="Hotel",
+    db.add(BankAccount(id="bnk-010", bank_name="CB", account_name="Main", company_name="Hotel",
                        starting_balance=Decimal("20000"), current_balance=Decimal("20275")))
     db.add_all([
         Sale(sales_id=113, company_id=1, transaction_date=date(2026, 11, 6), amount=Decimal("1349"),

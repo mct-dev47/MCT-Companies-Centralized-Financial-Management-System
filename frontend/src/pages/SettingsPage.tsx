@@ -1,9 +1,7 @@
 import * as React from 'react'
 import {
   Building2,
-  Mail,
   Phone,
-  User,
   MapPin,
   Bell,
   Camera,
@@ -66,9 +64,7 @@ export const SettingsPage: React.FC = () => {
 
   // Form Fields
   const [companyName, setCompanyName] = React.useState('')
-  const [contactPerson, setContactPerson] = React.useState('')
   const [telephoneNumber, setTelephoneNumber] = React.useState('')
-  const [email, setEmail] = React.useState('')
   const [address, setAddress] = React.useState('')
   const [logoUrl, setLogoUrl] = React.useState<string>(logo2Url)
   const [logoFile, setLogoFile] = React.useState<File | null>(null)
@@ -108,9 +104,7 @@ export const SettingsPage: React.FC = () => {
     (target: Company, fetchSettings = true) => {
       setSelectedCompanyId(target.id)
       setCompanyName(target.name)
-      setContactPerson(target.contactPerson || '')
       setTelephoneNumber(target.telephoneNumber || target.contactNumber || '')
-      setEmail(target.email || '')
       setAddress(target.address)
       setLogoUrl(target.logoUrl || logo2Url)
       if (fetchSettings) {
@@ -219,10 +213,8 @@ export const SettingsPage: React.FC = () => {
       const results = await Promise.allSettled([
         employeeService.updateCompany(selectedCompanyId, {
           name: companyName,
-          contactPerson,
           telephoneNumber,
           contactNumber: telephoneNumber,
-          email,
           address,
           logoUrl: logoFile ? undefined : logoUrl,
           logoFile: logoFile || undefined,
@@ -267,9 +259,7 @@ export const SettingsPage: React.FC = () => {
               ? {
                   ...c,
                   name: updated.name || companyName,
-                  contactPerson,
                   telephoneNumber,
-                  email,
                   address,
                   logoUrl: updated.logoUrl || logoUrl,
                 }
@@ -512,23 +502,6 @@ export const SettingsPage: React.FC = () => {
                     />
                   </div>
 
-                  {/* Contact Person */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs sm:text-sm font-semibold text-focus flex items-center gap-1.5">
-                      <User className="h-3.5 w-3.5 text-muted-fg" />
-                      <span>Contact Person</span>
-                      <span className="text-rose-500">*</span>
-                    </label>
-                    <Input
-                      type="text"
-                      value={contactPerson}
-                      onChange={(e) => setContactPerson(e.target.value)}
-                      placeholder="Enter contact person"
-                      required
-                      className="h-11 rounded-xl border border-stroke/60 bg-white text-sm text-focus shadow-xs focus-visible:ring-2 focus-visible:ring-focus"
-                    />
-                  </div>
-
                   {/* Telephone Number */}
                   <div className="space-y-1.5">
                     <label className="text-xs sm:text-sm font-semibold text-focus flex items-center gap-1.5">
@@ -541,23 +514,6 @@ export const SettingsPage: React.FC = () => {
                       value={telephoneNumber}
                       onChange={(e) => setTelephoneNumber(e.target.value)}
                       placeholder="(02) 8000-0000 or +63 900 000 0000"
-                      required
-                      className="h-11 rounded-xl border border-stroke/60 bg-white text-sm text-focus shadow-xs focus-visible:ring-2 focus-visible:ring-focus"
-                    />
-                  </div>
-
-                  {/* Email */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs sm:text-sm font-semibold text-focus flex items-center gap-1.5">
-                      <Mail className="h-3.5 w-3.5 text-muted-fg" />
-                      <span>Email Address</span>
-                      <span className="text-rose-500">*</span>
-                    </label>
-                    <Input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="corporate@mctgroup.com"
                       required
                       className="h-11 rounded-xl border border-stroke/60 bg-white text-sm text-focus shadow-xs focus-visible:ring-2 focus-visible:ring-focus"
                     />

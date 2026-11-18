@@ -35,10 +35,9 @@ def get_group_summary(
     total_group_cash_inflow = Decimal("0.00")
     total_group_cash_outflow = Decimal("0.00")
 
-    active_companies = db.query(Company.company_id).order_by(Company.company_id.asc()).all()
-    for (cid,) in active_companies:
-        summary = service.get_company_financial_summary(cid, start_date, end_date)
-        company_summaries.append(summary)
+    active_companies = [cid for (cid,) in db.query(Company.company_id).order_by(Company.company_id.asc()).all()]
+    company_summaries = service.get_group_financial_summaries(active_companies, start_date, end_date)
+    for summary in company_summaries:
         total_group_revenue += summary.total_revenue
         total_group_expenses += summary.total_expenses
         total_group_cash_inflow += summary.total_cash_inflow

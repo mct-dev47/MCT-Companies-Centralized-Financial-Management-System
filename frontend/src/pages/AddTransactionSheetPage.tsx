@@ -83,8 +83,8 @@ export interface UnpaidAssignmentRow {
   customerName: string
 }
 
-/** How many sheet rows are saved at the same time. */
-const SAVE_CONCURRENCY = 4
+/** How many sheet rows are saved at the same time (1 for atomic, sequential safety). */
+const SAVE_CONCURRENCY = 1
 
 export interface SpreadsheetRow {
   id: string
@@ -106,12 +106,22 @@ export interface SpreadsheetRow {
 export const getRowDepositDate = (row: SpreadsheetRow): string =>
   row.depositStatus === 'Deposited' ? row.depositDate || normalizeDateToYYYYMMDD(row.date) || '' : ''
 
+export const generateSheetRowId = (seed?: number | string) =>
+  `sheet_${Date.now()}_${seed !== undefined ? seed : Math.random().toString(36).substring(2, 8)}`
+
 export interface RowValidationError {
   rowIndex: number
   rowId: string
-  missingParticulars: boolean
-  missingCategory: boolean
-  missingPrice: boolean
+  missingParticulars?: boolean
+  missingCategory?: boolean
+  missingPrice?: boolean
+  invalidPrice?: boolean
+  invalidDate?: boolean
+  invalidQuantity?: boolean
+  invalidPaymentMethod?: boolean
+  invalidDepositDate?: boolean
+  invalidChequeNo?: boolean
+  customMessage?: string
 }
 
 export const DEFAULT_SALES_PAYMENT_METHODS = [
@@ -284,11 +294,17 @@ const SalesDateCellInput = React.forwardRef<
   HTMLInputElement,
   Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'value'> & {
     value: string
+    hasError?: boolean
   }
->(({ value, className, ...props }, ref) => {
+>(({ value, className, hasError, ...props }, ref) => {
   const short = toShortDate(value)
   return (
-    <div className="relative h-11 flex items-center px-2">
+    <div
+      className={cn(
+        'relative h-11 flex items-center px-2 rounded-none transition-colors',
+        hasError && 'bg-rose-50/60 ring-1 ring-inset ring-rose-500'
+      )}
+    >
       <input
         ref={ref}
         type="date"
@@ -299,6 +315,7 @@ const SalesDateCellInput = React.forwardRef<
           'peer pl-0 pr-0 cursor-pointer tabular-nums [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-70 hover:[&::-webkit-calendar-picker-indicator]:opacity-100 [&::-webkit-calendar-picker-indicator]:ml-1.5',
           short &&
             '[&:not(:focus)]:text-transparent',
+          hasError && 'text-rose-700 font-medium',
           className
         )}
       />
@@ -1143,6 +1160,7 @@ interface PaymentComboboxProps {
   inputRef?: (el: HTMLInputElement | null) => void
   ariaLabel?: string
   flat?: boolean
+  hasError?: boolean
 }
 
 const PaymentCombobox: React.FC<PaymentComboboxProps> = ({
@@ -1154,6 +1172,7 @@ const PaymentCombobox: React.FC<PaymentComboboxProps> = ({
   inputRef,
   ariaLabel,
   flat = true,
+  hasError,
 }) => {
   const [isOpen, setIsOpen] = React.useState(false)
   const [highlightedIndex, setHighlightedIndex] = React.useState<number>(-1)
@@ -1272,7 +1291,8 @@ const PaymentCombobox: React.FC<PaymentComboboxProps> = ({
           title={value || undefined}
           className={cn(
             flat ? SALES_INPUT : 'w-full h-9 pl-2.5 text-xs text-focus rounded-lg border bg-white',
-            'pr-7 cursor-pointer select-none font-bold text-xs'
+            'pr-7 cursor-pointer select-none font-bold text-xs',
+            hasError && 'bg-rose-50/60 ring-1 ring-inset ring-rose-500 border-rose-500 text-rose-700'
           )}
         />
         <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 z-10 pointer-events-none">
@@ -1848,7 +1868,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
 
   const [rows, setRows] = React.useState<SpreadsheetRow[]>([
     {
-      id: 'row-1',
+      id: generateSheetRowId(1),
       date: todayIso,
       particulars: '',
       category: defaultCategory,
@@ -2051,9 +2071,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           }))
         )
       } else {
+        const singleRowId = generateSheetRowId(1)
         setRows([
           {
-            id: 'row-1',
+            id: singleRowId,
             date: itemDate,
             particulars: editItem.particulars,
             category: editItem.category || defaultCategory,
@@ -2099,7 +2120,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       const initialRowId =
         editItem.items && editItem.items.length > 0 && editItem.items[0].id
           ? editItem.items[0].id
-          : 'row-1'
+          : generateSheetRowId(1)
       setUnpaidAssignments([
         {
           rowId: initialRowId,
@@ -2268,7 +2289,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     if (rows.length <= 1) {
       setRows([
         {
-          id: 'row-1',
+          id: generateSheetRowId(1),
           date: todayIso,
           particulars: '',
           category: defaultCategory,
@@ -2290,7 +2311,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
   const handleReset = () => {
     setRows([
       {
-        id: 'row-1',
+        id: generateSheetRowId(1),
         date: todayIso,
         particulars: '',
         category: defaultCategory,
@@ -2387,13 +2408,39 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                     Number(value) <= 0 ||
                     isNaN(Number(value))
                   : err.missingPrice,
+              invalidPrice:
+                field === 'unitPrice'
+                  ? Number(value) < 1
+                  : err.invalidPrice,
+              invalidDate:
+                field === 'date'
+                  ? !String(value).trim() || String(value) > todayIso
+                  : err.invalidDate,
+              invalidQuantity:
+                field === 'quantity'
+                  ? value === '' || Number(value) <= 0 || isNaN(Number(value))
+                  : err.invalidQuantity,
+              invalidPaymentMethod:
+                field === 'paymentMethod'
+                  ? !String(value).trim()
+                  : err.invalidPaymentMethod,
+              invalidDepositDate:
+                field === 'depositDate' ? false : err.invalidDepositDate,
+              invalidChequeNo:
+                field === 'chequeNo' ? false : err.invalidChequeNo,
             }
           })
           .filter(
             (err) =>
               err.missingParticulars ||
               err.missingCategory ||
-              err.missingPrice
+              err.missingPrice ||
+              err.invalidPrice ||
+              err.invalidDate ||
+              err.invalidQuantity ||
+              err.invalidPaymentMethod ||
+              err.invalidDepositDate ||
+              err.invalidChequeNo
           )
       )
     }
@@ -2762,19 +2809,49 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     rowsToValidate.forEach((r) => {
       const rowIndex = rows.findIndex((item) => item.id === r.id) + 1
       const missingParticulars = !r.particulars || !r.particulars.trim()
-      const missingCategory = !r.category || !r.category.trim()
+      const isSalesPettyCashCat = isSales && isPettyCash(r.category)
+      const missingCategory = !r.category || !r.category.trim() || isSalesPettyCashCat
       const missingPrice =
         r.unitPrice === '' ||
         Number(r.unitPrice) <= 0 ||
         isNaN(Number(r.unitPrice))
 
-      if (missingParticulars || missingCategory || missingPrice) {
+      const priceVal = typeof r.unitPrice === 'number' ? r.unitPrice : parseFloat(String(r.unitPrice || '')) || 0
+      const qtyVal = typeof r.quantity === 'number' ? r.quantity : parseInt(String(r.quantity || '1'), 10) || 1
+      const feeVal = typeof r.serviceFee === 'number' ? r.serviceFee : parseFloat(String(r.serviceFee || '0')) || 0
+      const rowTotal = Math.round((priceVal * qtyVal + feeVal) * 100) / 100
+      const invalidPrice = !missingPrice && rowTotal < 1.0
+
+      const parsedDate = normalizeDateToYYYYMMDD(r.date)
+      const invalidDate = !parsedDate || parsedDate > todayIso
+      const invalidQuantity = r.quantity !== '' && (Number(r.quantity) <= 0 || isNaN(Number(r.quantity)))
+      const invalidPaymentMethod = isSales && isPettyCash(r.paymentMethod)
+
+      const customMsgs: string[] = []
+      if (isSalesPettyCashCat) customMsgs.push('Petty Cash category cannot be used on a sale')
+      if (invalidPaymentMethod) customMsgs.push('Petty Cash payment method cannot be used on a sale')
+      if (invalidPrice) customMsgs.push('Total amount must be at least ₱1.00')
+
+      if (
+        missingParticulars ||
+        missingCategory ||
+        missingPrice ||
+        invalidPrice ||
+        invalidDate ||
+        invalidQuantity ||
+        invalidPaymentMethod
+      ) {
         errors.push({
           rowIndex,
           rowId: r.id,
           missingParticulars,
           missingCategory,
           missingPrice,
+          invalidPrice,
+          invalidDate,
+          invalidQuantity,
+          invalidPaymentMethod,
+          customMessage: customMsgs.join('; ') || undefined,
         })
       }
     })
@@ -2918,12 +2995,128 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       if (failedIdx.length === 0) return
       const savedIds = new Set(savedRows.filter((_, i) => results[i].status === 'fulfilled').map((r) => r.id))
       if (savedIds.size > 0) setRows((prev) => prev.filter((r) => !savedIds.has(r.id)))
-      const firstReason = (results[failedIdx[0]] as PromiseRejectedResult).reason
-      const reasonText = firstReason instanceof Error ? firstReason.message : String(firstReason || '')
+
+      const newErrors: RowValidationError[] = []
+      const detailedReasons: string[] = []
+
+      failedIdx.forEach((idx) => {
+        const failedRow = savedRows[idx]
+        const reason = (results[idx] as PromiseRejectedResult).reason
+        const errObj = reason instanceof Error ? (reason as any) : {}
+        const dataErrors: any[] = Array.isArray(errObj.errors)
+          ? errObj.errors
+          : Array.isArray(errObj.data?.errors)
+            ? errObj.data.errors
+            : []
+
+        let missingPart = false
+        let missingCat = false
+        let missingPrc = false
+        let invPrc = false
+        let invDate = false
+        let invQty = false
+        let invPm = false
+        let invDepDate = false
+        let invChq = false
+        const rowSpecificMsgs: string[] = []
+
+        if (dataErrors.length > 0) {
+          dataErrors.forEach((e) => {
+            const locStr = Array.isArray(e.loc) ? e.loc.filter((x: any) => x !== 'body').join('.').toLowerCase() : ''
+            const rawMsg = String(e.msg || 'Invalid value').replace(/^Value error,\s*/i, '')
+            if (locStr.includes('particular') || locStr.includes('description')) {
+              missingPart = true
+              rowSpecificMsgs.push(`Particulars: ${rawMsg}`)
+            } else if (locStr.includes('category')) {
+              missingCat = true
+              rowSpecificMsgs.push(`Category: ${rawMsg}`)
+            } else if (locStr.includes('amount') || locStr.includes('price')) {
+              invPrc = true
+              rowSpecificMsgs.push(`Amount: ${rawMsg}`)
+            } else if (locStr.includes('date') && !locStr.includes('deposit')) {
+              invDate = true
+              rowSpecificMsgs.push(`Date: ${rawMsg}`)
+            } else if (locStr.includes('deposit_date') || locStr.includes('depositdate')) {
+              invDepDate = true
+              rowSpecificMsgs.push(`Deposit Date: ${rawMsg}`)
+            } else if (locStr.includes('quantity')) {
+              invQty = true
+              rowSpecificMsgs.push(`Quantity: ${rawMsg}`)
+            } else if (locStr.includes('payment_method') || locStr.includes('paymentmethod')) {
+              invPm = true
+              rowSpecificMsgs.push(`Payment Method: ${rawMsg}`)
+            } else if (locStr.includes('cheque')) {
+              invChq = true
+              rowSpecificMsgs.push(`Reference / Cheque: ${rawMsg}`)
+            } else {
+              rowSpecificMsgs.push(locStr ? `${locStr}: ${rawMsg}` : rawMsg)
+            }
+          })
+        } else {
+          const rawReason = reason instanceof Error ? reason.message : String(reason || '')
+          const lower = rawReason.toLowerCase()
+          if (lower.includes('particular')) {
+            missingPart = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('category')) {
+            missingCat = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('amount') || lower.includes('price')) {
+            invPrc = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('deposit date')) {
+            invDepDate = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('date')) {
+            invDate = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('quantity') || lower.includes('qty')) {
+            invQty = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('payment')) {
+            invPm = true
+            rowSpecificMsgs.push(rawReason)
+          } else if (lower.includes('cheque')) {
+            invChq = true
+            rowSpecificMsgs.push(rawReason)
+          } else {
+            missingPart = true
+            rowSpecificMsgs.push(rawReason || 'Invalid parameters')
+          }
+        }
+
+        const rowNumber = idx + offset + 1
+        const combinedRowMsg = rowSpecificMsgs.join('; ')
+        if (combinedRowMsg) {
+          detailedReasons.push(`Row ${rowNumber}: ${combinedRowMsg}`)
+        }
+
+        newErrors.push({
+          rowIndex: rowNumber,
+          rowId: failedRow.id,
+          missingParticulars: missingPart,
+          missingCategory: missingCat,
+          missingPrice: missingPrc,
+          invalidPrice: invPrc,
+          invalidDate: invDate,
+          invalidQuantity: invQty,
+          invalidPaymentMethod: invPm,
+          invalidDepositDate: invDepDate,
+          invalidChequeNo: invChq,
+          customMessage: combinedRowMsg || undefined,
+        })
+      })
+
+      if (newErrors.length > 0) {
+        setRowValidationErrors(newErrors)
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+
       const rowNumbers = failedIdx.map((i) => i + offset + 1).join(', ')
+      const reasonSummary = detailedReasons.join(' | ') || (results[failedIdx[0]] as PromiseRejectedResult).reason?.toString() || ''
       throw new Error(
         `${savedIds.size} of ${savedRows.length} ${savedRows.length === 1 ? 'row was' : 'rows were'} saved. ` +
-          `Row ${rowNumbers} failed and ${failedIdx.length === 1 ? 'is' : 'are'} still in the sheet${reasonText ? `: ${reasonText}` : '.'}`
+          `Row ${rowNumbers} failed and ${failedIdx.length === 1 ? 'is' : 'are'} still in the sheet: ${reasonSummary}`
       )
     }
     const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
@@ -3086,6 +3279,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: extraItemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           } else {
             await expenseService.addExpense({
@@ -3100,6 +3294,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: extraItemized,
               bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           }
         })
@@ -3139,6 +3334,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: itemized,
               bankAccountId: effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
 
             if (row.status === 'Unpaid' && unpaidAssignments.length > 0) {
@@ -3191,6 +3387,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               items: itemized,
               bankAccountId: row.paymentMethod?.toLowerCase().includes('petty cash') ? undefined : effectiveBankId,
               createdBy: authorName,
+              clientRef: row.id,
             })
           }
         })
@@ -3631,7 +3828,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   }
                   options={availableBankAccounts.map((acc) => ({
                     value: acc.id,
-                    label: `${acc.bankName} - ${acc.accountName || acc.accountNumber} (${formatPHP(acc.currentBalance)})`,
+                    label: `${acc.bankName} - ${acc.accountName} (${formatPHP(acc.currentBalance)})`,
                   }))}
                   aria-label="Deposit Bank"
                 />
@@ -3781,14 +3978,36 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                   <ul className="list-disc list-inside space-y-0.5 text-rose-800">
                     {rowValidationErrors.flatMap((err) => {
                       const items: string[] = []
-                      if (err.missingParticulars) {
-                        items.push(`Row ${err.rowIndex}: The particulars couldn't be empty`)
-                      }
-                      if (err.missingCategory) {
-                        items.push(`Row ${err.rowIndex}: The category couldn't be empty`)
-                      }
-                      if (err.missingPrice) {
-                        items.push(`Row ${err.rowIndex}: The price couldn't be empty`)
+                      if (err.customMessage) {
+                        items.push(`Row ${err.rowIndex}: ${err.customMessage}`)
+                      } else {
+                        if (err.invalidDate) {
+                          items.push(`Row ${err.rowIndex}: The date is invalid or cannot be in the future`)
+                        }
+                        if (err.missingParticulars) {
+                          items.push(`Row ${err.rowIndex}: The particulars couldn't be empty`)
+                        }
+                        if (err.missingCategory) {
+                          items.push(`Row ${err.rowIndex}: The category couldn't be empty`)
+                        }
+                        if (err.missingPrice) {
+                          items.push(`Row ${err.rowIndex}: The price couldn't be empty`)
+                        }
+                        if (err.invalidPrice) {
+                          items.push(`Row ${err.rowIndex}: The total amount must be at least ₱1.00`)
+                        }
+                        if (err.invalidQuantity) {
+                          items.push(`Row ${err.rowIndex}: The quantity must be greater than 0`)
+                        }
+                        if (err.invalidPaymentMethod) {
+                          items.push(`Row ${err.rowIndex}: Invalid payment method`)
+                        }
+                        if (err.invalidDepositDate) {
+                          items.push(`Row ${err.rowIndex}: The deposit date must be on or after transaction date and not later than today`)
+                        }
+                        if (err.invalidChequeNo) {
+                          items.push(`Row ${err.rowIndex}: Invalid reference / cheque number`)
+                        }
                       }
                       return items.map((msg, i) => (
                         <li key={`${err.rowId}-${i}`}>{msg}</li>
@@ -3951,6 +4170,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }}
                             max={todayIso}
                             value={row.date}
+                            hasError={Boolean(rowErrors?.invalidDate)}
                             onChange={(e) =>
                               handleRowChange(row.id, 'date', e.target.value)
                             }
@@ -4025,6 +4245,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             }}
                             value={row.paymentMethod}
                             options={paymentOptions}
+                            hasError={Boolean(rowErrors?.invalidPaymentMethod)}
                             onChange={(val) => {
                               handleRowChange(row.id, 'paymentMethod', val)
                               const valLower = val.toLowerCase()
@@ -4106,7 +4327,10 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             onPaste={(e) => handlePaste(e, index, 4)}
                             aria-label={`Cheque / Ref, row ${index + 1}`}
                             title={row.chequeNo || undefined}
-                            className={SPREADSHEET_INPUT}
+                            className={cn(
+                              SPREADSHEET_INPUT,
+                              rowErrors?.invalidChequeNo && 'bg-rose-50/60 ring-1 ring-inset ring-rose-500 border-rose-500 text-rose-700 font-medium'
+                            )}
                           />
                         </TableCell>
 
@@ -4144,8 +4368,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 SPREADSHEET_INPUT,
                                 SPREADSHEET_NUM_INPUT,
                                 'pl-5',
-                                rowErrors?.missingPrice
-                                  ? 'bg-rose-50/60 ring-1 ring-inset ring-rose-500'
+                                rowErrors?.missingPrice || rowErrors?.invalidPrice
+                                  ? 'bg-rose-50/60 ring-1 ring-inset ring-rose-500 border-rose-500 text-rose-700'
                                   : row.isPartial && (!row.unitPrice || row.unitPrice === 0)
                                     ? 'bg-amber-50/60 ring-1 ring-inset ring-amber-400'
                                     : ''
@@ -4179,7 +4403,11 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             onKeyDown={(e) => handleCellKeyDown(e, index, 6)}
                             onPaste={(e) => handlePaste(e, index, 6)}
                             aria-label={`Qty, row ${index + 1}`}
-                            className={cn(SPREADSHEET_INPUT, SPREADSHEET_NUM_INPUT)}
+                            className={cn(
+                              SPREADSHEET_INPUT,
+                              SPREADSHEET_NUM_INPUT,
+                              rowErrors?.invalidQuantity && 'bg-rose-50/60 ring-1 ring-inset ring-rose-500 border-rose-500 text-rose-700'
+                            )}
                           />
                         </TableCell>
 
@@ -4304,6 +4532,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 value={getRowDepositDate(row)}
                                 min={normalizeDateToYYYYMMDD(row.date) || undefined}
                                 max={todayIso}
+                                hasError={Boolean(rowErrors?.invalidDepositDate)}
                                 onChange={(e) => {
                                   setErrorMessage(null)
                                   handleRowChange(row.id, 'depositDate', e.target.value)

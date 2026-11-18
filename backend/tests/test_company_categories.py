@@ -57,13 +57,12 @@ def client_and_db():
 
     # Setup seed companies and sole-owned bank
     db = TestingSessionLocal()
-    comp_a = Company(company_id=1, company_name="Company Alpha", starting_balance=Decimal("10000.00"))
-    comp_b = Company(company_id=2, company_name="Company Beta", starting_balance=Decimal("10000.00"))
+    comp_a = Company(company_id=1, company_name="Company Alpha")
+    comp_b = Company(company_id=2, company_name="Company Beta")
     bank_a = BankAccount(
         id="bank-alpha-1",
         bank_name="BDO",
         account_name="Alpha Checking",
-        account_number="1234567890",
         company_name="Company Alpha",
         company_id=1,
         starting_balance=Decimal("50000.00"),

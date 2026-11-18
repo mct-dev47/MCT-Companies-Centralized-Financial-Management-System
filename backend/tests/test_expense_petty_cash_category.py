@@ -37,7 +37,7 @@ def env():
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     with Session() as seed:
-        seed.add(Company(company_id=1, company_name="Company One", location="Manila", starting_balance=0))
+        seed.add(Company(company_id=1, company_name="Company One", location="Manila"))
         seed.add(Category(name="Office Supplies"))
         # Fund petty cash so petty cash expenses don't take the wallet below zero
         seed.add(PettyCashTopUp(company_id=1, amount=1000, topup_date=date(2026, 1, 1), status="Approved"))

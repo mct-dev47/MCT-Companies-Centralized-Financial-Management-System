@@ -1,6 +1,6 @@
 from typing import List, Optional
 import re
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -15,6 +15,7 @@ from app.core.dependencies import (
     require_finance_user,
 )
 from app.core.company_resolver import resolve_company
+from app.core.pagination import PaginationParams
 from app.models.company import Company
 from app.schemas.bank import (
     BankAccountCreate,
@@ -63,6 +64,7 @@ def _check_any_owner_access(db: Session, current_user, account) -> None:
 @router.get("", response_model=List[BankAccountOut], summary="List corporate bank accounts")
 def list_bank_accounts(
     company_name: Optional[str] = Query(None, description="Filter by company name"),
+    include_transactions: bool = Query(True, description="Include embedded transactions list"),
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db),
 ):
@@ -72,9 +74,13 @@ def list_bank_accounts(
     if company_name and company_name.strip().lower() != "all companies":
         comp = resolve_company(db, company_name=company_name)
         check_company_access(current_user, comp.company_id)
-        return service.list_accounts(company_name=comp.company_name, company_id=comp.company_id)
+        return service.list_accounts(
+            company_name=comp.company_name,
+            company_id=comp.company_id,
+            include_transactions=include_transactions,
+        )
 
-    accounts = service.list_accounts()
+    accounts = service.list_accounts(include_transactions=include_transactions)
     if user_role in ("audit", "auditor", "owner"):
         return accounts
 
@@ -91,9 +97,9 @@ def list_bank_accounts(
         return []
 
     assigned_names = {
-        c.company_name.strip().lower()
-        for c in db.query(Company).filter(Company.company_id.in_(assigned_ids)).all()
-        if c.company_name
+        cname.strip().lower()
+        for (cname,) in db.query(Company.company_name).filter(Company.company_id.in_(assigned_ids)).all()
+        if cname
     }
     owner_id_cache: dict[str, Optional[int]] = {}
 
@@ -119,6 +125,40 @@ def list_bank_accounts(
         return any(_owner_matches(n) for n in owners if n)
 
     return [a for a in accounts if _account_in_scope(a)]
+
+
+@router.get("/{account_id}/transactions", response_model=List[BankTransactionOut], summary="List paginated bank transactions for an account")
+def list_bank_account_transactions(
+    account_id: str,
+    response: Response,
+    search: Optional[str] = Query(None, description="Search particulars, cheque no, or category"),
+    tx_type: Optional[str] = Query(None, description="Filter by 'deposit' or 'withdrawal'"),
+    sort_dir: Optional[str] = Query("desc", description="Sort direction ('asc' or 'desc')"),
+    pagination: PaginationParams = Depends(),
+    current_user: AuthenticatedUser = Depends(require_business_reader),
+    db: Session = Depends(get_db),
+):
+    if hasattr(search, "default"):
+        search = None
+    if hasattr(tx_type, "default"):
+        tx_type = None
+    if hasattr(sort_dir, "default"):
+        sort_dir = "desc"
+    service = BankService(db)
+    acc = service.get_account(account_id)
+    if not acc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Bank account not found")
+    _check_any_owner_access(db, current_user, acc)
+    rows, total = service.list_transactions_paginated(
+        account_id=account_id,
+        offset=pagination.offset,
+        limit=pagination.limit,
+        search=search,
+        tx_type=tx_type,
+        sort_dir=sort_dir or "desc",
+    )
+    response.headers["X-Total-Count"] = str(total)
+    return rows
 
 
 @router.post("/reconcile", summary="Bring every bank back in line with the Transactions ledger")

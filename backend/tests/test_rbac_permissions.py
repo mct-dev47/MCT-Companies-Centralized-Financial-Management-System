@@ -119,10 +119,10 @@ class TestRBACPermissions(unittest.TestCase):
 
         with self.Session() as seed:
             seed.add_all([
-                Company(company_id=1, company_name="MCT Hotel", location="Manila", starting_balance=1000),
-                Company(company_id=4, company_name="Speedfire Construction & Trading Corp.", location="Manila", starting_balance=1000),
-                Company(company_id=5, company_name="JK Property and Ventures Corporation", location="Manila", starting_balance=1000),
-                Company(company_id=7, company_name="FILCAP Prime Holdings Corp.", location="Manila", starting_balance=1000),
+                Company(company_id=1, company_name="MCT Hotel", location="Manila"),
+                Company(company_id=4, company_name="Speedfire Construction & Trading Corp.", location="Manila"),
+                Company(company_id=5, company_name="JK Property and Ventures Corporation", location="Manila"),
+                Company(company_id=7, company_name="FILCAP Prime Holdings Corp.", location="Manila"),
             ])
             seed.commit()
 
@@ -318,7 +318,7 @@ class TestRBACPermissions(unittest.TestCase):
             finance_companies = companies_endpoints.get_authorized_companies(current_user=FINANCE_USER, db=db)
             self.assertEqual(len(finance_companies), 4)
             self.assertTrue(all(c.role == "Finance" for c in finance_companies))
-            self.assertTrue(all(hasattr(c, "name") and hasattr(c, "location") and hasattr(c, "starting_balance") for c in finance_companies))
+            self.assertTrue(all(hasattr(c, "name") and hasattr(c, "location") and hasattr(c, "petty_cash") and not hasattr(c, "starting_balance") for c in finance_companies))
 
             # Auditor user gets all companies with role="Auditor"
             auditor_companies = companies_endpoints.get_authorized_companies(current_user=AUDITOR_USER, db=db)

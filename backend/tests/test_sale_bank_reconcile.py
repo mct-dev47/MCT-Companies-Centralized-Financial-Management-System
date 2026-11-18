@@ -12,7 +12,7 @@ def _session():
     Base.metadata.create_all(bind=engine)
     db = sessionmaker(bind=engine)()
     db.add(BankAccount(
-        id="bnk-001", bank_name="BDO", account_name="Main", account_number="1",
+        id="bnk-001", bank_name="BDO", account_name="Main", 
         company_name="Acme", starting_balance=Decimal("1000.00"), current_balance=Decimal("1000.00"),
     ))
     db.commit()

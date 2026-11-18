@@ -212,7 +212,6 @@ export interface PettyCashMovement {
 
 interface BackendMovement {
   topup_id: number
-  reference_no?: string | null
   topup_date: string
   amount: string | number
   description?: string | null
@@ -276,7 +275,6 @@ interface BackendLedgerEntry {
   entry_date: string
   description: string
   category?: string | null
-  reference_no?: string | null
   amount_requested?: string | number
   amount_in: string | number
   amount_out: string | number
@@ -381,7 +379,6 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
     date: data.entry_date,
     description: data.description,
     category: data.category,
-    referenceNo: data.reference_no,
     amountRequested: Number(data.amount_requested || (data.entry_type === 'topup' ? data.amount_in : 0)),
     amountIn: Number(data.amount_in),
     amountOut: Number(data.amount_out),
@@ -450,7 +447,6 @@ export interface EligibleExpense {
   particulars: string
   category: string | null
   amount: number
-  referenceNo: string | null
 }
 
 const pcCache = new Map<string, { data: any; timestamp: number }>()
@@ -514,7 +510,6 @@ export const pettyCashService = {
       particulars: string
       category?: string | null
       amount: string | number
-      reference_no?: string | null
     }>
     return rows.map((row) => ({
       expenseId: row.expense_id,
@@ -523,7 +518,6 @@ export const pettyCashService = {
       particulars: row.particulars || '',
       category: row.category ?? null,
       amount: Number(row.amount || 0),
-      referenceNo: row.reference_no ?? null,
     }))
   },
 
@@ -560,6 +554,37 @@ export const pettyCashService = {
     const result = ((await response.json()) as BackendSummary[]).map(mapSummary)
     pcCache.set(cacheKey, { data: result, timestamp: Date.now() })
     return result
+  },
+
+  async getLedgerPaginated(
+    company?: string,
+    period: PettyCashPeriod = {},
+    params: {
+      page?: number
+      limit?: number
+      search?: string
+      entryType?: string
+      status?: string
+      auditStatus?: string
+    } = {}
+  ): Promise<{ items: PettyCashLedgerEntry[]; total: number }> {
+    const query = buildQuery({
+      company_name: company && company !== 'All Companies' ? company : undefined,
+      start_date: period.startDate,
+      end_date: period.endDate,
+      page: params.page,
+      limit: params.limit,
+      search: params.search,
+      entry_type: params.entryType,
+      status: params.status,
+      audit_status: params.auditStatus,
+    })
+    const response = await fetch(`/api/v1/petty-cash/ledger${query}`, { headers: backendHeaders() })
+    if (!response.ok) throw await getBackendError(response)
+    const totalHeader = response.headers.get('X-Total-Count')
+    const items = ((await response.json()) as BackendLedgerEntry[]).map(mapLedgerEntry)
+    const total = totalHeader !== null ? Number(totalHeader) || items.length : items.length
+    return { items, total }
   },
 
   async getLedger(company?: string, period: PettyCashPeriod = {}): Promise<PettyCashLedgerEntry[]> {
@@ -610,7 +635,7 @@ export const pettyCashService = {
     if (!response.ok) throw await getBackendError(response)
     return ((await response.json()) as BackendMovement[]).map((m) => ({
       topupId: m.topup_id,
-      refNo: m.reference_no || `PC-${m.topup_id}`,
+      refNo: '',
       date: m.topup_date,
       amount: Number(m.amount),
       description: m.description || 'Petty cash top-up',

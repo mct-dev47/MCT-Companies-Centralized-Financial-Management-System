@@ -17,7 +17,6 @@ def test_expense_out_schema_resilience():
         payment_method=None,
         created_by=None,
         expense_date=None,
-        reference_no=None,
         cheque_no=None,
         amount=Decimal("150.00"),
         amount_paid=None,
