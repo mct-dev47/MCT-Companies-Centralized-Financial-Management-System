@@ -92,6 +92,7 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             commit=commit,
         )
         if commit:
+            system_cache.invalidate_tag("bank_accounts")
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
     except Exception as exc:  # never block saving an expense unless running inside an atomic commit=False batch
         if not commit:
@@ -992,6 +993,7 @@ def create_expense(
             company_name=target_company.company_name,
             category_id=expense.category_id,
             category_name=cat.name if cat else "None",
+            payment_method=expense.payment_method,
             created_by=expense.created_by,
             expense_date=expense.expense_date,
             cheque_no=expense.cheque_number or expense.cheque_no or cheque,
@@ -1138,6 +1140,10 @@ def update_expense(
 
     # No petty cash balance block on edit either: the wallet may go negative (paid out of pocket).
 
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    old_exp_date = expense.expense_date if expense else None
+    had_bank_link = bool(expense and expense.bank_account_id)
+
     update_payload = {
         "audit_status": "Pending Audit",
         "audited_by": None,
@@ -1148,12 +1154,38 @@ def update_expense(
         update_payload["expense_date"] = expense_in.expense_date.isoformat()
     if target_amt is not None:
         update_payload["amount"] = float(target_amt)
-    if expense_in.amount_paid is not None:
-        update_payload["amount_paid"] = float(expense_in.amount_paid)
 
     parts = expense_in.particulars or expense_in.description
     if parts is not None:
         update_payload["description"] = parts.strip()
+
+    # Always keep amount_paid aligned with amount and [Paid]/[Pending] lines whenever amount or particulars change,
+    # so Expense.amount_paid, pre-validation, bank withdrawal, and bill/loan amounts never diverge.
+    derived_amount_paid = None
+    base_desc = parts.strip() if parts is not None else (expense.description if expense else None)
+    base_amt = target_amt if target_amt is not None else (current or {}).get("amount")
+    if base_amt is not None and (target_amt is not None or parts is not None or expense_in.amount_paid is None):
+        derived_amount_paid = compute_paid_amount_from_particulars(base_desc, base_amt)
+        effective_paid_amount = derived_amount_paid
+        update_payload["amount_paid"] = float(effective_paid_amount)
+    elif expense_in.amount_paid is not None:
+        effective_paid_amount = Decimal(str(expense_in.amount_paid)).quantize(Decimal("0.01"))
+        update_payload["amount_paid"] = float(effective_paid_amount)
+    elif expense is not None:
+        effective_paid_amount = compute_paid_amount_from_particulars(expense.description, expense.amount)
+    else:
+        effective_paid_amount = None
+
+    # Validate linked loan repayment and bill payment limits BEFORE mutating Supabase, Expense, or bank rows.
+    from app.api.v1.endpoints.loans import (
+        prepare_loan_repayment_edit,
+        sync_loan_repayment_from_expense,
+        sync_remote_loan_status,
+    )
+    from app.services.bills_service import BillsService
+
+    prepare_loan_repayment_edit(db, expense_id, effective_paid_amount)
+    BillsService(db).prepare_payment_edit_from_expense(expense_id, effective_paid_amount)
 
     cheque = expense_in.cheque_no if expense_in.cheque_no is not None else expense_in.chequeNo
     if cheque is not None:
@@ -1162,56 +1194,75 @@ def update_expense(
     if expense_in.remarks is not None:
         update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
-    # Update in Supabase
-    updated_row = None
+    if force_petty_category:
+        update_payload["bank_account_id"] = None
+    else:
+        new_bank_id = (expense_in.bank_account_id or "").strip() or None if expense_in.bank_account_id is not None else None
+        if new_bank_id:
+            if current and current.get("company_id"):
+                from app.services.income_bank_links import validate_company_bank
+                validate_company_bank(db, int(current["company_id"]), new_bank_id)
+            update_payload["bank_account_id"] = new_bank_id
+        elif expense is not None and expense.bank_account_id:
+            update_payload["bank_account_id"] = expense.bank_account_id
+        elif expense is not None and expense.company_id:
+            from app.services.bank_service import BankService
+            comp = db.query(Company).filter(Company.company_id == expense.company_id).first()
+            found_acct = BankService(db).find_account_for_company(comp.company_name) if comp else None
+            if found_acct is not None:
+                update_payload["bank_account_id"] = str(found_acct.id)
+
+    if expense_in.payment_method is not None:
+        update_payload["payment_method"] = (expense_in.payment_method or "").strip() or None
+
+    # Resolve category_id before mutating locally
+    client = None
     try:
         client = get_supabase_admin_client()
-        company_map, cat_map = get_supabase_mappings(client, db=db)
+    except Exception:
+        client = None
 
-        category_str = (expense_in.category or "").strip()
-        if category_str:
-            if category_str.lower() == "none":
-                update_payload["category_id"] = None
-            else:
-                cat_id = None
-                for cid, cname in cat_map.items():
-                    if cname.lower() == category_str.lower():
-                        cat_id = cid
-                        break
-                if not cat_id:
-                    ins_cat = client.table("category").insert({"name": category_str}).execute()
-                    if ins_cat.data:
-                        cat_id = ins_cat.data[0]["category_id"]
-                update_payload["category_id"] = cat_id
-        elif expense_in.category_id is not None:
-            update_payload["category_id"] = expense_in.category_id
+    category_str = (expense_in.category or "").strip()
+    if category_str:
+        if category_str.lower() == "none":
+            update_payload["category_id"] = None
+        else:
+            cat_id = None
+            if client is not None:
+                try:
+                    _, cat_map = get_supabase_mappings(client, db=db)
+                    for cid, cname in cat_map.items():
+                        if cname.lower() == category_str.lower():
+                            cat_id = cid
+                            break
+                    if not cat_id:
+                        ins_cat = client.table("category").insert({"name": category_str}).execute()
+                        if ins_cat.data:
+                            cat_id = ins_cat.data[0]["category_id"]
+                except Exception:
+                    cat_id = None
+            if not cat_id:
+                cat_id = _local_category_id(db, category_str)
+            update_payload["category_id"] = cat_id
+    elif expense_in.category_id is not None:
+        update_payload["category_id"] = expense_in.category_id
 
-        if expense_in.payment_method is not None:
-            update_payload["payment_method"] = (expense_in.payment_method or "").strip() or None
-
-        if update_payload:
-            sb_res = client.table("expenses").update(update_payload).eq("expense_id", expense_id).execute()
-            if sb_res.data:
-                updated_row = sb_res.data[0]
-    except Exception as e:
-        print(f"Supabase expense update error: {e}")
-
-    # Also update in local SQLite
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if expense and force_petty_category and "category_id" not in update_payload:
-        # Supabase step did not run: still file the expense under Petty Cash locally
         update_payload["category_id"] = _local_category_id(db, PETTY_CASH_CATEGORY)
+
+    # Atomically update Expense, borrower bank, BillPayment, and LoanRepayment (+ lender bank) together
+    affected_bill_id = None
+    affected_loan_id = None
     if expense:
         if "expense_date" in update_payload:
             expense.expense_date = expense_in.expense_date
         if "amount" in update_payload:
             expense.amount = target_amt
         if "amount_paid" in update_payload:
-            expense.amount_paid = expense_in.amount_paid
+            expense.amount_paid = effective_paid_amount
         if "description" in update_payload:
             expense.description = update_payload["description"]
         if "cheque_number" in update_payload:
-            expense.cheque_number = update_payload["cheque_number"]
             expense.cheque_no = update_payload["cheque_number"]
         if "category_id" in update_payload:
             expense.category_id = update_payload["category_id"]
@@ -1219,16 +1270,46 @@ def update_expense(
             expense.payment_method = update_payload["payment_method"]
         if "remarks" in update_payload:
             expense.remarks = update_payload["remarks"]
+        if "bank_account_id" in update_payload:
+            expense.bank_account_id = update_payload["bank_account_id"]
         expense.audit_status = "Pending Audit"
         expense.audited_by = None
         expense.audited_at = None
         expense.audit_remarks = None
+        db.flush()
+
+        reconcile_expense_bank(db, expense_id=expense_id, commit=False)
+        affected_bill_id = BillsService(db).sync_payment_from_expense(expense, commit=False)
+        affected_loan_id = sync_loan_repayment_from_expense(db, expense, commit=False, old_pay_date=old_exp_date)
         db.commit()
         db.refresh(expense)
 
-    # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
-    reconcile_expense_bank(db, expense_id=expense_id)
+    # Sync to Supabase after local atomic commit succeeds (skip redundant write when sharing Postgres)
+    updated_row = None
+    if client is not None and update_payload and (not expense or not rest_and_orm_share_database()):
+        try:
+            sb_res = client.table("expenses").update(update_payload).eq("expense_id", expense_id).execute()
+            if sb_res.data:
+                updated_row = sb_res.data[0]
+        except Exception as e:
+            print(f"Supabase expense update error: {e}")
+
     system_cache.invalidate_tag("petty_cash")
+    from app.core.websocket import ws_manager
+    if not force_petty_category or had_bank_link:
+        system_cache.invalidate_tag("bank_accounts")
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+    if affected_bill_id is not None:
+        system_cache.invalidate_tag("bills")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"bill_id": affected_bill_id}})
+    if affected_loan_id is not None:
+        sync_remote_loan_status(db, affected_loan_id)
+        system_cache.invalidate_tag("loans")
+        system_cache.invalidate_tag("bank_accounts")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"loan_id": affected_loan_id}})
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
 
     # Auto-save updated particulars to company library
     if parts:
@@ -1482,26 +1563,48 @@ def delete_expense(
 
     check_company_access(current_user, deleted_company_id)
 
-    if client:
+    if expense:
+        # Cascade first, while the expense still exists everywhere: removing the (Supabase) expense row early
+        # fires its ON DELETE SET NULL / bank cascade trigger and would orphan the bill payment and bank rows.
+        from app.services.bank_service import BankService
+        from app.services.bills_service import BillsService
+        from app.api.v1.endpoints.loans import delete_loan_repayment_from_expense, sync_remote_loan_status
+        from app.core.websocket import ws_manager
+
+        had_bank_link = bool(expense.bank_account_id)
+        affected_bill_id = BillsService(db).delete_payment_from_expense(resolved_id, commit=False)
+        affected_loan_id = delete_loan_repayment_from_expense(db, resolved_id, commit=False)
+
+        # Undo the bank debit, purge all linked bank entries, and remove the expense in one atomic transaction
+        reconcile_expense_bank(db, expense_id=resolved_id, force_zero=True, commit=False)
+        BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=resolved_id, commit=False)
+        db.delete(expense)
+        db.commit()
+
+        if affected_loan_id is not None:
+            sync_remote_loan_status(db, affected_loan_id)
+        if not _is_petty_cash_payment(expense.payment_method) or had_bank_link:
+            system_cache.invalidate_tag("bank_accounts")
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+        if affected_bill_id is not None:
+            system_cache.invalidate_tag("bills")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"bill_id": affected_bill_id}})
+        if affected_loan_id is not None:
+            system_cache.invalidate_tag("loans")
+            system_cache.invalidate_tag("bank_accounts")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"loan_id": affected_loan_id}})
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+
+    # Remote copy last: only needed when Supabase REST and SQLAlchemy do not share Postgres
+    if client and (not expense or not rest_and_orm_share_database()):
         try:
             sb_res = client.table("expenses").delete().eq("expense_id", resolved_id).execute()
             if sb_res.data and len(sb_res.data) > 0:
                 deleted_from_supabase = True
         except Exception as e:
             print(f"Supabase delete expense error: {e}")
-
-    if expense:
-        # Undo the bank debit first, while the expense (and its bank entries) can still be found
-        reconcile_expense_bank(db, expense_id=resolved_id, force_zero=True)
-        db.delete(expense)
-        db.commit()
-        # The expense is gone, so none of its bank entries (originals or reversals) should remain
-        try:
-            from app.services.bank_service import BankService
-            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=resolved_id)
-        except Exception as e:
-            db.rollback()
-            print(f"Bank entry purge error on expense delete: {e}")
 
     # Cascade: the day's expense remark goes once no expense is left on that day
     if deleted_day:

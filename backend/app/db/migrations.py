@@ -737,6 +737,21 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0072_drop_reference_no_columns")
             logger.info("Migration 0072_drop_reference_no_columns applied successfully.")
 
+    # 39. 0074: link loan repayments to their expense and bank entries so edits and deletes cascade
+    result_0074 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0074_loan_repayment_links'")
+    ).first()
+    if not result_0074:
+        script_0074 = MIGRATIONS_DIR / "0074_loan_repayment_links.postgres.sql"
+        if script_0074.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0074.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0074_loan_repayment_links')"))
+            applied.append("0074_loan_repayment_links")
+            logger.info("Migration 0074_loan_repayment_links applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1795,6 +1810,30 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN remarks TEXT NULL"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0073_bank_transactions_audit_fields')"))
         applied.append("0073_bank_transactions_audit_fields")
+
+    # 39. 0074: link loan repayments to their expense and bank entries so edits and deletes cascade
+    result_0074 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0074_loan_repayment_links'")
+    ).first()
+    if not result_0074:
+        tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        if "loans_repayments" in tables:
+            lr_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(loans_repayments)")).fetchall()}
+            if "expense_id" not in lr_cols:
+                conn.execute(text("ALTER TABLE loans_repayments ADD COLUMN expense_id INTEGER REFERENCES expenses(expense_id) ON DELETE SET NULL"))
+            if "bank_account_id" not in lr_cols:
+                conn.execute(text("ALTER TABLE loans_repayments ADD COLUMN bank_account_id VARCHAR(100)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_loans_repayments_expense_id ON loans_repayments (expense_id)"))
+        if "bank_transactions" in tables:
+            bt_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "source_loan_repayment_id" not in bt_cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_loan_repayment_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_loan_repayment_id ON bank_transactions (source_loan_repayment_id)"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0074_loan_repayment_links')"))
+        applied.append("0074_loan_repayment_links")
 
     conn.commit()
     return applied

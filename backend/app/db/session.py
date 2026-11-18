@@ -230,6 +230,14 @@ def init_db():
             if "source_expense_id" not in bank_tx_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER"))
+            if "source_loan_repayment_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_loan_repayment_id INTEGER"))
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_loan_repayment_id ON bank_transactions(source_loan_repayment_id)"))
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Index on bank_transactions.source_loan_repayment_id skipped: %s", exc)
             if "audit_status" not in bank_tx_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
@@ -374,8 +382,33 @@ def init_db():
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
                 except Exception:
                     pass
+
+        if "loans_repayments" in table_names:
+            lr_cols = {col["name"] for col in inspector.get_columns("loans_repayments")}
+            with engine.begin() as conn:
+                if "expense_id" not in lr_cols:
+                    conn.execute(text("ALTER TABLE loans_repayments ADD COLUMN expense_id INTEGER"))
+                if "bank_account_id" not in lr_cols:
+                    conn.execute(text("ALTER TABLE loans_repayments ADD COLUMN bank_account_id VARCHAR(100)"))
+                try:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_loans_repayments_expense_id ON loans_repayments(expense_id)"))
+                except Exception:
+                    pass
     except Exception:
         pass
+
+    # Loan repayments recorded before migration 0074 get linked to their expense and lender deposit, so edits
+    # and deletes reach them. Only fills blanks, so it is safe on every start.
+    try:
+        from app.api.v1.endpoints.loans import backfill_loan_repayment_links
+
+        _link_db = SessionLocal()
+        try:
+            backfill_loan_repayment_links(_link_db)
+        finally:
+            _link_db.close()
+    except Exception as e:
+        logger.warning(f"Loan repayment link backfill skipped on init: {e}")
 
     # Bank integrity on every start: drop entries whose sale/expense was deleted while nothing was watching,
     # and re-derive every balance from its entries. Both are safe no matter what any record's status is.

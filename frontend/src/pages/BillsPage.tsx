@@ -7,7 +7,6 @@ import {
   Clock,
   BellRing,
   Plus,
-  Download,
   FileSpreadsheet,
   Trash2,
   Pencil,
@@ -15,7 +14,6 @@ import {
   ChevronDown,
   Check,
   Building2,
-  X,
   AlertCircle,
   Eye,
   MoreVertical,
@@ -26,7 +24,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
-import { TablePagination, TableSkeleton, TableEmptyState, TableErrorState, StatusPill, ConfirmModal, CardSkeleton } from '@/components/common'
+import { TablePagination, TableSkeleton, TableEmptyState, TableErrorState, ConfirmModal, CardSkeleton } from '@/components/common'
 import { Skeleton } from '@/components/ui/skeleton'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {
@@ -37,13 +35,6 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
@@ -55,6 +46,7 @@ import {
   type BillStatus,
 } from '@/services/billsService'
 import { loanService } from '@/services/loanService'
+import { websocketService } from '@/services/websocketService'
 import { AddBillModal } from '@/components/dashboard/AddBillModal'
 import { EditBillModal } from '@/components/dashboard/EditBillModal'
 import { BillDetailPageView } from '@/components/dashboard/BillDetailPageView'
@@ -213,6 +205,23 @@ export const BillsPage: React.FC = () => {
       setBills([])
     } finally {
       setLoading(false)
+    }
+  }, [selectedCompany])
+
+  React.useEffect(() => {
+    let active = true
+    const refreshSilently = () => {
+      billsService
+        .getBills(selectedCompany)
+        .then((data) => {
+          if (active) setBills(data)
+        })
+        .catch(() => {})
+    }
+    const unsub = websocketService.subscribe('BILLS_UPDATED', refreshSilently)
+    return () => {
+      active = false
+      unsub()
     }
   }, [selectedCompany])
 

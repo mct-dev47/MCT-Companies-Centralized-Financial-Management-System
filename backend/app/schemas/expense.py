@@ -89,6 +89,7 @@ class ExpenseUpdate(StrictBaseModel):
     particulars: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=500)
     remarks: Optional[str] = Field(None, max_length=500)
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
     @field_validator('amount', 'withdrawal', mode='before')
     @classmethod

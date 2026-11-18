@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.core.company_resolver import get_company_name_map
 from app.db.supabase import get_supabase_admin_client
 from app.models.loan import Loan, LoanRepayment
-from app.models.bank import BankAccount
+from app.models.bank import BankAccount, BankTransaction
 from app.models.finance import Expense, Category
 from app.services.bank_service import BankService
 from app.schemas.bank import BankDepositWithdrawRequest
@@ -155,15 +155,22 @@ def _loan_category(description: Optional[str]) -> Optional[str]:
     return None
 
 
-def _company_loan_item(loan: Loan, company_names: dict[int, str], db: Session) -> CompanyLoanOut:
+def _loan_total_payable(loan: Loan) -> Decimal:
     principal = Decimal(str(loan.principal_amount or 0))
-    interest = FinanceCalculator.calculate_loan_interest(
-        principal, Decimal(str(loan.interest_rate or 0))
+    rate = Decimal(str(loan.interest_rate or 0))
+    return FinanceCalculator.calculate_loan_total_payable(
+        principal, FinanceCalculator.calculate_loan_interest(principal, rate)
     )
-    total_payable = FinanceCalculator.calculate_loan_total_payable(principal, interest)
+
+
+def _company_loan_item(loan: Loan, company_names: dict[int, str], db: Session) -> CompanyLoanOut:
+    total_payable = _loan_total_payable(loan)
     total_paid = Decimal(str(
         db.query(func.coalesce(func.sum(LoanRepayment.amount), 0))
-        .filter(LoanRepayment.loan_id == loan.loan_id, LoanRepayment.status != "pending")
+        .filter(
+            LoanRepayment.loan_id == loan.loan_id,
+            or_(LoanRepayment.status.is_(None), func.lower(LoanRepayment.status) != "pending"),
+        )
         .scalar() or 0
     ))
     outstanding = FinanceCalculator.calculate_loan_remaining_balance(total_payable, total_paid)
@@ -412,7 +419,6 @@ def cleanup_duplicate_loan_repayment_expenses(db: Session) -> int:
     """Find and remove duplicate loan repayment expense records (keeping only the earliest one)."""
     try:
         from app.models.finance import Expense
-        from app.core.supabase import get_supabase_admin_client
 
         rows = (
             db.query(Expense)
@@ -420,9 +426,13 @@ def cleanup_duplicate_loan_repayment_expenses(db: Session) -> int:
             .order_by(Expense.expense_id.asc())
             .all()
         )
+        # An expense tied to a LoanRepayment is a real payment of its own: never treat it as a duplicate.
+        linked_ids = {eid for (eid,) in db.query(LoanRepayment.expense_id).filter(LoanRepayment.expense_id.isnot(None)).all()}
         seen: set[tuple] = set()
         to_delete: list[Expense] = []
         for r in rows:
+            if r.expense_id in linked_ids:
+                continue
             cheque_key = (r.cheque_no or r.cheque_number or "").strip().lower()
             desc_key = (r.description or "").strip().lower()
             key = (r.company_id, str(r.amount), str(r.expense_date), cheque_key, desc_key)
@@ -475,14 +485,22 @@ def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
         .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
         .all()
     )
+    exp_ids = [r.expense_id for r in rows if r.expense_id is not None]
+    exp_pm_map = (
+        dict(db.query(Expense.expense_id, Expense.payment_method).filter(Expense.expense_id.in_(exp_ids)).all())
+        if exp_ids
+        else {}
+    )
     by_loan: dict[int, list[LoanRepayment]] = {}
     for r in rows:
+        if not r.payment_method:
+            r.payment_method = exp_pm_map.get(r.expense_id) or "Cash"
         by_loan.setdefault(r.loan_id, []).append(r)
 
     for item in items:
         reps = by_loan.get(item.loan_id, [])
         total_paid = sum(
-            (Decimal(str(r.amount or 0)) for r in reps if (r.status or "").lower() != "pending"),
+            (Decimal(str(r.amount or 0)) for r in reps if (r.status or "").strip().lower() != "pending"),
             Decimal("0.00"),
         )
         principal = Decimal(str(item.principal_amount or 0))
@@ -1802,6 +1820,7 @@ def create_loan_repayment(
     repayment = LoanRepayment(**repayment_data)
     repayment.payment_method = chosen_payment_method
     db.add(repayment)
+    db.flush()
 
     # Update loan status in SQLAlchemy (and Supabase if configured)
     new_loan_status = "Paid" if new_remaining <= Decimal("0.00") else "Partially Paid"
@@ -1816,28 +1835,20 @@ def create_loan_repayment(
     pay_date_str = repayment_in.payment_date.strftime("%m/%d/%y")
 
     bank_svc = BankService(db)
-    # 1. Deduct from Borrower's bank account
+    is_petty = "petty cash" in chosen_payment_method.strip().lower()
+    # 1. Resolve Borrower & Lender bank accounts
     borrower_acc = None
-    if chosen_borrower_bank_id:
-        borrower_acc = db.query(BankAccount).filter(BankAccount.id == chosen_borrower_bank_id).first()
-    if not borrower_acc:
-        borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
-    if not borrower_acc:
-        borrower_acc = bank_svc.find_account_for_company(b_name)
-    if borrower_acc:
-        bank_svc.withdraw(
-            borrower_acc.id,
-            BankDepositWithdrawRequest(
-                amount=repayment_in.amount,
-                date=pay_date_str,
-                particulars=f"Loan Repayment: {clean_particular} (to {l_name})",
-                category="Loan Repayment",
-                reference_no=repayment_in.reference_no or loan_ref,
-            ),
-        )
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
+    if not is_petty:
+        if chosen_borrower_bank_id:
+            from app.services.income_bank_links import validate_company_bank
+            validate_company_bank(db, loan.borrower, chosen_borrower_bank_id)
+            borrower_acc = db.query(BankAccount).filter(BankAccount.id == chosen_borrower_bank_id).first()
+        if not borrower_acc:
+            borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
+        if not borrower_acc:
+            borrower_acc = bank_svc.find_account_for_company(b_name)
+    repayment.bank_account_id = borrower_acc.id if borrower_acc else None
 
-    # 2. Credit Lender's funding bank account
     lender_acc = None
     if getattr(loan, "bank_account_id", None):
         lender_acc = db.query(BankAccount).filter(BankAccount.id == loan.bank_account_id).first()
@@ -1845,20 +1856,8 @@ def create_loan_repayment(
         lender_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.lender).first()
     if not lender_acc and loan.lender:
         lender_acc = bank_svc.find_account_for_company(l_name)
-    if lender_acc:
-        bank_svc.deposit(
-            lender_acc.id,
-            BankDepositWithdrawRequest(
-                amount=repayment_in.amount,
-                date=pay_date_str,
-                particulars=f"Loan Repayment: {clean_particular} (from {b_name})",
-                category="Loan Repayment",
-                reference_no=repayment_in.reference_no or loan_ref,
-            ),
-        )
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": lender_acc.id}})
 
-    # 3. Record Expense for Borrower company (reflected in Expenses & Transactions)
+    # 2. Record Expense for Borrower company first so its expense_id links to LoanRepayment & BankTransaction
     loan_cat = db.query(Category).filter(Category.name.ilike("Loan Repayment")).first()
     if not loan_cat:
         loan_cat = db.query(Category).filter(Category.name.ilike("Loan%")).first()
@@ -1870,7 +1869,9 @@ def create_loan_repayment(
     target_cheque = repayment_in.reference_no or loan_ref
     target_desc = f"Loan Repayment: {clean_particular} (to {l_name})"
 
-    # Prevent duplicate expense creation if already recorded
+    # Reuse an unlinked identical expense only; one already tied to another repayment belongs to that payment
+    # (two same day partial payments of the same amount are two payments, not one).
+    linked_expense_ids = db.query(LoanRepayment.expense_id).filter(LoanRepayment.expense_id.isnot(None))
     existing_exp = db.query(Expense).filter(
         Expense.company_id == loan.borrower,
         Expense.amount == repayment_in.amount,
@@ -1880,6 +1881,7 @@ def create_loan_repayment(
             Expense.cheque_number == target_cheque,
         ),
         Expense.description == target_desc,
+        ~Expense.expense_id.in_(linked_expense_ids),
     ).first()
 
     expense_id = None
@@ -1899,20 +1901,52 @@ def create_loan_repayment(
             audit_status="Pending Audit",
         )
         db.add(expense_rec)
-        db.commit()
+        db.flush()
         expense_id = expense_rec.expense_id
     else:
         expense_id = existing_exp.expense_id
-        db.commit()
 
+    repayment.expense_id = expense_id
+    db.flush()
+
+    # 3. Deduct from Borrower's bank account via linked Expense entry (same transaction)
+    if borrower_acc and expense_id:
+        from app.api.v1.endpoints.expenses import reconcile_expense_bank
+        reconcile_expense_bank(db, expense_id=expense_id, commit=False)
+        for borrower_tx in db.query(BankTransaction).filter(BankTransaction.source_expense_id == expense_id).all():
+            borrower_tx.source_loan_repayment_id = repayment.loan_repayment_id
+            borrower_tx.category = "Loan Repayment"
+
+    # 4. Credit Lender's funding bank account and tag with source_loan_repayment_id (same transaction)
+    if lender_acc:
+        # deposit() returns (account, transaction)
+        bank_svc.deposit(
+            lender_acc.id,
+            BankDepositWithdrawRequest(
+                amount=repayment_in.amount,
+                date=pay_date_str,
+                particulars=f"Loan Repayment: {clean_particular} (from {b_name})",
+                category="Loan Repayment",
+                reference_no=repayment_in.reference_no or loan_ref,
+            ),
+            source_loan_repayment_id=repayment.loan_repayment_id,
+            commit=False,
+        )
+
+    db.commit()
     db.refresh(repayment)
+    repayment.payment_method = chosen_payment_method
+    if borrower_acc:
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
+    if lender_acc:
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": lender_acc.id}})
 
     try:
-        sb_client = get_supabase_admin_client()
+        sb_client = None if rest_and_orm_share_database() else get_supabase_admin_client()
         if sb_client:
             sb_client.table("loan").update({"status": new_loan_status}).eq("loan_id", loan_id).execute()
             # Only perform Supabase REST insert if ORM and REST do NOT share the same database
-            if not existing_exp and not rest_and_orm_share_database():
+            if not existing_exp:
                 try:
                     sb_client.table("expenses").insert({
                         "company_id": loan.borrower,
@@ -1956,3 +1990,628 @@ def create_loan_repayment(
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
     ws_manager.broadcast_sync({"type": "EXPENSE_CREATED"})
     return repayment
+
+
+def recompute_loan_repayments_and_status(db: Session, loan_id: int) -> Optional[str]:
+    """Recalculate remaining_balance on every repayment for a loan and update Loan.status."""
+    loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    if not loan:
+        return None
+    total_payable = _loan_total_payable(loan)
+
+    repayments = (
+        db.query(LoanRepayment)
+        .filter(LoanRepayment.loan_id == loan_id)
+        .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
+        .all()
+    )
+    total_paid = Decimal("0.00")
+    for rep in repayments:
+        if (rep.status or "").strip().lower() != "pending":
+            total_paid += Decimal(str(rep.amount or 0))
+        rep.remaining_balance = max(Decimal("0.00"), total_payable - total_paid)
+
+    remaining = max(Decimal("0.00"), total_payable - total_paid)
+    if total_paid <= Decimal("0.00"):
+        new_status = "Disbursed"
+    elif remaining <= Decimal("0.00"):
+        new_status = "Paid"
+    else:
+        new_status = "Partially Paid"
+    loan.status = new_status
+    db.flush()
+    return new_status
+
+
+def sync_remote_loan_status(db: Session, loan_id: int) -> None:
+    """Push Loan.status via Supabase REST only after local commit and only when REST and ORM do not share Postgres."""
+    if rest_and_orm_share_database():
+        return
+    loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    if not loan:
+        return
+    try:
+        sb_client = get_supabase_admin_client()
+        if sb_client:
+            sb_client.table("loan").update({"status": loan.status}).eq("loan_id", loan_id).execute()
+    except Exception:
+        pass
+
+
+def _find_repayment_for_expense(db: Session, expense: Optional[Expense]) -> Optional[LoanRepayment]:
+    if not expense:
+        return None
+    rep = db.query(LoanRepayment).filter(LoanRepayment.expense_id == expense.expense_id).first()
+    if rep:
+        return rep
+    desc = (expense.description or "").strip()
+    if desc.lower().startswith("loan repayment:"):
+        rep = (
+            db.query(LoanRepayment)
+            .join(Loan, Loan.loan_id == LoanRepayment.loan_id)
+            .filter(
+                Loan.borrower == expense.company_id,
+                LoanRepayment.payment_date == expense.expense_date,
+                LoanRepayment.amount == expense.amount,
+            )
+            .order_by(LoanRepayment.loan_repayment_id.asc())
+            .first()
+        )
+        if rep:
+            return rep
+    return None
+
+
+def _find_legacy_lender_deposit(
+    db: Session,
+    repayment: LoanRepayment,
+    *,
+    match_date: Optional[date] = None,
+    claimed_tx_ids: Optional[set] = None,
+    loans_by_id: Optional[dict] = None,
+    comp_map: Optional[dict] = None,
+    lender_accounts_by_company: Optional[dict] = None,
+) -> Optional[BankTransaction]:
+    loan = loans_by_id.get(repayment.loan_id) if loans_by_id is not None else db.query(Loan).filter(Loan.loan_id == repayment.loan_id).first()
+    legacy_q = db.query(BankTransaction).filter(
+        BankTransaction.source_loan_repayment_id.is_(None),
+        BankTransaction.source_expense_id.is_(None),
+        BankTransaction.source_sale_id.is_(None),
+        BankTransaction.category == "Loan Repayment",
+        BankTransaction.deposit > 0,
+        BankTransaction.particulars.ilike("Loan Repayment:%(from %"),
+    )
+    if claimed_tx_ids:
+        legacy_q = legacy_q.filter(~BankTransaction.id.in_(claimed_tx_ids))
+    if loan is not None:
+        if getattr(loan, "bank_account_id", None):
+            legacy_q = legacy_q.filter(BankTransaction.bank_account_id == loan.bank_account_id)
+        elif loan.lender:
+            if lender_accounts_by_company is not None:
+                lender_acc_ids = lender_accounts_by_company.get(loan.lender, [])
+            else:
+                lender_acc_ids = [
+                    aid for (aid,) in db.query(BankAccount.id).filter(BankAccount.company_id == loan.lender).all()
+                ]
+            if lender_acc_ids:
+                legacy_q = legacy_q.filter(BankTransaction.bank_account_id.in_(lender_acc_ids))
+        b_name = (
+            comp_map.get(loan.borrower)
+            if comp_map is not None
+            else (db.query(Company.company_name).filter(Company.company_id == loan.borrower).scalar() if loan.borrower else None)
+        )
+        if b_name:
+            legacy_q = legacy_q.filter(BankTransaction.particulars.ilike(f"Loan Repayment:%(from {b_name})%"))
+    target_date = match_date or repayment.payment_date
+    if target_date is not None:
+        legacy_q = legacy_q.filter(BankTransaction.transaction_date == target_date.strftime("%m/%d/%y"))
+    if repayment.amount is not None:
+        legacy_q = legacy_q.filter(BankTransaction.deposit == repayment.amount)
+    return legacy_q.order_by(BankTransaction.created_at.asc()).first()
+
+
+def _assert_lender_bank_unlocked(db: Session, repayment_id: int) -> None:
+    verified = (
+        db.query(BankTransaction.id)
+        .filter(
+            BankTransaction.source_loan_repayment_id == repayment_id,
+            BankTransaction.deposit > 0,
+            func.lower(func.coalesce(BankTransaction.audit_status, "")) == "verified",
+        )
+        .first()
+    )
+    if verified:
+        raise HTTPException(
+            status_code=409,
+            detail="The lender's bank deposit for this loan repayment has been Verified by an Auditor and cannot be modified.",
+        )
+
+
+def _sync_lender_bank_for_repayment(
+    db: Session,
+    repayment: LoanRepayment,
+    *,
+    amount: Optional[Decimal],
+    pay_date: Optional[date] = None,
+    reference_no: Optional[str] = None,
+    delete: bool = False,
+    legacy_pay_date: Optional[date] = None,
+) -> None:
+    """Update or delete the lender's BankTransaction deposit linked to this LoanRepayment."""
+    bank_svc = BankService(db)
+    linked = (
+        db.query(BankTransaction)
+        .filter(
+            BankTransaction.source_loan_repayment_id == repayment.loan_repayment_id,
+            BankTransaction.deposit > 0,
+        )
+        .all()
+    )
+    if not linked:
+        legacy = _find_legacy_lender_deposit(db, repayment, match_date=legacy_pay_date or repayment.payment_date)
+        if legacy is not None:
+            legacy.source_loan_repayment_id = repayment.loan_repayment_id
+            db.flush()
+            linked = [legacy]
+    for t in linked:
+        if (t.audit_status or "").strip().lower() == "verified":
+            raise HTTPException(
+                status_code=409,
+                detail="The lender's bank deposit for this loan repayment has been Verified by an Auditor and cannot be modified.",
+            )
+    touched_accounts = {t.bank_account_id for t in linked}
+    if delete or amount is None or amount <= Decimal("0.00"):
+        for t in linked:
+            db.delete(t)
+    elif linked:
+        keep = linked[0]
+        extras = linked[1:]
+        for extra in extras:
+            db.delete(extra)
+        amt = Decimal(str(amount)).quantize(Decimal("0.01"))
+        new_tx_date = pay_date.strftime("%m/%d/%y") if pay_date is not None else keep.transaction_date
+        norm_ref = (reference_no or "").strip() or None
+        changed = (
+            bool(extras)
+            or Decimal(str(keep.deposit or 0)) != amt
+            or keep.transaction_date != new_tx_date
+            or ((keep.cheque_no or "").strip() or None) != norm_ref
+        )
+        keep.deposit = amt
+        keep.withdrawal = Decimal("0.00")
+        keep.net_amount = amt
+        keep.transaction_date = new_tx_date
+        keep.cheque_no = norm_ref
+        if changed:
+            keep.audit_status = "Pending Audit"
+            keep.audited_by = None
+            keep.audited_at = None
+            keep.audit_remarks = None
+    db.flush()
+    for acc_id in touched_accounts:
+        acc = bank_svc._get_account_for_update(acc_id)
+        if acc is not None:
+            bank_svc._sync_balance(acc)
+
+
+def _assert_repayment_amount_allowed(db: Session, loan: Loan, repayment_id: int, new_amt: Decimal) -> None:
+    """The edited payment plus every other payment may not go past what the loan owes (principal + interest)."""
+    total_payable = _loan_total_payable(loan)
+    other_paid = sum(
+        (
+            Decimal(str(r.amount or 0))
+            for r in db.query(LoanRepayment).filter(
+                LoanRepayment.loan_id == loan.loan_id,
+                LoanRepayment.loan_repayment_id != repayment_id,
+                or_(LoanRepayment.status.is_(None), func.lower(LoanRepayment.status) != "pending"),
+            ).all()
+        ),
+        Decimal("0.00"),
+    )
+    max_allowed = max(Decimal("0.00"), total_payable - other_paid)
+    if new_amt > max_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Repayment amount ({new_amt}) exceeds remaining loan balance ({max_allowed}).",
+        )
+
+
+def prepare_loan_repayment_edit(db: Session, expense_id: int, new_amount: Optional[Decimal]) -> Optional[int]:
+    """Run BEFORE an expense is changed. Finds the loan repayment behind the expense (matching on the values
+    it still has now), pins the link to expense_id so later lookups never depend on those values, and rejects
+    an amount the loan cannot take or a Verified lender deposit, so a refused edit never leaves anything half saved."""
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    rep = _find_repayment_for_expense(db, expense)
+    if rep is None:
+        return None
+    _assert_lender_bank_unlocked(db, rep.loan_repayment_id)
+    if rep.expense_id != expense_id:
+        rep.expense_id = expense_id
+        db.flush()
+    if new_amount is not None:
+        amt = Decimal(str(new_amount)).quantize(Decimal("0.01"))
+        if amt <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=400,
+                detail="A loan repayment expense cannot be marked as Pending or Unpaid. Delete the expense to reverse the loan repayment.",
+            )
+        loan = db.query(Loan).filter(Loan.loan_id == rep.loan_id).first()
+        if loan is not None:
+            _assert_repayment_amount_allowed(db, loan, rep.loan_repayment_id, amt)
+    return rep.loan_repayment_id
+
+
+def sync_loan_repayment_from_expense(
+    db: Session,
+    expense: Expense,
+    commit: bool = True,
+    old_pay_date: Optional[date] = None,
+) -> Optional[int]:
+    """Cascade an Expense edit to its linked LoanRepayment, Loan status, and lender's bank deposit."""
+    from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
+
+    rep = _find_repayment_for_expense(db, expense)
+    if not rep:
+        return None
+    rep.expense_id = expense.expense_id
+    loan = db.query(Loan).filter(Loan.loan_id == rep.loan_id).first()
+    if not loan:
+        return None
+
+    new_amt = Decimal(str(compute_paid_amount_from_particulars(expense.description, expense.amount) or 0)).quantize(Decimal("0.01"))
+    if new_amt <= Decimal("0.00"):
+        raise HTTPException(
+            status_code=400,
+            detail="A loan repayment expense cannot be marked as Pending or Unpaid. Delete the expense to reverse the loan repayment.",
+        )
+    _assert_repayment_amount_allowed(db, loan, rep.loan_repayment_id, new_amt)
+
+    prior_date = old_pay_date or rep.payment_date
+    is_petty = "petty cash" in (expense.payment_method or "").strip().lower()
+    if is_petty:
+        target_bank_id = None
+    elif expense.bank_account_id:
+        target_bank_id = expense.bank_account_id
+    elif rep.bank_account_id:
+        target_bank_id = rep.bank_account_id
+    else:
+        acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
+        if not acc:
+            comp = db.query(Company).filter(Company.company_id == loan.borrower).first()
+            acc = BankService(db).find_account_for_company(comp.company_name) if comp else None
+        target_bank_id = acc.id if acc else None
+
+    rep.amount = new_amt
+    if expense.expense_date is not None:
+        rep.payment_date = expense.expense_date
+    rep.reference_no = expense.cheque_no
+    rep.notes = expense.remarks
+    rep.bank_account_id = target_bank_id
+
+    # Tag borrower bank entry with source_loan_repayment_id and canonical category if present
+    for btx in db.query(BankTransaction).filter(BankTransaction.source_expense_id == expense.expense_id).all():
+        btx.source_loan_repayment_id = rep.loan_repayment_id
+        btx.category = "Loan Repayment"
+
+    _sync_lender_bank_for_repayment(
+        db,
+        rep,
+        amount=new_amt,
+        pay_date=rep.payment_date,
+        reference_no=rep.reference_no,
+        legacy_pay_date=prior_date,
+    )
+    recompute_loan_repayments_and_status(db, loan.loan_id)
+    if commit:
+        db.commit()
+        sync_remote_loan_status(db, loan.loan_id)
+    else:
+        db.flush()
+    system_cache.invalidate_tag("notifications")
+    return loan.loan_id
+
+
+def delete_loan_repayment_from_expense(db: Session, expense_id: int, commit: bool = True) -> Optional[int]:
+    """Cascade an Expense deletion to its linked LoanRepayment, Loan status, and lender's bank deposit."""
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    rep = _find_repayment_for_expense(db, expense) if expense else (
+        db.query(LoanRepayment).filter(LoanRepayment.expense_id == expense_id).first()
+    )
+    if not rep:
+        return None
+    loan_id = rep.loan_id
+    _sync_lender_bank_for_repayment(db, rep, amount=None, delete=True)
+    db.delete(rep)
+    db.flush()
+    recompute_loan_repayments_and_status(db, loan_id)
+    if commit:
+        db.commit()
+        sync_remote_loan_status(db, loan_id)
+    else:
+        db.flush()
+    system_cache.invalidate_tag("notifications")
+    return loan_id
+
+
+@router.put("/{loan_id}/repayments/{repayment_id}", response_model=LoanRepaymentOut, summary="Update a loan repayment")
+def update_loan_repayment(
+    loan_id: int,
+    repayment_id: int,
+    repayment_in: LoanRepaymentCreate,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    check_company_access(current_user, loan.borrower)
+
+    rep = db.query(LoanRepayment).filter(
+        LoanRepayment.loan_id == loan_id,
+        LoanRepayment.loan_repayment_id == repayment_id,
+    ).first()
+    if not rep:
+        raise HTTPException(status_code=404, detail="Loan repayment not found")
+
+    exp = db.query(Expense).filter(Expense.expense_id == rep.expense_id).first() if rep.expense_id else None
+    if exp and (exp.audit_status or "").strip().lower() == "verified":
+        raise HTTPException(status_code=409, detail="This loan repayment's expense has been Verified by an Auditor and cannot be edited.")
+    _assert_lender_bank_unlocked(db, rep.loan_repayment_id)
+
+    new_amt = Decimal(str(repayment_in.amount)).quantize(Decimal("0.01"))
+    _assert_repayment_amount_allowed(db, loan, repayment_id, new_amt)
+
+    existing_pm = (exp.payment_method if exp and exp.payment_method else rep.payment_method) or "Cash"
+    if "payment_method" in repayment_in.model_fields_set and repayment_in.payment_method is not None:
+        chosen_pm = repayment_in.payment_method.strip() or existing_pm
+    else:
+        chosen_pm = existing_pm
+    is_petty = "petty cash" in chosen_pm.lower()
+
+    if not is_petty and repayment_in.bank_account_id:
+        from app.services.income_bank_links import validate_company_bank
+        validate_company_bank(db, loan.borrower, repayment_in.bank_account_id)
+
+    if is_petty:
+        target_bank_id = None
+    else:
+        target_bank_id = repayment_in.bank_account_id or rep.bank_account_id or (exp.bank_account_id if exp else None)
+        if not target_bank_id:
+            acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
+            if not acc:
+                comp = db.query(Company).filter(Company.company_id == loan.borrower).first()
+                acc = BankService(db).find_account_for_company(comp.company_name) if comp else None
+            target_bank_id = acc.id if acc else None
+
+    old_pay_date = rep.payment_date
+    rep.amount = new_amt
+    rep.payment_date = repayment_in.payment_date
+    # An empty reference clears it (the expense and bank rows fall back to the loan reference)
+    rep.reference_no = (repayment_in.reference_no or "").strip() or None
+    rep.notes = repayment_in.notes
+    rep.bank_account_id = target_bank_id
+
+    effective_cheque = rep.reference_no or loan.loan_ref_no or f"LN-{loan_id}"
+    if exp:
+        exp.amount = new_amt
+        exp.amount_paid = new_amt
+        exp.expense_date = repayment_in.payment_date
+        exp.cheque_no = effective_cheque
+        exp.remarks = repayment_in.notes
+        exp.payment_method = chosen_pm
+        exp.bank_account_id = target_bank_id
+        exp.audit_status = "Pending Audit"
+        exp.audited_by = None
+        exp.audited_at = None
+        exp.audit_remarks = None
+        db.flush()
+
+    _sync_lender_bank_for_repayment(
+        db,
+        rep,
+        amount=new_amt,
+        pay_date=rep.payment_date,
+        reference_no=rep.reference_no or loan.loan_ref_no,
+        legacy_pay_date=old_pay_date,
+    )
+    recompute_loan_repayments_and_status(db, loan_id)
+
+    if exp:
+        # Same transaction as the edit above, so the repayment, expense and both banks save together
+        from app.api.v1.endpoints.expenses import reconcile_expense_bank
+        reconcile_expense_bank(db, expense_id=exp.expense_id, commit=False)
+        for btx in db.query(BankTransaction).filter(BankTransaction.source_expense_id == exp.expense_id).all():
+            btx.source_loan_repayment_id = rep.loan_repayment_id
+            btx.category = "Loan Repayment"
+    db.commit()
+    sync_remote_loan_status(db, loan_id)
+
+    if exp and not rest_and_orm_share_database():
+        try:
+            sb_client = get_supabase_admin_client()
+            if sb_client:
+                sb_client.table("expenses").update({
+                    "amount": float(new_amt),
+                    "amount_paid": float(new_amt),
+                    "expense_date": repayment_in.payment_date.isoformat(),
+                    "cheque_number": effective_cheque,
+                    "remarks": repayment_in.notes,
+                    "payment_method": chosen_pm,
+                    "bank_account_id": target_bank_id,
+                    "audit_status": "Pending Audit",
+                    "audited_by": None,
+                    "audited_at": None,
+                    "audit_remarks": None,
+                }).eq("expense_id", exp.expense_id).execute()
+        except Exception as sb_err:
+            print(f"Supabase expense update on loan repayment warning: {sb_err}")
+
+    db.refresh(rep)
+    rep.payment_method = chosen_pm
+    log_transaction(
+        db, AuditAction.LOAN_UPDATED,
+        user_id=current_user.get("user_id"), company_id=loan.borrower,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=loan_id, record_type="loan_repayment",
+        extra={"repayment_id": rep.loan_repayment_id, "amount": float(new_amt), "action": "repayment_updated"},
+    )
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("bank_accounts")
+    system_cache.invalidate_tag("expenses")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
+    ws_manager.broadcast_sync({"type": "EXPENSE_UPDATED"})
+    ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+    return rep
+
+
+@router.delete("/{loan_id}/repayments/{repayment_id}", status_code=status.HTTP_200_OK, summary="Delete a loan repayment")
+def delete_loan_repayment(
+    loan_id: int,
+    repayment_id: int,
+    request: Request,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    loan = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    check_company_access(current_user, loan.borrower)
+
+    rep = db.query(LoanRepayment).filter(
+        LoanRepayment.loan_id == loan_id,
+        LoanRepayment.loan_repayment_id == repayment_id,
+    ).first()
+    if not rep:
+        raise HTTPException(status_code=404, detail="Loan repayment not found")
+
+    exp = db.query(Expense).filter(Expense.expense_id == rep.expense_id).first() if rep.expense_id else None
+    if exp and (exp.audit_status or "").strip().lower() == "verified":
+        raise HTTPException(status_code=409, detail="This loan repayment's expense has been Verified by an Auditor and cannot be deleted.")
+
+    expense_id = rep.expense_id
+    _sync_lender_bank_for_repayment(db, rep, amount=None, delete=True)
+    if expense_id:
+        from app.api.v1.endpoints.expenses import reconcile_expense_bank
+        reconcile_expense_bank(db, expense_id=expense_id, force_zero=True, commit=False)
+        BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id, commit=False)
+        if exp:
+            db.delete(exp)
+    db.delete(rep)
+    db.flush()
+    recompute_loan_repayments_and_status(db, loan_id)
+    db.commit()
+    sync_remote_loan_status(db, loan_id)
+
+    if expense_id and not rest_and_orm_share_database():
+        try:
+            sb_client = get_supabase_admin_client()
+            if sb_client:
+                sb_client.table("expenses").delete().eq("expense_id", expense_id).execute()
+        except Exception as sb_err:
+            print(f"Supabase expense delete on loan repayment warning: {sb_err}")
+
+    log_transaction(
+        db, AuditAction.LOAN_UPDATED,
+        user_id=current_user.get("user_id"), company_id=loan.borrower,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=loan_id, record_type="loan_repayment",
+        extra={"repayment_id": repayment_id, "expense_id": expense_id, "action": "repayment_deleted"},
+    )
+    system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("bank_accounts")
+    system_cache.invalidate_tag("expenses")
+    system_cache.invalidate_tag("notifications")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
+    ws_manager.broadcast_sync({"type": "EXPENSE_DELETED"})
+    ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+    return {"success": True, "loan_id": loan_id, "repayment_id": repayment_id}
+
+
+def backfill_loan_repayment_links(db: Session) -> int:
+    """Link repayments recorded before migration 0074 to their borrower expense and lender deposit, so an
+    edit or delete reaches them too. Matches only on exact amount, date and the 'Loan Repayment' wording,
+    never to something already linked, and only fills blanks. Safe to run on every start."""
+    linked = 0
+    try:
+        loans_by_id = {ln.loan_id: ln for ln in db.query(Loan).all()}
+        comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+        lender_accounts_by_company: dict[int, list[str]] = {}
+        for aid, cid in db.query(BankAccount.id, BankAccount.company_id).all():
+            if cid is not None:
+                lender_accounts_by_company.setdefault(cid, []).append(aid)
+
+        taken_expenses = {
+            eid for (eid,) in db.query(LoanRepayment.expense_id).filter(LoanRepayment.expense_id.isnot(None)).all()
+        }
+        reps = (
+            db.query(LoanRepayment)
+            .filter(LoanRepayment.expense_id.is_(None))
+            .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
+            .all()
+        )
+        for rep in reps:
+            loan = loans_by_id.get(rep.loan_id)
+            if loan is None:
+                continue
+            q = db.query(Expense).filter(
+                Expense.company_id == loan.borrower,
+                Expense.description.ilike("Loan Repayment:%"),
+                Expense.expense_date == rep.payment_date,
+                Expense.amount == rep.amount,
+            ).order_by(Expense.expense_id.asc())
+            candidates = [e for e in q.all() if e.expense_id not in taken_expenses]
+            l_name = comp_map.get(loan.lender) if loan.lender else None
+            exp = (
+                next((e for e in candidates if f"(to {l_name.lower()})" in (e.description or "").lower()), None)
+                if l_name
+                else None
+            )
+            if exp is None and not l_name and candidates:
+                exp = candidates[0]
+            elif exp is None and candidates and len(candidates) == 1:
+                # Single candidate when lender wording changed: only adopt if it wasn't explicitly addressed to a different lender
+                desc_lower = (candidates[0].description or "").lower()
+                if not l_name or "(to " not in desc_lower:
+                    exp = candidates[0]
+            if exp is not None:
+                rep.expense_id = exp.expense_id
+                taken_expenses.add(exp.expense_id)
+                if not rep.bank_account_id:
+                    rep.bank_account_id = exp.bank_account_id
+                linked += 1
+
+        already_linked_reps = {
+            rid
+            for (rid,) in db.query(BankTransaction.source_loan_repayment_id)
+            .filter(
+                BankTransaction.source_loan_repayment_id.isnot(None),
+                BankTransaction.deposit > 0,
+            )
+            .all()
+        }
+        claimed_tx_ids: set[str] = set()
+        for rep in db.query(LoanRepayment).order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc()).all():
+            if rep.loan_repayment_id in already_linked_reps:
+                continue
+            tx = _find_legacy_lender_deposit(
+                db,
+                rep,
+                match_date=rep.payment_date,
+                claimed_tx_ids=claimed_tx_ids,
+                loans_by_id=loans_by_id,
+                comp_map=comp_map,
+                lender_accounts_by_company=lender_accounts_by_company,
+            )
+            if tx is not None:
+                tx.source_loan_repayment_id = rep.loan_repayment_id
+                claimed_tx_ids.add(tx.id)
+                db.flush()
+                linked += 1
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        print(f"Loan repayment link backfill skipped: {exc}")
+    return linked
+

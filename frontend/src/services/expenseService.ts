@@ -594,6 +594,9 @@ export const expenseService = {
     if (updates.remarks !== undefined) {
       payload.remarks = updates.remarks
     }
+    if (updates.bankAccountId !== undefined) {
+      payload.bank_account_id = updates.bankAccountId || null
+    }
 
     try {
       const token =

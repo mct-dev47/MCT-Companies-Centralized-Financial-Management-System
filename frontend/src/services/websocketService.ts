@@ -9,6 +9,7 @@ export type ConnectionStatus = 'connected' | 'reconnecting' | 'offline'
 
 export type SyncEventType =
   | 'LOANS_UPDATED'
+  | 'BILLS_UPDATED'
   | 'PETTY_CASH_UPDATED'
   | 'TRANSACTION_UPDATED'
   | 'BANK_UPDATED'

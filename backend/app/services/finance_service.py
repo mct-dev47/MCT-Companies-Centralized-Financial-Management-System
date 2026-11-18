@@ -342,8 +342,30 @@ class FinanceService:
         if not loan:
             return None
 
-        repayments = self.db.query(LoanRepayment).filter(LoanRepayment.loan_id == loan_id).order_by(LoanRepayment.payment_date.asc()).all()
-        total_repaid = sum((r.amount for r in repayments), Decimal("0.00"))
+        all_repayments = (
+            self.db.query(LoanRepayment)
+            .filter(LoanRepayment.loan_id == loan_id)
+            .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
+            .all()
+        )
+        exp_ids = [r.expense_id for r in all_repayments if r.expense_id is not None]
+        exp_pm_map = (
+            dict(
+                self.db.query(Expense.expense_id, Expense.payment_method)
+                .filter(Expense.expense_id.in_(exp_ids))
+                .all()
+            )
+            if exp_ids
+            else {}
+        )
+        for r in all_repayments:
+            if not r.payment_method:
+                r.payment_method = exp_pm_map.get(r.expense_id) or "Cash"
+        total_repaid = sum(
+            (Decimal(str(r.amount or 0)) for r in all_repayments if (r.status or "").strip().lower() != "pending"),
+            Decimal("0.00"),
+        )
+        repayments = all_repayments
 
         rate = loan.interest_rate or Decimal("0.00")
         interest_amount = FinanceCalculator.calculate_loan_interest(loan.principal_amount, rate)
