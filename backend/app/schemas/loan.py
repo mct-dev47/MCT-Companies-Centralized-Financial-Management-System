@@ -5,11 +5,12 @@ from decimal import Decimal
 
 # --- Loan Repayment ---
 class LoanRepaymentBase(BaseModel):
-    loan_id: int
+    loan_id: Optional[int] = None
     recorded_by: Optional[int] = None
     payment_date: date
     due_date: Optional[date] = None
     bank_account_id: Optional[str] = Field(None, description="Chosen source bank account ID")
+    payment_method: Optional[str] = Field(default="Cash", description="Payment method used")
     amount: Decimal = Field(..., gt=0, decimal_places=2)
     reference_no: Optional[str] = None
     status: str = Field(default="completed", description="pending, completed, overdue")
@@ -103,6 +104,9 @@ class LoanOut(LoanBase):
     disbursed_at: Optional[datetime] = None
     # The borrower's bank that received the money on disbursement (bank_account_id is the lender's).
     borrower_bank_account_id: Optional[str] = None
+    total_paid: Decimal = Decimal("0.00")
+    outstanding_balance: Optional[Decimal] = None
+    repayments: List[LoanRepaymentOut] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

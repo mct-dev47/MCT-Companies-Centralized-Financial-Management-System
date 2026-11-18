@@ -744,24 +744,6 @@ export const ReceivablesPage: React.FC = () => {
                         : 'absolute right-0 top-full mt-2 w-68'
                     )}
                   >
-                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-stroke/20 px-1">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-muted-fg">
-                        Filter By Company
-                      </span>
-                      {selectedCompany !== 'All Companies' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCompany('All Companies')
-                            setActiveCompany('All Companies')
-                            setIsCompanyDropdownOpen(false)
-                          }}
-                          className="text-xs text-primary hover:underline font-semibold cursor-pointer"
-                        >
-                          Clear Filter
-                        </button>
-                      )}
-                    </div>
 
                     <div className="relative mb-2 px-1">
                       <Search className="w-3.5 h-3.5 text-muted-fg absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />

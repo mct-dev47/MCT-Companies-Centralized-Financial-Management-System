@@ -173,13 +173,12 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
         if (!mounted) return
         const filtered = filterForCompany(accounts || [])
         setBankAccounts(filtered)
-        setSelectedBankAccountId((prev) =>
-          prev && filtered.some((b) => b.id === prev)
-            ? prev
-            : filtered.length > 0
-              ? filtered[0].id
-              : ''
-        )
+        setSelectedBankAccountId((prev) => {
+          if (prev && filtered.some((b) => b.id === prev)) return prev
+          const originId = sale?.origin_bank_account_id
+          if (originId && filtered.some((b) => b.id === originId)) return originId
+          return filtered.length > 0 ? filtered[0].id : ''
+        })
       })
       .catch(() => {})
 
@@ -242,9 +241,7 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
       bank_account_id:
         paymentMethod === 'Payroll Deduction'
           ? undefined
-          : originBank.mode === 'fixed'
-            ? originBank.id
-            : selectedBankAccountId || undefined,
+          : selectedBankAccountId || (originBank.mode === 'fixed' ? originBank.id : undefined),
       notes: notes.trim() || undefined,
     })
 
@@ -683,33 +680,26 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                 </div>
               </div>
 
-              {paymentMethod !== 'Payroll Deduction' && originBank.mode !== 'none' && (
-                <div className="space-y-1">
-                  <Label className="text-xs font-semibold text-focus">Deposit Bank</Label>
-                  <div className="w-full h-10 px-3 flex items-center text-xs rounded-xl border border-stroke/60 bg-slate-50 font-semibold text-focus">
-                    {originBank.mode === 'fixed' ? originBank.name : "Each order's own bank"}
-                  </div>
-                  <p className="text-[10.5px] text-muted-fg">
-                    Payments always go to the bank this order was first recorded to.
-                  </p>
-                </div>
-              )}
-
-              {paymentMethod !== 'Payroll Deduction' && originBank.mode === 'none' && bankAccounts.length > 0 && (
+              {paymentMethod !== 'Payroll Deduction' && bankAccounts.length > 0 && (
                 <div className="space-y-1">
                   <Label className="text-xs font-semibold text-focus">
-                    Deposit Bank (Optional)
+                    Deposit Bank
                   </Label>
                   <Dropdown
                     value={selectedBankAccountId}
                     onChange={(val) => setSelectedBankAccountId(String(val))}
-                    placeholder="Do not post bank deposit"
+                    placeholder="Select deposit bank"
                     options={[
                       { value: '', label: 'Do not post bank deposit' },
                       ...bankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
                     ]}
                     aria-label="Bank Deposit Account"
                   />
+                  {originBank.mode === 'fixed' && originBank.name && (
+                    <p className="text-[10.5px] text-muted-fg">
+                      Original order bank: <span className="font-semibold text-focus">{originBank.name}</span>
+                    </p>
+                  )}
                 </div>
               )}
 
