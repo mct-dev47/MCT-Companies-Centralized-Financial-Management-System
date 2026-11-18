@@ -59,7 +59,14 @@ def _local_category_id(db: Session, name: str) -> Optional[int]:
     return cat.category_id
 
 
-def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False, commit: bool = True) -> None:
+def reconcile_expense_bank(
+    db: Session,
+    *,
+    expense_id: int,
+    force_zero: bool = False,
+    commit: bool = True,
+    paid_amount: Optional[Decimal] = None,
+) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
     has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
     Petty cash expenses never touch a bank."""
@@ -72,11 +79,12 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             return
         # Same rule the petty cash wallet uses to count an expense as spent from petty cash
         is_petty = "petty cash" in (expense.payment_method or "").strip().lower()
-        target = (
-            Decimal("0.00")
-            if force_zero or is_petty
+        resolved_paid = (
+            Decimal(str(paid_amount)).quantize(Decimal("0.01"))
+            if paid_amount is not None
             else compute_paid_amount_from_particulars(expense.description, expense.amount)
         )
+        target = Decimal("0.00") if force_zero or is_petty else resolved_paid
         company = db.query(Company).filter(Company.company_id == expense.company_id).first()
         company_name = company.company_name if company else None
         exp_date = expense.expense_date
@@ -678,6 +686,11 @@ def create_expense(
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     effective_bank_id = getattr(expense_in, "bank_account_id", None)
+    effective_paid_amount = (
+        Decimal(str(expense_in.amount_paid)).quantize(Decimal("0.01"))
+        if expense_in.amount_paid is not None
+        else compute_paid_amount_from_particulars(parts, expense_in.amount)
+    )
     created_row = None
     sb_expense_id = None
 
@@ -740,7 +753,7 @@ def create_expense(
             "expense_date": expense_in.expense_date.isoformat(),
             "cheque_number": cheque,
             "amount": float(expense_in.amount),
-            "amount_paid": float(expense_in.amount_paid or 0.0),
+            "amount_paid": float(effective_paid_amount),
             "description": parts,
             "remarks": expense_in.remarks,
             "bank_account_id": effective_bank_id,
@@ -784,7 +797,7 @@ def create_expense(
                 cheque_no=cheque,
                 cheque_number=cheque,
                 amount=expense_in.amount,
-                amount_paid=expense_in.amount_paid or Decimal("0.00"),
+                amount_paid=effective_paid_amount,
                 description=parts,
                 remarks=expense_in.remarks,
                 bank_account_id=effective_bank_id,
@@ -927,7 +940,7 @@ def create_expense(
             cheque_no=cheque,
             cheque_number=cheque,
             amount=expense_in.amount,
-            amount_paid=expense_in.amount_paid or Decimal("0.00"),
+            amount_paid=effective_paid_amount,
             description=parts,
             remarks=expense_in.remarks,
             bank_account_id=effective_bank_id,
@@ -1160,21 +1173,28 @@ def update_expense(
         update_payload["description"] = parts.strip()
 
     # Always keep amount_paid aligned with amount and [Paid]/[Pending] lines whenever amount or particulars change,
-    # so Expense.amount_paid, pre-validation, bank withdrawal, and bill/loan amounts never diverge.
-    derived_amount_paid = None
+    # and pass the validated effective_paid_amount explicitly to bank, bill, and loan sync helpers.
     base_desc = parts.strip() if parts is not None else (expense.description if expense else None)
     base_amt = target_amt if target_amt is not None else (current or {}).get("amount")
-    if base_amt is not None and (target_amt is not None or parts is not None or expense_in.amount_paid is None):
-        derived_amount_paid = compute_paid_amount_from_particulars(base_desc, base_amt)
-        effective_paid_amount = derived_amount_paid
+    if base_amt is not None and (target_amt is not None or parts is not None):
+        effective_paid_amount = compute_paid_amount_from_particulars(base_desc, base_amt)
         update_payload["amount_paid"] = float(effective_paid_amount)
     elif expense_in.amount_paid is not None:
         effective_paid_amount = Decimal(str(expense_in.amount_paid)).quantize(Decimal("0.01"))
         update_payload["amount_paid"] = float(effective_paid_amount)
     elif expense is not None:
-        effective_paid_amount = compute_paid_amount_from_particulars(expense.description, expense.amount)
+        effective_paid_amount = (
+            Decimal(str(expense.amount_paid)).quantize(Decimal("0.01"))
+            if expense.amount_paid is not None
+            else compute_paid_amount_from_particulars(expense.description, expense.amount)
+        )
     else:
         effective_paid_amount = None
+
+    if target_amt is None and effective_paid_amount is not None and base_amt is not None:
+        if effective_paid_amount > Decimal(str(base_amt)).quantize(Decimal("0.01")):
+            target_amt = effective_paid_amount
+            update_payload["amount"] = float(effective_paid_amount)
 
     # Validate linked loan repayment and bill payment limits BEFORE mutating Supabase, Expense, or bank rows.
     from app.api.v1.endpoints.loans import (
@@ -1278,9 +1298,13 @@ def update_expense(
         expense.audit_remarks = None
         db.flush()
 
-        reconcile_expense_bank(db, expense_id=expense_id, commit=False)
-        affected_bill_id = BillsService(db).sync_payment_from_expense(expense, commit=False)
-        affected_loan_id = sync_loan_repayment_from_expense(db, expense, commit=False, old_pay_date=old_exp_date)
+        reconcile_expense_bank(db, expense_id=expense_id, commit=False, paid_amount=effective_paid_amount)
+        affected_bill_id = BillsService(db).sync_payment_from_expense(
+            expense, commit=False, paid_amount=effective_paid_amount
+        )
+        affected_loan_id = sync_loan_repayment_from_expense(
+            db, expense, commit=False, old_pay_date=old_exp_date, paid_amount=effective_paid_amount
+        )
         db.commit()
         db.refresh(expense)
 

@@ -737,7 +737,22 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0072_drop_reference_no_columns")
             logger.info("Migration 0072_drop_reference_no_columns applied successfully.")
 
-    # 39. 0074: link loan repayments to their expense and bank entries so edits and deletes cascade
+    # 39. 0073: bank_transactions audit & remarks columns
+    result_0073 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0073_bank_transactions_audit_fields'")
+    ).first()
+    if not result_0073:
+        script_0073 = MIGRATIONS_DIR / "0073_bank_transactions_audit_fields.postgres.sql"
+        if script_0073.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0073.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0073_bank_transactions_audit_fields')"))
+            applied.append("0073_bank_transactions_audit_fields")
+            logger.info("Migration 0073_bank_transactions_audit_fields applied successfully.")
+
+    # 40. 0074: link loan repayments to their expense and bank entries so edits and deletes cascade
     result_0074 = conn.execute(
         text("SELECT 1 FROM schema_migrations WHERE version = '0074_loan_repayment_links'")
     ).first()
@@ -1808,6 +1823,7 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_remarks TEXT NULL"))
             if "remarks" not in cols:
                 conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN remarks TEXT NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_audit_status ON bank_transactions (audit_status)"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0073_bank_transactions_audit_fields')"))
         applied.append("0073_bank_transactions_audit_fields")
 

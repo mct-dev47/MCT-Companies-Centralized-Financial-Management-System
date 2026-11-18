@@ -674,9 +674,11 @@ class BankService:
         tx_date: Optional[str],
         is_reversal: bool = False,
         company_name: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> BankTransaction:
         """Add one bank entry linked to its source record and move the account balance with it."""
         label = particulars or "Bank entry"
+        resolved_category = category or ("Loan Repayment" if link_attr == "source_loan_repayment_id" else "Cash")
         tx = BankTransaction(
             company_name=self.resolve_tx_company(account, company_name),
             id=self._generate_transaction_id(),
@@ -686,7 +688,7 @@ class BankService:
             particulars=f"Reversal: {label}" if is_reversal else label,
             withdrawal=Decimal("0.00") if is_deposit else amount,
             deposit=amount if is_deposit else Decimal("0.00"),
-            category="Cash",
+            category=resolved_category,
             net_amount=amount,
         )
         setattr(tx, link_attr, link_id)
@@ -703,10 +705,11 @@ class BankService:
         credit: bool,
         amount: Decimal,
         account_id: Optional[str],
-        particulars: str,
+        particulars: Optional[str],
         reference_no: Optional[str],
         tx_date: Optional[str],
         company_name: Optional[str] = None,
+        category: Optional[str] = None,
         commit: bool = True,
     ) -> Optional[BankTransaction]:
         """
@@ -715,19 +718,22 @@ class BankService:
         2,000 entry instead of the original plus a reversal. Any extra entries the record built up are
         removed. Balances are re-derived from the entries of every account touched.
         """
-        if link_attr not in ("source_sale_id", "source_expense_id"):
+        if link_attr not in ("source_sale_id", "source_expense_id", "source_loan_repayment_id"):
             raise ValueError("Unsupported link attribute.")
         amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
-        linked = (
-            self.db.query(BankTransaction)
-            .filter(getattr(BankTransaction, link_attr) == link_id)
-            .order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc())
-            .all()
-        )
+        q = self.db.query(BankTransaction).filter(getattr(BankTransaction, link_attr) == link_id)
+        if link_attr == "source_loan_repayment_id":
+            q = q.filter(BankTransaction.deposit > 0 if credit else BankTransaction.withdrawal > 0)
+        linked = q.order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc()).all()
         if (not account_id or amount <= Decimal("0.00")) and not linked:
             return None
 
-        account = self._get_account_for_update(account_id) if (account_id and amount > Decimal("0.00")) else None
+        resolved_account_id = account_id or (linked[0].bank_account_id if linked else None)
+        account = (
+            self._get_account_for_update(resolved_account_id)
+            if (resolved_account_id and amount > Decimal("0.00"))
+            else None
+        )
         touched = {t.bank_account_id for t in linked}
 
         if account is None or amount <= Decimal("0.00"):
@@ -742,6 +748,7 @@ class BankService:
             new_dep = amount if credit else Decimal("0.00")
             new_wd = Decimal("0.00") if credit else amount
             new_date = tx_date or keep.transaction_date
+            new_particulars = particulars if particulars is not None else keep.particulars
             norm_ref = (reference_no or "").strip() or None
             changed = (
                 bool(extras)
@@ -749,7 +756,7 @@ class BankService:
                 or keep.company_name != new_company
                 or Decimal(str(keep.deposit or 0)) != new_dep
                 or Decimal(str(keep.withdrawal or 0)) != new_wd
-                or keep.particulars != particulars
+                or keep.particulars != new_particulars
                 or ((keep.cheque_no or "").strip() or None) != norm_ref
                 or keep.transaction_date != new_date
             )
@@ -758,9 +765,11 @@ class BankService:
             keep.deposit = new_dep
             keep.withdrawal = new_wd
             keep.net_amount = amount
-            keep.particulars = particulars
+            keep.particulars = new_particulars
             keep.cheque_no = norm_ref
             keep.transaction_date = new_date
+            if category is not None:
+                keep.category = category
             if changed:
                 keep.audit_status = "Pending Audit"
                 keep.audited_by = None
@@ -773,10 +782,11 @@ class BankService:
                 link_id=link_id,
                 is_deposit=credit,
                 amount=amount,
-                particulars=particulars,
+                particulars=particulars or "Bank entry",
                 reference_no=reference_no,
                 tx_date=tx_date,
                 company_name=company_name,
+                category=category,
             )
         if account is not None:
             touched.add(account.id)

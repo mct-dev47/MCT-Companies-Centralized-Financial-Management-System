@@ -22,7 +22,7 @@ from app.schemas.bills import BillCreate, BillPaymentCreate
 from app.schemas.loan import LoanRepaymentCreate
 from app.services.bills_service import BillsService
 
-ADMIN = {"role": "admin", "is_admin": True, "user_id": 1}
+ADMIN = {"role": "admin", "is_admin": True, "user_id": 1, "company_ids": [1, 2]}
 REQ = SimpleNamespace(client=None)
 
 
@@ -379,105 +379,6 @@ def test_http_delete_expense_cascades_to_bills_and_loans_atomically():
         app.dependency_overrides.update(old_overrides)
 
 
-def test_http_delete_expense_cascades_to_bills_and_loans_atomically():
-    """Major 2 & 3: HTTP PUT (happy + bill overpay/[Pending] rejections) & DELETE /expenses/{id} cascades."""
-    from app.api.v1.endpoints import expenses as exp_ep
-
-    app, client, SessionMaker, old_overrides, seed_db = _http_env()
-    try:
-        svc = BillsService(seed_db)
-        bill_out = svc.create_bill(
-            BillCreate(company_id=1, bill_name="PLDT", amount=Decimal("1000.00"), recurring="one-time", due_date=date(2026, 11, 15))
-        )
-        svc.record_payment(
-            bill_out.bill_id,
-            BillPaymentCreate(
-                payment_date=date(2026, 11, 10),
-                amount=Decimal("600.00"),
-                payment_method="Bank Transfer",
-                funding_source="bank",
-                bank_account_id="bnk-a1",
-                reference_no="BILL-HTTP-1",
-            ),
-        )
-        loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-HTTP-2", bank_account_id="bnk-b1",
-            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Ops",
-        )
-        seed_db.add(loan)
-        seed_db.commit()
-        seed_db.refresh(loan)
-
-        bill_exp_id = seed_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first().expense_id
-
-        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
-             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            # Bill overpayment & [Pending] rejections return 400 without mutating DB
-            overpay = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"amount": 1500.00})
-            assert overpay.status_code == 400
-            pending_bill = client.put(
-                f"/api/v1/expenses/{bill_exp_id}",
-                json={"particulars": "Bills Payment: PLDT (1x @ ₱600.00 = ₱600.00) [Pending]"},
-            )
-            assert pending_bill.status_code == 400
-
-            # Happy path PUT /expenses/{bill_exp_id} updates BillPayment, Bill.status, and Bank
-            ok_bill = client.put(
-                f"/api/v1/expenses/{bill_exp_id}",
-                json={"amount": 1000.00, "particulars": "Bills Payment: PLDT (1x @ ₱1,000.00 = ₱1,000.00) [Paid]"},
-            )
-            assert ok_bill.status_code == 200, ok_bill.text
-            check_db = SessionMaker()
-            assert check_db.get(Bill, bill_out.bill_id).status == "paid"
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("9000.00")
-            check_db.close()
-
-            # DELETE /expenses/{bill_exp_id} cascades cleanly to BillPayment, Bill, and Bank
-            del_bill = client.delete(f"/api/v1/expenses/{bill_exp_id}")
-            assert del_bill.status_code == 200, del_bill.text
-            check_db = SessionMaker()
-            assert check_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).count() == 0
-            assert check_db.get(Bill, bill_out.bill_id).status != "paid"
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
-            check_db.close()
-
-            # Loan repayment happy PUT /expenses/{id} & DELETE /expenses/{id}
-            rep_res = client.post(
-                f"/api/v1/loans/{loan.loan_id}/repayments",
-                json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
-            )
-            assert rep_res.status_code == 201
-            rep_id = rep_res.json()["loan_repayment_id"]
-            check_db = SessionMaker()
-            loan_exp_id = check_db.get(LoanRepayment, rep_id).expense_id
-            check_db.close()
-
-            ok_loan_put = client.put(
-                f"/api/v1/expenses/{loan_exp_id}",
-                json={"amount": 3000.00, "particulars": "Loan Repayment: Ops (1x @ ₱3,000.00 = ₱3,000.00) [Paid]"},
-            )
-            assert ok_loan_put.status_code == 200, ok_loan_put.text
-            check_db = SessionMaker()
-            assert check_db.get(LoanRepayment, rep_id).amount == Decimal("3000.00")
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("7000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("23000.00")
-            check_db.close()
-
-            del_loan = client.delete(f"/api/v1/expenses/{loan_exp_id}")
-            assert del_loan.status_code == 200, del_loan.text
-            check_db = SessionMaker()
-            assert check_db.get(LoanRepayment, rep_id) is None
-            assert check_db.get(Loan, loan.loan_id).status == "Disbursed"
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("20000.00")
-            check_db.close()
-    finally:
-        seed_db.close()
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(old_overrides)
-
-
 def test_http_verified_lender_deposit_locks_repayment_edits_and_deletes_409():
     """Major 3 / Minor: Verified lender BankTransaction locks repayment edits and deletes with 409."""
     from app.api.v1.endpoints import expenses as exp_ep
@@ -617,149 +518,6 @@ def test_patch_linked_entry_preserves_verified_on_noop_and_recompute_loan_skips_
     with patch.object(loans_ep, "get_supabase_admin_client") as sb_mock:
         loans_ep.recompute_loan_repayments_and_status(db, loan.loan_id)
         sb_mock.assert_not_called()
-
-
-
-def test_http_verified_lender_deposit_locks_repayment_edits_and_deletes_409():
-    """Major 3 / Minor: Verified lender BankTransaction locks repayment edits and deletes with 409."""
-    from app.api.v1.endpoints import expenses as exp_ep
-
-    app, client, SessionMaker, old_overrides, seed_db = _http_env()
-    try:
-        loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-VER-1", bank_account_id="bnk-b1",
-            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: AuditLock",
-        )
-        seed_db.add(loan)
-        seed_db.commit()
-        seed_db.refresh(loan)
-
-        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
-             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            rep_res = client.post(
-                f"/api/v1/loans/{loan.loan_id}/repayments",
-                json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
-            )
-            assert rep_res.status_code == 201
-            rep_id = rep_res.json()["loan_repayment_id"]
-            check_db = SessionMaker()
-            rep_exp_id = check_db.get(LoanRepayment, rep_id).expense_id
-            lender_tx = check_db.query(BankTransaction).filter(
-                BankTransaction.source_loan_repayment_id == rep_id, BankTransaction.deposit > 0
-            ).first()
-            lender_tx.audit_status = "Verified"
-            check_db.commit()
-            check_db.close()
-
-            assert client.put(f"/api/v1/expenses/{rep_exp_id}", json={"amount": 2500.00}).status_code == 409
-            assert client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-06", "amount": 2500.00},
-            ).status_code == 409
-            assert client.delete(f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}").status_code == 409
-
-            check_db = SessionMaker()
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("8000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("22000.00")
-            check_db.close()
-    finally:
-        seed_db.close()
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(old_overrides)
-
-
-def test_http_repayment_payment_method_omitted_preserves_petty_cash_and_switches_cleanly():
-    """Major 1: omitting payment_method in PUT repayment preserves Petty Cash; switching to Bank resolves default bank."""
-    from app.api.v1.endpoints import expenses as exp_ep
-
-    app, client, SessionMaker, old_overrides, seed_db = _http_env()
-    try:
-        loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-PM-1", bank_account_id="bnk-b1",
-            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Petty",
-        )
-        seed_db.add(loan)
-        seed_db.commit()
-        seed_db.refresh(loan)
-
-        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
-             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            rep_res = client.post(
-                f"/api/v1/loans/{loan.loan_id}/repayments",
-                json={"payment_date": "2026-11-05", "amount": 1000.00, "payment_method": "Petty Cash"},
-            )
-            assert rep_res.status_code == 201
-            rep_id = rep_res.json()["loan_repayment_id"]
-
-            # Omitting payment_method must NOT reset Petty Cash to Cash
-            put_omitted = client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-05", "amount": 1500.00},
-            )
-            assert put_omitted.status_code == 200, put_omitted.text
-            assert put_omitted.json()["payment_method"] == "Petty Cash"
-            assert put_omitted.json()["bank_account_id"] is None
-            check_db = SessionMaker()
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
-            check_db.close()
-
-            # Switching to Bank Transfer without bank_account_id resolves and persists default borrower bank
-            put_bank = client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-05", "amount": 1500.00, "payment_method": "Bank Transfer"},
-            )
-            assert put_bank.status_code == 200, put_bank.text
-            assert put_bank.json()["bank_account_id"] == "bnk-a1"
-            check_db = SessionMaker()
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("8500.00")
-            check_db.close()
-    finally:
-        seed_db.close()
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(old_overrides)
-
-
-def test_patch_linked_entry_preserves_verified_on_noop_and_recompute_loan_skips_rest_when_shared_db():
-    """Blocker 1 & Minor 6: patch_linked_entry keeps Verified on '' vs None no-op; recompute skips REST inside tx."""
-    from app.services.bank_service import BankService
-
-    db, loan = _db()
-    svc = BankService(db)
-    tx = svc.patch_linked_entry(
-        link_attr="source_expense_id",
-        link_id=501,
-        credit=False,
-        amount=Decimal("250.00"),
-        account_id="bnk-a",
-        particulars="Supplies",
-        reference_no=None,
-        tx_date="11/05/26",
-    )
-    tx.audit_status = "Verified"
-    tx.audited_by = "Auditor"
-    db.commit()
-
-    # No-op reconcile with reference_no="" must preserve Verified
-    res = svc.patch_linked_entry(
-        link_attr="source_expense_id",
-        link_id=501,
-        credit=False,
-        amount=Decimal("250.00"),
-        account_id="bnk-a",
-        particulars="Supplies",
-        reference_no="",
-        tx_date="11/05/26",
-    )
-    assert res.audit_status == "Verified"
-    assert res.audited_by == "Auditor"
-
-    # recompute_loan_repayments_and_status must NOT make any Supabase REST call before commit
-    with patch.object(loans_ep, "get_supabase_admin_client") as sb_mock:
-        loans_ep.recompute_loan_repayments_and_status(db, loan.loan_id)
-        sb_mock.assert_not_called()
-
 
 
 def test_http_update_expense_rejects_loan_overpay_via_particulars_and_pending_atomically():
@@ -800,7 +558,6 @@ def test_http_update_expense_rejects_loan_overpay_via_particulars_and_pending_at
             bad_put = client.put(
                 f"/api/v1/expenses/{rep_exp_id}",
                 json={
-                    "amount": 6000.00,
                     "particulars": "Loan Repayment: Equipment (1x @ ₱6,000.00 = ₱6,000.00) [Paid]",
                 },
             )
@@ -850,70 +607,253 @@ def test_http_update_expense_rejects_loan_overpay_via_particulars_and_pending_at
         app.dependency_overrides.update(old_overrides)
 
 
-def test_http_delete_expense_cascades_to_bills_and_loans_atomically():
-    """Major 2 & 3: HTTP PUT (happy + bill overpay/[Pending] rejections) & DELETE /expenses/{id} cascades."""
+def test_http_company_loans_and_export_endpoints():
+    """Blocker 1: GET /api/v1/loans/company and /api/v1/loans/company/export return principal_amount without NameError."""
+    from app.api.v1.endpoints import expenses as exp_ep
+
+    app, client, SessionMaker, old_overrides, seed_db = _http_env()
+    try:
+        loan = Loan(
+            borrower=1, lender=2, loan_ref_no="LN-COMP-1", bank_account_id="bnk-b1",
+            principal_amount=Decimal("5000.00"), interest_rate=Decimal("10.00"),
+            loan_date=date(2026, 11, 1), due_date=date(2026, 12, 1),
+            status="Disbursed", description="Loan: Rent Support",
+        )
+        seed_db.add(loan)
+        seed_db.commit()
+        seed_db.refresh(loan)
+
+        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
+             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
+            rep_res = client.post(
+                f"/api/v1/loans/{loan.loan_id}/repayments",
+                json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
+            )
+            assert rep_res.status_code == 201
+
+            list_res = client.get("/api/v1/loans/company")
+            assert list_res.status_code == 200, list_res.text
+            body = list_res.json()
+            assert body["total"] == 1
+            group = body["items"][0]
+            assert Decimal(str(group["total_loan_amount"])) == Decimal("5000.00")
+            assert Decimal(str(group["total_paid"])) == Decimal("2000.00")
+            assert Decimal(str(group["outstanding_balance"])) == Decimal("3500.00")
+            assert group["payment_status"] == "Partially Paid"
+            item = group["loans"][0]
+            assert Decimal(str(item["principal_amount"])) == Decimal("5000.00")
+            assert Decimal(str(item["amount"])) == Decimal("5000.00")
+
+            csv_res = client.get("/api/v1/loans/company/export")
+            assert csv_res.status_code == 200, csv_res.text
+            assert "Alpha Corp,Beta Corp,Rent,5000.00,2000.00,3500.00" in csv_res.text
+    finally:
+        seed_db.close()
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(old_overrides)
+
+
+def test_http_unlinked_legacy_repayment_amount_edit_and_verified_lock():
+    """Major 1: editing amount on an unlinked legacy repayment adopts & updates the lender deposit; Verified legacy deposit locks upfront."""
+    from app.api.v1.endpoints import expenses as exp_ep
+
+    app, client, SessionMaker, old_overrides, seed_db = _http_env()
+    try:
+        loan = Loan(
+            borrower=1, lender=2, loan_ref_no="LN-LEG-1", bank_account_id="bnk-b1",
+            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
+            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Legacy",
+        )
+        seed_db.add(loan)
+        seed_db.commit()
+        seed_db.refresh(loan)
+
+        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
+             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
+            rep_res = client.post(
+                f"/api/v1/loans/{loan.loan_id}/repayments",
+                json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
+            )
+            assert rep_res.status_code == 201
+            rep_id = rep_res.json()["loan_repayment_id"]
+
+            # Simulate pre-0074 legacy state: strip source_loan_repayment_id and mark lender deposit Verified
+            check_db = SessionMaker()
+            rep_exp_id = check_db.get(LoanRepayment, rep_id).expense_id
+            check_db.query(BankTransaction).update({"source_loan_repayment_id": None})
+            lender_tx = check_db.query(BankTransaction).filter(
+                BankTransaction.bank_account_id == "bnk-b1", BankTransaction.deposit > 0
+            ).first()
+            lender_tx.audit_status = "Verified"
+            check_db.commit()
+            check_db.close()
+
+            # Upfront 409 lock must catch unlinked legacy Verified deposit on both PUT /expenses/{id} and PUT /repayments/{id}
+            assert client.put(f"/api/v1/expenses/{rep_exp_id}", json={"amount": 2500.00}).status_code == 409
+            assert client.put(
+                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
+                json={"payment_date": "2026-11-05", "amount": 2500.00},
+            ).status_code == 409
+
+            # Unlock legacy lender deposit and change amount while still unlinked
+            check_db = SessionMaker()
+            lender_tx = check_db.query(BankTransaction).filter(
+                BankTransaction.bank_account_id == "bnk-b1", BankTransaction.deposit > 0
+            ).first()
+            lender_tx.audit_status = "Pending Audit"
+            check_db.commit()
+            check_db.close()
+
+            ok_put = client.put(f"/api/v1/expenses/{rep_exp_id}", json={"amount": 3200.00})
+            assert ok_put.status_code == 200, ok_put.text
+
+            check_db = SessionMaker()
+            lender_tx = check_db.query(BankTransaction).filter(
+                BankTransaction.bank_account_id == "bnk-b1", BankTransaction.deposit > 0
+            ).first()
+            assert lender_tx.source_loan_repayment_id == rep_id
+            assert lender_tx.deposit == Decimal("3200.00")
+            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("23200.00")
+
+            # Unlink again and test PUT /loans/{id}/repayments/{id} changing amount on unlinked legacy deposit
+            lender_tx.source_loan_repayment_id = None
+            check_db.commit()
+            check_db.close()
+
+            ok_rep_put = client.put(
+                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
+                json={"payment_date": "2026-11-06", "amount": 4100.00, "payment_method": "Bank Transfer"},
+            )
+            assert ok_rep_put.status_code == 200, ok_rep_put.text
+            check_db = SessionMaker()
+            lender_tx = check_db.query(BankTransaction).filter(
+                BankTransaction.bank_account_id == "bnk-b1", BankTransaction.deposit > 0
+            ).first()
+            assert lender_tx.source_loan_repayment_id == rep_id
+            assert lender_tx.deposit == Decimal("4100.00")
+            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("24100.00")
+            check_db.close()
+    finally:
+        seed_db.close()
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(old_overrides)
+
+
+def test_find_repayment_for_expense_never_steals_linked_repayment_and_disambiguates_lender():
+    """Major 2: fallback matching in _find_repayment_for_expense skips already-linked repayments and disambiguates by lender name."""
+    db, loan_beta = _db()
+    db.add(Company(company_id=3, company_name="Gamma Corp"))
+    db.add(BankAccount(id="bnk-c", bank_name="BPI", account_name="C", company_name="Gamma Corp", company_id=3,
+                       starting_balance=Decimal("15000.00"), current_balance=Decimal("15000.00")))
+    loan_gamma = Loan(borrower=1, lender=3, loan_ref_no="LN-2", bank_account_id="bnk-c",
+                      principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
+                      loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Working Capital")
+    db.add(loan_gamma)
+    db.commit()
+
+    rep_beta = _repay(db, loan_beta, "1000.00")
+    with patch.object(loans_ep, "get_supabase_admin_client", return_value=None):
+        rep_gamma = loans_ep.create_loan_repayment(
+            loan_id=loan_gamma.loan_id,
+            repayment_in=LoanRepaymentCreate(payment_date=date(2026, 11, 5), amount=Decimal("1000.00"),
+                                             bank_account_id="bnk-a", payment_method="Bank Transfer"),
+            request=REQ, current_user=ADMIN, db=db,
+        )
+
+    # 1. An unlinked expense with same borrower/date/amount must NOT steal rep_beta (which is already linked)
+    stray_exp = Expense(
+        company_id=1,
+        expense_date=date(2026, 11, 5),
+        payment_method="Cash",
+        amount=Decimal("1000.00"),
+        amount_paid=Decimal("1000.00"),
+        description="Loan Repayment: Working Capital (to Beta Corp)",
+    )
+    db.add(stray_exp)
+    db.commit()
+    assert loans_ep._find_repayment_for_expense(db, stray_exp) is None
+
+    # 2. If both rep_beta and rep_gamma are unlinked, _find_repayment_for_expense disambiguates by (to Gamma Corp)
+    exp_gamma = db.get(Expense, rep_gamma.expense_id)
+    db.query(LoanRepayment).update({"expense_id": None})
+    db.commit()
+    matched = loans_ep._find_repayment_for_expense(db, exp_gamma)
+    assert matched is not None
+    assert matched.loan_repayment_id == rep_gamma.loan_repayment_id
+
+
+def test_http_amount_paid_only_and_bank_petty_switches_cascade_to_bills_and_loans():
+    """Major 3 & 4: amount_paid-only PUT, bank_account_id switch, Petty Cash toggle, and invalid bank rejection on PUT /expenses/{id}."""
     from app.api.v1.endpoints import expenses as exp_ep
 
     app, client, SessionMaker, old_overrides, seed_db = _http_env()
     try:
         svc = BillsService(seed_db)
         bill_out = svc.create_bill(
-            BillCreate(company_id=1, bill_name="PLDT", amount=Decimal("1000.00"), recurring="one-time", due_date=date(2026, 11, 15))
+            BillCreate(company_id=1, bill_name="Globe", amount=Decimal("1000.00"), recurring="one-time", due_date=date(2026, 11, 15))
         )
         svc.record_payment(
             bill_out.bill_id,
             BillPaymentCreate(
                 payment_date=date(2026, 11, 10),
-                amount=Decimal("600.00"),
+                amount=Decimal("1000.00"),
                 payment_method="Bank Transfer",
                 funding_source="bank",
                 bank_account_id="bnk-a1",
-                reference_no="BILL-HTTP-1",
+                reference_no="BILL-SW-1",
             ),
         )
+        bill_exp_id = seed_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first().expense_id
+
         loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-HTTP-2", bank_account_id="bnk-b1",
+            borrower=1, lender=2, loan_ref_no="LN-SW-1", bank_account_id="bnk-b1",
             principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Ops",
+            loan_date=date(2026, 10, 1), due_date=date(2026, 10, 15),
+            status="Overdue", description="Loan: Bridge",
         )
         seed_db.add(loan)
         seed_db.commit()
         seed_db.refresh(loan)
 
-        bill_exp_id = seed_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first().expense_id
-
         with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
              patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            # Bill overpayment & [Pending] rejections return 400 without mutating DB
-            overpay = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"amount": 1500.00})
-            assert overpay.status_code == 400
-            pending_bill = client.put(
-                f"/api/v1/expenses/{bill_exp_id}",
-                json={"particulars": "Bills Payment: PLDT (1x @ ₱600.00 = ₱600.00) [Pending]"},
-            )
-            assert pending_bill.status_code == 400
+            # 1. Invalid / foreign-company bank_account_id on PUT /expenses/{id} is rejected with 400
+            bad_bank = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"bank_account_id": "bnk-b1"})
+            assert bad_bank.status_code == 400
 
-            # Happy path PUT /expenses/{bill_exp_id} updates BillPayment, Bill.status, and Bank
-            ok_bill = client.put(
-                f"/api/v1/expenses/{bill_exp_id}",
-                json={"amount": 1000.00, "particulars": "Bills Payment: PLDT (1x @ ₱1,000.00 = ₱1,000.00) [Paid]"},
-            )
-            assert ok_bill.status_code == 200, ok_bill.text
+            # 2. amount_paid-only PUT on bill-linked expense syncs BillPayment, Bill.status, and Bank
+            assert client.put(f"/api/v1/expenses/{bill_exp_id}", json={"amount_paid": 0.00}).status_code == 400
+            assert client.put(f"/api/v1/expenses/{bill_exp_id}", json={"amount_paid": 1500.00}).status_code == 400
+            paid_only_bill = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"amount_paid": 600.00})
+            assert paid_only_bill.status_code == 200, paid_only_bill.text
+            assert Decimal(str(paid_only_bill.json()["amount_paid"])) == Decimal("600.00")
             check_db = SessionMaker()
-            assert check_db.get(Bill, bill_out.bill_id).status == "paid"
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("9000.00")
+            bp = check_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first()
+            assert bp.amount == Decimal("600.00")
+            assert check_db.get(Bill, bill_out.bill_id).status == "partially paid"
+            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("9400.00")
             check_db.close()
 
-            # DELETE /expenses/{bill_exp_id} cascades cleanly to BillPayment, Bill, and Bank
-            del_bill = client.delete(f"/api/v1/expenses/{bill_exp_id}")
-            assert del_bill.status_code == 200, del_bill.text
+            # 3. Switch bill expense bank_account_id from bnk-a1 to bnk-a2, then toggle to Petty Cash
+            sw_bill_bank = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"bank_account_id": "bnk-a2"})
+            assert sw_bill_bank.status_code == 200, sw_bill_bank.text
             check_db = SessionMaker()
-            assert check_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).count() == 0
-            assert check_db.get(Bill, bill_out.bill_id).status != "paid"
+            bp = check_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first()
+            assert bp.bank_account_id == "bnk-a2"
             assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
+            assert check_db.get(BankAccount, "bnk-a2").current_balance == Decimal("7400.00")
             check_db.close()
 
-            # Loan repayment happy PUT /expenses/{id} & DELETE /expenses/{id}
+            sw_bill_petty = client.put(f"/api/v1/expenses/{bill_exp_id}", json={"payment_method": "Petty Cash"})
+            assert sw_bill_petty.status_code == 200, sw_bill_petty.text
+            check_db = SessionMaker()
+            bp = check_db.query(BillPayment).filter(BillPayment.bill_id == bill_out.bill_id).first()
+            assert bp.funding_source == "petty_cash"
+            assert bp.bank_account_id is None
+            assert check_db.get(BankAccount, "bnk-a2").current_balance == Decimal("8000.00")
+            check_db.close()
+
+            # 4. Loan repayment on Overdue loan preserves "Overdue" when partially paid, and syncs amount_paid-only + bank/Petty switches
             rep_res = client.post(
                 f"/api/v1/loans/{loan.loan_id}/repayments",
                 json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
@@ -921,172 +861,40 @@ def test_http_delete_expense_cascades_to_bills_and_loans_atomically():
             assert rep_res.status_code == 201
             rep_id = rep_res.json()["loan_repayment_id"]
             check_db = SessionMaker()
+            assert check_db.get(Loan, loan.loan_id).status == "Overdue"
             loan_exp_id = check_db.get(LoanRepayment, rep_id).expense_id
             check_db.close()
 
-            ok_loan_put = client.put(
-                f"/api/v1/expenses/{loan_exp_id}",
-                json={"amount": 3000.00, "particulars": "Loan Repayment: Ops (1x @ ₱3,000.00 = ₱3,000.00) [Paid]"},
-            )
-            assert ok_loan_put.status_code == 200, ok_loan_put.text
+            # amount_paid-only edit on loan expense
+            assert client.put(f"/api/v1/expenses/{loan_exp_id}", json={"amount_paid": 6000.00}).status_code == 400
+            paid_only_loan = client.put(f"/api/v1/expenses/{loan_exp_id}", json={"amount_paid": 1500.00})
+            assert paid_only_loan.status_code == 200, paid_only_loan.text
             check_db = SessionMaker()
-            assert check_db.get(LoanRepayment, rep_id).amount == Decimal("3000.00")
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("7000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("23000.00")
-            check_db.close()
-
-            del_loan = client.delete(f"/api/v1/expenses/{loan_exp_id}")
-            assert del_loan.status_code == 200, del_loan.text
-            check_db = SessionMaker()
-            assert check_db.get(LoanRepayment, rep_id) is None
-            assert check_db.get(Loan, loan.loan_id).status == "Disbursed"
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("20000.00")
-            check_db.close()
-    finally:
-        seed_db.close()
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(old_overrides)
-
-
-def test_http_verified_lender_deposit_locks_repayment_edits_and_deletes_409():
-    """Major 3 / Minor: Verified lender BankTransaction locks repayment edits and deletes with 409."""
-    from app.api.v1.endpoints import expenses as exp_ep
-
-    app, client, SessionMaker, old_overrides, seed_db = _http_env()
-    try:
-        loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-VER-1", bank_account_id="bnk-b1",
-            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: AuditLock",
-        )
-        seed_db.add(loan)
-        seed_db.commit()
-        seed_db.refresh(loan)
-
-        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
-             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            rep_res = client.post(
-                f"/api/v1/loans/{loan.loan_id}/repayments",
-                json={"payment_date": "2026-11-05", "amount": 2000.00, "bank_account_id": "bnk-a1", "payment_method": "Bank Transfer"},
-            )
-            assert rep_res.status_code == 201
-            rep_id = rep_res.json()["loan_repayment_id"]
-            check_db = SessionMaker()
-            rep_exp_id = check_db.get(LoanRepayment, rep_id).expense_id
-            lender_tx = check_db.query(BankTransaction).filter(
-                BankTransaction.source_loan_repayment_id == rep_id, BankTransaction.deposit > 0
-            ).first()
-            lender_tx.audit_status = "Verified"
-            check_db.commit()
-            check_db.close()
-
-            assert client.put(f"/api/v1/expenses/{rep_exp_id}", json={"amount": 2500.00}).status_code == 409
-            assert client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-06", "amount": 2500.00},
-            ).status_code == 409
-            assert client.delete(f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}").status_code == 409
-
-            check_db = SessionMaker()
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("8000.00")
-            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("22000.00")
-            check_db.close()
-    finally:
-        seed_db.close()
-        app.dependency_overrides.clear()
-        app.dependency_overrides.update(old_overrides)
-
-
-def test_http_repayment_payment_method_omitted_preserves_petty_cash_and_switches_cleanly():
-    """Major 1: omitting payment_method in PUT repayment preserves Petty Cash; switching to Bank resolves default bank."""
-    from app.api.v1.endpoints import expenses as exp_ep
-
-    app, client, SessionMaker, old_overrides, seed_db = _http_env()
-    try:
-        loan = Loan(
-            borrower=1, lender=2, loan_ref_no="LN-PM-1", bank_account_id="bnk-b1",
-            principal_amount=Decimal("5000.00"), interest_rate=Decimal("0.00"),
-            loan_date=date(2026, 11, 1), status="Disbursed", description="Loan: Petty",
-        )
-        seed_db.add(loan)
-        seed_db.commit()
-        seed_db.refresh(loan)
-
-        with patch.object(loans_ep, "get_supabase_admin_client", return_value=None), \
-             patch.object(exp_ep, "get_supabase_admin_client", return_value=None):
-            rep_res = client.post(
-                f"/api/v1/loans/{loan.loan_id}/repayments",
-                json={"payment_date": "2026-11-05", "amount": 1000.00, "payment_method": "Petty Cash"},
-            )
-            assert rep_res.status_code == 201
-            rep_id = rep_res.json()["loan_repayment_id"]
-
-            # Omitting payment_method must NOT reset Petty Cash to Cash
-            put_omitted = client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-05", "amount": 1500.00},
-            )
-            assert put_omitted.status_code == 200, put_omitted.text
-            assert put_omitted.json()["payment_method"] == "Petty Cash"
-            assert put_omitted.json()["bank_account_id"] is None
-            check_db = SessionMaker()
-            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
-            check_db.close()
-
-            # Switching to Bank Transfer without bank_account_id resolves and persists default borrower bank
-            put_bank = client.put(
-                f"/api/v1/loans/{loan.loan_id}/repayments/{rep_id}",
-                json={"payment_date": "2026-11-05", "amount": 1500.00, "payment_method": "Bank Transfer"},
-            )
-            assert put_bank.status_code == 200, put_bank.text
-            assert put_bank.json()["bank_account_id"] == "bnk-a1"
-            check_db = SessionMaker()
+            rep = check_db.get(LoanRepayment, rep_id)
+            assert rep.amount == Decimal("1500.00")
+            assert check_db.get(Loan, loan.loan_id).status == "Overdue"
             assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("8500.00")
+            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("21500.00")
+            check_db.close()
+
+            # Switch loan expense to bnk-a2, then Petty Cash
+            assert client.put(f"/api/v1/expenses/{loan_exp_id}", json={"bank_account_id": "bnk-a2"}).status_code == 200
+            check_db = SessionMaker()
+            assert check_db.get(LoanRepayment, rep_id).bank_account_id == "bnk-a2"
+            assert check_db.get(BankAccount, "bnk-a1").current_balance == Decimal("10000.00")
+            assert check_db.get(BankAccount, "bnk-a2").current_balance == Decimal("6500.00")
+            check_db.close()
+
+            assert client.put(f"/api/v1/expenses/{loan_exp_id}", json={"payment_method": "Petty Cash"}).status_code == 200
+            check_db = SessionMaker()
+            assert check_db.get(LoanRepayment, rep_id).bank_account_id is None
+            assert check_db.get(BankAccount, "bnk-a2").current_balance == Decimal("8000.00")
+            assert check_db.get(BankAccount, "bnk-b1").current_balance == Decimal("21500.00")
             check_db.close()
     finally:
         seed_db.close()
         app.dependency_overrides.clear()
         app.dependency_overrides.update(old_overrides)
 
-
-def test_patch_linked_entry_preserves_verified_on_noop_and_recompute_loan_skips_rest_when_shared_db():
-    """Blocker 1 & Minor 6: patch_linked_entry keeps Verified on '' vs None no-op; recompute skips REST inside tx."""
-    from app.services.bank_service import BankService
-
-    db, loan = _db()
-    svc = BankService(db)
-    tx = svc.patch_linked_entry(
-        link_attr="source_expense_id",
-        link_id=501,
-        credit=False,
-        amount=Decimal("250.00"),
-        account_id="bnk-a",
-        particulars="Supplies",
-        reference_no=None,
-        tx_date="11/05/26",
-    )
-    tx.audit_status = "Verified"
-    tx.audited_by = "Auditor"
-    db.commit()
-
-    # No-op reconcile with reference_no="" must preserve Verified
-    res = svc.patch_linked_entry(
-        link_attr="source_expense_id",
-        link_id=501,
-        credit=False,
-        amount=Decimal("250.00"),
-        account_id="bnk-a",
-        particulars="Supplies",
-        reference_no="",
-        tx_date="11/05/26",
-    )
-    assert res.audit_status == "Verified"
-    assert res.audited_by == "Auditor"
-
-    # recompute_loan_repayments_and_status must NOT make any Supabase REST call before commit
-    with patch.object(loans_ep, "get_supabase_admin_client") as sb_mock:
-        loans_ep.recompute_loan_repayments_and_status(db, loan.loan_id)
-        sb_mock.assert_not_called()
 
 

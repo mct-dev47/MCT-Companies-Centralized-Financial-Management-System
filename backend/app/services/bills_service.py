@@ -775,7 +775,12 @@ class BillsService:
                     )
         return payment.bill_id
 
-    def sync_payment_from_expense(self, expense, commit: bool = True) -> Optional[int]:
+    def sync_payment_from_expense(
+        self,
+        expense,
+        commit: bool = True,
+        paid_amount: Optional[Decimal] = None,
+    ) -> Optional[int]:
         """Update the linked BillPayment and recompute Bill.status when its Expense is edited."""
         from app.services.bank_service import BankService
         from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
@@ -783,7 +788,11 @@ class BillsService:
         payment = self.db.query(BillPayment).filter(BillPayment.expense_id == expense.expense_id).first()
         if not payment:
             return None
-        paid_amt = Decimal(str(compute_paid_amount_from_particulars(expense.description, expense.amount) or 0)).quantize(Decimal("0.01"))
+        paid_amt = (
+            Decimal(str(paid_amount)).quantize(Decimal("0.01"))
+            if paid_amount is not None
+            else Decimal(str(compute_paid_amount_from_particulars(expense.description, expense.amount) or 0)).quantize(Decimal("0.01"))
+        )
         self.prepare_payment_edit_from_expense(expense.expense_id, paid_amt)
 
         payment.amount = paid_amt

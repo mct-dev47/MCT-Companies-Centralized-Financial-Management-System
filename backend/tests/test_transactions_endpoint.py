@@ -1573,3 +1573,82 @@ def test_sales_receivables_sync_partial_delete_resets_audit_metadata(db_session,
     with pytest.raises(HTTPException) as exc_info:
         sync_svc.sync_receivable_to_sale(rec2, deleted=True)
     assert exc_info.value.status_code == 409
+
+
+def test_post_expense_without_amount_paid_shows_paid_in_transactions(db_session, monkeypatch):
+    """
+    When POST /api/v1/expenses omits amount_paid (as the frontend does),
+    amount_paid must be derived from particulars so fully-paid expenses
+    appear as 'Paid' (not 'Unpaid') on GET /api/v1/transactions.
+    """
+    from app.api.v1.endpoints import expenses as exp_ep
+
+    monkeypatch.setattr(exp_ep, "get_supabase_admin_client", lambda: None)
+
+    comp = Company(company_name="Paid Expense Sync Corp")
+    db_session.add(comp)
+    db_session.commit()
+
+    # 1. Plain particulars without status tag (AddExpenseModal flow)
+    res_plain = client.post(
+        "/api/v1/expenses",
+        json={
+            "company_id": comp.company_id,
+            "category": "Utilities",
+            "payment_method": "Cash",
+            "expense_date": date.today().isoformat(),
+            "amount": 500.00,
+            "particulars": "Office Supplies",
+        },
+    )
+    assert res_plain.status_code in (200, 201), res_plain.text
+    exp_plain = res_plain.json()
+    assert Decimal(str(exp_plain["amount_paid"])) == Decimal("500.00")
+
+    # 2. Itemized [Paid] particulars (AddTransactionSheetPage flow)
+    res_paid = client.post(
+        "/api/v1/expenses",
+        json={
+            "company_id": comp.company_id,
+            "category": "Utilities",
+            "payment_method": "Cash",
+            "expense_date": date.today().isoformat(),
+            "amount": 300.00,
+            "particulars": "Water (1x @ ₱300.00 = ₱300.00) [Paid]",
+        },
+    )
+    assert res_paid.status_code in (200, 201), res_paid.text
+    exp_paid = res_paid.json()
+    assert Decimal(str(exp_paid["amount_paid"])) == Decimal("300.00")
+
+    # 3. Itemized [Unpaid] particulars must remain Unpaid
+    res_unpaid = client.post(
+        "/api/v1/expenses",
+        json={
+            "company_id": comp.company_id,
+            "category": "Utilities",
+            "payment_method": "Cash",
+            "expense_date": date.today().isoformat(),
+            "amount": 200.00,
+            "particulars": "Internet (1x @ ₱200.00 = ₱200.00) [Unpaid]",
+        },
+    )
+    assert res_unpaid.status_code in (200, 201), res_unpaid.text
+    exp_unpaid = res_unpaid.json()
+    assert Decimal(str(exp_unpaid["amount_paid"])) == Decimal("0.00")
+
+    tx_res = client.get(f"/api/v1/transactions?company_id={comp.company_id}")
+    assert tx_res.status_code == 200, tx_res.text
+    tx_by_id = {t["id"]: t for t in tx_res.json()}
+
+    plain_tx = tx_by_id[f"exp_{exp_plain['expense_id']}"]
+    assert plain_tx["status"] == "Paid"
+    assert plain_tx["paidAmount"] == 500.0
+
+    paid_tx = tx_by_id[f"exp_{exp_paid['expense_id']}"]
+    assert paid_tx["status"] == "Paid"
+    assert paid_tx["paidAmount"] == 300.0
+
+    unpaid_tx = tx_by_id[f"exp_{exp_unpaid['expense_id']}"]
+    assert unpaid_tx["status"] == "Unpaid"
+    assert unpaid_tx["paidAmount"] == 0.0

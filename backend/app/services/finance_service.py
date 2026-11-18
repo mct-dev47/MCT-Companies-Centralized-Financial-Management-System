@@ -85,6 +85,23 @@ class FinanceCalculator:
         return quantize_currency(max(Decimal("0.00"), remaining))
 
 
+def hydrate_repayment_payment_methods(db: Session, repayments: List[LoanRepayment]) -> None:
+    """Populate missing LoanRepayment.payment_method from linked Expense rows (defaulting to 'Cash')."""
+    exp_ids = [r.expense_id for r in repayments if r.expense_id is not None and not r.payment_method]
+    exp_pm_map = (
+        dict(
+            db.query(Expense.expense_id, Expense.payment_method)
+            .filter(Expense.expense_id.in_(exp_ids))
+            .all()
+        )
+        if exp_ids
+        else {}
+    )
+    for r in repayments:
+        if not r.payment_method:
+            r.payment_method = exp_pm_map.get(r.expense_id) or "Cash"
+
+
 class FinanceService:
     """
     Database queries & aggregation logic for financial transactions.
@@ -348,19 +365,7 @@ class FinanceService:
             .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
             .all()
         )
-        exp_ids = [r.expense_id for r in all_repayments if r.expense_id is not None]
-        exp_pm_map = (
-            dict(
-                self.db.query(Expense.expense_id, Expense.payment_method)
-                .filter(Expense.expense_id.in_(exp_ids))
-                .all()
-            )
-            if exp_ids
-            else {}
-        )
-        for r in all_repayments:
-            if not r.payment_method:
-                r.payment_method = exp_pm_map.get(r.expense_id) or "Cash"
+        hydrate_repayment_payment_methods(self.db, all_repayments)
         total_repaid = sum(
             (Decimal(str(r.amount or 0)) for r in all_repayments if (r.status or "").strip().lower() != "pending"),
             Decimal("0.00"),
