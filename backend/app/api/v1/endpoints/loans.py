@@ -33,6 +33,7 @@ from app.core.cache import system_cache
 from app.core.websocket import ws_manager
 from app.services.finance_service import FinanceService, FinanceCalculator
 from app.services.audit_service import AuditAction, log_transaction
+from app.core.post_save import rest_and_orm_share_database
 
 router = APIRouter()
 
@@ -407,9 +408,64 @@ def _attach_borrower_banks(db: Session, loans: List[LoanOut]) -> None:
             loan.borrower_bank_account_id = account_id
 
 
+def cleanup_duplicate_loan_repayment_expenses(db: Session) -> int:
+    """Find and remove duplicate loan repayment expense records (keeping only the earliest one)."""
+    try:
+        from app.models.finance import Expense
+        from app.core.supabase import get_supabase_admin_client
+
+        rows = (
+            db.query(Expense)
+            .filter(Expense.description.ilike("Loan Repayment%"))
+            .order_by(Expense.expense_id.asc())
+            .all()
+        )
+        seen: set[tuple] = set()
+        to_delete: list[Expense] = []
+        for r in rows:
+            cheque_key = (r.cheque_no or r.cheque_number or "").strip().lower()
+            desc_key = (r.description or "").strip().lower()
+            key = (r.company_id, str(r.amount), str(r.expense_date), cheque_key, desc_key)
+            if key in seen:
+                to_delete.append(r)
+            else:
+                seen.add(key)
+
+        if to_delete:
+            deleted_count = len(to_delete)
+            sb_client = None if rest_and_orm_share_database() else get_supabase_admin_client()
+            for dup in to_delete:
+                dup_id = dup.expense_id
+                db.delete(dup)
+                if sb_client:
+                    try:
+                        sb_client.table("expenses").delete().eq("expense_id", dup_id).execute()
+                    except Exception:
+                        pass
+            db.commit()
+            system_cache.invalidate_tag("expenses")
+            return deleted_count
+    except Exception as exc:
+        print(f"Cleanup duplicate loan repayment expenses warning: {exc}")
+    return 0
+
+
+_duplicate_cleanup_done = False
+
+
+def ensure_repayment_expenses_deduplicated(db: Session) -> None:
+    global _duplicate_cleanup_done
+    if _duplicate_cleanup_done:
+        return
+    try:
+        cleanup_duplicate_loan_repayment_expenses(db)
+        _duplicate_cleanup_done = True
+    except Exception as exc:
+        print(f"Deduplication check warning: {exc}")
+
+
 def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
     """Populate total_paid, outstanding_balance, and repayments from LoanRepayment rows."""
-    global _has_backfilled_repayments
     loan_ids = [item.loan_id for item in items if item.loan_id]
     if not loan_ids:
         return
@@ -439,57 +495,6 @@ def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
         item.total_paid = total_paid
         item.outstanding_balance = outstanding
         item.repayments = [LoanRepaymentOut.model_validate(r) for r in reps]
-
-    # Run one-time self-healing backfill for legacy repayments lacking Expense records
-    if not _has_backfilled_repayments:
-        try:
-            loan_cat = db.query(Category).filter(Category.name.ilike("Loan Repayment")).first()
-            if not loan_cat:
-                loan_cat = db.query(Category).filter(Category.name.ilike("Loan%")).first()
-            if not loan_cat:
-                loan_cat = Category(name="Loan Repayment", description="Inter-company loan repayment")
-                db.add(loan_cat)
-                db.flush()
-
-            comp_map = dict(db.query(Company.company_id, Company.company_name).all())
-            needs_commit = False
-            for item in items:
-                reps = by_loan.get(item.loan_id, [])
-                for r in reps:
-                    if (r.status or "").lower() == "pending":
-                        continue
-                    r_ref = r.reference_no or item.loan_ref_no or f"LN-{item.loan_id}"
-                    exp_exists = db.query(Expense).filter(
-                        Expense.company_id == item.borrower,
-                        Expense.amount == r.amount,
-                        Expense.expense_date == r.payment_date,
-                        Expense.cheque_no == r_ref,
-                    ).first()
-                    if not exp_exists:
-                        l_name = comp_map.get(item.lender) if item.lender else "Lender"
-                        raw_desc = (item.description or item.particulars or "").strip()
-                        clean_particular = raw_desc[5:].strip() if raw_desc.lower().startswith("loan:") else (raw_desc or "Loan Facility")
-                        new_exp = Expense(
-                            company_id=item.borrower,
-                            category_id=loan_cat.category_id,
-                            payment_method="Cash",
-                            expense_date=r.payment_date,
-                            cheque_no=r_ref,
-                            amount=r.amount,
-                            amount_paid=r.amount,
-                            description=f"Loan Repayment: {clean_particular} (to {l_name})",
-                            remarks=r.notes,
-                            bank_account_id=item.borrower_bank_account_id,
-                            audit_status="Pending Audit",
-                        )
-                        db.add(new_exp)
-                        needs_commit = True
-            if needs_commit:
-                db.commit()
-                system_cache.invalidate_tag("expenses")
-            _has_backfilled_repayments = True
-        except Exception as exc:
-            print(f"Repayment expense backfill warning: {exc}")
 
 
 @router.get("", response_model=List[LoanOut], summary="List loans from Supabase / DB")
@@ -551,6 +556,8 @@ def get_loans(
         check_company_access(current_user, borrower_id)
     if lender_id:
         check_company_access(current_user, lender_id)
+
+    ensure_repayment_expenses_deduplicated(db)
 
     query = db.query(Loan)
 
@@ -1860,48 +1867,73 @@ def create_loan_repayment(
         db.add(loan_cat)
         db.flush()
 
-    expense_rec = Expense(
-        company_id=loan.borrower,
-        category_id=loan_cat.category_id,
-        payment_method=chosen_payment_method,
-        created_by=current_user.get("user_id"),
-        expense_date=repayment_in.payment_date,
-        cheque_no=repayment_in.reference_no or loan_ref,
-        amount=repayment_in.amount,
-        amount_paid=repayment_in.amount,
-        description=f"Loan Repayment: {clean_particular} (to {l_name})",
-        remarks=repayment_in.notes,
-        bank_account_id=borrower_acc.id if borrower_acc else None,
-        audit_status="Pending Audit",
-    )
-    db.add(expense_rec)
+    target_cheque = repayment_in.reference_no or loan_ref
+    target_desc = f"Loan Repayment: {clean_particular} (to {l_name})"
 
-    db.commit()
+    # Prevent duplicate expense creation if already recorded
+    existing_exp = db.query(Expense).filter(
+        Expense.company_id == loan.borrower,
+        Expense.amount == repayment_in.amount,
+        Expense.expense_date == repayment_in.payment_date,
+        or_(
+            Expense.cheque_no == target_cheque,
+            Expense.cheque_number == target_cheque,
+        ),
+        Expense.description == target_desc,
+    ).first()
+
+    expense_id = None
+    if not existing_exp:
+        expense_rec = Expense(
+            company_id=loan.borrower,
+            category_id=loan_cat.category_id,
+            payment_method=chosen_payment_method,
+            created_by=current_user.get("user_id"),
+            expense_date=repayment_in.payment_date,
+            cheque_no=target_cheque,
+            amount=repayment_in.amount,
+            amount_paid=repayment_in.amount,
+            description=target_desc,
+            remarks=repayment_in.notes,
+            bank_account_id=borrower_acc.id if borrower_acc else None,
+            audit_status="Pending Audit",
+        )
+        db.add(expense_rec)
+        db.commit()
+        expense_id = expense_rec.expense_id
+    else:
+        expense_id = existing_exp.expense_id
+        db.commit()
+
     db.refresh(repayment)
 
     try:
         sb_client = get_supabase_admin_client()
         if sb_client:
             sb_client.table("loan").update({"status": new_loan_status}).eq("loan_id", loan_id).execute()
-            try:
-                sb_client.table("expenses").insert({
-                    "company_id": loan.borrower,
-                    "category_id": loan_cat.category_id,
-                    "payment_method": chosen_payment_method,
-                    "created_by": current_user.get("user_id"),
-                    "expense_date": repayment_in.payment_date.isoformat(),
-                    "cheque_number": repayment_in.reference_no or loan_ref,
-                    "amount": float(repayment_in.amount),
-                    "amount_paid": float(repayment_in.amount),
-                    "description": f"Loan Repayment: {clean_particular} (to {l_name})",
-                    "remarks": repayment_in.notes,
-                    "bank_account_id": borrower_acc.id if borrower_acc else None,
-                    "audit_status": "Pending Audit",
-                }).execute()
-            except Exception as sb_exp_err:
-                print(f"Supabase expense insert on loan repayment warning: {sb_exp_err}")
+            # Only perform Supabase REST insert if ORM and REST do NOT share the same database
+            if not existing_exp and not rest_and_orm_share_database():
+                try:
+                    sb_client.table("expenses").insert({
+                        "company_id": loan.borrower,
+                        "category_id": loan_cat.category_id,
+                        "payment_method": chosen_payment_method,
+                        "created_by": current_user.get("user_id"),
+                        "expense_date": repayment_in.payment_date.isoformat(),
+                        "cheque_number": target_cheque,
+                        "amount": float(repayment_in.amount),
+                        "amount_paid": float(repayment_in.amount),
+                        "description": target_desc,
+                        "remarks": repayment_in.notes,
+                        "bank_account_id": borrower_acc.id if borrower_acc else None,
+                        "audit_status": "Pending Audit",
+                    }).execute()
+                except Exception as sb_exp_err:
+                    print(f"Supabase expense insert on loan repayment warning: {sb_exp_err}")
     except Exception as exc:
         print(f"Supabase loan status update on repayment failed: {exc}")
+
+    cleanup_duplicate_loan_repayment_expenses(db)
 
     log_transaction(
         db, AuditAction.LOAN_UPDATED,
@@ -1914,7 +1946,7 @@ def create_loan_repayment(
             "remaining_balance": float(new_remaining),
             "borrower_bank_id": borrower_acc.id if borrower_acc else None,
             "lender_bank_id": lender_acc.id if lender_acc else None,
-            "expense_id": expense_rec.expense_id,
+            "expense_id": expense_id,
         },
     )
     system_cache.invalidate_tag("loans")

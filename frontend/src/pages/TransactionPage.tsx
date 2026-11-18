@@ -255,16 +255,16 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
       const particulars = `Loan repayment received from ${l.borrower}${l.particulars ? `: ${l.particulars}` : ''}`
       rows.push({
         refNo: r.referenceNo || l.refNo,
-        chequeNo: '',
+        chequeNo: r.referenceNo || l.chequeNo || '',
         date: r.paymentDate || l.date,
         type: 'Loan' as const,
         amount: rAmt,
         category: 'Loan Repayment' as any,
         status: 'Paid',
-        auditStatus: l.auditStatus || 'Verified',
-        auditedBy: l.auditedBy,
-        auditDate: l.auditDate,
-        auditNotes: l.auditNotes,
+        auditStatus: 'Pending Audit',
+        auditedBy: undefined,
+        auditDate: undefined,
+        auditNotes: undefined,
         createdBy: l.createdBy,
         createdAt: r.createdAt || r.paymentDate || l.createdAt,
         updatedAt: r.createdAt || l.updatedAt,
@@ -2288,6 +2288,12 @@ export const TransactionPage: React.FC = () => {
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Loan') {
+        if (tx.id.startsWith('loan_rep_')) {
+          setIsMarkAuditModalOpen(false)
+          setMarkAuditRemarks('')
+          setMarkAuditTargetTx(null)
+          return
+        }
         const loanId = tx.id.replace(/:lender$/, '')
         await loanService.updateLoan(loanId, {
           auditStatus: 'Verified',
@@ -2355,6 +2361,9 @@ export const TransactionPage: React.FC = () => {
         if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Loan') {
+          if (tx.id.startsWith('loan_rep_')) {
+            return Promise.resolve()
+          }
           const loanId = tx.id.replace(/:lender$/, '')
           return loanService.updateLoan(loanId, { auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes })
         }
@@ -2415,6 +2424,12 @@ export const TransactionPage: React.FC = () => {
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
       } else if (tx.type === 'Loan') {
+        if (tx.id.startsWith('loan_rep_')) {
+          setIsDiscrepancyModalOpen(false)
+          setDiscrepancyReason('')
+          setDiscrepancyTargetTx(null)
+          return
+        }
         const loanId = tx.id.replace(/:lender$/, '')
         await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
       } else if (tx.type === 'Income') {
