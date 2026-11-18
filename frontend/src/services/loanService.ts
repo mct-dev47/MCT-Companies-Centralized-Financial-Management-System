@@ -715,7 +715,9 @@ export const loanService = {
       paymentDate: savedRepayment?.payment_date || repayment.paymentDate,
       amount: Number(savedRepayment?.amount ?? repayment.amount),
       remainingBalance: Number(savedRepayment?.remaining_balance ?? newRemaining),
-      referenceNo: savedRepayment?.reference_no || repayment.referenceNo || `REP-${Date.now().toString().slice(-4)}`,
+      referenceNo: savedRepayment
+        ? savedRepayment.reference_no || repayment.referenceNo || ''
+        : repayment.referenceNo || `REP-${Date.now().toString().slice(-4)}`,
       paymentMethod: repayment.paymentMethod || 'Cash',
       notes: savedRepayment?.notes ?? repayment.notes ?? '',
       createdAt: savedRepayment?.created_at || new Date().toISOString(),

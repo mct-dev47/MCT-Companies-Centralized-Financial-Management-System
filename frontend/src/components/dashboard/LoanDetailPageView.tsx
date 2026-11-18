@@ -17,6 +17,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { BackButton } from '@/components/common'
 import { formatPHP } from '@/lib/format'
+import {
+  mapStatementRepayment,
+  mergeLoanRepayments,
+} from '@/lib/loanRepaymentHelpers'
 import { cn } from '@/lib/utils'
 import {
   loanService,
@@ -77,15 +81,9 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
       .then((stmt: any) => {
         if (!mounted || !stmt) return
         const list = Array.isArray(stmt.repayments) ? stmt.repayments : []
-        const mapped: LoanRepaymentRecord[] = list.map((r: any, idx: number) => ({
-          id: String(r.repayment_id || r.id || `stmt-${idx}`),
-          paymentDate: String(r.payment_date || r.paymentDate || loan.rawDate || loan.date),
-          amount: Number(r.amount || 0),
-          remainingBalance: Number(r.remaining_balance ?? r.remainingBalance ?? 0),
-          referenceNo: String(r.reference_no || r.reference || r.referenceNo || '—'),
-          paymentMethod: String(r.payment_method || r.paymentMethod || 'Bank Transfer'),
-          notes: String(r.notes || r.remarks || 'Loan repayment remittance'),
-        }))
+        const mapped: LoanRepaymentRecord[] = list.map((r: any, idx: number) =>
+          mapStatementRepayment(r, idx, loan.rawDate || loan.date)
+        )
         setStatementRepayments(mapped)
       })
       .catch(() => {
@@ -103,22 +101,10 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
       ? loan.outstandingBalance
       : Math.max(0, totalAmount - totalPaid)
 
-  const combinedRepayments = React.useMemo(() => {
-    const localList = loan.repayments || []
-    const map = new Map<string, LoanRepaymentRecord>()
-    statementRepayments.forEach((r) => {
-      map.set(`${r.paymentDate}-${r.amount}-${r.referenceNo || ''}`, r)
-    })
-    localList.forEach((r) => {
-      const key = `${r.paymentDate}-${r.amount}-${r.referenceNo || ''}`
-      if (!map.has(key)) {
-        map.set(key, r)
-      }
-    })
-    return Array.from(map.values()).sort((a, b) =>
-      b.paymentDate.localeCompare(a.paymentDate)
-    )
-  }, [loan.repayments, statementRepayments])
+  const combinedRepayments = React.useMemo(
+    () => mergeLoanRepayments(statementRepayments, loan.repayments || []),
+    [loan.repayments, statementRepayments]
+  )
 
   const filteredRepayments = React.useMemo(() => {
     const q = detailSearchQuery.trim().toLowerCase()
