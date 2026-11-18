@@ -1773,6 +1773,29 @@ def _run_sqlite_migrations(conn) -> list[str]:
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0072_drop_reference_no_columns')"))
         applied.append("0072_drop_reference_no_columns")
 
+    # 38. 0073: bank_transactions audit & remarks columns
+    result_0073 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0073_bank_transactions_audit_fields'")
+    ).first()
+    if not result_0073:
+        tx_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if tx_exists:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "audit_status" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audited_by VARCHAR(100) NULL"))
+            if "audited_at" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audited_at TIMESTAMP NULL"))
+            if "audit_remarks" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_remarks TEXT NULL"))
+            if "remarks" not in cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN remarks TEXT NULL"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0073_bank_transactions_audit_fields')"))
+        applied.append("0073_bank_transactions_audit_fields")
+
     conn.commit()
     return applied
 

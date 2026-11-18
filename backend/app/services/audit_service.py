@@ -131,6 +131,11 @@ class AuditAction(str, Enum):
     UNAUTHORIZED_ACCESS = "UNAUTHORIZED_ACCESS"
     PERMISSION_DENIED   = "PERMISSION_DENIED"
 
+    # ── Bank Transactions ────────────────────────────────────────────────────
+    BANK_TRANSACTION_CREATED = "BANK_TRANSACTION_CREATED"
+    BANK_TRANSACTION_UPDATED = "BANK_TRANSACTION_UPDATED"
+    BANK_TRANSACTION_DELETED = "BANK_TRANSACTION_DELETED"
+
 
 # Map each action to its broad category label (stored in action_category column)
 _ACTION_CATEGORY_MAP: dict[str, str] = {
@@ -199,6 +204,10 @@ _ACTION_CATEGORY_MAP: dict[str, str] = {
     "SYSTEM_ERROR": "SYSTEM",
     "UNAUTHORIZED_ACCESS": "SYSTEM",
     "PERMISSION_DENIED": "SYSTEM",
+    # BANK TRANSACTIONS
+    "BANK_TRANSACTION_CREATED": "TRANSACTION",
+    "BANK_TRANSACTION_UPDATED": "TRANSACTION",
+    "BANK_TRANSACTION_DELETED": "TRANSACTION",
 }
 
 
@@ -265,6 +274,9 @@ _ACTION_DESCRIPTION_MAP: dict[str, str] = {
     "SYSTEM_ERROR":            "System error occurred",
     "UNAUTHORIZED_ACCESS":     "Unauthorized access attempt detected",
     "PERMISSION_DENIED":       "Permission denied for requested action",
+    "BANK_TRANSACTION_CREATED": "Bank transaction recorded",
+    "BANK_TRANSACTION_UPDATED": "Bank transaction updated",
+    "BANK_TRANSACTION_DELETED": "Bank transaction deleted",
 }
 
 

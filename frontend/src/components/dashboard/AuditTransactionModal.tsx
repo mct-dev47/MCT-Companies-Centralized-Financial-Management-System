@@ -121,8 +121,13 @@ const DEFAULT_SPECIFIC_CATEGORIES = [
 function formatTimelineDateTime(dateStr?: string | null): string {
   if (!dateStr) return '—'
   try {
-    const d = new Date(dateStr)
-    if (isNaN(d.getTime())) return String(dateStr)
+    const str = String(dateStr).trim()
+    if (!str) return '—'
+    const hasExplicitTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(str)
+    const isIsoLike = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(str)
+    const normalized = isIsoLike && !hasExplicitTz ? `${str.replace(' ', 'T')}Z` : str
+    const d = new Date(normalized)
+    if (isNaN(d.getTime())) return str
     return d.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -353,7 +358,11 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     let id: string | number | undefined = undefined
     let ref: string | undefined = undefined
 
-    if (activeSale || activeTx?.type === 'Sales') {
+    if (activeTx?.id && String(activeTx.id).startsWith('tx-')) {
+      type = activeTx.sourceExpenseId ? 'expense' : activeTx.sourceSaleId ? 'sale' : 'bank_transaction'
+      id = activeTx.sourceExpenseId || activeTx.sourceSaleId || activeTx.id
+      ref = activeTx.refNo || activeTx.chequeNo
+    } else if (activeSale || activeTx?.type === 'Sales') {
       type = 'sale'
       const rawId = activeSale?.id || activeTx?.id
       id = rawId ? String(rawId).replace(/^sale_/, '') : undefined
@@ -546,7 +555,15 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmittingRemarks(true)
     try {
       const trimmed = remarksInput.trim()
-      if (isExpense || activeTx?.type === 'Expense') {
+      if (activeTx?.id && (String(activeTx.id).startsWith('tx-') || activeTx.type === 'Bank')) {
+        await bankService.updateTransactionRemarks(activeTx.id, trimmed)
+        const updatedTx: DashboardTransactionItem = {
+          ...activeTx,
+          remarks: trimmed,
+        }
+        setCurrentTx(updatedTx)
+        if (onTransactionUpdated) onTransactionUpdated(updatedTx)
+      } else if (isExpense || activeTx?.type === 'Expense') {
         const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
         setCurrentExpense(updatedExpense)
         const tx = expenseService.toDashboardTransaction(updatedExpense)
@@ -633,11 +650,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const handleMarkAudit = async (optionalRemarks?: string) => {
     setIsSubmittingAudit(true)
     const trimmedNotes = (optionalRemarks ?? markAuditRemarks).trim() || undefined
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
     try {
@@ -691,23 +704,40 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: trimmedNotes,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, {
-            auditStatus: 'Verified',
-            auditedBy: auditorName,
-            auditDate: today,
-            auditNotes: trimmedNotes,
-          })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Verified', trimmedNotes)
+            const finalTx: DashboardTransactionItem = {
+              ...updated,
+              auditedBy: res.auditedBy || auditorName,
+              auditDate: res.auditDate || today,
+            }
+            setCurrentTx(finalTx)
+            if (onTransactionUpdated) onTransactionUpdated(finalTx)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Loan') {
+            const loanId = activeTx.id.replace(/:lender$/, '')
+            await loanService.updateLoan(loanId, {
+              auditStatus: 'Verified',
+              auditedBy: auditorName,
+              auditDate: today,
+              auditNotes: trimmedNotes,
+            })
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
@@ -723,11 +753,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     const trimmedRemarks = discrepancyReason.trim()
     if (!trimmedRemarks) return
     setIsSubmittingAudit(true)
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
     try {
@@ -776,18 +802,35 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: trimmedRemarks,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Flagged', trimmedRemarks)
+            const finalTx: DashboardTransactionItem = {
+              ...updated,
+              auditedBy: res.auditedBy || auditorName,
+              auditDate: res.auditDate || today,
+            }
+            setCurrentTx(finalTx)
+            if (onTransactionUpdated) onTransactionUpdated(finalTx)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Loan') {
+            const loanId = activeTx.id.replace(/:lender$/, '')
+            await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')
@@ -847,18 +890,29 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: undefined,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            await bankService.updateTransactionAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Loan') {
+            const loanId = activeTx.id.replace(/:lender$/, '')
+            await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
     } catch (err: any) {
       console.error('Failed to reset audit status:', err)
@@ -1448,7 +1502,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 )}
                 {displayAuditedBy && currentAuditStatus !== 'Pending Audit' && (
                   <span className="text-xs text-muted-fg">
-                    by {formatRealName(displayAuditedBy, 'Audit Officer')}{displayAuditDate ? ` · ${displayAuditDate}` : ''}
+                    by {formatRealName(displayAuditedBy, 'Audit Officer')}{displayAuditDate ? ` · ${formatTimelineDateTime(displayAuditDate)}` : ''}
                   </span>
                 )}
               </div>
@@ -1747,7 +1801,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                         {displayAuditedBy && (
                           <p className="text-[11px] opacity-85">
                             By <span className="font-semibold">{formatRealName(displayAuditedBy, 'Audit Officer')}</span>
-                            {displayAuditDate ? ` · ${displayAuditDate}` : ''}
+                            {displayAuditDate ? ` · ${formatTimelineDateTime(displayAuditDate)}` : ''}
                           </p>
                         )}
                       </div>

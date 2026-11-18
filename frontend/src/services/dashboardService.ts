@@ -56,6 +56,8 @@ export interface DashboardTransactionItem {
   deposit_date?: string | null
   depositDate?: string | null
   saleDate?: string
+  sourceExpenseId?: number
+  sourceSaleId?: number
 }
 
 export interface DashboardMetricSummary {

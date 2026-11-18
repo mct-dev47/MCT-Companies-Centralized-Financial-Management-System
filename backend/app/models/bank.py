@@ -78,6 +78,11 @@ class BankTransaction(Base):
     __mapper_args__ = {"exclude_properties": ["entry_source"]}
     # Which owner company this entry belongs to (only meaningful when the account has more than one owner).
     company_name = Column(String(255), nullable=True)
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
+    remarks = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")

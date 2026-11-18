@@ -2246,11 +2246,7 @@ export const TransactionPage: React.FC = () => {
 
   const submitMarkAudit = async (tx: DashboardTransactionItem, trimmedNotes: string | undefined) => {
     setIsSubmittingAudit(true)
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
@@ -2263,7 +2259,15 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.type === 'Sales') {
+      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Verified', trimmedNotes)
+        const finalTx: DashboardTransactionItem = {
+          ...updatedTx,
+          auditedBy: res.auditedBy || auditorName,
+          auditDate: res.auditDate || today,
+        }
+        setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
+      } else if (tx.type === 'Sales') {
         await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
@@ -2315,7 +2319,7 @@ export const TransactionPage: React.FC = () => {
     const notes = dayAuditRemarks.trim() || undefined
     setIsSubmittingDayAudit(true)
 
-    const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const keys = new Set(targets.map((t) => `${t.type}:${t.id}`))
 
@@ -2329,6 +2333,9 @@ export const TransactionPage: React.FC = () => {
 
     const results = await Promise.allSettled(
       targets.map((tx) => {
+        if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+          return bankService.updateTransactionAuditStatus(tx.id, action, notes)
+        }
         if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Loan') {
@@ -2366,11 +2373,7 @@ export const TransactionPage: React.FC = () => {
     setIsSubmittingAudit(true)
     const tx = discrepancyTargetTx
     const trimmed = discrepancyReason.trim()
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
@@ -2383,7 +2386,15 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.type === 'Sales') {
+      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Flagged', trimmed)
+        const finalTx: DashboardTransactionItem = {
+          ...updatedTx,
+          auditedBy: res.auditedBy || auditorName,
+          auditDate: res.auditDate || today,
+        }
+        setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
+      } else if (tx.type === 'Sales') {
         await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)

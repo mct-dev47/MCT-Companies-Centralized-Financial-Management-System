@@ -21,6 +21,11 @@ export interface BankTransaction {
   sourceExpenseId?: number
   timestamp?: string
   createdAt?: string
+  auditStatus?: 'Verified' | 'Pending Audit' | 'Flagged'
+  auditedBy?: string
+  auditDate?: string
+  auditNotes?: string
+  remarks?: string
 }
 
 export interface BankAccount {
@@ -169,24 +174,33 @@ function backendHeaders(userRole?: string): Record<string, string> {
   return headers
 }
 
+function mapTransactionFromBackend(t: any): BankTransaction {
+  return {
+    id: t.id,
+    bankAccountId: t.bank_account_id,
+    date: t.transaction_date,
+    chequeNo: t.cheque_no || undefined,
+    particulars: t.particulars,
+    withdrawal: Number(t.withdrawal || 0),
+    deposit: Number(t.deposit || 0),
+    category: t.category,
+    netAmount: Number(t.net_amount || 0),
+    companyName: t.company_name || undefined,
+    entrySource: t.entry_source || undefined,
+    sourceSaleId: t.source_sale_id ?? undefined,
+    sourceExpenseId: t.source_expense_id ?? undefined,
+    createdAt: t.created_at,
+    auditStatus: t.audit_status || 'Pending Audit',
+    auditedBy: t.audited_by || undefined,
+    auditDate: t.audited_at || undefined,
+    auditNotes: t.audit_remarks || undefined,
+    remarks: t.remarks || undefined,
+  }
+}
+
 function mapAccountFromBackend(raw: any): BankAccount {
   const txs = Array.isArray(raw.transactions)
-    ? raw.transactions.map((t: any) => ({
-        id: t.id,
-        bankAccountId: t.bank_account_id,
-        date: t.transaction_date,
-        chequeNo: t.cheque_no || undefined,
-        particulars: t.particulars,
-        withdrawal: Number(t.withdrawal || 0),
-        deposit: Number(t.deposit || 0),
-        category: t.category,
-        netAmount: Number(t.net_amount || 0),
-        companyName: t.company_name || undefined,
-        entrySource: t.entry_source || undefined,
-        sourceSaleId: t.source_sale_id ?? undefined,
-        sourceExpenseId: t.source_expense_id ?? undefined,
-        createdAt: t.created_at,
-      }))
+    ? raw.transactions.map(mapTransactionFromBackend)
     : []
 
   return {
@@ -480,5 +494,41 @@ export const bankService = {
     if (!res.ok) throw await handleResponseError(res)
     clearBankCache()
     return res.json()
+  },
+
+  async updateTransactionAuditStatus(
+    txId: string,
+    auditStatus: 'Verified' | 'Pending Audit' | 'Flagged',
+    remarks?: string
+  ): Promise<BankTransaction> {
+    const res = await fetch(`/api/v1/bank-accounts/transactions/${encodeURIComponent(txId)}/audit`, {
+      method: 'PATCH',
+      headers: backendHeaders(),
+      body: JSON.stringify({
+        audit_status: auditStatus,
+        remarks: remarks || '',
+      }),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    clearBankCache()
+    const data = await res.json()
+    return mapTransactionFromBackend(data)
+  },
+
+  async updateTransactionRemarks(
+    txId: string,
+    remarks: string
+  ): Promise<BankTransaction> {
+    const res = await fetch(`/api/v1/bank-accounts/transactions/${encodeURIComponent(txId)}/remarks`, {
+      method: 'PATCH',
+      headers: backendHeaders(),
+      body: JSON.stringify({
+        remarks: remarks,
+      }),
+    })
+    if (!res.ok) throw await handleResponseError(res)
+    clearBankCache()
+    const data = await res.json()
+    return mapTransactionFromBackend(data)
   },
 }
