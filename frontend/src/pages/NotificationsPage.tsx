@@ -413,9 +413,9 @@ export const NotificationsPage: React.FC = () => {
       {/* Main Content Container */}
       <Card className="rounded-2xl border border-[#EEF0F3] shadow-xs overflow-hidden bg-white">
         {/* Controls Bar: Tabs & Search */}
-        <div className="p-4 sm:p-5 border-b border-[#EEF0F3] flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="p-4 sm:p-5 border-b border-[#EEF0F3] flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
           {/* Underline Tabs */}
-          <div className="flex items-center gap-6 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-6 overflow-x-auto no-scrollbar shrink-0">
             {TABS.map((tab) => {
               const isActive = activeTab === tab.id
               const count = tabCounts[tab.id]
@@ -447,15 +447,15 @@ export const NotificationsPage: React.FC = () => {
             })}
           </div>
 
-          {/* Search Input: Increased width to 480px */}
-          <div className="relative w-full md:w-[480px]">
+          {/* Search Input: Wide container preventing any placeholder or text clipping */}
+          <div className="relative w-full xl:w-[560px] 2xl:w-[620px]">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5B6470]" />
             <Input
               type="text"
               placeholder="Search notifications by title, borrower, loan or TX ref..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 h-10 text-sm rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A]"
+              className="pl-10 pr-4 h-10 text-sm rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A] w-full"
             />
           </div>
         </div>

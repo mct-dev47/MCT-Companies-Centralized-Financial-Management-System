@@ -112,7 +112,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     : activeCompany || user?.assignedCompany || 'All Companies'
 
   const fetchLiveNotifications = React.useCallback(
-    async (forceRefresh = false, limit = 100) => {
+    async (forceRefresh = false, limit = 80) => {
       if (!isAuthenticated) return
       if (isFetchingRef.current && !forceRefresh) return
 
@@ -220,16 +220,16 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   // Initial fetch and 30s background sync
   React.useEffect(() => {
     if (!isAuthenticated) return
-    void fetchLiveNotifications(false, 100)
+    void fetchLiveNotifications(false, 80)
 
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      void fetchLiveNotifications(false, 100)
+      void fetchLiveNotifications(false, 80)
     }, 30000)
 
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
-        void fetchLiveNotifications(false, 100)
+        void fetchLiveNotifications(false, 80)
       }
     }
 
@@ -258,7 +258,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null
         try {
-          void fetchLiveNotifications(true, 100)
+          void fetchLiveNotifications(true, 80)
         } catch (err) {
           console.warn('Real-time refresh error:', formatUserFriendlyErrorMessage(err))
         }
@@ -268,7 +268,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     const handleStatusChange = (status: ConnectionStatus) => {
       if (status === 'connected') {
         try {
-          void fetchLiveNotifications(true, 100)
+          void fetchLiveNotifications(true, 80)
         } catch (err) {
           console.warn('Catch-up sync error:', formatUserFriendlyErrorMessage(err))
         }
@@ -318,7 +318,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   // Refetch when dropdown opened
   React.useEffect(() => {
     if (isOpen && isAuthenticated) {
-      void fetchLiveNotifications(false, 100)
+      void fetchLiveNotifications(false, 80)
     }
   }, [isOpen, isAuthenticated, fetchLiveNotifications])
 
@@ -412,9 +412,14 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     [filteredList]
   )
 
+  // Check if there are actually any older/previous notifications to reveal
+  const hasPreviousNotifications = React.useMemo(() => {
+    return allSections.some((s) => s.id === 'yesterday' || s.id === 'earlier')
+  }, [allSections])
+
   // Display sections: when collapsed, show recent items; when expanded, show all previous
   const displayedSections = React.useMemo(() => {
-    if (showPrevious) {
+    if (showPrevious && hasPreviousNotifications) {
       return allSections
     }
     const currentOnly = allSections.filter((s) => s.id === 'new' || s.id === 'today')
@@ -422,14 +427,15 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
       return currentOnly
     }
     return allSections.slice(0, 1)
-  }, [allSections, showPrevious])
+  }, [allSections, showPrevious, hasPreviousNotifications])
 
   // Toggle see previous notifications
   const handleTogglePrevious = () => {
+    if (!hasPreviousNotifications) return
     const next = !showPrevious
     setShowPrevious(next)
     if (next) {
-      void fetchLiveNotifications(true, 200)
+      void fetchLiveNotifications(true, 150)
     }
   }
 
@@ -538,7 +544,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
         )}
       </Button>
 
-      {/* Notification Dropdown Popover: Compact standard size ~380px wide */}
+      {/* Notification Dropdown: Facebook-style compact fit (w-[350px] sm:w-[360px], h-auto max-h-[420px]) */}
       {isOpen && (
         <>
           {/* Mobile Backdrop */}
@@ -552,31 +558,29 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             aria-label="Notifications panel"
             style={{ overscrollBehavior: 'contain' }}
             className={cn(
-              'bg-white border border-[#EEF0F3] shadow-xl z-50 overflow-hidden flex flex-col transition-all duration-200',
-              'sm:absolute sm:right-0 sm:mt-1.5 sm:w-[380px] sm:rounded-xl animate-in fade-in-0 zoom-in-95 duration-150',
-              showPrevious
-                ? 'sm:max-h-[540px] max-sm:max-h-[85vh]'
-                : 'sm:max-h-[440px] max-sm:max-h-[80vh]',
+              'bg-white border border-[#EEF0F3] shadow-xl z-50 overflow-hidden flex flex-col',
+              'sm:absolute sm:right-0 sm:mt-1.5 sm:w-[350px] sm:rounded-xl animate-in fade-in-0 zoom-in-95 duration-150',
+              'h-auto max-h-[420px]',
               'max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-t-2xl max-sm:rounded-b-none'
             )}
           >
             {/* Header: Compact */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-[#EEF0F3] bg-white">
-              <div className="flex items-center gap-2">
-                <h2 className="text-[15px] font-bold text-[#1B2330]">Notifications</h2>
+            <div className="flex items-center justify-between px-3.5 py-2.5 border-b border-[#EEF0F3] bg-white shrink-0">
+              <div className="flex items-center gap-1.5">
+                <h2 className="text-[14px] font-bold text-[#1B2330]">Notifications</h2>
                 {unreadCount > 0 && (
-                  <span className="px-2 py-0.2 text-[11px] font-bold bg-[#8B1A1A] text-white rounded-full">
+                  <span className="px-1.5 py-0.2 text-[10px] font-bold bg-[#8B1A1A] text-white rounded-full">
                     {unreadCount > 99 ? '99+' : unreadCount} new
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-2.5">
+              <div className="flex items-center gap-2">
                 {unreadCount > 0 && (
                   <button
                     type="button"
                     onClick={markAllAsRead}
-                    className="text-xs font-semibold text-[#8B1A1A] hover:underline transition-colors cursor-pointer"
+                    className="text-[11px] font-semibold text-[#8B1A1A] hover:underline transition-colors cursor-pointer"
                   >
                     Mark all read
                   </button>
@@ -588,7 +592,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     setIsOpen(false)
                     navigate('/notifications')
                   }}
-                  className="text-xs font-semibold text-[#5B6470] hover:text-[#8B1A1A] hover:underline transition-colors cursor-pointer"
+                  className="text-[11px] font-semibold text-[#5B6470] hover:text-[#8B1A1A] hover:underline transition-colors cursor-pointer"
                 >
                   View all
                 </button>
@@ -597,14 +601,14 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
             {/* Sync Error Banner */}
             {syncError && (
-              <div className="bg-amber-50 border-b border-amber-200/80 px-3.5 py-2 flex items-center justify-between text-xs text-amber-900">
+              <div className="bg-amber-50 border-b border-amber-200/80 px-3 py-1.5 flex items-center justify-between text-[11px] text-amber-900 shrink-0">
                 <span className="flex items-center gap-1.5 flex-1 min-w-0 mr-2">
-                  <WifiOff className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+                  <WifiOff className="h-3 w-3 text-amber-700 shrink-0" />
                   <span className="truncate">{syncError}</span>
                 </span>
                 <button
                   type="button"
-                  onClick={() => void fetchLiveNotifications(true, 100)}
+                  onClick={() => void fetchLiveNotifications(true, 80)}
                   className="font-bold underline hover:text-amber-950 flex items-center gap-1 cursor-pointer shrink-0"
                 >
                   <RefreshCw className="h-3 w-3" />
@@ -614,7 +618,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
             )}
 
             {/* Underline Tabs: Compact padding */}
-            <div className="flex items-center gap-4 px-4 border-b border-[#EEF0F3] overflow-x-auto no-scrollbar pt-1">
+            <div className="flex items-center gap-3 px-3.5 border-b border-[#EEF0F3] overflow-x-auto no-scrollbar pt-1 shrink-0">
               {TABS.map((tab) => {
                 const isActive = activeTab === tab.id
                 const count = tabCounts[tab.id]
@@ -624,7 +628,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     type="button"
                     onClick={() => handleTabChange(tab.id)}
                     className={cn(
-                      'pb-2 text-[13.5px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-b-2',
+                      'pb-1.5 text-[12.5px] transition-all flex items-center gap-1 shrink-0 cursor-pointer border-b-2',
                       isActive
                         ? 'border-[#8B1A1A] text-[#8B1A1A] font-bold'
                         : 'border-transparent text-[#5B6470] hover:text-[#1B2330] font-medium'
@@ -634,7 +638,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     {count > 0 && (
                       <span
                         className={cn(
-                          'px-1.5 py-0.2 rounded-full text-[10px] font-bold',
+                          'px-1.5 py-0.2 rounded-full text-[9.5px] font-bold',
                           isActive ? 'bg-[#8B1A1A] text-white' : 'bg-[#EEF1F5] text-[#3A4350]'
                         )}
                       >
@@ -646,7 +650,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               })}
             </div>
 
-            {/* Scrollable Notification List: Compact height and smooth scroll */}
+            {/* Scrollable Notification List: Bounded to 260px (or 320px when previous items exist) */}
             <div
               ref={listRef}
               style={{
@@ -654,21 +658,21 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                 scrollbarWidth: 'thin',
               }}
               className={cn(
-                'min-h-0 flex-1 overflow-y-auto overscroll-contain transition-all duration-150',
-                showPrevious ? 'max-h-[380px]' : 'max-h-[290px]'
+                'min-h-0 flex-1 overflow-y-auto overscroll-contain',
+                showPrevious && hasPreviousNotifications ? 'max-h-[320px]' : 'max-h-[260px]'
               )}
             >
               {isLoading && notifications.length === 0 ? (
                 /* Skeleton Loading: 3 rows */
-                <div className="p-3.5 space-y-3">
+                <div className="p-3 space-y-2.5">
                   {[1, 2, 3].map((skeletonId) => (
-                    <div key={skeletonId} className="flex items-start gap-3 animate-pulse">
-                      <div className="w-9 h-9 rounded-full bg-slate-200 shrink-0" />
+                    <div key={skeletonId} className="flex items-start gap-2.5 animate-pulse">
+                      <div className="w-8 h-8 rounded-full bg-slate-200 shrink-0" />
                       <div className="flex-1 space-y-1.5 pt-0.5">
-                        <div className="h-3.5 bg-slate-200 rounded w-3/4" />
+                        <div className="h-3 bg-slate-200 rounded w-3/4" />
                         <div className="flex gap-1.5">
-                          <div className="h-3 bg-slate-200 rounded w-16" />
-                          <div className="h-3 bg-slate-200 rounded w-20" />
+                          <div className="h-2.5 bg-slate-200 rounded w-14" />
+                          <div className="h-2.5 bg-slate-200 rounded w-16" />
                         </div>
                       </div>
                     </div>
@@ -676,19 +680,19 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                 </div>
               ) : displayedSections.length === 0 ? (
                 /* Empty State */
-                <div className="py-10 px-4 text-center space-y-1.5">
-                  <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-2 ring-4 ring-emerald-50/50">
-                    <Check className="w-5 h-5 stroke-[2.5]" />
+                <div className="py-8 px-4 text-center space-y-1">
+                  <div className="w-9 h-9 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-1.5 ring-2 ring-emerald-50/50">
+                    <Check className="w-4 h-4 stroke-[2.5]" />
                   </div>
                   <p className="font-bold text-[#1B2330] text-xs">You&apos;re all caught up</p>
-                  <p className="text-[11px] text-[#5B6470]">No notifications to show in this view.</p>
+                  <p className="text-[10.5px] text-[#5B6470]">No notifications in this view.</p>
                 </div>
               ) : (
                 displayedSections.map((section) => (
                   <div key={section.id}>
                     {/* Section Header */}
-                    <div className="bg-[#FAFBFD] px-4 py-1.5 border-b border-[#EEF0F3]">
-                      <span className="text-[10px] font-bold tracking-wider text-[#5B6470] uppercase">
+                    <div className="bg-[#FAFBFD] px-3.5 py-1 border-b border-[#EEF0F3]">
+                      <span className="text-[9.5px] font-bold tracking-wider text-[#5B6470] uppercase">
                         {section.title}
                       </span>
                     </div>
@@ -707,59 +711,58 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                               key={item.id}
                               onClick={() => handleGroupClick(item)}
                               className={cn(
-                                'flex items-start gap-3 px-3.5 sm:px-4 py-2.5 text-left transition-colors cursor-pointer',
+                                'flex items-start gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer',
                                 item.unread
                                   ? 'bg-[#FBF3F3] hover:bg-[#F7EBEB]'
                                   : 'bg-white hover:bg-slate-50'
                               )}
                             >
-                              {/* 36px Avatar */}
+                              {/* 32px Avatar */}
                               <div className="relative shrink-0 mt-0.5">
                                 <div
                                   style={{
                                     backgroundColor: avatarColors.bg,
                                     color: avatarColors.text,
                                   }}
-                                  className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs select-none"
+                                  className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[11px] select-none"
                                 >
                                   {initials}
                                 </div>
-                                <div className="w-4 h-4 rounded-full border border-white absolute -bottom-0.5 -right-0.5 bg-[#0B8A44] flex items-center justify-center text-white">
-                                  <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                <div className="w-3.5 h-3.5 rounded-full border border-white absolute -bottom-0.5 -right-0.5 bg-[#0B8A44] flex items-center justify-center text-white">
+                                  <Check className="w-2 h-2 stroke-[3]" />
                                 </div>
                               </div>
 
                               {/* Main Info */}
                               <div className="flex-1 min-w-0">
-                                <p className="text-[13px] leading-snug text-[#1B2330]">
+                                <p className="text-[12.5px] leading-tight text-[#1B2330]">
                                   <span className="font-bold">{item.borrowerName}</span> made{' '}
                                   {item.paymentCount} payments ·{' '}
                                   <span className="font-bold">
                                     {formatCurrencyPHP(item.totalAmount)}
-                                  </span>{' '}
-                                  total
+                                  </span>
                                 </p>
 
                                 {/* Chips */}
-                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                  <span className="bg-[#E3F4EB] text-[#0B5C37] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                <div className="flex flex-wrap items-center gap-1 mt-1">
+                                  <span className="bg-[#E3F4EB] text-[#0B5C37] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                     {item.paymentCount} payments
                                   </span>
                                   {item.totalLateFee > 0 && (
-                                    <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                    <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                       +{formatCurrencyPHP(item.totalLateFee)} late fee
                                     </span>
                                   )}
                                   {item.latestBalance !== undefined && (
-                                    <span className="bg-[#EEF1F5] text-[#3A4350] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
-                                      Balance {formatCurrencyPHP(item.latestBalance)}
+                                    <span className="bg-[#EEF1F5] text-[#3A4350] text-[10px] font-medium px-1.5 py-0.2 rounded">
+                                      Bal {formatCurrencyPHP(item.latestBalance)}
                                     </span>
                                   )}
                                 </div>
 
                                 {/* Meta line */}
                                 {item.loanRef && (
-                                  <p className="text-[11px] text-[#5B6470] mt-1">{item.loanRef}</p>
+                                  <p className="text-[10.5px] text-[#5B6470] mt-0.5">{item.loanRef}</p>
                                 )}
 
                                 {/* Inline Expand / Collapse toggle */}
@@ -777,7 +780,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                       return next
                                     })
                                   }}
-                                  className="text-[11px] font-semibold text-[#8B1A1A] hover:underline mt-1.5 inline-flex items-center gap-1 cursor-pointer"
+                                  className="text-[10.5px] font-semibold text-[#8B1A1A] hover:underline mt-1 inline-flex items-center gap-1 cursor-pointer"
                                 >
                                   {isExpanded
                                     ? `Hide ${item.paymentCount} payments`
@@ -786,7 +789,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
                                 {/* Inline Expanded Children */}
                                 {isExpanded && (
-                                  <div className="mt-2 space-y-1.5 border-l-2 border-slate-200 pl-2.5 pt-0.5">
+                                  <div className="mt-1.5 space-y-1 border-l-2 border-slate-200 pl-2 pt-0.5">
                                     {item.children.map((child) => (
                                       <div
                                         key={child.id}
@@ -794,7 +797,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                           e.stopPropagation()
                                           handleItemClick(child)
                                         }}
-                                        className="text-[11.5px] hover:bg-slate-100/70 p-1 rounded transition-colors flex items-center justify-between gap-1.5"
+                                        className="text-[11px] hover:bg-slate-100/70 p-1 rounded transition-colors flex items-center justify-between gap-1"
                                       >
                                         <div className="min-w-0">
                                           <p className="text-[#1B2330] font-medium truncate">
@@ -810,12 +813,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                             )}
                                           </p>
                                           {child.lateFee && child.lateFee > 0 ? (
-                                            <span className="inline-block bg-[#FFF1D6] text-[#7A4B00] text-[9.5px] font-medium px-1 rounded mt-0.5">
+                                            <span className="inline-block bg-[#FFF1D6] text-[#7A4B00] text-[9px] font-medium px-1 rounded mt-0.5">
                                               +{formatCurrencyPHP(child.lateFee)} late fee
                                             </span>
                                           ) : null}
                                         </div>
-                                        <span className="text-[10px] text-[#5B6470] shrink-0">
+                                        <span className="text-[9.5px] text-[#5B6470] shrink-0">
                                           {formatRelativeTime(child.created_at)}
                                         </span>
                                       </div>
@@ -825,10 +828,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                               </div>
 
                               {/* Right Column: Time and Dot */}
-                              <div className="flex flex-col items-end justify-between self-stretch shrink-0 min-h-[36px]">
+                              <div className="flex flex-col items-end justify-between self-stretch shrink-0 min-h-[32px]">
                                 <span
                                   className={cn(
-                                    'text-[11px] whitespace-nowrap',
+                                    'text-[10.5px] whitespace-nowrap',
                                     item.unread ? 'text-[#8B1A1A] font-semibold' : 'text-[#5B6470]'
                                   )}
                                 >
@@ -836,7 +839,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                 </span>
                                 {item.unread && (
                                   <span
-                                    className="w-2 h-2 rounded-full bg-[#8B1A1A] shrink-0 mt-1"
+                                    className="w-1.5 h-1.5 rounded-full bg-[#8B1A1A] shrink-0 mt-1"
                                     aria-label="Unread"
                                     role="status"
                                   />
@@ -858,26 +861,26 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                             key={item.id}
                             onClick={() => handleItemClick(item)}
                             className={cn(
-                              'flex items-start gap-3 px-3.5 sm:px-4 py-2.5 text-left transition-colors cursor-pointer',
+                              'flex items-start gap-2.5 px-3 py-2 text-left transition-colors cursor-pointer',
                               item.unread
                                 ? 'bg-[#FBF3F3] hover:bg-[#F7EBEB]'
                                 : 'bg-white hover:bg-slate-50'
                             )}
                           >
-                            {/* 36px Avatar */}
+                            {/* 32px Avatar */}
                             <div className="relative shrink-0 mt-0.5">
                               <div
                                 style={{
                                   backgroundColor: avatarColors.bg,
                                   color: avatarColors.text,
                                 }}
-                                className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs select-none"
+                                className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-[11px] select-none"
                               >
                                 {initials}
                               </div>
                               <div
                                 className={cn(
-                                  'w-4 h-4 rounded-full border border-white absolute -bottom-0.5 -right-0.5 flex items-center justify-center text-white',
+                                  'w-3.5 h-3.5 rounded-full border border-white absolute -bottom-0.5 -right-0.5 flex items-center justify-center text-white',
                                   isPayment
                                     ? 'bg-[#0B8A44]'
                                     : isDue
@@ -886,11 +889,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                 )}
                               >
                                 {isPayment ? (
-                                  <Check className="w-2.5 h-2.5 stroke-[3]" />
+                                  <Check className="w-2 h-2 stroke-[3]" />
                                 ) : isDue ? (
-                                  <Clock className="w-2.5 h-2.5 stroke-[2.5]" />
+                                  <Clock className="w-2 h-2 stroke-[2.5]" />
                                 ) : (
-                                  <AlertCircle className="w-2.5 h-2.5" />
+                                  <AlertCircle className="w-2 h-2" />
                                 )}
                               </div>
                             </div>
@@ -898,7 +901,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                             {/* Main Info */}
                             <div className="flex-1 min-w-0">
                               {isPayment && item.borrowerName && item.amountPaid !== undefined ? (
-                                <p className="text-[13px] leading-snug text-[#1B2330]">
+                                <p className="text-[12.5px] leading-tight text-[#1B2330]">
                                   <span className="font-bold">{item.borrowerName}</span> paid{' '}
                                   <span className="font-bold">
                                     {formatCurrencyPHP(item.amountPaid)}
@@ -906,7 +909,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                                   via {item.paymentMethod || 'Cash'}
                                 </p>
                               ) : (
-                                <p className="text-[13px] leading-snug text-[#1B2330] line-clamp-2">
+                                <p className="text-[12.5px] leading-tight text-[#1B2330] line-clamp-2">
                                   <span className="font-bold">{item.title}</span>: {item.message}
                                 </p>
                               )}
@@ -915,26 +918,26 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                               <div className="flex flex-wrap items-center gap-1 mt-1">
                                 {isPayment ? (
                                   <>
-                                    <span className="bg-[#E3F4EB] text-[#0B5C37] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                    <span className="bg-[#E3F4EB] text-[#0B5C37] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                       Payment received
                                     </span>
                                     {item.remainingBalance !== undefined && (
-                                      <span className="bg-[#EEF1F5] text-[#3A4350] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
-                                        Balance {formatCurrencyPHP(item.remainingBalance)}
+                                      <span className="bg-[#EEF1F5] text-[#3A4350] text-[10px] font-medium px-1.5 py-0.2 rounded">
+                                        Bal {formatCurrencyPHP(item.remainingBalance)}
                                       </span>
                                     )}
                                     {item.lateFee !== undefined && item.lateFee > 0 && (
-                                      <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                      <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                         +{formatCurrencyPHP(item.lateFee)} late fee
                                       </span>
                                     )}
                                   </>
                                 ) : isDue ? (
-                                  <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                  <span className="bg-[#FFF1D6] text-[#7A4B00] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                     Due Reminder
                                   </span>
                                 ) : (
-                                  <span className="bg-[#EEF1F5] text-[#3A4350] text-[10.5px] font-medium px-1.5 py-0.2 rounded">
+                                  <span className="bg-[#EEF1F5] text-[#3A4350] text-[10px] font-medium px-1.5 py-0.2 rounded">
                                     {item.categoryLabel}
                                   </span>
                                 )}
@@ -942,17 +945,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
 
                               {/* Meta line */}
                               {(item.loanRef || item.txRef) && (
-                                <p className="text-[11px] text-[#5B6470] mt-1">
+                                <p className="text-[10.5px] text-[#5B6470] mt-0.5">
                                   {[item.loanRef, item.txRef].filter(Boolean).join(' · ')}
                                 </p>
                               )}
                             </div>
 
                             {/* Right Column: Time and Dot */}
-                            <div className="flex flex-col items-end justify-between self-stretch shrink-0 min-h-[36px]">
+                            <div className="flex flex-col items-end justify-between self-stretch shrink-0 min-h-[32px]">
                               <span
                                 className={cn(
-                                  'text-[11px] whitespace-nowrap',
+                                  'text-[10.5px] whitespace-nowrap',
                                   item.unread ? 'text-[#8B1A1A] font-semibold' : 'text-[#5B6470]'
                                 )}
                               >
@@ -960,7 +963,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                               </span>
                               {item.unread && (
                                 <span
-                                  className="w-2 h-2 rounded-full bg-[#8B1A1A] shrink-0 mt-1"
+                                  className="w-1.5 h-1.5 rounded-full bg-[#8B1A1A] shrink-0 mt-1"
                                   aria-label="Unread"
                                   role="status"
                                 />
@@ -975,22 +978,28 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               )}
             </div>
 
-            {/* Footer: Compact */}
-            <div className="p-2.5 text-center border-t border-[#EEF0F3] bg-white shrink-0">
-              <button
-                type="button"
-                onClick={handleTogglePrevious}
-                className="text-xs font-semibold text-[#8B1A1A] hover:underline cursor-pointer inline-flex items-center gap-1"
-              >
-                <span>
-                  {showPrevious ? 'Collapse previous notifications' : 'See previous notification'}
-                </span>
-                {showPrevious ? (
-                  <ChevronUp className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                )}
-              </button>
+            {/* Footer: Compact and only shows toggle if there are actual previous notifications */}
+            <div className="p-2 text-center border-t border-[#EEF0F3] bg-white shrink-0">
+              {hasPreviousNotifications ? (
+                <button
+                  type="button"
+                  onClick={handleTogglePrevious}
+                  className="text-[11px] font-semibold text-[#8B1A1A] hover:underline cursor-pointer inline-flex items-center gap-1"
+                >
+                  <span>
+                    {showPrevious
+                      ? 'Collapse previous notifications'
+                      : 'See previous notifications'}
+                  </span>
+                  {showPrevious ? (
+                    <ChevronUp className="w-3 h-3" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3" />
+                  )}
+                </button>
+              ) : (
+                <span className="text-[10.5px] text-[#5B6470]">All caught up</span>
+              )}
             </div>
           </div>
         </>
