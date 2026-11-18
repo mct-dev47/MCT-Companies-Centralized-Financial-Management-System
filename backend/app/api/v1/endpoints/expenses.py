@@ -313,6 +313,12 @@ def get_expenses(
     if hasattr(sort_dir, "default"):
         sort_dir = "desc"
 
+    try:
+        from app.api.v1.endpoints.loans import ensure_repayment_expenses_deduplicated
+        ensure_repayment_expenses_deduplicated(db)
+    except Exception:
+        pass
+
     query = _build_expenses_query(
         db=db,
         current_user=current_user,
