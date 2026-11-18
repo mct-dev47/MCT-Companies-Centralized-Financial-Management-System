@@ -4,6 +4,7 @@ import { router } from '@/routes'
 import { SessionProvider } from '@/context/SessionContext'
 import { CompanyProvider } from '@/context/CompanyContext'
 import { Toaster } from '@/components/common/Toaster'
+import { GlobalHttpErrorListener } from '@/components/common/GlobalHttpErrorListener'
 
 export default function App() {
   // Clear any stuck overflow locks left on document element or body
@@ -33,8 +34,10 @@ export default function App() {
   return (
     <SessionProvider>
       <CompanyProvider>
-        <RouterProvider router={router} />
-        <Toaster />
+        <GlobalHttpErrorListener>
+          <RouterProvider router={router} />
+          <Toaster />
+        </GlobalHttpErrorListener>
       </CompanyProvider>
     </SessionProvider>
   )
