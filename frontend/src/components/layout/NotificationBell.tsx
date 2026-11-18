@@ -82,11 +82,11 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
   const [isLoading, setIsLoading] = React.useState(false)
   const [syncError, setSyncError] = React.useState<string | null>(null)
-  const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
   const [expandedGroupIds, setExpandedGroupIds] = React.useState<Set<string>>(new Set())
-  const [isExpandedHeight, setIsExpandedHeight] = React.useState(false)
+  const [showPrevious, setShowPrevious] = React.useState(false)
 
   const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const listRef = React.useRef<HTMLDivElement>(null)
   const isFetchingRef = React.useRef(false)
   const mountedRef = React.useRef(true)
 
@@ -112,7 +112,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     : activeCompany || user?.assignedCompany || 'All Companies'
 
   const fetchLiveNotifications = React.useCallback(
-    async (forceRefresh = false) => {
+    async (forceRefresh = false, limit = 100) => {
       if (!isAuthenticated) return
       if (isFetchingRef.current && !forceRefresh) return
 
@@ -124,7 +124,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           userId,
           companyName: scopedCompanyName,
           userRole: userRole || undefined,
-          limit: 100,
+          limit,
           forceRefresh,
         })
 
@@ -220,16 +220,16 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   // Initial fetch and 30s background sync
   React.useEffect(() => {
     if (!isAuthenticated) return
-    void fetchLiveNotifications(false)
+    void fetchLiveNotifications(false, 100)
 
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return
-      void fetchLiveNotifications(false)
+      void fetchLiveNotifications(false, 100)
     }, 30000)
 
     const handleVisibilityChange = () => {
       if (typeof document !== 'undefined' && !document.hidden) {
-        void fetchLiveNotifications(false)
+        void fetchLiveNotifications(false, 100)
       }
     }
 
@@ -249,7 +249,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   React.useEffect(() => {
     if (!isAuthenticated) return
 
-    setWsStatus(websocketService.getStatus())
     let refreshTimer: number | null = null
 
     const handleRefresh = () => {
@@ -259,7 +258,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
       refreshTimer = window.setTimeout(() => {
         refreshTimer = null
         try {
-          void fetchLiveNotifications(true)
+          void fetchLiveNotifications(true, 100)
         } catch (err) {
           console.warn('Real-time refresh error:', formatUserFriendlyErrorMessage(err))
         }
@@ -267,10 +266,9 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
 
     const handleStatusChange = (status: ConnectionStatus) => {
-      setWsStatus(status)
       if (status === 'connected') {
         try {
-          void fetchLiveNotifications(true)
+          void fetchLiveNotifications(true, 100)
         } catch (err) {
           console.warn('Catch-up sync error:', formatUserFriendlyErrorMessage(err))
         }
@@ -320,7 +318,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
   // Refetch when dropdown opened
   React.useEffect(() => {
     if (isOpen && isAuthenticated) {
-      void fetchLiveNotifications(false)
+      void fetchLiveNotifications(false, 100)
     }
   }, [isOpen, isAuthenticated, fetchLiveNotifications])
 
@@ -354,6 +352,34 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     }
   }, [isOpen])
 
+  // Isolate scroll so scrolling inside dropdown does NOT scroll the parent window/page
+  React.useEffect(() => {
+    const listEl = listRef.current
+    if (!isOpen || !listEl) return
+
+    const onWheel = (e: WheelEvent) => {
+      const scrollTop = listEl.scrollTop
+      const scrollHeight = listEl.scrollHeight
+      const clientHeight = listEl.clientHeight
+
+      const isScrollingDown = e.deltaY > 0
+      const isScrollingUp = e.deltaY < 0
+
+      if (
+        (isScrollingDown && scrollTop + clientHeight >= scrollHeight) ||
+        (isScrollingUp && scrollTop <= 0)
+      ) {
+        e.preventDefault()
+      }
+      e.stopPropagation()
+    }
+
+    listEl.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      listEl.removeEventListener('wheel', onWheel)
+    }
+  }, [isOpen])
+
   const handleTabChange = (tab: TabId) => {
     setActiveTab(tab)
     try {
@@ -380,11 +406,34 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
     [groupedList, activeTab]
   )
 
-  // Sections (New, Today, Yesterday, Earlier)
-  const sections = React.useMemo(
+  // Full Sections (New, Today, Yesterday, Earlier)
+  const allSections = React.useMemo(
     () => partitionBySection(filteredList),
     [filteredList]
   )
+
+  // When showPrevious is false, show 'new' and 'today' (or top section);
+  // When showPrevious is true, show ALL sections and increase height!
+  const displayedSections = React.useMemo(() => {
+    if (showPrevious) {
+      return allSections
+    }
+    const currentOnly = allSections.filter((s) => s.id === 'new' || s.id === 'today')
+    if (currentOnly.length > 0) {
+      return currentOnly
+    }
+    return allSections.slice(0, 1)
+  }, [allSections, showPrevious])
+
+  // Toggle see previous notifications
+  const handleTogglePrevious = () => {
+    const next = !showPrevious
+    setShowPrevious(next)
+    if (next) {
+      // If expanding to see previous, fetch with larger limit to get complete history
+      void fetchLiveNotifications(true, 200)
+    }
+  }
 
   // Optimistic Mark All Read
   const markAllAsRead = async () => {
@@ -503,11 +552,12 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
           <div
             role="region"
             aria-label="Notifications panel"
+            style={{ overscrollBehavior: 'contain' }}
             className={cn(
               'bg-white border border-[#EEF0F3] shadow-2xl z-50 overflow-hidden flex flex-col transition-all duration-200',
               'sm:absolute sm:right-0 sm:mt-2 sm:w-[440px] sm:rounded-2xl animate-in fade-in-0 zoom-in-95 duration-150',
-              isExpandedHeight
-                ? 'sm:max-h-[760px] max-sm:max-h-[92vh]'
+              showPrevious
+                ? 'sm:h-[680px] sm:max-h-[760px] max-sm:max-h-[92vh]'
                 : 'sm:max-h-[580px] max-sm:max-h-[85vh]',
               'max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:rounded-t-2xl max-sm:rounded-b-none'
             )}
@@ -521,24 +571,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     {unreadCount > 99 ? '99+' : unreadCount} new
                   </span>
                 )}
-                {/* Real-time sync indicator dot */}
-                <span
-                  title={
-                    wsStatus === 'connected'
-                      ? 'Real-time sync connected'
-                      : wsStatus === 'reconnecting'
-                      ? 'Reconnecting real-time sync...'
-                      : 'Offline polling mode'
-                  }
-                  className={cn(
-                    'h-2 w-2 rounded-full inline-block',
-                    wsStatus === 'connected'
-                      ? 'bg-emerald-500 ring-2 ring-emerald-100'
-                      : wsStatus === 'reconnecting'
-                      ? 'bg-amber-500 animate-pulse'
-                      : 'bg-slate-300'
-                  )}
-                />
               </div>
 
               <div className="flex items-center gap-3">
@@ -551,7 +583,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     Mark all read
                   </button>
                 )}
-                {/* Replaced Settings Icon with View all notifications */}
+                {/* View all notifications button in corner */}
                 <button
                   type="button"
                   aria-label="View all notifications"
@@ -575,7 +607,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                 </span>
                 <button
                   type="button"
-                  onClick={() => void fetchLiveNotifications(true)}
+                  onClick={() => void fetchLiveNotifications(true, 100)}
                   className="font-bold underline hover:text-amber-950 flex items-center gap-1 cursor-pointer shrink-0"
                 >
                   <RefreshCw className="h-3 w-3" />
@@ -584,8 +616,8 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               </div>
             )}
 
-            {/* Underline-style Tabs */}
-            <div className="flex items-center gap-5 px-5 border-b border-[#EEF0F3] overflow-x-auto no-scrollbar pt-1">
+            {/* Underline-style Tabs: Font size increased to 15px (+2) */}
+            <div className="flex items-center gap-5 px-5 border-b border-[#EEF0F3] overflow-x-auto no-scrollbar pt-1.5">
               {TABS.map((tab) => {
                 const isActive = activeTab === tab.id
                 const count = tabCounts[tab.id]
@@ -595,7 +627,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     type="button"
                     onClick={() => handleTabChange(tab.id)}
                     className={cn(
-                      'pb-2.5 text-[13px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-b-2',
+                      'pb-2.5 text-[15px] transition-all flex items-center gap-1.5 shrink-0 cursor-pointer border-b-2',
                       isActive
                         ? 'border-[#8B1A1A] text-[#8B1A1A] font-bold'
                         : 'border-transparent text-[#5B6470] hover:text-[#1B2330] font-medium'
@@ -605,7 +637,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     {count > 0 && (
                       <span
                         className={cn(
-                          'px-1.5 py-0.2 rounded-full text-[10px] font-bold',
+                          'px-1.5 py-0.2 rounded-full text-[11px] font-bold',
                           isActive ? 'bg-[#8B1A1A] text-white' : 'bg-[#EEF1F5] text-[#3A4350]'
                         )}
                       >
@@ -617,11 +649,13 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               })}
             </div>
 
-            {/* Notification Items List */}
+            {/* Notification Items List with isolated scroll and min-h-0 */}
             <div
+              ref={listRef}
+              style={{ overscrollBehavior: 'contain' }}
               className={cn(
-                'flex-1 overflow-y-auto transition-all duration-200',
-                isExpandedHeight ? 'max-h-[620px]' : 'max-h-[420px]'
+                'min-h-0 flex-1 overflow-y-auto overscroll-contain transition-all duration-200',
+                showPrevious ? 'max-h-[580px] h-[520px]' : 'max-h-[420px]'
               )}
             >
               {isLoading && notifications.length === 0 ? (
@@ -641,7 +675,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                     </div>
                   ))}
                 </div>
-              ) : sections.length === 0 ? (
+              ) : displayedSections.length === 0 ? (
                 /* Empty State */
                 <div className="py-14 px-6 text-center space-y-2">
                   <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3 ring-4 ring-emerald-50/50">
@@ -651,7 +685,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
                   <p className="text-xs text-[#5B6470]">No notifications to show in this view.</p>
                 </div>
               ) : (
-                sections.map((section) => (
+                displayedSections.map((section) => (
                   <div key={section.id}>
                     {/* Section Header */}
                     <div className="bg-[#FAFBFD] px-5 py-2 border-b border-[#EEF0F3]">
@@ -942,17 +976,17 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ className })
               )}
             </div>
 
-            {/* Footer */}
-            <div className="p-3 text-center border-t border-[#EEF0F3] bg-white">
+            {/* Footer: "See previous notification" that visibly expands panel height and shows older notifications */}
+            <div className="p-3 text-center border-t border-[#EEF0F3] bg-white shrink-0">
               <button
                 type="button"
-                onClick={() => setIsExpandedHeight((prev) => !prev)}
+                onClick={handleTogglePrevious}
                 className="text-xs sm:text-sm font-semibold text-[#8B1A1A] hover:underline cursor-pointer inline-flex items-center gap-1.5"
               >
                 <span>
-                  {isExpandedHeight ? 'Collapse notifications' : 'See previous notification'}
+                  {showPrevious ? 'Collapse previous notifications' : 'See previous notification'}
                 </span>
-                {isExpandedHeight ? (
+                {showPrevious ? (
                   <ChevronUp className="w-3.5 h-3.5" />
                 ) : (
                   <ChevronDown className="w-3.5 h-3.5" />

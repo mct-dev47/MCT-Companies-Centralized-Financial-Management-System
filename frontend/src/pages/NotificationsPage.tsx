@@ -360,23 +360,6 @@ export const NotificationsPage: React.FC = () => {
                 {unreadCount > 99 ? '99+' : unreadCount} new
               </span>
             )}
-            <span
-              title={
-                wsStatus === 'connected'
-                  ? 'Real-time sync connected'
-                  : wsStatus === 'reconnecting'
-                  ? 'Reconnecting real-time sync...'
-                  : 'Offline polling mode'
-              }
-              className={cn(
-                'h-2.5 w-2.5 rounded-full inline-block',
-                wsStatus === 'connected'
-                  ? 'bg-emerald-500 ring-4 ring-emerald-100'
-                  : wsStatus === 'reconnecting'
-                  ? 'bg-amber-500 animate-pulse'
-                  : 'bg-slate-300'
-              )}
-            />
           </div>
           <p className="text-sm text-[#5B6470]">
             Review all alerts, payments, due dates, and reminders across companies.
@@ -442,7 +425,7 @@ export const NotificationsPage: React.FC = () => {
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
                   className={cn(
-                    'pb-2 text-sm transition-all flex items-center gap-2 shrink-0 cursor-pointer border-b-2',
+                    'pb-2.5 text-[16px] transition-all flex items-center gap-2 shrink-0 cursor-pointer border-b-2',
                     isActive
                       ? 'border-[#8B1A1A] text-[#8B1A1A] font-bold'
                       : 'border-transparent text-[#5B6470] hover:text-[#1B2330] font-medium'
@@ -452,7 +435,7 @@ export const NotificationsPage: React.FC = () => {
                   {count > 0 && (
                     <span
                       className={cn(
-                        'px-2 py-0.2 rounded-full text-xs font-bold',
+                        'px-2 py-0.5 rounded-full text-xs font-bold',
                         isActive ? 'bg-[#8B1A1A] text-white' : 'bg-[#EEF1F5] text-[#3A4350]'
                       )}
                     >
@@ -464,15 +447,15 @@ export const NotificationsPage: React.FC = () => {
             })}
           </div>
 
-          {/* Search Input */}
-          <div className="relative w-full md:w-72">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5B6470]" />
+          {/* Search Input: Increased width to 480px */}
+          <div className="relative w-full md:w-[480px]">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5B6470]" />
             <Input
               type="text"
-              placeholder="Search notifications..."
+              placeholder="Search notifications by title, borrower, loan or TX ref..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9 text-xs rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A]"
+              className="pl-10 h-10 text-sm rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A]"
             />
           </div>
         </div>
