@@ -426,11 +426,13 @@ def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
             (Decimal(str(r.amount or 0)) for r in reps if (r.status or "").lower() != "pending"),
             Decimal("0.00"),
         )
-        _, total_payable = FinanceCalculator.calculate_loan_totals(
-            Decimal(str(item.principal_amount or 0)),
+        principal = Decimal(str(item.principal_amount or 0))
+        interest = FinanceCalculator.calculate_loan_interest(
+            principal,
             Decimal(str(item.interest_rate or 0)),
         )
-        outstanding = max(Decimal("0.00"), total_payable - total_paid)
+        total_payable = FinanceCalculator.calculate_loan_total_payable(principal, interest)
+        outstanding = FinanceCalculator.calculate_loan_remaining_balance(total_payable, total_paid)
         item.total_paid = total_paid
         item.outstanding_balance = outstanding
         item.repayments = [LoanRepaymentOut.model_validate(r) for r in reps]
