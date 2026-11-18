@@ -1664,7 +1664,7 @@ export const TransactionPage: React.FC = () => {
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
-    (isSupervisor || isFinance || isAdmin) &&
+    isBusinessWriter &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     !tx.sourceModule &&
@@ -1937,11 +1937,28 @@ export const TransactionPage: React.FC = () => {
       const isExp = remarksTargetTx.type === 'Expense' || (remarksTargetTx.type as string) === 'Bill'
       if (isExp) {
         const updatedExpense = await expenseService.updateExpenseRemarks(remarksTargetTx.id, trimmed)
-        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        const tx = {
+          ...expenseService.toDashboardTransaction(updatedExpense),
+          id: remarksTargetTx.id,
+          remarks: trimmed,
+          paidAmount: remarksTargetTx.paidAmount,
+          bankAccountId: remarksTargetTx.bankAccountId,
+          bankName: remarksTargetTx.bankName,
+        }
         handleTransactionUpdated(tx)
       } else if (remarksTargetTx.type === 'Sales') {
         const updatedSale = await salesService.updateSaleRemarks(remarksTargetTx.id, trimmed)
-        const tx = salesService.toDashboardTransaction(updatedSale)
+        const tx = {
+          ...salesService.toDashboardTransaction(updatedSale),
+          id: remarksTargetTx.id,
+          remarks: trimmed,
+          paidAmount: remarksTargetTx.paidAmount,
+          bankAccountId: remarksTargetTx.bankAccountId,
+          bankName: remarksTargetTx.bankName,
+          depositStatus: remarksTargetTx.depositStatus,
+          depositDate: remarksTargetTx.depositDate,
+          saleDate: remarksTargetTx.saleDate,
+        }
         handleTransactionUpdated(tx)
       } else if (remarksTargetTx.type === 'Bank' || String(remarksTargetTx.id).startsWith('tx-')) {
         await bankService.updateTransactionRemarks(remarksTargetTx.id, trimmed)

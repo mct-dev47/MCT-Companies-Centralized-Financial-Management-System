@@ -2896,13 +2896,17 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       unpaidRows.length > 0 &&
       currentStep === 'encode'
     ) {
-      const saleIdNum = editItem ? Number(editItem.id) : NaN
+      const saleIdNum = editItem
+        ? Number(
+            typeof editItem.id === 'string'
+              ? editItem.id.replace(/^sale_/, '')
+              : editItem.id,
+          )
+        : NaN
       const recIdFromUtang =
         editItem && typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
           ? Number(editItem.id.replace('utang-', ''))
-          : !Number.isNaN(saleIdNum)
-            ? saleIdNum
-            : undefined
+          : undefined
 
       const linkedRec = !Number.isNaN(saleIdNum)
         ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)

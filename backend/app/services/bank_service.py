@@ -704,6 +704,7 @@ class BankService:
         reference_no: Optional[str],
         tx_date: Optional[str],
         linked: List[BankTransaction],
+        commit: bool = True,
     ) -> Optional[BankTransaction]:
         """
         Make the bank net for one record equal `target_amount`, on the record's OWN bank account.
@@ -725,7 +726,8 @@ class BankService:
             found_acct = self.find_account_for_company(company_name)
             account = self._get_account_for_update(found_acct.id) if found_acct else None
         if not account:
-            self.db.commit()
+            if commit:
+                self.db.commit()
             return None
 
         # Move anything recorded on another account: offset it there, count it here instead
@@ -774,9 +776,12 @@ class BankService:
             if linked[0].particulars != particulars:
                 linked[0].particulars = particulars
                 tx = linked[0]
-        self.db.commit()
-        if tx is not None:
-            self.db.refresh(tx)
+        if commit:
+            self.db.commit()
+            if tx is not None:
+                self.db.refresh(tx)
+        else:
+            self.db.flush()
         return tx
 
     def patch_linked_entry(
@@ -855,7 +860,7 @@ class BankService:
             self.db.refresh(keep)
         return keep
 
-    def purge_linked_entries(self, *, link_attr: str, link_id: int) -> int:
+    def purge_linked_entries(self, *, link_attr: str, link_id: int, commit: bool = True) -> int:
         """
         Delete every bank entry linked to a deleted sale/expense (`source_sale_id` / `source_expense_id`).
         Each account's balance is corrected by the net of the entries removed, so balances stay right
@@ -877,7 +882,10 @@ class BankService:
             account = self._get_account_for_update(account_id)
             if account is not None:
                 self._sync_balance(account)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return len(linked)
 
     def sync_sale_deposit(
@@ -939,6 +947,7 @@ class BankService:
         reference_no: Optional[str] = None,
         tx_date: Optional[str] = None,
         legacy_particulars: Optional[str] = None,
+        commit: bool = True,
     ) -> Optional[BankTransaction]:
         """
         Make the bank net for one expense equal `target_amount` (only the PAID part leaves the bank;
@@ -976,6 +985,7 @@ class BankService:
             reference_no=reference_no,
             tx_date=tx_date,
             linked=linked,
+            commit=commit,
         )
 
     def record_expense_cash_withdrawal(self, company_name: str, amount: Decimal, particulars: str, cheque_no: Optional[str] = None, tx_date: Optional[str] = None) -> Optional[BankTransaction]:

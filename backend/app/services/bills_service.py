@@ -434,10 +434,19 @@ class BillsService:
                         detail="Cannot delete bill with an audited & verified payment expense.",
                     )
         # Cascade remove all funding expenses and bank entries (prevents ghost data)
-        for payment in list(bill.payments or []):
-            self._remove_funding_expense(payment)
-        self.db.delete(bill)
-        self.db.commit()
+        removed_expense_ids: List[int] = []
+        try:
+            for payment in list(bill.payments or []):
+                exp_id = self._remove_funding_expense(payment)
+                if exp_id:
+                    removed_expense_ids.append(exp_id)
+            self.db.delete(bill)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses(removed_expense_ids)
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
 
     def schedule(self, bill_id: int, as_of: date = date.today()) -> BillScheduleOut:
@@ -633,10 +642,13 @@ class BillsService:
         self.db.flush()
         return expense
 
-    def _remove_funding_expense(self, payment: BillPayment) -> None:
-        """Undo a funded payment: give the money back to the bank / petty cash by removing its expense."""
+    def _remove_funding_expense(self, payment: BillPayment) -> Optional[int]:
+        """Undo a funded payment inside the caller's transaction (no commit here).
+
+        Returns the removed expense id so the caller can delete the remote copy after its own commit.
+        """
         if not payment.expense_id:
-            return
+            return None
         from app.api.v1.endpoints.expenses import reconcile_expense_bank
         from app.models.finance import Expense
         from app.services.bank_service import BankService
@@ -649,24 +661,34 @@ class BillsService:
                 detail="This bill payment has a Verified funding expense and cannot be deleted without audit unlock.",
             )
 
-        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True)
+        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True, commit=False)
         if expense is not None:
             self.db.delete(expense)
         self.db.flush()
 
+        # Failures here must abort the whole delete so nothing is half committed
+        BankService(self.db).purge_linked_entries(
+            link_attr="source_expense_id", link_id=expense_id, commit=False
+        )
+        return expense_id
+
+    def _delete_remote_expenses(self, expense_ids: List[int]) -> None:
+        """Remove the Supabase copies after the local commit succeeded. Failures are logged as errors."""
+        if not expense_ids:
+            return
         try:
             from app.db.supabase import get_supabase_admin_client
             client = get_supabase_admin_client()
-            if client:
+        except Exception as exc:
+            logger.error("Supabase client unavailable, remote bill funding expenses %s not deleted: %s", expense_ids, exc)
+            return
+        if not client:
+            return
+        for expense_id in expense_ids:
+            try:
                 client.table("expenses").delete().eq("expense_id", expense_id).execute()
-        except Exception as exc:
-            logger.warning("Supabase delete failed for bill funding expense %s: %s", expense_id, exc)
-
-        try:
-            BankService(self.db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
-        except Exception as exc:
-            logger.warning("Bank entry purge error on bill payment deletion %s: %s", expense_id, exc)
-        system_cache.invalidate_tag("petty_cash")
+            except Exception as exc:
+                logger.error("Supabase delete failed for bill funding expense %s: %s", expense_id, exc)
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
         payment = self.db.query(BillPayment).filter(
@@ -675,9 +697,15 @@ class BillsService:
         ).first()
         if not payment:
             raise HTTPException(status_code=404, detail="Bill payment not found.")
-        self._remove_funding_expense(payment)
-        self.db.delete(payment)
-        self.db.commit()
+        try:
+            exp_id = self._remove_funding_expense(payment)
+            self.db.delete(payment)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses([exp_id] if exp_id else [])
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
@@ -690,9 +718,15 @@ class BillsService:
         )
         if not payment:
             raise HTTPException(status_code=404, detail="No bill payment found to undo.")
-        self._remove_funding_expense(payment)
-        self.db.delete(payment)
-        self.db.commit()
+        try:
+            exp_id = self._remove_funding_expense(payment)
+            self.db.delete(payment)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses([exp_id] if exp_id else [])
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 

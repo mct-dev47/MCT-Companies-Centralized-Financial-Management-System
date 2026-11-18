@@ -59,7 +59,7 @@ def _local_category_id(db: Session, name: str) -> Optional[int]:
     return cat.category_id
 
 
-def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
+def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False, commit: bool = True) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
     has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
     Petty cash expenses never touch a bank."""
@@ -89,6 +89,7 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             reference_no=expense.cheque_number or expense.cheque_no,
             tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
             legacy_particulars=expense.description,
+            commit=commit,
         )
         ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
     except Exception as exc:  # never block saving an expense on a bank sync problem

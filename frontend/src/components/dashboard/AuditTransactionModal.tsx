@@ -39,7 +39,7 @@ import { normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatDisplayDate } from '@/
 import { bankService } from '@/services/bankService'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 import { DayRemarkCell } from './DayRemark'
-import { notifyError } from '@/utils/errorUtils'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -170,7 +170,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
-  const [localRemarksAuthor, setLocalRemarksAuthor] = React.useState<{
+  const [, setLocalRemarksAuthor] = React.useState<{
     name: string
     role?: string
     timestamp?: string
@@ -558,28 +558,15 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     activeLoan?.auditDate ||
     activeTx?.auditDate
 
-  const timelineRemarksEvent = React.useMemo(() => {
-    return [...timelineEvents].reverse().find((e) => {
-      if (e.event_type === 'audited') return false
-      if (e.notes && String(e.notes).trim()) return true
-      return Boolean(e.changes && Object.prototype.hasOwnProperty.call(e.changes, 'remarks'))
-    })
-  }, [timelineEvents])
-
-  const remarksAuthorInfo = React.useMemo(() => {
-    if (!displayRemarks) return null
-    if (localRemarksAuthor) return localRemarksAuthor
-    if (timelineRemarksEvent?.actor_name) {
-      return {
-        name: formatRealName(timelineRemarksEvent.actor_name, timelineRemarksEvent.actor_role || 'Staff'),
-        timestamp: timelineRemarksEvent.timestamp,
-      }
-    }
-    if ((!displayUpdatedAt || displayUpdatedAt === displayCreatedAt) && displayCreatedBy !== '—') {
-      return { name: displayCreatedBy, timestamp: displayCreatedAt }
-    }
-    return null
-  }, [displayRemarks, localRemarksAuthor, timelineRemarksEvent, displayUpdatedAt, displayCreatedAt, displayCreatedBy])
+  const preserveLedgerFields = (t: DashboardTransactionItem) => ({
+    id: t.id,
+    paidAmount: t.paidAmount,
+    bankAccountId: t.bankAccountId,
+    bankName: t.bankName,
+    depositStatus: t.depositStatus,
+    depositDate: t.depositDate,
+    saleDate: t.saleDate,
+  })
 
   const handleSaveImmediateRemarks = async () => {
     const targetId = activeSale?.id || activeExpense?.id || activeTx?.id
@@ -600,7 +587,11 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       } else if (isExpense || activeTx?.type === 'Expense') {
         const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
         setCurrentExpense(updatedExpense)
-        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        const tx = {
+          ...expenseService.toDashboardTransaction(updatedExpense),
+          ...(activeTx ? preserveLedgerFields(activeTx) : {}),
+          remarks: trimmed,
+        }
         if (isFinance) tx.financeRemark = trimmed
         else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
@@ -610,7 +601,11 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const cleanId = String(targetId).replace(/^sale_/, '')
         const updatedSale = await salesService.updateSaleRemarks(cleanId, trimmed)
         setCurrentSale(updatedSale)
-        const tx = salesService.toDashboardTransaction(updatedSale)
+        const tx = {
+          ...salesService.toDashboardTransaction(updatedSale),
+          ...(activeTx ? preserveLedgerFields(activeTx) : {}),
+          remarks: trimmed,
+        }
         if (isFinance) tx.financeRemark = trimmed
         else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
@@ -651,7 +646,14 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     ? (activeExpense?.netAmount ?? withdrawalVal)
     : ((depositVal || 0) - (withdrawalVal || 0))
 
-  const isEditable = Boolean(!viewOnly && editable && !isAdmin && !isAudited && !isOwner)
+  const isEditableType = Boolean(
+    activeSale ||
+    activeExpense ||
+    isLoan ||
+    activeTx?.type === 'Sales' ||
+    activeTx?.type === 'Expense'
+  )
+  const isEditable = Boolean(!viewOnly && editable && isEditableType && !isAdmin && !isAudited && !isOwner)
 
   const handleEditInSheet = () => {
     if (isAudited) return

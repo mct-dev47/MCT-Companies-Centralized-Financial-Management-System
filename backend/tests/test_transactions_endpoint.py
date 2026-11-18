@@ -1,5 +1,5 @@
 import pytest
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -832,8 +832,11 @@ def test_tenant_lease_payment_excludes_missed_and_formats_id(db_session):
         company_id=comp.company_id,
         tenant_name="Tenant Alpha",
         unit_name="Unit 101",
-        monthly_rent=Decimal("15000.00"),
-        lease_start=date.today(),
+        tenant_ref=f"TNT-TEST-{int(datetime.now().timestamp() * 1000)}",
+        rent_amount=Decimal("15000.00"),
+        contract_date=date.today(),
+        due_date=date.today(),
+        total_amount_payable=Decimal("15000.00"),
         status="Active",
     )
     db_session.add(lease)
@@ -952,3 +955,193 @@ def test_pending_loan_delete_permitted_and_disbursed_rejected(db_session):
     # Deleting disbursed loan is rejected with 400
     res_disbursed = client.delete(f"/api/v1/transactions/loan_{disbursed_loan.loan_id}")
     assert res_disbursed.status_code == 400
+
+
+def _supervisor_for(company_id):
+    return {
+        "user_id": 77,
+        "email": "sup@test.com",
+        "role": "supervisor",
+        "full_name": "Scoped Supervisor",
+        "company_ids": [company_id],
+        "company_id": company_id,
+    }
+
+
+def test_restricted_user_without_company_filter_does_not_see_counterparty_loan_rows(db_session):
+    """Review Blocker 1: lender side rows of another company must not leak to a borrower only user."""
+    borrower = Company(company_name="Leak Borrower Test Corp")
+    lender = Company(company_name="Leak Lender Test Corp")
+    db_session.add_all([borrower, lender])
+    db_session.flush()
+    loan = Loan(
+        borrower=borrower.company_id,
+        lender=lender.company_id,
+        principal_amount=Decimal("10000.00"),
+        loan_date=date.today(),
+        status="Disbursed",
+        description="Scope isolation loan",
+    )
+    db_session.add(loan)
+    db_session.commit()
+
+    user = _supervisor_for(borrower.company_id)
+    app.dependency_overrides[require_business_reader] = lambda: user
+
+    res = client.get("/api/v1/transactions?type=loan")
+    assert res.status_code == 200
+    ids = [it["id"] for it in res.json()]
+    assert f"loan_{loan.loan_id}" in ids
+    assert f"loan_{loan.loan_id}:lender" not in ids
+    assert not any(i.startswith("loan_rep_") for i in ids)
+
+
+def test_petty_cash_status_mapping_and_cross_company_split(db_session):
+    """Review Blocker 2: approved topups are Paid with a bank withdrawal, cancelled are hidden,
+    and a funder only sees its own withdrawal for a cross company funding."""
+    funder = Company(company_name="Petty Funder Test Corp")
+    recipient = Company(company_name="Petty Recipient Test Corp")
+    db_session.add_all([funder, recipient])
+    db_session.flush()
+    bank = BankAccount(
+        id="acc-test-petty-funder",
+        bank_name="BDO",
+        account_name="Funder Main",
+        company_name=funder.company_name,
+        company_id=funder.company_id,
+        starting_balance=Decimal("50000.00"),
+        current_balance=Decimal("50000.00"),
+    )
+    db_session.add(bank)
+    db_session.flush()
+
+    approved = PettyCashTopUp(
+        company_id=funder.company_id, request_type="topup", amount=Decimal("1000.00"),
+        topup_date=date.today(), status="Approved", description="Approved own topup",
+        bank_account_id=bank.id, reviewed_by="Auditor",
+    )
+    cancelled = PettyCashTopUp(
+        company_id=funder.company_id, request_type="topup", amount=Decimal("700.00"),
+        topup_date=date.today(), status="Cancelled", description="Cancelled topup",
+        bank_account_id=bank.id,
+    )
+    in_transit = PettyCashTopUp(
+        company_id=funder.company_id, request_type="topup", amount=Decimal("500.00"),
+        topup_date=date.today(), status="Transfer In Transit", description="Transit topup",
+        bank_account_id=bank.id,
+    )
+    return_pending = PettyCashTopUp(
+        company_id=funder.company_id, request_type="topup", amount=Decimal("300.00"),
+        topup_date=date.today(), status="Return Pending", description="Return topup",
+        bank_account_id=bank.id,
+    )
+    cross = PettyCashTopUp(
+        company_id=recipient.company_id, request_type="topup", amount=Decimal("2000.00"),
+        topup_date=date.today(), status="Approved", description="Cross company funding",
+        bank_account_id=bank.id, reviewed_by="Auditor",
+    )
+    db_session.add_all([approved, cancelled, in_transit, return_pending, cross])
+    db_session.commit()
+
+    res = client.get(f"/api/v1/transactions?type=petty_cash&company_id={funder.company_id}")
+    assert res.status_code == 200
+    by_id = {it["id"]: it for it in res.json()}
+
+    assert by_id[f"petty_{approved.topup_id}"]["status"] == "Paid"
+    assert by_id[f"petty_{approved.topup_id}"]["withdrawal"] == 1000.0
+    assert by_id[f"petty_{approved.topup_id}"]["awaitingAudit"] is False
+    assert f"petty_{cancelled.topup_id}" not in by_id
+    for row in (in_transit, return_pending):
+        item = by_id[f"petty_{row.topup_id}"]
+        assert item["withdrawal"] == float(row.amount)
+        assert item["awaitingAudit"] is False
+    # Funder sees the cross company withdrawal under its own name and bank
+    cross_item = by_id[f"petty_{cross.topup_id}"]
+    assert cross_item["company"] == funder.company_name
+    assert cross_item["bankAccountId"] == bank.id
+
+    # Recipient only user sees the row without the funder bank
+    app.dependency_overrides[require_business_reader] = lambda: _supervisor_for(recipient.company_id)
+    res2 = client.get("/api/v1/transactions?type=petty_cash")
+    assert res2.status_code == 200
+    rec_items = {it["id"]: it for it in res2.json()}
+    assert f"petty_{cross.topup_id}" in rec_items
+    assert rec_items[f"petty_{cross.topup_id}"]["bankAccountId"] is None
+    assert rec_items[f"petty_{cross.topup_id}"]["withdrawal"] == 0.0
+    assert f"petty_{approved.topup_id}" not in rec_items
+
+
+def test_transactions_offset_and_limit_are_applied(db_session):
+    """Review Major: bounded paging, offset is honoured."""
+    comp = Company(company_name="Paging Test Corp")
+    db_session.add(comp)
+    db_session.flush()
+    for i in range(3):
+        db_session.add(Expense(
+            company_id=comp.company_id, expense_date=date.today(), amount=Decimal("10.00"),
+            amount_paid=Decimal("10.00"), particulars=f"Paging {i}", audit_status="Pending Audit",
+        ))
+    db_session.commit()
+
+    full = client.get(f"/api/v1/transactions?type=expense&company_id={comp.company_id}").json()
+    page = client.get(f"/api/v1/transactions?type=expense&company_id={comp.company_id}&limit=1&offset=1").json()
+    assert len(full) == 3
+    assert [p["id"] for p in page] == [full[1]["id"]]
+
+
+def test_delete_bill_rolls_back_everything_when_a_payment_cleanup_fails(db_session, monkeypatch):
+    """Review Major: bill deletion is atomic, a failure mid loop leaves bill, payments and expenses intact."""
+    comp = Company(company_name="Bills Atomic Test Corp")
+    db_session.add(comp)
+    db_session.flush()
+    bank = BankAccount(
+        id="acc-test-bills-atomic",
+        bank_name="BDO",
+        account_name="Atomic Account",
+        company_name=comp.company_name,
+        company_id=comp.company_id,
+        starting_balance=Decimal("50000.00"),
+        current_balance=Decimal("50000.00"),
+    )
+    db_session.add(bank)
+    db_session.flush()
+
+    svc = BillsService(db_session)
+    bill = svc.create_bill(BillCreate(
+        company_id=comp.company_id, bill_name="Atomic Bill", amount=Decimal("4000.00"),
+        due_date=date.today(), recurring="monthly",
+    ))
+    for _ in range(2):
+        svc.record_payment(bill.bill_id, BillPaymentCreate(
+            payment_date=date.today(), amount=Decimal("1000.00"),
+            payment_method="Bank Transfer", funding_source="bank", bank_account_id=bank.id,
+        ))
+    bill_id = bill.bill_id
+    expense_ids = [p.expense_id for p in db_session.query(BillPayment).filter(BillPayment.bill_id == bill_id).all()]
+    assert len(expense_ids) == 2
+
+    calls = {"n": 0}
+    original = BankService.purge_linked_entries
+
+    def flaky(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated bank purge failure")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(BankService, "purge_linked_entries", flaky)
+
+    with pytest.raises(RuntimeError):
+        BillsService(db_session).delete_bill(bill_id)
+
+    db_session.expire_all()
+    assert db_session.query(Bill).filter(Bill.bill_id == bill_id).first() is not None
+    assert db_session.query(BillPayment).filter(BillPayment.bill_id == bill_id).count() == 2
+    assert db_session.query(Expense).filter(Expense.expense_id.in_(expense_ids)).count() == 2
+
+    # And a clean run removes everything
+    monkeypatch.setattr(BankService, "purge_linked_entries", original)
+    BillsService(db_session).delete_bill(bill_id)
+    db_session.expire_all()
+    assert db_session.query(Bill).filter(Bill.bill_id == bill_id).first() is None
+    assert db_session.query(Expense).filter(Expense.expense_id.in_(expense_ids)).count() == 0
