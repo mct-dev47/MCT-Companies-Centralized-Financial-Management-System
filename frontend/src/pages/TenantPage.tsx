@@ -556,6 +556,7 @@ export const TenantPage: React.FC = () => {
       penaltyRate: '',
     })
     setFormErrors({})
+    setIsReviewingAdd(false)
     setIsAddModalOpen(true)
   }
 
@@ -2515,7 +2516,7 @@ export const TenantPage: React.FC = () => {
                         type="button"
                         variant="primary"
                         size="sm"
-                        onClick={() => setIsAddModalOpen(true)}
+                        onClick={handleOpenAdd}
                         className="rounded-[10px]"
                       >
                         New Tenant Lease
@@ -2806,7 +2807,13 @@ export const TenantPage: React.FC = () => {
       )}
 
       {/* MODAL 1: New Tenant Lease (Matching system modal UI) */}
-      <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
+      <Dialog
+        open={isAddModalOpen}
+        onOpenChange={(open) => {
+          setIsAddModalOpen(open)
+          if (!open) setIsReviewingAdd(false)
+        }}
+      >
         <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal max-h-[85vh] overflow-y-auto">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
@@ -2832,11 +2839,28 @@ export const TenantPage: React.FC = () => {
                 errorMessage={formErrors.form}
                 items={[
                   { label: 'Tenant Name', value: formData.tenantName.trim(), highlight: true },
-                  { label: 'Unit / Property', value: `${formData.propertyName || ''} · ${formData.unitName}` },
-                  { label: 'Monthly Rent', value: formatPHP(formData.monthlyRent), isCurrency: true },
-                  { label: 'Security Deposit', value: formatPHP(formData.securityDeposit), isCurrency: true },
-                  { label: 'Lease Term', value: formData.leasePeriod },
-                  { label: 'Notes', value: formData.notes || 'None' },
+                  { label: 'Unit / Stall', value: formData.unitName.trim() },
+                  {
+                    label:
+                      formData.repeat === 'Daily'
+                        ? 'Daily Rent'
+                        : formData.repeat === 'Monthly'
+                          ? 'Monthly Rent'
+                          : 'Rent Amount',
+                    value: formatPHP(parseFloat(formData.rentAmount) || 0),
+                    isCurrency: true,
+                  },
+                  { label: 'Payment Schedule', value: formData.repeat },
+                  { label: 'Total Payable', value: formatPHP(getFormPayable()), isCurrency: true },
+                  {
+                    label: 'Lease Term',
+                    value:
+                      formData.repeat !== 'None' && formData.leaseEndDate
+                        ? `${formData.contractDate} to ${formData.leaseEndDate}`
+                        : formData.contractDate,
+                  },
+                  { label: 'First Due Date', value: formData.dueDate },
+                  { label: 'Notes', value: formData.notes.trim() || 'None' },
                 ]}
               />
             ) : (
