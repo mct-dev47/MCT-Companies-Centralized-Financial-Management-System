@@ -241,6 +241,40 @@ const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
       isMirrorRow: true,
     })
   }
+
+  // Reflected in Transaction Page for the Lender company: each repayment is a deposit to the lender's bank
+  if (loanHasLender(l) && Array.isArray(l.repayments) && l.repayments.length > 0) {
+    for (const r of l.repayments) {
+      const rAmt = Number(r.amount || 0)
+      if (rAmt <= 0) continue
+      const particulars = `Loan repayment received from ${l.borrower}${l.particulars ? `: ${l.particulars}` : ''}`
+      rows.push({
+        refNo: r.referenceNo || l.refNo,
+        chequeNo: '',
+        date: r.paymentDate || l.date,
+        type: 'Loan' as const,
+        amount: rAmt,
+        category: 'Loan Repayment' as any,
+        status: 'Paid',
+        auditStatus: l.auditStatus || 'Verified',
+        auditedBy: l.auditedBy,
+        auditDate: l.auditDate,
+        auditNotes: l.auditNotes,
+        createdBy: l.createdBy,
+        createdAt: r.createdAt || r.paymentDate || l.createdAt,
+        updatedAt: r.createdAt || l.updatedAt,
+        attachments: [],
+        bankAccountId: l.bankAccountId,
+        id: `loan_rep_${r.id}:lender`,
+        company: l.lender,
+        description: particulars,
+        particulars,
+        deposit: rAmt,
+        withdrawal: 0,
+        isMirrorRow: true,
+      })
+    }
+  }
   return rows
 }
 
