@@ -69,7 +69,7 @@ import {
   type CompanyOption,
 } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { isDateInRange, normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/context/CompanyContext'
@@ -149,7 +149,18 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
     startDate: null,
     endDate: null,
   })
-  const [searchQuery, setSearchQuery] = React.useState('')
+  const [searchParams] = useSearchParams()
+  const [searchQuery, setSearchQuery] = React.useState(() => {
+    return searchParams.get('search') || searchParams.get('ref') || ''
+  })
+
+  // Sync searchQuery when searchParams change
+  React.useEffect(() => {
+    const q = searchParams.get('search') || searchParams.get('ref')
+    if (q !== null && q !== undefined) {
+      setSearchQuery(q)
+    }
+  }, [searchParams])
   const [currentPage, setCurrentPage] = React.useState(1)
 
   // Dropdown menus

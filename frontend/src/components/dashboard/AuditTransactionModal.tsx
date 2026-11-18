@@ -172,6 +172,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
   const [localRemarksAuthor, setLocalRemarksAuthor] = React.useState<{
     name: string
+    role?: string
     timestamp?: string
   } | null>(null)
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
@@ -185,7 +186,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
   const [timelineEvents, setTimelineEvents] = React.useState<EntityTimelineEvent[]>([])
   const [isLoadingTimeline, setIsLoadingTimeline] = React.useState(false)
-  const [isRemarksExpanded, setIsRemarksExpanded] = React.useState(false)
   const [isTimelineExpanded, setIsTimelineExpanded] = React.useState(false)
 
   // Form states for editing
@@ -299,7 +299,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       }
     } else {
       setIsEditing(false)
-      setIsRemarksExpanded(false)
       setIsTimelineExpanded(false)
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
@@ -538,6 +537,27 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayRemarks =
     activeSale?.remarks || activeExpense?.remarks || activeTx?.remarks || ''
 
+  const currentAuditStatus =
+    activeSale?.auditStatus ||
+    activeExpense?.auditStatus ||
+    activeLoan?.auditStatus ||
+    activeTx?.auditStatus ||
+    'Pending Audit'
+
+  const isAudited = currentAuditStatus === 'Verified'
+
+  const displayAuditedBy =
+    activeSale?.auditedBy ||
+    activeExpense?.auditedBy ||
+    activeLoan?.auditedBy ||
+    activeTx?.auditedBy
+
+  const displayAuditDate =
+    activeSale?.auditDate ||
+    activeExpense?.auditDate ||
+    activeLoan?.auditDate ||
+    activeTx?.auditDate
+
   const timelineRemarksEvent = React.useMemo(() => {
     return [...timelineEvents].reverse().find((e) => {
       if (e.event_type === 'audited') return false
@@ -567,11 +587,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmittingRemarks(true)
     try {
       const trimmed = remarksInput.trim()
+      const roleStr = user?.role || (isFinance ? 'Finance' : 'Supervisor')
       if (activeTx?.id && (String(activeTx.id).startsWith('tx-') || activeTx.type === 'Bank')) {
         await bankService.updateTransactionRemarks(activeTx.id, trimmed)
         const updatedTx: DashboardTransactionItem = {
           ...activeTx,
           remarks: trimmed,
+          ...(isFinance ? { financeRemark: trimmed } : { supervisorRemark: trimmed }),
         }
         setCurrentTx(updatedTx)
         if (onTransactionUpdated) onTransactionUpdated(updatedTx)
@@ -579,6 +601,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
         setCurrentExpense(updatedExpense)
         const tx = expenseService.toDashboardTransaction(updatedExpense)
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
         if (onTransactionUpdated) onTransactionUpdated(tx)
@@ -587,6 +611,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         const updatedSale = await salesService.updateSaleRemarks(cleanId, trimmed)
         setCurrentSale(updatedSale)
         const tx = salesService.toDashboardTransaction(updatedSale)
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onSaleUpdated) onSaleUpdated(updatedSale)
         if (onTransactionUpdated) onTransactionUpdated(tx)
@@ -598,7 +624,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       setLocalRemarksAuthor(
         trimmed
           ? {
-              name: formatRealName(user?.fullName || user?.email || 'Staff', user?.role || 'Staff'),
+              name: formatRealName(user?.fullName || user?.email || 'Staff', roleStr),
+              role: roleStr,
               timestamp: new Date().toISOString(),
             }
           : null
@@ -624,14 +651,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     ? (activeExpense?.netAmount ?? withdrawalVal)
     : ((depositVal || 0) - (withdrawalVal || 0))
 
-  const currentAuditStatus =
-    activeSale?.auditStatus ||
-    activeExpense?.auditStatus ||
-    activeLoan?.auditStatus ||
-    activeTx?.auditStatus ||
-    'Pending Audit'
-
-  const isAudited = currentAuditStatus === 'Verified'
   const isEditable = Boolean(!viewOnly && editable && !isAdmin && !isAudited && !isOwner)
 
   const handleEditInSheet = () => {
@@ -651,18 +670,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       })
     }
   }
-
-  const displayAuditedBy =
-    activeSale?.auditedBy ||
-    activeExpense?.auditedBy ||
-    activeLoan?.auditedBy ||
-    activeTx?.auditedBy
-
-  const displayAuditDate =
-    activeSale?.auditDate ||
-    activeExpense?.auditDate ||
-    activeLoan?.auditDate ||
-    activeTx?.auditDate
 
   const handleMarkAudit = async (optionalRemarks?: string) => {
     setIsSubmittingAudit(true)
@@ -1737,28 +1744,29 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               )}
             </div>
 
-            {/* 4. Collapsible Sections (Remarks + Day Remark + Activity Timeline) */}
+            {/* 4. Activity Timeline & Remarks */}
             <div className="space-y-2.5">
-              {/* Remarks (Collapsible Chevron) */}
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 min-w-0">
+              {/* Activity Timeline & Remarks Section (Collapsible Chevron) */}
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"
-                    onClick={() => setIsRemarksExpanded((prev) => !prev)}
-                    aria-expanded={isRemarksExpanded}
-                    className="inline-flex items-center gap-2 min-h-[36px] py-1 text-left text-xs font-bold uppercase tracking-wider text-muted-fg hover:text-focus transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    onClick={() => setIsTimelineExpanded((prev) => !prev)}
+                    aria-expanded={isTimelineExpanded}
+                    className="inline-flex items-center gap-2 min-h-[36px] py-1 text-left cursor-pointer rounded-md hover:text-focus transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                   >
-                    {isRemarksExpanded ? (
-                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
-                    )}
-                    <span>Remarks</span>
-                    {!isRemarksExpanded && (displayRemarks || displayAuditNotes) && (
-                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary normal-case tracking-normal">
-                        Has note
-                      </span>
-                    )}
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted-fg flex items-center gap-2">
+                      {isTimelineExpanded ? (
+                        <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                      )}
+                      <History className="w-3.5 h-3.5 text-primary" />
+                      <span>Activity Timeline & Remarks</span>
+                    </span>
+                    <span className="text-xs text-muted-fg font-mono">
+                      ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
+                    </span>
                   </button>
                   {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && canEditRemarks && (
                     <Button
@@ -1778,76 +1786,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     </Button>
                   )}
                 </div>
-                {isRemarksExpanded && (
-                  <div className="mt-2 pb-1.5 pl-6 space-y-2.5">
-                    <div>
-                      {displayRemarks ? (
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium text-focus whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                            {displayRemarks}
-                          </p>
-                          {remarksAuthorInfo && (
-                            <p className="text-xs text-muted-fg">
-                              Added by <span className="font-semibold text-focus">{remarksAuthorInfo.name}</span>
-                              {remarksAuthorInfo.timestamp
-                                ? ` · ${formatTimelineDateTime(remarksAuthorInfo.timestamp)}`
-                                : ''}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-fg/70 italic font-normal text-xs">No operational remarks provided</span>
-                      )}
-                    </div>
-
-                    {displayAuditNotes && (
-                      <div
-                        className={cn(
-                          'rounded-lg border px-3 py-2 text-xs space-y-1',
-                          currentAuditStatus === 'Verified'
-                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                            : 'bg-rose-50/70 border-rose-200 text-rose-900'
-                        )}
-                      >
-                        <span className="font-bold block">
-                          {currentAuditStatus === 'Verified' ? 'Audit Remarks' : 'Audit Discrepancy Note'}
-                        </span>
-                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                          {displayAuditNotes}
-                        </p>
-                        {displayAuditedBy && (
-                          <p className="text-[11px] opacity-85">
-                            By <span className="font-semibold">{formatRealName(displayAuditedBy, 'Audit Officer')}</span>
-                            {displayAuditDate ? ` · ${formatTimelineDateTime(displayAuditDate)}` : ''}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Activity Timeline & Remarks Section (Collapsible Chevron) */}
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">
-                <button
-                  type="button"
-                  onClick={() => setIsTimelineExpanded((prev) => !prev)}
-                  aria-expanded={isTimelineExpanded}
-                  className="w-full flex items-center justify-between min-h-[36px] py-1 text-left cursor-pointer rounded-md hover:text-focus transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                >
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-fg flex items-center gap-2">
-                    {isTimelineExpanded ? (
-                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
-                    )}
-                    <History className="w-3.5 h-3.5 text-primary" />
-                    <span>Activity Timeline & Remarks</span>
-                  </span>
-                  <span className="text-xs text-muted-fg font-mono">
-                    ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
-                  </span>
-                </button>
 
                 {isTimelineExpanded && (
                   <div className="rounded-xl border border-stroke/20 bg-white p-3 space-y-2.5 text-xs">

@@ -144,6 +144,10 @@ const EmployeePage = lazyPage(() => import('@/pages/EmployeePage'), 'EmployeePag
 const UserManagementPage = lazyPage(() => import('@/pages/UserManagementPage'), 'UserManagementPage')
 const ActivityLogPage = lazyPage(() => import('@/pages/ActivityLogPage'), 'ActivityLogPage')
 const SettingsPage = lazyPage(() => import('@/pages/SettingsPage'), 'SettingsPage')
+const NotificationsPage = lazyPage(
+  () => import('@/pages/NotificationsPage'),
+  'NotificationsPage'
+)
 const AddTransactionSheetPage = lazyPage(
   () => import('@/pages/AddTransactionSheetPage'),
   'AddTransactionSheetPage'
@@ -435,6 +439,14 @@ export const router = createBrowserRouter([
       {
         path: '/activity',
         element: <Navigate to="/activity-log" replace />,
+      },
+      {
+        path: '/notifications',
+        element: (
+          <ProtectedRoute>
+            <NotificationsPage />
+          </ProtectedRoute>
+        ),
       },
       {
         path: '/settings',

@@ -711,6 +711,29 @@ export const TransactionPage: React.FC = () => {
   const [selectedTx, setSelectedTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isModalOpen, setIsModalOpen] = React.useState(false)
 
+  // Auto-open transaction modal if URL specifies ?ref= or ?txRef= or ?txId= or ?id=
+  React.useEffect(() => {
+    const targetRef =
+      searchParams.get('ref') ||
+      searchParams.get('txRef') ||
+      searchParams.get('txId') ||
+      searchParams.get('id')
+    if (!targetRef || transactions.length === 0) return
+
+    const normalizedTarget = targetRef.trim().toLowerCase()
+    const match = transactions.find((t) => {
+      if (String(t.id).toLowerCase() === normalizedTarget) return true
+      if (t.refNo && t.refNo.toLowerCase() === normalizedTarget) return true
+      if (t.particulars && t.particulars.toLowerCase().includes(normalizedTarget)) return true
+      return false
+    })
+
+    if (match) {
+      setSelectedTx(match)
+      setIsModalOpen(true)
+    }
+  }, [searchParams, transactions])
+
   // Close dropdowns / popovers on click outside or Escape
   React.useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
