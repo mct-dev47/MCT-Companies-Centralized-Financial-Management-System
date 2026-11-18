@@ -62,6 +62,8 @@ import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
 import { isDateInRange, formatToYYYYMMDD, normalizeDateToYYYYMMDD, formatCreatedAt } from '@/utils/dateUtils'
 import { cn } from '@/lib/utils'
 import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFields'
+import { TenantAuditConfirmModal } from '@/components/tenant/TenantAuditConfirmModal'
+import { TenantDiscrepancyModal } from '@/components/tenant/TenantDiscrepancyModal'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import {
   getDefaultDatesForRepeat,
@@ -3002,123 +3004,28 @@ export const TenantPage: React.FC = () => {
       })()}
 
       {/* Modal: Mark as Audited Confirmation */}
-      <Dialog open={isAuditConfirmModalOpen} onOpenChange={setIsAuditConfirmModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shrink-0">
-                <CheckCircle2 className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-extrabold text-focus">
-                  Mark Lease as Audited
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  Confirm that you have reviewed the lease terms, payments, and agreement for{' '}
-                  <strong className="text-focus">{activeTenant?.tenantName}</strong> ({activeTenant?.unitName}).
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <div className="p-3.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl text-xs text-emerald-900 space-y-1">
-            <p className="font-semibold text-emerald-800">
-              Audit Verification
-            </p>
-            <p className="text-[11px] text-emerald-700 leading-relaxed">
-              This record will be officially stamped with your name and today's date. Once marked as audited, further modifications will reset the status to pending audit.
-            </p>
-          </div>
-
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/30">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={isSubmittingAudit}
-              onClick={() => setIsAuditConfirmModalOpen(false)}
-              className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              disabled={isSubmittingAudit}
-              onClick={() => {
-                if (activeTenant) void saveAudit(activeTenant, 'Verified')
-              }}
-              className="h-10 px-5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-xs flex items-center gap-1.5"
-            >
-              {isSubmittingAudit && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
-              <span>{isSubmittingAudit ? 'Saving...' : 'Confirm & Mark as Audited'}</span>
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TenantAuditConfirmModal
+        open={isAuditConfirmModalOpen}
+        onOpenChange={setIsAuditConfirmModalOpen}
+        tenantName={activeTenant?.tenantName}
+        unitName={activeTenant?.unitName}
+        isSubmitting={isSubmittingAudit}
+        onConfirm={() => {
+          if (activeTenant) void saveAudit(activeTenant, 'Verified')
+        }}
+      />
 
       {/* Modal: Flag Discrepancy with Reason */}
-      <Dialog open={isDiscrepancyModalOpen} onOpenChange={setIsDiscrepancyModalOpen}>
-        <DialogContent className="sm:max-w-md bg-white rounded-[24px] p-6 sm:p-7 border border-stroke/50 shadow-modal">
-          <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
-                <AlertCircle className="h-5 w-5" />
-              </div>
-              <div>
-                <DialogTitle className="text-lg font-extrabold text-focus">
-                  Flag Audit Discrepancy
-                </DialogTitle>
-                <DialogDescription className="text-xs text-muted-fg mt-0.5">
-                  Please provide the reason or details of the discrepancy found on{' '}
-                  <strong className="text-focus">{activeTenant?.tenantName}</strong>'s lease.
-                </DialogDescription>
-              </div>
-            </div>
-          </DialogHeader>
-
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (!discrepancyReason.trim() || !activeTenant) return
-              void saveAudit(activeTenant, 'Flagged', discrepancyReason.trim())
-            }}
-            className="space-y-4 mt-2"
-          >
-            <div>
-              <label className="text-xs font-semibold text-focus block mb-1">
-                Discrepancy Reason / Remarks <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                required
-                rows={4}
-                value={discrepancyReason}
-                onChange={(e) => setDiscrepancyReason(e.target.value)}
-                placeholder="Describe the discrepancy, variance, or missing documents..."
-                className="w-full p-3 rounded-xl border border-rose-300 bg-rose-50/20 text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-rose-500/20 resize-none transition-all placeholder:text-muted-fg/60"
-              />
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-stroke/30">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={isSubmittingAudit}
-                onClick={() => setIsDiscrepancyModalOpen(false)}
-                className="h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={!discrepancyReason.trim() || isSubmittingAudit}
-                className="h-10 px-5 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white cursor-pointer shadow-xs flex items-center gap-1.5 disabled:opacity-50"
-              >
-                {isSubmittingAudit && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
-                <span>{isSubmittingAudit ? 'Submitting...' : 'Confirm Discrepancy'}</span>
-              </Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <TenantDiscrepancyModal
+        open={isDiscrepancyModalOpen}
+        onOpenChange={setIsDiscrepancyModalOpen}
+        tenantName={activeTenant?.tenantName}
+        initialReason={discrepancyReason}
+        isSubmitting={isSubmittingAudit}
+        onConfirm={(reason) => {
+          if (activeTenant) void saveAudit(activeTenant, 'Flagged', reason)
+        }}
+      />
 
       {/* MODAL 6: Confirm removing a payment, or marking a period unpaid (spec 0016) */}
       <ConfirmModal

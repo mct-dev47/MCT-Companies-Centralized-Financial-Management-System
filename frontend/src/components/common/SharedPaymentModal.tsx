@@ -584,6 +584,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                   type="button"
                   onClick={() => setPaymentError(null)}
                   className="text-[#960C01] hover:text-[#800a01] font-bold ml-1 text-sm leading-none"
+                  aria-label="Dismiss error message"
                 >
                   &times;
                 </button>
@@ -621,6 +622,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                           <button
                             key={`month-select-${m.monthIndex}`}
                             type="button"
+                            aria-label={`Month ${m.monthIndex} - Due ${m.dueDate} - ${m.status}`}
                             disabled={isFullyPaid}
                             onClick={() => {
                               if (!isFullyPaid) {
@@ -789,6 +791,7 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
                                 <button
                                   key={dateStr}
                                   type="button"
+                                  aria-label={`${dateStr}${isPaid ? ' (Paid)' : isPartial ? ' (Partially Paid)' : isMissed ? ' (Missed)' : ''}`}
                                   disabled={isDisabled}
                                   onClick={() => {
                                     if (!isDisabled) {
