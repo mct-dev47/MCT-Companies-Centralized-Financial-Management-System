@@ -1202,9 +1202,9 @@ export const PettyCashPage: React.FC = () => {
                         <Receipt className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Request Reimbursement</div>
+                        <div className="text-xs font-bold text-focus group-hover:text-amber-700 transition-colors">Record Petty Expense</div>
                         <div className="text-[11px] text-muted-fg leading-snug mt-0.5">
-                          Get paid back for out of pocket or mixed split petty cash expenses.
+                          Record an expense paid from company petty cash.
                         </div>
                       </div>
                     </button>
