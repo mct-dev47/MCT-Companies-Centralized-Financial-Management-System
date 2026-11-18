@@ -691,14 +691,17 @@ export const RecordUtangPaymentModal: React.FC<RecordUtangPaymentModalProps> = (
                     placeholder="Select deposit bank"
                     options={[
                       { value: '', label: 'Do not post bank deposit' },
-                      ...bankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
+                      ...bankAccounts.map((b) => ({
+                        value: b.id,
+                        label: `${b.bankName}${b.accountName ? ` - ${b.accountName}` : ''}`,
+                      })),
                     ]}
                     aria-label="Bank Deposit Account"
                   />
                   {originBank.mode === 'fixed' && originBank.name && (
                     <p className="text-[10.5px] text-muted-fg">
                       Original order bank: <span className="font-semibold text-focus">{originBank.name}</span>
-                    </p>
+                    </p>  
                   )}
                 </div>
               )}

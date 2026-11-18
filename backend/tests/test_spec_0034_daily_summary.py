@@ -44,7 +44,7 @@ def client(db_session):
             "email": "finance@mct.com",
             "role": "finance",
             "is_admin": False,
-            "company_ids": [],
+            "company_ids": [1],
         }
 
     app.dependency_overrides[get_db] = override_get_db

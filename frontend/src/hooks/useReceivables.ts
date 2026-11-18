@@ -25,12 +25,16 @@ export function useReceivables(
   const [kpis, setKpis] = React.useState<ReceivablesKPIs>(() =>
     receivablesStore.getKPIs(dateRange, company)
   )
+  const [isLoading, setIsLoading] = React.useState<boolean>(() =>
+    receivablesStore.getIsLoading()
+  )
 
   const reload = React.useCallback(() => {
     setSales(receivablesStore.getSales(company))
     setPeople(receivablesStore.getPeopleSummaries(company))
     setPayments(receivablesStore.getAllPayments(company))
     setKpis(receivablesStore.getKPIs(dateRange, company))
+    setIsLoading(receivablesStore.getIsLoading())
   }, [dateRange?.startDate, dateRange?.endDate, company])
 
   React.useEffect(() => {
@@ -159,6 +163,7 @@ export function useReceivables(
     people,
     payments,
     kpis,
+    isLoading,
     recordPayment,
     settleStaffPayrollDeduction,
     addNewSale,

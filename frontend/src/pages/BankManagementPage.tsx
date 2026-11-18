@@ -118,7 +118,8 @@ import { Link } from 'react-router-dom'
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
 import { getParticularsSummary, stripBankSystemPrefix } from '@/utils/particularsUtils'
-import { formatToMMDDYYYY } from '@/utils/dateUtils'
+import { formatToMMDDYYYY, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { compareTransactionsDesc } from '@/lib/transactionSort'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 
@@ -942,93 +943,37 @@ export const BankManagementPage: React.FC = () => {
 
   }
 
-  // Compute running historical balance for each transaction (newest to oldest)
+  // Sort transactions newest-first by transaction date, then timestamp, then id so running balances match table order
+  const compareBankTransactionsDesc = React.useCallback((a: BankTransaction, b: BankTransaction): number => {
+    return compareTransactionsDesc(a, b)
+  }, [])
 
+  // Compute running historical balance for each transaction (newest to oldest)
   const transactionsWithRunningBalance = React.useMemo(() => {
+    const buildForAccount = (acc: BankAccount) => {
+      const sortedTxs = [...(acc.transactions || [])].sort(compareBankTransactionsDesc)
+      let current = Number(acc.currentBalance) || 0
+      return sortedTxs.map((tx) => {
+        const row = {
+          ...tx,
+          runningBalance: current,
+          companyName: tx.companyName || acc.companyName || 'Corporate',
+          bankName: acc.bankName || 'Corporate Bank',
+        }
+        const dep = Number(tx.deposit) || 0
+        const wth = Number(tx.withdrawal) || 0
+        current = current - dep + wth
+        return row
+      })
+    }
 
     if (isAggregatedView) {
-
-      const allTx: (BankTransaction & { runningBalance: number; companyName: string; bankName: string })[] = []
-
-      for (const acc of roleScopedAccounts) {
-
-        let current = acc.currentBalance
-
-        for (let i = 0; i < (acc.transactions || []).length; i++) {
-
-          const tx = acc.transactions[i]
-
-          allTx.push({
-
-            ...tx,
-
-            runningBalance: current,
-
-            companyName: tx.companyName || acc.companyName || 'Corporate',
-
-            bankName: acc.bankName || 'Corporate Bank',
-
-          })
-
-          const dep = tx.deposit || 0
-
-          const wth = tx.withdrawal || 0
-
-          current = current - dep + wth
-
-        }
-
-      }
-
-      return allTx.sort((a, b) => {
-
-        const timeA = new Date(a.date).getTime() || 0
-
-        const timeB = new Date(b.date).getTime() || 0
-
-        if (timeA !== timeB) return timeB - timeA
-
-        return (b.id || '').localeCompare(a.id || '')
-
-      })
-
+      return roleScopedAccounts.flatMap(buildForAccount).sort(compareBankTransactionsDesc)
     }
 
     if (!activeAccount || !activeAccount.transactions) return []
-
-    let current = activeAccount.currentBalance
-
-    const result: (BankTransaction & { runningBalance: number; companyName: string; bankName: string })[] = []
-
-    for (let i = 0; i < activeAccount.transactions.length; i++) {
-
-      const tx = activeAccount.transactions[i]
-
-      result.push({
-
-        ...tx,
-
-        runningBalance: current,
-
-        companyName: tx.companyName || activeAccount.companyName || 'Corporate',
-
-        bankName: activeAccount.bankName || 'Corporate Bank',
-
-      })
-
-      // Adjust balance backwards to calculate previous row's balance
-
-      const dep = tx.deposit || 0
-
-      const wth = tx.withdrawal || 0
-
-      current = current - dep + wth
-
-    }
-
-    return result
-
-  }, [isAggregatedView, roleScopedAccounts, activeAccount])
+    return buildForAccount(activeAccount)
+  }, [isAggregatedView, roleScopedAccounts, activeAccount, compareBankTransactionsDesc])
 
   // Filtered transactions of the currently selected bank account
 
@@ -1070,20 +1015,11 @@ export const BankManagementPage: React.FC = () => {
       })
     }
 
-    list.sort((a, b) => {
-      const timeA = new Date(a.date).getTime() || 0
-      const timeB = new Date(b.date).getTime() || 0
-      if (timeA !== timeB) {
-        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA
-      }
-      return sortOrder === 'asc'
-        ? (a.id || '').localeCompare(b.id || '')
-        : (b.id || '').localeCompare(a.id || '')
-    })
+    list.sort((a, b) => (sortOrder === 'asc' ? -compareBankTransactionsDesc(a, b) : compareBankTransactionsDesc(a, b)))
 
     return list
 
-  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter, bankStatusFilter, sortOrder])
+  }, [transactionsWithRunningBalance, tableSearchQuery, txTypeFilter, bankStatusFilter, sortOrder, compareBankTransactionsDesc])
 
   // Pagination
 
@@ -3160,6 +3096,53 @@ export const BankManagementPage: React.FC = () => {
 
       {/* 3. Bottom Section: Bank Transactions Table (No title, fits cleanly without horizontal scroll) */}
       <Card className="rounded-[24px] bg-white border border-stroke/30 p-4 sm:p-6 shadow-xs">
+        {roleScopedAccounts.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2 mb-4 pb-3 border-b border-slate-100">
+            {selectedCompany === 'All Companies' && (
+              <button
+                type="button"
+                onClick={() => setSelectedAccountId('all')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer border',
+                  isAggregatedView
+                    ? 'bg-[#960C01] text-white border-[#960C01] shadow-xs'
+                    : 'bg-slate-50 text-focus border-slate-200 hover:bg-slate-100'
+                )}
+              >
+                <span>All Banks</span>
+                <span className={cn('text-[11px] font-bold tabular-nums', isAggregatedView ? 'text-white/90' : 'text-muted-fg')}>
+                  {formatPHP(totalGroupBalance)}
+                </span>
+              </button>
+            )}
+            {roleScopedAccounts.map((acc) => {
+              const isSelected = !isAggregatedView && activeAccount?.id === acc.id
+              return (
+                <button
+                  key={acc.id}
+                  type="button"
+                  onClick={() => setSelectedAccountId(acc.id)}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer border',
+                    isSelected
+                      ? 'bg-[#960C01] text-white border-[#960C01] shadow-xs'
+                      : 'bg-slate-50 text-focus border-slate-200 hover:bg-slate-100'
+                  )}
+                >
+                  <span>{acc.bankName}</span>
+                  {acc.accountName && (
+                    <span className={cn('text-[11px] font-normal truncate max-w-[120px]', isSelected ? 'text-white/80' : 'text-muted-fg')}>
+                      ({acc.accountName})
+                    </span>
+                  )}
+                  <span className={cn('text-[11px] font-bold tabular-nums', isSelected ? 'text-white/90' : 'text-muted-fg')}>
+                    {formatPHP(acc.currentBalance || 0)}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        )}
         <div className="overflow-x-auto">
           <Table className="w-full text-xs table-fixed">
             <colgroup>
@@ -3291,7 +3274,12 @@ export const BankManagementPage: React.FC = () => {
 
                     {/* Current Balance */}
                     <TableCell className="px-2.5 sm:px-3 py-3 font-bold text-xs text-focus text-right whitespace-nowrap tabular-nums">
-                      ₱ {tx.runningBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}
+                      <div>₱ {tx.runningBalance.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</div>
+                      {isAggregatedView && (tx as any).bankName && (
+                        <div className="text-[10px] font-medium text-muted-fg mt-0.5">
+                          {(tx as any).bankName}
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                   )
@@ -4738,27 +4726,30 @@ export const BankManagementPage: React.FC = () => {
         transaction={viewingBankTx}
         onTransactionUpdated={(updatedTx) => {
           setViewingBankTx(updatedTx)
-          if (activeAccount) {
-            setActiveAccount((prev) => {
-              if (!prev) return prev
-              const updatedTransactions = (prev.transactions || []).map((t) => {
-                if (t.id === updatedTx.id) {
-                  return {
-                    ...t,
-                    auditStatus: updatedTx.auditStatus as any,
-                    auditedBy: updatedTx.auditedBy,
-                    auditDate: updatedTx.auditDate,
-                    auditNotes: updatedTx.auditNotes,
-                    remarks: updatedTx.remarks,
+          const targetAccountId = activeAccount?.id || updatedTx.bankAccountId
+          if (targetAccountId) {
+            setAccounts((prev) =>
+              prev.map((acc) => {
+                if (acc.id !== targetAccountId) return acc
+                const updatedTransactions = (acc.transactions || []).map((t) => {
+                  if (t.id === updatedTx.id) {
+                    return {
+                      ...t,
+                      auditStatus: updatedTx.auditStatus as any,
+                      auditedBy: updatedTx.auditedBy,
+                      auditDate: updatedTx.auditDate,
+                      auditNotes: updatedTx.auditNotes,
+                      remarks: updatedTx.remarks,
+                    }
                   }
+                  return t
+                })
+                return {
+                  ...acc,
+                  transactions: updatedTransactions,
                 }
-                return t
               })
-              return {
-                ...prev,
-                transactions: updatedTransactions,
-              }
-            })
+            )
           }
         }}
       />

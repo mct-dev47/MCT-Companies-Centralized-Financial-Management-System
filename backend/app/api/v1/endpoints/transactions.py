@@ -25,6 +25,7 @@ from app.models.company import Company
 from app.models.finance import Expense, Sale
 from app.models.loan import Loan, LoanRepayment
 from app.models.petty_cash import PettyCashTopUp
+from app.models.receivable import Receivable, ReceivablePayment
 from app.models.tenant import TenantLease, TenantLeasePayment
 from app.schemas.transaction import TransactionOut
 from app.services.audit_service import AuditAction, log_transaction
@@ -154,6 +155,22 @@ def list_transactions(
         sync_svc = SalesReceivablesSyncService(db)
         paid_by_sale = sync_svc.compute_paid_amounts((s.sales_id, s.particulars or "", s.amount) for s in sales)
 
+        # Receivables that have explicit ReceivablePayment rows are emitted one row per payment in Section 7
+        backed_paid_by_sale: dict[int, float] = {}
+        if sale_ids:
+            sale_recs = db.query(Receivable).filter(Receivable.sale_id.in_(sale_ids)).all()
+            if sale_recs:
+                rec_ids_with_pmts = {
+                    row[0]
+                    for row in db.query(ReceivablePayment.receivable_id)
+                    .filter(ReceivablePayment.receivable_id.in_([r.receivable_id for r in sale_recs]))
+                    .distinct()
+                    .all()
+                }
+                for r in sale_recs:
+                    if r.receivable_id in rec_ids_with_pmts and r.sale_id is not None:
+                        backed_paid_by_sale[r.sale_id] = backed_paid_by_sale.get(r.sale_id, 0.0) + float(r.amount_paid or 0)
+
         for s in sales:
             cname = comp_map.get(s.company_id, "Unknown Company")
             src_mod = sources.get(s.sales_id)
@@ -182,6 +199,11 @@ def list_transactions(
                         paid_val = 0.0
                     else:
                         paid_val = float(paid_d)
+
+            if s.sales_id in backed_paid_by_sale:
+                paid_val = max(0.0, round(paid_val - backed_paid_by_sale[s.sales_id], 2))
+                if paid_val <= 0.005:
+                    continue
 
             is_deposited = d_status == "deposited"
             deposit_amt = paid_val if is_deposited else 0.0
@@ -746,6 +768,7 @@ def list_transactions(
                         bankAccountId=borrower_bank_id,
                         bankName=borrower_bank_name,
                         remarks=ln.finance_remark,
+                        createdAt=ln.created_at.isoformat() if ln.created_at else None,
                         awaitingAudit=False,
                     )
                 )
@@ -775,6 +798,7 @@ def list_transactions(
                         bankAccountId=ln.bank_account_id,
                         bankName=bank_name_map.get(ln.bank_account_id),
                         remarks=ln.finance_remark,
+                        createdAt=ln.created_at.isoformat() if ln.created_at else None,
                         isMirrorRow=True,
                         awaitingAudit=False,
                     )
@@ -811,6 +835,7 @@ def list_transactions(
                             auditStatus="Pending Audit",
                             bankAccountId=ln.bank_account_id,
                             bankName=bank_name_map.get(ln.bank_account_id),
+                            createdAt=rep.created_at.isoformat() if rep.created_at else None,
                             isMirrorRow=True,
                             awaitingAudit=False,
                         )
@@ -875,6 +900,88 @@ def list_transactions(
                 )
             )
 
+    # ─────────────────────────────────────────────────────────────────────────────
+    # 7. RECEIVABLE PAYMENTS (One transaction row per individual installment payment)
+    # ─────────────────────────────────────────────────────────────────────────────
+    if not type_filter or type_filter in ("sales", "income"):
+        rec_pmt_q = (
+            db.query(ReceivablePayment)
+            .join(Receivable, ReceivablePayment.receivable_id == Receivable.receivable_id)
+            .options(joinedload(ReceivablePayment.receivable))
+            .filter(ReceivablePayment.amount > 0)
+        )
+        if target_cid:
+            rec_pmt_q = rec_pmt_q.filter(Receivable.company_id == target_cid)
+        elif allowed_cids is not None:
+            rec_pmt_q = rec_pmt_q.filter(Receivable.company_id.in_(allowed_cids))
+
+        if start_date:
+            rec_pmt_q = rec_pmt_q.filter(ReceivablePayment.payment_date >= start_date)
+        if end_date:
+            rec_pmt_q = rec_pmt_q.filter(ReceivablePayment.payment_date <= end_date)
+
+        rec_pmts = rec_pmt_q.order_by(ReceivablePayment.payment_date.desc(), ReceivablePayment.payment_id.desc()).limit(query_cap).all()
+        parent_sale_ids = {p.receivable.sale_id for p in rec_pmts if p.receivable and p.receivable.sale_id}
+        parent_sales_map = (
+            {
+                s.sales_id: s
+                for s in db.query(Sale).filter(Sale.sales_id.in_(list(parent_sale_ids))).all()
+            }
+            if parent_sale_ids
+            else {}
+        )
+
+        for pmt in rec_pmts:
+            rec = pmt.receivable
+            if not rec:
+                continue
+            cname = comp_map.get(rec.company_id, rec.company_name or "Unknown Company")
+            amt = float(pmt.amount or 0)
+            pmt_date_iso = pmt.payment_date.isoformat() if pmt.payment_date else ""
+            rec_date_iso = rec.transaction_date.isoformat() if rec.transaction_date else pmt_date_iso
+            parent_sale = parent_sales_map.get(rec.sale_id) if rec.sale_id else None
+            is_payroll = (pmt.payment_method or "").strip().lower() == "payroll deduction"
+            if parent_sale is not None:
+                is_deposited = (parent_sale.deposit_status or "").strip().lower() == "deposited" and not is_payroll
+                dep_status_str = parent_sale.deposit_status or "Not Deposited"
+            else:
+                is_deposited = bool(pmt.bank_account_id) and not is_payroll
+                dep_status_str = "Deposited" if is_deposited else "Not Deposited"
+            deposit_val = amt if is_deposited else 0.0
+
+            items.append(
+                TransactionOut(
+                    id=f"rec_pmt_{pmt.payment_id}",
+                    refNo=pmt.reference_no or f"REC-{rec.receivable_id}-P{pmt.payment_id}",
+                    chequeNo=pmt.reference_no or "",
+                    date=pmt_date_iso,
+                    saleDate=rec_date_iso,
+                    type="Income",
+                    company=cname,
+                    description=f"Receivable Payment - {rec.customer_name} ({rec.items_summary})",
+                    particulars=f"Receivable Payment - {rec.customer_name} ({rec.items_summary})",
+                    amount=amt,
+                    withdrawal=0.0,
+                    deposit=deposit_val,
+                    category="Food Receivable",
+                    paymentMethod=pmt.payment_method or "Cash",
+                    status="Paid",
+                    auditStatus=(parent_sale.audit_status if parent_sale else None) or "Pending Audit",
+                    auditedBy=parent_sale.audited_by if parent_sale else None,
+                    auditNotes=parent_sale.audit_remarks if parent_sale else None,
+                    auditDate=parent_sale.audited_at.isoformat() if parent_sale and parent_sale.audited_at else None,
+                    createdAt=pmt.created_at.isoformat() if pmt.created_at else None,
+                    paidAmount=amt,
+                    bankAccountId=pmt.bank_account_id,
+                    bankName=bank_name_map.get(pmt.bank_account_id),
+                    depositStatus=dep_status_str,
+                    depositDate=pmt_date_iso if deposit_val > 0 else None,
+                    remarks=pmt.notes,
+                    sourceModule="Receivables",
+                    awaitingAudit=False,
+                )
+            )
+
     # Filter by search string if provided
     if search:
         s_term = search.strip().lower()
@@ -893,8 +1000,20 @@ def list_transactions(
         a_term = audit_status.strip().lower()
         items = [it for it in items if it.auditStatus.strip().lower() == a_term]
 
-    # Sort items chronologically descending (date, then id)
-    items.sort(key=lambda x: (x.date, x.createdAt or x.date, x.id), reverse=True)
+    # Sort items chronologically descending (transaction date, then timestamp, then id)
+    def _tx_sort_key(x: TransactionOut):
+        ts_val = 0.0
+        if x.createdAt:
+            try:
+                dt = datetime.fromisoformat(str(x.createdAt).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                ts_val = dt.timestamp()
+            except ValueError:
+                ts_val = 0.0
+        return (x.date or "", ts_val, str(x.id))
+
+    items.sort(key=_tx_sort_key, reverse=True)
 
     total_count = len(items)
     if response is not None:

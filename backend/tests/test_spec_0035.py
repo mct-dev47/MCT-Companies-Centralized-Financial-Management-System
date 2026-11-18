@@ -42,15 +42,15 @@ mock_user = AuthenticatedUser(
     assigned_company=None,
 )
 
-app.dependency_overrides[get_db] = override_get_db
-app.dependency_overrides[require_business_reader] = lambda: mock_user
-app.dependency_overrides[require_business_writer] = lambda: mock_user
-
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
+    prev_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[require_business_reader] = lambda: mock_user
+    app.dependency_overrides[require_business_writer] = lambda: mock_user
     Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     comp_a = Company(company_id=1, company_name="Company Alpha")
@@ -65,6 +65,8 @@ def setup_db():
     db.query(CompanyPaymentMethod).delete()
     db.commit()
     db.close()
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(prev_overrides)
 
 
 def test_custom_payment_methods_company_isolation():

@@ -1,0 +1,2 @@
+-- 0075_loan_borrower_bank.sqlite.sql
+-- In SQLite, ALTER TABLE column checks are executed idempotently in app/db/migrations.py (_run_sqlite_migrations) and app/db/session.py (init_db).

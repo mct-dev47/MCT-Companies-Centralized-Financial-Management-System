@@ -36,6 +36,7 @@ class LoanBase(BaseModel):
     lender_name: Optional[str] = None
     loan_ref_no: Optional[str] = None
     bank_account_id: Optional[str] = None
+    borrower_bank_account_id: Optional[str] = None
     principal_amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Principal amount must be at least 1.00 (cannot be 0 or letters)")
     interest_rate: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2, description="Interest percentage e.g. 5.00 for 5%")
     loan_date: date
@@ -58,6 +59,7 @@ class LoanUpdate(BaseModel):
     borrower_company: Optional[str] = None
     lender_company: Optional[str] = None
     loan_ref_no: Optional[str] = None
+    borrower_bank_account_id: Optional[str] = None
     principal_amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     amount: Optional[Decimal] = Field(None, ge=1.0, decimal_places=2)
     interest_rate: Optional[Decimal] = Field(None, ge=0, decimal_places=2)

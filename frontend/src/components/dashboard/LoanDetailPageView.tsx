@@ -342,10 +342,6 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
                   {loan.lender || 'Pending Assignment'}
                 </span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
-                <span className="text-muted-fg">Facility Category:</span>
-                <span className="font-semibold text-focus">{loan.category || 'Inter-Company'}</span>
-              </div>
               <div className="flex justify-between items-center py-1">
                 <span className="text-muted-fg">Particulars / Purpose:</span>
                 <span className="font-semibold text-focus truncate max-w-[180px]" title={loan.particulars}>
