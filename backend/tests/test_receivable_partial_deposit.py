@@ -69,13 +69,18 @@ def test_partial_payment_reflects_in_sale_and_auto_deposits():
 
 def test_payment_always_goes_to_the_sales_origin_bank():
     db = _setup()
-    # The client asks for BPI, but the sale was recorded to BDO: BDO receives it.
-    pay = ReceivablesService(db).record_payment(
-        1, ReceivablePaymentCreate(amount=Decimal("100.00"), payment_date=date.today(), bank_account_id="bnk-002")
+    # Explicit bank_account_id is honored; omitting it falls back to the sale's origin bank (BDO).
+    pay_explicit = ReceivablesService(db).record_payment(
+        1, ReceivablePaymentCreate(amount=Decimal("60.00"), payment_date=date.today(), bank_account_id="bnk-002")
     )
-    assert pay.bank_account_id == "bnk-001"
-    assert _balance(db, "bnk-001") == Decimal("1100.00")
-    assert _balance(db, "bnk-002") == Decimal("1000.00")
+    assert pay_explicit.bank_account_id == "bnk-002"
+    assert _balance(db, "bnk-002") == Decimal("1060.00")
+
+    pay_fallback = ReceivablesService(db).record_payment(
+        1, ReceivablePaymentCreate(amount=Decimal("40.00"), payment_date=date.today())
+    )
+    assert pay_fallback.bank_account_id == "bnk-001"
+    assert _balance(db, "bnk-001") == Decimal("1040.00")
 
     rec = ReceivablesService(db).get_receivable(1)
     assert rec.origin_bank_account_id == "bnk-001"

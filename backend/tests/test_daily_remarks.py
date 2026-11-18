@@ -11,7 +11,7 @@ from app.models.daily_remark import DailyRemark
 from app.models.finance import Base
 from app.schemas.daily_remark import DailyRemarkUpsert
 
-USER = {"user_id": 7, "role": "finance", "full_name": "Fin User"}
+USER = {"user_id": 7, "role": "finance", "full_name": "Fin User", "company_ids": [1, 2]}
 DAY = date(2026, 11, 9)
 
 

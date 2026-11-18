@@ -301,7 +301,6 @@ def test_cache_sharing_and_post_commit_invalidation(notif_env):
                 amount=Decimal("1500.00"),
                 billed_amount=Decimal("4500.00"),
                 payment_date=today,
-                period_due_date=today,
                 payment_method="Bank Transfer",
                 reference_no="REF-PARTIAL-1",
             ),
@@ -368,7 +367,6 @@ def test_recurring_bill_anchor_advances_across_paid_periods(notif_env):
             BillPaymentCreate(
                 amount=Decimal("8000.00"),
                 payment_date=two_months_ago,
-                period_due_date=two_months_ago,
                 payment_method="Cash",
             ),
         )
@@ -377,13 +375,12 @@ def test_recurring_bill_anchor_advances_across_paid_periods(notif_env):
             BillPaymentCreate(
                 amount=Decimal("8000.00"),
                 payment_date=one_month_ago,
-                period_due_date=one_month_ago,
                 payment_method="Cash",
             ),
         )
 
         ns = NotificationService(db)
-        notifs = ns.get_notifications(company_id=1, user_role="admin", user_scope_key="test-recurring")
+        notifs = ns.get_notifications(company_id=1, user_role="supervisor", user_scope_key="test-recurring")
         bill_reminders = [
             n for n in notifs if n.notification_type in ("BILL_OVERDUE", "BILL_DUE_TODAY", "BILL_DUE_SOON")
         ]
@@ -438,7 +435,7 @@ def test_lending_notifications_and_read_only_get_borrowers(notif_env):
 
         db.commit = spy_commit
         ns = NotificationService(db)
-        notifs = ns.get_notifications(company_id=1, user_role="admin", user_scope_key="test-lending")
+        notifs = ns.get_notifications(company_id=1, user_role="supervisor", user_scope_key="test-lending")
         assert not commit_called, "Notification read path must never call db.commit()"
 
         lending_types = {n.notification_type for n in notifs}
@@ -484,7 +481,7 @@ def test_petty_cash_low_and_zero_balance_notifications(notif_env):
         db.commit()
 
         ns = NotificationService(db)
-        notifs = ns.get_notifications(company_id=1, user_role="admin", user_scope_key="test-pc-zero")
+        notifs = ns.get_notifications(company_id=1, user_role="supervisor", user_scope_key="test-pc-zero")
         pc_low = [n for n in notifs if n.notification_type == "PETTY_CASH_LOW_BALANCE" and n.company_id == 1]
         assert len(pc_low) == 1
         assert pc_low[0].amount == pytest.approx(0.0)
@@ -662,7 +659,7 @@ def test_zero_n_plus_one_query_scaling(monkeypatch):
             try:
                 items = ns.get_notifications(
                     company_id=None,
-                    user_role="admin",
+                    user_role="supervisor",
                     limit=500,
                     user_scope_key=f"scale-{scale_n}",
                 )
