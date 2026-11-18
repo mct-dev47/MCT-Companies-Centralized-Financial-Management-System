@@ -18,6 +18,7 @@ jobs:
       ENVIRONMENT: "development"
       SUPABASE_URL: "https://ci-placeholder.supabase.co"
       SUPABASE_KEY: "ci-test-supabase-key-placeholder"
+      BREVO_API_KEY: "ci-test-brevo-api-key-placeholder"
       SUPABASE_JWT_SECRET: "ci-test-jwt-secret-key-minimum-32-characters-long"
       OTP_HMAC_SECRET: "ci-test-otp-hmac-secret-minimum-32-characters-long"
     steps:

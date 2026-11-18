@@ -56,17 +56,20 @@ class TestSecretLeakPrevention(unittest.TestCase):
 
     def test_settings_redacts_sensitive_keys(self):
         """Asserts that SecretStr fields mask credentials when serialized or printed."""
-        # When str() or repr() is called on SecretStr, it must be masked
-        self.assertEqual(str(settings.BREVO_API_KEY), "**********")
-        self.assertIn("**********", repr(settings.BREVO_API_KEY))
+        from pydantic import SecretStr
 
-        # Full settings repr must not expose raw Brevo key or service role key
-        settings_repr = repr(settings)
-        self.assertNotIn("xkeysib-", settings_repr)
+        with patch.object(settings, "BREVO_API_KEY", SecretStr("xkeysib-ci-test-secret")):
+            # When str() or repr() is called on SecretStr, it must be masked
+            self.assertEqual(str(settings.BREVO_API_KEY), "**********")
+            self.assertIn("**********", repr(settings.BREVO_API_KEY))
 
-        # unwrap_secret safely retrieves the raw string value when required for backend execution
-        plain_key = unwrap_secret(settings.BREVO_API_KEY)
-        self.assertIsInstance(plain_key, str)
+            # Full settings repr must not expose raw Brevo key or service role key
+            settings_repr = repr(settings)
+            self.assertNotIn("xkeysib-", settings_repr)
+
+            # unwrap_secret safely retrieves the raw string value when required for backend execution
+            plain_key = unwrap_secret(settings.BREVO_API_KEY)
+            self.assertEqual(plain_key, "xkeysib-ci-test-secret")
 
     def test_global_exception_handler_sanitizes_500_responses(self):
         """Asserts that unhandled server exceptions return generic error responses without echoing secrets."""
