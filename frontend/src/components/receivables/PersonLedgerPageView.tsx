@@ -1152,7 +1152,10 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                           placeholder="No bank deposit"
                           options={[
                             { value: '', label: 'No bank deposit' },
-                            ...editBankAccounts.map((b) => ({ value: b.id, label: b.bankName })),
+                            ...editBankAccounts.map((b) => ({
+                              value: b.id,
+                              label: `${b.bankName}${b.accountName ? ` - ${b.accountName}` : ''}`,
+                            })),
                           ]}
                           aria-label="Bank Deposit Account"
                         />
