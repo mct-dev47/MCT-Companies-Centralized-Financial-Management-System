@@ -27,6 +27,8 @@ import {
 import { formatPHP } from '@/lib/format'
 import { loanService, type LoanItem } from '@/services/loanService'
 import { expenseService, type ExpenseItem } from '@/services/expenseService'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
+import { Dropdown } from '@/components/ui/Dropdown'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import { cn } from '@/lib/utils'
 
@@ -88,6 +90,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const [isReviewing, setIsReviewing] = React.useState(false)
   const [error, setError] = React.useState('')
   const [successBanner, setSuccessBanner] = React.useState<string | null>(null)
+  const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
+  const [selectedBankAccountId, setSelectedBankAccountId] = React.useState<string>('')
 
   // Reset or initialize on open
   React.useEffect(() => {
@@ -103,6 +107,40 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       setError('')
       setIsReviewing(false)
       setSuccessBanner(null)
+
+      if (loan?.borrower) {
+        let mounted = true
+        const filterForBorrower = (list: BankAccount[]) => {
+          const matched = list.filter((a) => isAccountOwnedBy(a, loan.borrower))
+          return matched.length > 0 ? preferSoleOwnedBanks(matched, loan.borrower) : list
+        }
+        const cached = filterForBorrower(bankService.getCachedAccounts(loan.borrower))
+        setBankAccounts(cached)
+        const defaultId =
+          loan.borrowerBankAccountId && cached.some((b) => b.id === loan.borrowerBankAccountId)
+            ? loan.borrowerBankAccountId
+            : cached[0]?.id || ''
+        setSelectedBankAccountId(defaultId)
+
+        bankService
+          .getAccounts(loan.borrower)
+          .then((accounts) => {
+            if (!mounted) return
+            const filtered = filterForBorrower(accounts || [])
+            setBankAccounts(filtered)
+            setSelectedBankAccountId((prev) => {
+              if (prev && filtered.some((b) => b.id === prev)) return prev
+              if (loan.borrowerBankAccountId && filtered.some((b) => b.id === loan.borrowerBankAccountId)) {
+                return loan.borrowerBankAccountId
+              }
+              return filtered[0]?.id || ''
+            })
+          })
+          .catch(() => {})
+        return () => {
+          mounted = false
+        }
+      }
     }
   }, [open, loan, expense])
 
@@ -162,6 +200,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
           paymentDate,
           referenceNo: referenceNo.trim() || undefined,
           paymentMethod,
+          bankAccountId: selectedBankAccountId || undefined,
           notes: notes.trim() || undefined,
         })
         setSuccessBanner(`Payment of ${formatPHP(numericAmount)} successfully recorded!`)
@@ -304,6 +343,16 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   { label: 'Payment Amount', value: formatPHP(numericAmount), isCurrency: true },
                   { label: 'Payment Date', value: paymentDate },
                   { label: 'Payment Method', value: paymentMethod },
+                  ...(isLoan
+                    ? [
+                        {
+                          label: 'Pay From Bank',
+                          value:
+                            bankAccounts.find((b) => b.id === selectedBankAccountId)?.bankName ||
+                            'Default Company Bank',
+                        },
+                      ]
+                    : []),
                   { label: 'Reference No.', value: referenceNo.trim() || 'None' },
                   { label: 'Notes', value: notes.trim() || 'None' },
                 ]}
@@ -645,6 +694,23 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                     ))}
                   </div>
                 </div>
+
+                {/* Pay From Bank (Loan Repayments) */}
+                {isLoan && bankAccounts.length > 0 && (
+                  <div className="space-y-1">
+                    <Label className="text-xs font-semibold text-focus">Pay From Bank</Label>
+                    <Dropdown
+                      value={selectedBankAccountId}
+                      onChange={(val) => setSelectedBankAccountId(String(val))}
+                      placeholder="Select borrower bank account"
+                      options={bankAccounts.map((b) => ({
+                        value: b.id,
+                        label: `${b.bankName} • ${b.accountName} (${formatPHP(b.currentBalance)})`,
+                      }))}
+                      aria-label="Pay From Bank"
+                    />
+                  </div>
+                )}
 
                 {/* Reference No / Cheque No */}
                 <div className="space-y-1">

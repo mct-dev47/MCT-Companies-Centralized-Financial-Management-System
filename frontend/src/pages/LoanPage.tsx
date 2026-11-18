@@ -1157,9 +1157,9 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
                       {/* 3. Partner Company (Lender if borrower view, Borrower if lender view) */}
                       <TableCell className="px-2 py-3 text-xs text-focus font-semibold">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <Building2 className="w-3.5 h-3.5 text-muted-fg shrink-0" />
-                          <span className="truncate" title={loanType === 'Borrower' ? loan.lender : loan.borrower}>
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <Building2 className="w-3.5 h-3.5 text-muted-fg shrink-0 mt-0.5" />
+                          <span className="break-words whitespace-normal" title={loanType === 'Borrower' ? loan.lender : loan.borrower}>
                             {loanType === 'Borrower' ? loan.lender : loan.borrower}
                           </span>
                         </div>

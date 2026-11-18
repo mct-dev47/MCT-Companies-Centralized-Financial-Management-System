@@ -458,9 +458,8 @@ class ReceivablesStore {
         amount,
         date,
         method,
-        // The order's own bank always wins (the server enforces the same)
         bank_account_id:
-          method === 'Payroll Deduction' ? null : targetSale.origin_bank_account_id || bank_account_id || null,
+          method === 'Payroll Deduction' ? null : bank_account_id || targetSale.origin_bank_account_id || null,
         notes: notes || undefined,
         createdAt: paymentTimestamp,
       }
@@ -510,7 +509,7 @@ class ReceivablesStore {
           date,
           method,
           bank_account_id:
-            method === 'Payroll Deduction' ? null : sale.origin_bank_account_id || bank_account_id || null,
+            method === 'Payroll Deduction' ? null : bank_account_id || sale.origin_bank_account_id || null,
           notes: notes || undefined,
           createdAt: paymentTimestamp,
         }

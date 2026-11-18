@@ -330,15 +330,15 @@ export const LoanDetailPageView: React.FC<LoanDetailPageViewProps> = ({
                   {remainingBalance <= 0.005 ? 'Fully Paid' : loan.dueDate || 'On Demand'}
                 </span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
-                <span className="text-muted-fg">Borrower Company:</span>
-                <span className="font-semibold text-focus truncate max-w-[180px]">
+              <div className="flex justify-between items-start gap-3 py-1 border-b border-slate-100/70">
+                <span className="text-muted-fg shrink-0">Borrower Company:</span>
+                <span className="font-semibold text-focus break-words whitespace-normal text-right">
                   {loan.borrower}
                 </span>
               </div>
-              <div className="flex justify-between items-center py-1 border-b border-slate-100/70">
-                <span className="text-muted-fg">Lender Company:</span>
-                <span className="font-semibold text-focus truncate max-w-[180px]">
+              <div className="flex justify-between items-start gap-3 py-1 border-b border-slate-100/70">
+                <span className="text-muted-fg shrink-0">Lender Company:</span>
+                <span className="font-semibold text-focus break-words whitespace-normal text-right">
                   {loan.lender || 'Pending Assignment'}
                 </span>
               </div>

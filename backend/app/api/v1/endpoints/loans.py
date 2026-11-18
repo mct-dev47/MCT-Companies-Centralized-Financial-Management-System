@@ -10,6 +10,7 @@ from app.core.company_resolver import get_company_name_map
 from app.db.supabase import get_supabase_admin_client
 from app.models.loan import Loan, LoanRepayment
 from app.models.bank import BankAccount
+from app.models.finance import Expense, Category
 from app.services.bank_service import BankService
 from app.schemas.bank import BankDepositWithdrawRequest
 from app.models.company import Company
@@ -404,6 +405,37 @@ def _attach_borrower_banks(db: Session, loans: List[LoanOut]) -> None:
             loan.borrower_bank_account_id = account_id
 
 
+def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
+    """Populate total_paid, outstanding_balance, and repayments from LoanRepayment rows."""
+    loan_ids = [item.loan_id for item in items if item.loan_id]
+    if not loan_ids:
+        return
+    rows = (
+        db.query(LoanRepayment)
+        .filter(LoanRepayment.loan_id.in_(loan_ids))
+        .order_by(LoanRepayment.payment_date.asc(), LoanRepayment.loan_repayment_id.asc())
+        .all()
+    )
+    by_loan: dict[int, list[LoanRepayment]] = {}
+    for r in rows:
+        by_loan.setdefault(r.loan_id, []).append(r)
+
+    for item in items:
+        reps = by_loan.get(item.loan_id, [])
+        total_paid = sum(
+            (Decimal(str(r.amount or 0)) for r in reps if (r.status or "").lower() != "pending"),
+            Decimal("0.00"),
+        )
+        _, total_payable = FinanceCalculator.calculate_loan_totals(
+            Decimal(str(item.principal_amount or 0)),
+            Decimal(str(item.interest_rate or 0)),
+        )
+        outstanding = max(Decimal("0.00"), total_payable - total_paid)
+        item.total_paid = total_paid
+        item.outstanding_balance = outstanding
+        item.repayments = [LoanRepaymentOut.model_validate(r) for r in reps]
+
+
 @router.get("", response_model=List[LoanOut], summary="List loans from Supabase / DB")
 def get_loans(
     response: Response,
@@ -547,6 +579,7 @@ def get_loans(
         for l in loans
     ]
     _attach_borrower_banks(db, result)
+    _attach_loan_repayments(db, result)
     system_cache.set(cache_key, {"items": result, "total": total_count}, ttl=45, tags=["loans"])
     return result
 
@@ -679,6 +712,7 @@ def _export_loans_unbounded(
         for l in loans
     ]
     _attach_borrower_banks(db, result)
+    _attach_loan_repayments(db, result)
     return result
 
 
@@ -1696,23 +1730,123 @@ def create_loan_repayment(
 
     new_remaining = statement.current_remaining_balance - repayment_in.amount
 
-    repayment_data = repayment_in.model_dump()
+    repayment_data = repayment_in.model_dump(exclude={"bank_account_id", "payment_method"})
     repayment_data["loan_id"] = loan_id
     repayment_data["remaining_balance"] = new_remaining
+    chosen_payment_method = repayment_in.payment_method or "Cash"
+    chosen_borrower_bank_id = repayment_in.bank_account_id
 
     repayment = LoanRepayment(**repayment_data)
+    repayment.payment_method = chosen_payment_method
     db.add(repayment)
+
+    # Update loan status in SQLAlchemy (and Supabase if configured)
+    new_loan_status = "Paid" if new_remaining <= Decimal("0.00") else "Partially Paid"
+    loan.status = new_loan_status
+
+    comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+    b_name = comp_map.get(loan.borrower) or f"Company #{loan.borrower}"
+    l_name = comp_map.get(loan.lender) if loan.lender else "Lender"
+    loan_ref = loan.loan_ref_no or f"LN-{loan_id}"
+    raw_desc = (loan.description or "").strip()
+    clean_particular = raw_desc[5:].strip() if raw_desc.lower().startswith("loan:") else (raw_desc or "Loan Facility")
+    pay_date_str = repayment_in.payment_date.strftime("%m/%d/%y")
+
+    bank_svc = BankService(db)
+    # 1. Deduct from Borrower's bank account
+    borrower_acc = None
+    if chosen_borrower_bank_id:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.id == chosen_borrower_bank_id).first()
+    if not borrower_acc:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.borrower).first()
+    if not borrower_acc:
+        borrower_acc = bank_svc.find_account_for_company(b_name)
+    if borrower_acc:
+        bank_svc.withdraw(
+            borrower_acc.id,
+            BankDepositWithdrawRequest(
+                amount=repayment_in.amount,
+                date=pay_date_str,
+                particulars=f"Loan Repayment: {clean_particular} (to {l_name})",
+                category="Loan Repayment",
+                reference_no=repayment_in.reference_no or loan_ref,
+            ),
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
+
+    # 2. Credit Lender's funding bank account
+    lender_acc = None
+    if getattr(loan, "bank_account_id", None):
+        lender_acc = db.query(BankAccount).filter(BankAccount.id == loan.bank_account_id).first()
+    if not lender_acc and loan.lender:
+        lender_acc = db.query(BankAccount).filter(BankAccount.company_id == loan.lender).first()
+    if not lender_acc and loan.lender:
+        lender_acc = bank_svc.find_account_for_company(l_name)
+    if lender_acc:
+        bank_svc.deposit(
+            lender_acc.id,
+            BankDepositWithdrawRequest(
+                amount=repayment_in.amount,
+                date=pay_date_str,
+                particulars=f"Loan Repayment: {clean_particular} (from {b_name})",
+                category="Loan Repayment",
+                reference_no=repayment_in.reference_no or loan_ref,
+            ),
+        )
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": lender_acc.id}})
+
+    # 3. Record Expense for Borrower company (reflected in Expenses & Transactions)
+    loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan Repayment")).first()
+    if not loan_cat:
+        loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan%")).first()
+    if not loan_cat:
+        loan_cat = Category(category_name="Loan Repayment", category_type="Expense")
+        db.add(loan_cat)
+        db.flush()
+
+    expense_rec = Expense(
+        company_id=loan.borrower,
+        category_id=loan_cat.category_id,
+        payment_method=chosen_payment_method,
+        created_by=current_user.get("user_id"),
+        expense_date=repayment_in.payment_date,
+        cheque_no=repayment_in.reference_no or loan_ref,
+        amount=repayment_in.amount,
+        amount_paid=repayment_in.amount,
+        description=f"Loan Repayment: {clean_particular} (to {l_name})",
+        remarks=repayment_in.notes,
+        bank_account_id=borrower_acc.id if borrower_acc else None,
+    )
+    db.add(expense_rec)
+
     db.commit()
     db.refresh(repayment)
+
+    try:
+        sb_client = get_supabase_admin_client()
+        if sb_client:
+            sb_client.table("loan").update({"status": new_loan_status}).eq("loan_id", loan_id).execute()
+    except Exception as exc:
+        print(f"Supabase loan status update on repayment failed: {exc}")
 
     log_transaction(
         db, AuditAction.LOAN_UPDATED,
         user_id=None, company_id=loan.borrower,
         ip_address=request.client.host if request.client else "unknown",
         record_id=loan_id, record_type="loan_repayment",
-        extra={"repayment_id": repayment.loan_repayment_id, "amount": float(repayment.amount), "remaining_balance": float(new_remaining)},
+        extra={
+            "repayment_id": repayment.loan_repayment_id,
+            "amount": float(repayment.amount),
+            "remaining_balance": float(new_remaining),
+            "borrower_bank_id": borrower_acc.id if borrower_acc else None,
+            "lender_bank_id": lender_acc.id if lender_acc else None,
+            "expense_id": expense_rec.expense_id,
+        },
     )
     system_cache.invalidate_tag("loans")
+    system_cache.invalidate_tag("bank_accounts")
+    system_cache.invalidate_tag("expenses")
     system_cache.invalidate_tag("notifications")
     ws_manager.broadcast_sync({"type": "LOANS_UPDATED"})
+    ws_manager.broadcast_sync({"type": "EXPENSE_CREATED"})
     return repayment

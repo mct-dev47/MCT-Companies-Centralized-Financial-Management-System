@@ -324,9 +324,8 @@ class ReceivablesService:
 
         pay_date = payment_data.payment_date or date.today()
         is_payroll = (payment_data.payment_method or "").strip().lower() == "payroll deduction"
-        # Always the bank the receivable was first recorded to
         deposit_bank_id = None if is_payroll else (
-            self.sync_service.resolve_origin_bank_account_id(rec) or payment_data.bank_account_id
+            payment_data.bank_account_id or self.sync_service.resolve_origin_bank_account_id(rec)
         )
         payment = ReceivablePayment(
             receivable_id=rec.receivable_id,
