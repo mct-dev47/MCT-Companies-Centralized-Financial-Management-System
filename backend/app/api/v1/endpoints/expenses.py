@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
 import logging
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from app.core.business_time import business_today
@@ -91,7 +92,6 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
         )
         ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
     except Exception as exc:  # never block saving an expense on a bank sync problem
-        import logging
         logging.getLogger(__name__).warning("Bank reconcile skipped for expense %s: %s", expense_id, exc)
 
 
@@ -623,7 +623,6 @@ def _enqueue_large_expense_alert_if_enabled(
             )
         db.commit()
     except Exception as exc:
-        import logging
         logging.getLogger(__name__).warning("Large expense alert enqueue skipped for expense %s: %s", expense_id, exc)
 
 
@@ -992,17 +991,33 @@ def create_expense(
             **audit_fields(expense)
         )
 
+def _resolve_expense_id(db: Session, raw_id: Union[str, int]) -> int:
+    s = str(raw_id).strip()
+    if s.startswith("tx-"):
+        from app.models.bank import BankTransaction
+        bt = db.query(BankTransaction).filter(BankTransaction.id == s).first()
+        if bt and bt.source_expense_id:
+            return bt.source_expense_id
+        raise HTTPException(status_code=404, detail=f"Linked expense not found for transaction {s}")
+    s = re.sub(r"^(exp|expense)_", "", s)
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail=f"Invalid expense_id: {raw_id}")
+
+
 @router.get("/{expense_id}", response_model=ExpenseOut, summary="Get expense details")
 def get_expense(
-    expense_id: int,
+    expense_id: Union[int, str],
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
 
     try:
         client = get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client, db=db)
-        res = client.table("expenses").select("*").eq("expense_id", expense_id).execute()
+        res = client.table("expenses").select("*").eq("expense_id", resolved_id).execute()
         if res.data:
             row = res.data[0]
             check_company_access(current_user, row.get("company_id"))
@@ -1039,7 +1054,7 @@ def get_expense(
         )
         .outerjoin(Company, Expense.company_id == Company.company_id)
         .outerjoin(Category, Expense.category_id == Category.category_id)
-        .filter(Expense.expense_id == expense_id)
+        .filter(Expense.expense_id == resolved_id)
         .first()
     )
     if not result:
@@ -1290,15 +1305,16 @@ def update_expense(
 
 @router.patch("/{expense_id}/remarks", response_model=ExpenseOut, summary="Update operational remarks of an expense")
 def update_expense_remarks(
-    expense_id: int,
+    expense_id: Union[int, str],
     remarks_in: RemarksUpdate,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
 
-    current = _current_expense_row(db, expense_id)
+    current = _current_expense_row(db, resolved_id)
     if not current:
         raise HTTPException(status_code=404, detail="Expense not found")
 
@@ -1307,22 +1323,38 @@ def update_expense_remarks(
 
     try:
         client = get_supabase_admin_client()
-        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", expense_id).execute()
+        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", resolved_id).execute()
     except Exception as e:
         pass
 
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    expense = db.query(Expense).filter(Expense.expense_id == resolved_id).first()
     if expense:
         expense.remarks = target_remarks
         db.commit()
         db.refresh(expense)
+
+    # Sync remarks to any linked bank transaction
+    try:
+        from app.models.bank import BankTransaction
+        linked_txs = db.query(BankTransaction).filter(BankTransaction.source_expense_id == resolved_id).all()
+        for ltx in linked_txs:
+            ltx.remarks = target_remarks
+        if linked_txs:
+            db.commit()
+            from app.core.websocket import ws_manager
+            ws_manager.broadcast_sync({
+                "type": "BANK_UPDATED",
+                "payload": {"action": "remarks_updated", "expense_id": resolved_id, "remarks": target_remarks},
+            })
+    except Exception:
+        pass
 
     try:
         from app.core.websocket import ws_manager
         ws_manager.broadcast_sync({
             "type": "EXPENSE_UPDATED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "company_id": existing_company_id,
                 "action": "remarks_updated",
                 "remarks": target_remarks,
@@ -1336,31 +1368,32 @@ def update_expense_remarks(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=existing_company_id,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=expense_id, record_type="expense",
+        record_id=resolved_id, record_type="expense",
         extra={"remarks": target_remarks, "actor_name": actor_name},
     )
 
-    return get_expense(expense_id, current_user, db)
+    return get_expense(resolved_id, current_user, db)
 
 
 @router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Auditor only)")
 def review_expense_audit(
-    expense_id: int,
+    expense_id: Union[int, str],
     review_in: AuditReviewIn,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     apply_audit_review(
         db, current_user,
         model=Expense, pk_column="expense_id", supabase_table="expenses",
-        record_id=expense_id, payload=review_in, not_found="Expense not found",
+        record_id=resolved_id, payload=review_in, not_found="Expense not found",
     )
     log_transaction(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=None,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=expense_id, record_type="expense_audit_review",
+        record_id=resolved_id, record_type="expense_audit_review",
         extra={"audit_status": review_in.audit_status},
     )
 
@@ -1369,22 +1402,23 @@ def review_expense_audit(
         ws_manager.broadcast_sync({
             "type": "EXPENSE_UPDATED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "audit_status": review_in.audit_status,
             }
         })
     except Exception:
         pass
-    return get_expense(expense_id, current_user, db)
+    return get_expense(resolved_id, current_user, db)
 @router.delete("/{expense_id}", status_code=status.HTTP_200_OK, summary="Delete an expense")
 def delete_expense(
-    expense_id: int,
+    expense_id: Union[int, str],
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     from app.services.income_bank_links import assert_not_linked_expense
-    assert_not_linked_expense(db, expense_id)
+    assert_not_linked_expense(db, resolved_id)
 
     deleted_from_supabase = False
     deleted_company_id = None

@@ -85,9 +85,13 @@ class BankService:
         return query.options(selectinload(BankAccount.transactions)).execution_options(populate_existing=True)
 
     def _attach_entry_sources(self, accounts):
-        """Attach entry_source to the loaded entries with one query (skipped until the column exists)."""
+        """Attach entry_source and audit fields to loaded entries."""
         accounts = [a for a in (accounts if isinstance(accounts, list) else [accounts]) if a is not None]
-        if not accounts or not entry_source_supported(self.db):
+        if not accounts:
+            return
+        all_txs = [t for a in accounts for t in (a.transactions or [])]
+        self._hydrate_audit_fields(all_txs)
+        if not entry_source_supported(self.db):
             return
         from sqlalchemy import bindparam, text
 
@@ -102,6 +106,54 @@ class BankService:
         for a in accounts:
             for t in a.transactions:
                 t._entry_source = by_id.get(t.id)
+
+    def _hydrate_audit_fields(self, rows: List[BankTransaction]) -> None:
+        """
+        If a bank transaction is linked to an expense or sale, ensure its audit_status,
+        audited_by, audited_at, audit_remarks, and remarks reflect the source record
+        if not already stamped on the bank transaction itself.
+        """
+        if not rows:
+            return
+        from app.models.finance import Expense, Sale
+        exp_ids = [r.source_expense_id for r in rows if r.source_expense_id]
+        sale_ids = [r.source_sale_id for r in rows if r.source_sale_id]
+
+        exp_map = {}
+        if exp_ids:
+            exps = self.db.query(Expense).filter(Expense.expense_id.in_(set(exp_ids))).all()
+            exp_map = {e.expense_id: e for e in exps}
+
+        sale_map = {}
+        if sale_ids:
+            sales = self.db.query(Sale).filter(Sale.sales_id.in_(set(sale_ids))).all()
+            sale_map = {s.sales_id: s for s in sales}
+
+        for r in rows:
+            if r.source_expense_id and r.source_expense_id in exp_map:
+                exp = exp_map[r.source_expense_id]
+                if (not r.audit_status or r.audit_status == "Pending Audit") and exp.audit_status and exp.audit_status != "Pending Audit":
+                    r.audit_status = exp.audit_status
+                if not r.audited_by and exp.audited_by:
+                    r.audited_by = exp.audited_by
+                if not r.audited_at and exp.audited_at:
+                    r.audited_at = exp.audited_at
+                if not r.audit_remarks and exp.audit_remarks:
+                    r.audit_remarks = exp.audit_remarks
+                if not r.remarks and exp.remarks:
+                    r.remarks = exp.remarks
+            elif r.source_sale_id and r.source_sale_id in sale_map:
+                s = sale_map[r.source_sale_id]
+                if (not r.audit_status or r.audit_status == "Pending Audit") and s.audit_status and s.audit_status != "Pending Audit":
+                    r.audit_status = s.audit_status
+                if not r.audited_by and s.audited_by:
+                    r.audited_by = s.audited_by
+                if not r.audited_at and s.audited_at:
+                    r.audited_at = s.audited_at
+                if not r.audit_remarks and s.audit_remarks:
+                    r.audit_remarks = s.audit_remarks
+                if not r.remarks and s.remarks:
+                    r.remarks = s.remarks
 
     def _save_entry_source(self, tx: BankTransaction) -> None:
         """Persist tx._entry_source (after the entry is inserted), only when the column exists."""
@@ -235,6 +287,7 @@ class BankService:
             src_map = {str(r[0]): r[1] for r in src_rows}
             for r in rows:
                 r._entry_source = src_map.get(str(r.id))
+        self._hydrate_audit_fields(rows)
         return rows, total
 
     def get_account(self, account_id: str, with_entries: bool = False) -> Optional[BankAccount]:
@@ -279,7 +332,7 @@ class BankService:
         Needs no database round trip and stays unique when several saves run at once
         (the old count()+1 scheme handed two concurrent saves the same id). Ids still sort oldest first.
         """
-        return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(3)}"
+        return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(4)}"
 
     def _sync_balance(self, account: BankAccount) -> None:
         """

@@ -219,6 +219,21 @@ def init_db():
             if "source_expense_id" not in bank_tx_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_expense_id INTEGER"))
+            if "audit_status" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit'"))
+            if "audited_by" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audited_by VARCHAR(100)"))
+            if "audited_at" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+            if "audit_remarks" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN audit_remarks TEXT"))
+            if "remarks" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN remarks TEXT"))
 
         if "petty_cash_wallets" in table_names:
             existing_cols = {col["name"] for col in inspector.get_columns("petty_cash_wallets")}

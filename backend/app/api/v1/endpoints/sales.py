@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
 import logging
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from app.core.business_time import business_today
@@ -987,18 +988,34 @@ def create_sale(
         )
 
 
+def _resolve_sale_id(db: Session, raw_id: Union[str, int]) -> int:
+    s = str(raw_id).strip()
+    if s.startswith("tx-"):
+        from app.models.bank import BankTransaction
+        bt = db.query(BankTransaction).filter(BankTransaction.id == s).first()
+        if bt and bt.source_sale_id:
+            return bt.source_sale_id
+        raise HTTPException(status_code=404, detail=f"Linked sale not found for transaction {s}")
+    s = re.sub(r"^sale_", "", s)
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail=f"Invalid sales_id: {raw_id}")
+
+
 @router.get("/{sales_id}", response_model=SaleOut, summary="Get sale details")
 def get_sale(
-    sales_id: int,
+    sales_id: Union[int, str],
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_sale_id(db, sales_id)
     use_sb = SalesReceivablesSyncService(db)._use_supabase()
     if use_sb:
         try:
             client = get_supabase_admin_client()
             company_map, cat_map = get_supabase_mappings(client)
-            res = client.table("sales").select("*").eq("sales_id", sales_id).execute()
+            res = client.table("sales").select("*").eq("sales_id", resolved_id).execute()
             if res.data:
                 row = res.data[0]
                 check_company_access(current_user, row.get("company_id"))
@@ -1034,7 +1051,7 @@ def get_sale(
         )
         .outerjoin(Company, Sale.company_id == Company.company_id)
         .outerjoin(Category, Sale.category_id == Category.category_id)
-        .filter(Sale.sales_id == sales_id)
+        .filter(Sale.sales_id == resolved_id)
         .first()
     )
     if not result:
@@ -1590,12 +1607,13 @@ def update_sale_deposit_status(
 
 @router.patch("/{sales_id}/remarks", response_model=SaleOut, summary="Update operational remarks of a sale")
 def update_sale_remarks(
-    sales_id: int,
+    sales_id: Union[int, str],
     remarks_in: RemarksUpdate,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_sale_id(db, sales_id)
     target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
 
     existing_company_id = None
@@ -1606,13 +1624,13 @@ def update_sale_remarks(
     if use_sb:
         try:
             client = get_supabase_admin_client()
-            res = client.table("sales").select("company_id").eq("sales_id", sales_id).limit(1).execute()
+            res = client.table("sales").select("company_id").eq("sales_id", resolved_id).limit(1).execute()
             if res.data:
                 existing_company_id = res.data[0].get("company_id")
         except Exception:
             pass
 
-    existing_local = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    existing_local = db.query(Sale).filter(Sale.sales_id == resolved_id).first()
     if existing_local:
         existing_company_id = existing_company_id or existing_local.company_id
 
@@ -1624,7 +1642,7 @@ def update_sale_remarks(
     if use_sb:
         try:
             client = client or get_supabase_admin_client()
-            client.table("sales").update({"remarks": target_remarks}).eq("sales_id", sales_id).execute()
+            client.table("sales").update({"remarks": target_remarks}).eq("sales_id", resolved_id).execute()
         except Exception as e:
             pass
 
@@ -1633,11 +1651,26 @@ def update_sale_remarks(
         db.commit()
         db.refresh(existing_local)
 
+    # Sync remarks to any linked bank transaction
+    try:
+        from app.models.bank import BankTransaction
+        linked_txs = db.query(BankTransaction).filter(BankTransaction.source_sale_id == resolved_id).all()
+        for ltx in linked_txs:
+            ltx.remarks = target_remarks
+        if linked_txs:
+            db.commit()
+            ws_manager.broadcast_sync({
+                "type": "BANK_UPDATED",
+                "payload": {"action": "remarks_updated", "sale_id": resolved_id, "remarks": target_remarks},
+            })
+    except Exception:
+        pass
+
     ws_manager.broadcast_sync(
         {
             "type": "SALES_UPDATED",
             "company_id": existing_company_id,
-            "payload": {"sale_id": sales_id, "action": "remarks_updated", "remarks": target_remarks},
+            "payload": {"sale_id": resolved_id, "action": "remarks_updated", "remarks": target_remarks},
         }
     )
 
@@ -1645,28 +1678,29 @@ def update_sale_remarks(
         db, AuditAction.SALE_UPDATED,
         user_id=current_user.get("user_id"), company_id=existing_company_id,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=sales_id, record_type="sale",
+        record_id=resolved_id, record_type="sale",
         extra={"remarks": target_remarks},
     )
 
-    return get_sale(sales_id, current_user, db)
+    return get_sale(resolved_id, current_user, db)
 
 
 @router.patch("/{sales_id}/audit", response_model=SaleOut, summary="Save the audit review of a sale (Auditor only)")
 def review_sale_audit(
-    sales_id: int,
+    sales_id: Union[int, str],
     review_in: AuditReviewIn,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_sale_id(db, sales_id)
     apply_audit_review(
         db, current_user,
         model=Sale, pk_column="sales_id", supabase_table="sales",
-        record_id=sales_id, payload=review_in, not_found="Sale not found",
+        record_id=resolved_id, payload=review_in, not_found="Sale not found",
     )
     SalesReceivablesSyncService(db).broadcast_sync_events(
-        sale_id=sales_id,
+        sale_id=resolved_id,
         action=f"audit_{review_in.audit_status}",
         emit_sales=True,
         emit_receivables=True,
@@ -1675,19 +1709,20 @@ def review_sale_audit(
         db, AuditAction.SALE_UPDATED,
         user_id=current_user.get("user_id"), company_id=None,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=sales_id, record_type="sale_audit_review",
+        record_id=resolved_id, record_type="sale_audit_review",
         extra={"audit_status": review_in.audit_status},
     )
-    return get_sale(sales_id, current_user, db)
+    return get_sale(resolved_id, current_user, db)
 
 
 @router.delete("/{sales_id}", status_code=status.HTTP_200_OK, summary="Delete a sale")
 def delete_sale(
-    sales_id: int,
+    sales_id: Union[int, str],
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_sale_id(db, sales_id)
     from app.services.income_bank_links import assert_not_linked_sale
     assert_not_linked_sale(db, sales_id)
     deleted_from_supabase = False

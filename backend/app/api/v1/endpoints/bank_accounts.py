@@ -10,10 +10,13 @@ from app.core.dependencies import (
     BusinessWriter,
     FinanceUser,
     check_company_access,
+    require_auditor_user,
     require_business_reader,
     require_business_writer,
     require_finance_user,
 )
+from app.schemas.audit_review import AuditReviewIn
+from app.schemas.expense import RemarksUpdate
 from app.core.company_resolver import resolve_company
 from app.core.pagination import PaginationParams
 from app.models.company import Company
@@ -333,3 +336,175 @@ def withdraw_from_bank_account(
     except ValueError as e:
         msg = _sanitize_value_error(str(e), "Invalid withdrawal parameters.")
         raise HTTPException(status_code=400, detail=msg)
+
+
+@router.patch("/transactions/{transaction_id}/audit", response_model=BankTransactionOut, summary="Save the audit review of a bank transaction (Auditor only)")
+@router.patch("/{account_id}/transactions/{transaction_id}/audit", response_model=BankTransactionOut, summary="Save the audit review of a bank transaction (Auditor only)")
+def review_bank_transaction_audit(
+    transaction_id: str,
+    review_in: AuditReviewIn,
+    request: Request,
+    account_id: Optional[str] = None,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.bank import BankTransaction, BankAccount
+    from app.models.finance import Expense, Sale
+    from app.services.audit_review_service import _auditor_name, apply_audit_review
+    from app.services.audit_service import AuditAction, log_transaction
+    from datetime import datetime, timezone
+
+    tx = db.query(BankTransaction).filter(BankTransaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Bank transaction not found")
+
+    account = db.query(BankAccount).filter(BankAccount.id == tx.bank_account_id).first()
+    if account:
+        _check_any_owner_access(db, current_user, account)
+
+    auditor = _auditor_name(db, current_user)
+    now_utc = datetime.now(timezone.utc)
+    target_remarks = (review_in.remarks or "").strip() or None
+
+    if review_in.audit_status == "Pending Audit":
+        tx.audit_status = "Pending Audit"
+        tx.audited_by = None
+        tx.audited_at = None
+        tx.audit_remarks = None
+    else:
+        tx.audit_status = review_in.audit_status
+        tx.audited_by = auditor
+        tx.audited_at = now_utc
+        tx.audit_remarks = target_remarks
+
+    # If linked to expense, update the expense's audit review as well
+    if tx.source_expense_id:
+        try:
+            apply_audit_review(
+                db, current_user,
+                model=Expense, pk_column="expense_id", supabase_table="expenses",
+                record_id=tx.source_expense_id, payload=review_in, not_found="Expense not found",
+            )
+        except Exception:
+            exp = db.query(Expense).filter(Expense.expense_id == tx.source_expense_id).first()
+            if exp:
+                exp.audit_status = tx.audit_status
+                exp.audited_by = tx.audited_by
+                exp.audited_at = tx.audited_at
+                exp.audit_remarks = tx.audit_remarks
+
+    # If linked to sale, update the sale's audit review as well
+    if tx.source_sale_id:
+        try:
+            apply_audit_review(
+                db, current_user,
+                model=Sale, pk_column="sales_id", supabase_table="sales",
+                record_id=tx.source_sale_id, payload=review_in, not_found="Sale not found",
+            )
+        except Exception:
+            s = db.query(Sale).filter(Sale.sales_id == tx.source_sale_id).first()
+            if s:
+                s.audit_status = tx.audit_status
+                s.audited_by = tx.audited_by
+                s.audited_at = tx.audited_at
+                s.audit_remarks = tx.audit_remarks
+
+    db.commit()
+    db.refresh(tx)
+
+    log_transaction(
+        db, AuditAction.EXPENSE_UPDATED if tx.source_expense_id else AuditAction.SALE_UPDATED if tx.source_sale_id else AuditAction.BANK_UPDATED,
+        user_id=current_user.get("user_id"),
+        company_id=account.company_id if account else None,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=tx.source_expense_id or tx.source_sale_id or transaction_id,
+        record_type="expense_audit_review" if tx.source_expense_id else "sale_audit_review" if tx.source_sale_id else "bank_transaction_audit_review",
+        extra={"audit_status": review_in.audit_status, "remarks": target_remarks, "bank_tx_id": transaction_id},
+    )
+
+    ws_manager.broadcast_sync({
+        "type": "AUDIT_UPDATED",
+        "payload": {"resource": "bank_transactions", "id": transaction_id, "expense_id": tx.source_expense_id, "sale_id": tx.source_sale_id},
+    })
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"account_id": tx.bank_account_id, "transaction_id": transaction_id, "action": "audited"},
+    })
+
+    return tx
+
+
+@router.patch("/transactions/{transaction_id}/remarks", response_model=BankTransactionOut, summary="Update operational remarks of a bank transaction")
+@router.patch("/{account_id}/transactions/{transaction_id}/remarks", response_model=BankTransactionOut, summary="Update operational remarks of a bank transaction")
+def update_bank_transaction_remarks(
+    transaction_id: str,
+    remarks_in: RemarksUpdate,
+    request: Request,
+    account_id: Optional[str] = None,
+    current_user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    from app.models.bank import BankTransaction, BankAccount
+    from app.models.finance import Expense, Sale
+    from app.services.audit_service import AuditAction, log_transaction
+
+    tx = db.query(BankTransaction).filter(BankTransaction.id == transaction_id).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Bank transaction not found")
+
+    account = db.query(BankAccount).filter(BankAccount.id == tx.bank_account_id).first()
+    if account:
+        _check_any_owner_access(db, current_user, account)
+
+    target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
+    tx.remarks = target_remarks
+
+    # If linked to expense, update expense remarks too
+    if tx.source_expense_id:
+        exp = db.query(Expense).filter(Expense.expense_id == tx.source_expense_id).first()
+        if exp:
+            exp.remarks = target_remarks
+            try:
+                from app.db.supabase import get_supabase_admin_client
+                client = get_supabase_admin_client()
+                client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", tx.source_expense_id).execute()
+            except Exception:
+                pass
+
+    # If linked to sale, update sale remarks too
+    if tx.source_sale_id:
+        s = db.query(Sale).filter(Sale.sales_id == tx.source_sale_id).first()
+        if s:
+            s.remarks = target_remarks
+            try:
+                from app.db.supabase import get_supabase_admin_client
+                client = get_supabase_admin_client()
+                client.table("sales").update({"remarks": target_remarks}).eq("sales_id", tx.source_sale_id).execute()
+            except Exception:
+                pass
+
+    db.commit()
+    db.refresh(tx)
+
+    actor_name = current_user.get("full_name") or current_user.get("name") or current_user.get("email") or f"User #{current_user.get('user_id')}"
+    log_transaction(
+        db, AuditAction.EXPENSE_UPDATED if tx.source_expense_id else AuditAction.BANK_UPDATED,
+        user_id=current_user.get("user_id"),
+        company_id=account.company_id if account else None,
+        ip_address=request.client.host if request.client else "unknown",
+        record_id=tx.source_expense_id or tx.source_sale_id or transaction_id,
+        record_type="expense" if tx.source_expense_id else "bank_transaction",
+        extra={"remarks": target_remarks, "actor_name": actor_name, "bank_tx_id": transaction_id},
+    )
+
+    ws_manager.broadcast_sync({
+        "type": "BANK_UPDATED",
+        "payload": {"account_id": tx.bank_account_id, "transaction_id": transaction_id, "action": "remarks_updated", "remarks": target_remarks},
+    })
+    if tx.source_expense_id:
+        ws_manager.broadcast_sync({
+            "type": "EXPENSE_UPDATED",
+            "payload": {"expense_id": tx.source_expense_id, "action": "remarks_updated", "remarks": target_remarks},
+        })
+
+    return tx

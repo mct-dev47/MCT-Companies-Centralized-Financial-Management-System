@@ -29,6 +29,11 @@ class BankTransactionOut(BankTransactionBase):
     source_sale_id: Optional[int] = None
     source_expense_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
+    remarks: Optional[str] = None
 
 
 class BankAccountBase(BaseModel):
