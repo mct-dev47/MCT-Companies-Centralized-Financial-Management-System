@@ -2094,7 +2094,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
 
     // Pre-fill debtor name and customer type if editing an unpaid sale
-    const saleIdNum = Number(editItem.id)
+    const rawIdStr = typeof editItem.id === 'string' ? editItem.id.replace(/^sale_/, '') : String(editItem.id)
+    const saleIdNum = Number(rawIdStr)
     const recIdFromUtang =
       typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
         ? Number(editItem.id.replace('utang-', ''))
@@ -3160,7 +3161,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           })
 
           // Synchronize receivables for unpaid / paid edit
-          const saleIdNum = Number(editItem.id)
+          const rawIdStr = typeof editItem.id === 'string' ? editItem.id.replace(/^sale_/, '') : String(editItem.id)
+          const saleIdNum = Number(rawIdStr)
           // Only an "utang-<id>" row id names a receivable. A plain numeric id is a SALE id and must
           // never be used as a receivable id (that caused "Receivable with ID 81 not found").
           const recIdFromUtang =

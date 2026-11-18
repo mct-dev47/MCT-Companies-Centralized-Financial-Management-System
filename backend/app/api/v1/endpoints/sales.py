@@ -1229,6 +1229,10 @@ def update_sale(
     update_payload = {
         "payment_status": new_payment_status,
         "deposit_status": new_deposit_status,
+        "audit_status": "Pending Audit",
+        "audited_by": None,
+        "audited_at": None,
+        "audit_remarks": None,
     }
     # Deposit date follows the deposit status: cleared when not deposited, otherwise the supplied
     # date, otherwise (newly deposited) the sale date.
@@ -1330,6 +1334,10 @@ def update_sale(
             sale.remarks = update_payload["remarks"]
         if "bank_account_id" in update_payload:
             sale.bank_account_id = update_payload["bank_account_id"]
+        sale.audit_status = "Pending Audit"
+        sale.audited_by = None
+        sale.audited_at = None
+        sale.audit_remarks = None
         db.commit()
         db.refresh(sale)
 
@@ -1554,6 +1562,10 @@ def update_sale_deposit_status(
     sb_update = {
         "deposit_status": target_deposit_status,
         "deposit_date": target_deposit_date.isoformat() if target_deposit_date else None,
+        "audit_status": "Pending Audit",
+        "audited_by": None,
+        "audited_at": None,
+        "audit_remarks": None,
     }
     if deposit_in.bank_account_id:
         sb_update["bank_account_id"] = deposit_in.bank_account_id
@@ -1564,13 +1576,23 @@ def update_sale_deposit_status(
             client.table("sales").update(sb_update).eq("sales_id", sales_id).execute()
         except Exception:
             try:
-                client.table("sales").update({"deposit_status": target_deposit_status}).eq("sales_id", sales_id).execute()
+                client.table("sales").update({
+                    "deposit_status": target_deposit_status,
+                    "audit_status": "Pending Audit",
+                    "audited_by": None,
+                    "audited_at": None,
+                    "audit_remarks": None,
+                }).eq("sales_id", sales_id).execute()
             except Exception:
                 pass
 
     if existing_local:
         existing_local.deposit_status = target_deposit_status
         existing_local.deposit_date = target_deposit_date
+        existing_local.audit_status = "Pending Audit"
+        existing_local.audited_by = None
+        existing_local.audited_at = None
+        existing_local.audit_remarks = None
         if deposit_in.bank_account_id:
             existing_local.bank_account_id = deposit_in.bank_account_id
         db.commit()
@@ -1724,7 +1746,7 @@ def delete_sale(
 ):
     resolved_id = _resolve_sale_id(db, sales_id)
     from app.services.income_bank_links import assert_not_linked_sale
-    assert_not_linked_sale(db, sales_id)
+    assert_not_linked_sale(db, resolved_id)
     deleted_from_supabase = False
     deleted_company_id = None
     deleted_tx_date = None
@@ -1739,7 +1761,7 @@ def delete_sale(
             existing = (
                 client.table("sales")
                 .select("company_id, audit_status, transaction_date")
-                .eq("sales_id", sales_id)
+                .eq("sales_id", resolved_id)
                 .limit(1)
                 .execute()
             )
@@ -1750,7 +1772,7 @@ def delete_sale(
         except Exception as e:
             print(f"Supabase fetch before delete error: {e}")
 
-    sale = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    sale = db.query(Sale).filter(Sale.sales_id == resolved_id).first()
     if sale:
         deleted_company_id = deleted_company_id or sale.company_id
         existing_audit_status = existing_audit_status or sale.audit_status
@@ -1768,20 +1790,20 @@ def delete_sale(
         )
 
     # Cascade delete linked receivables and reverse bank deposits before removing parent sale
-    sync_svc.sync_sale_deleted_to_receivables(sales_id, company_id=deleted_company_id)
+    sync_svc.sync_sale_deleted_to_receivables(resolved_id, company_id=deleted_company_id)
 
     # Reverse whatever the bank still holds for this sale (receivable reversals above are already counted)
-    reconcile_sale_bank(db, sale_id=sales_id, force_zero=True)
+    reconcile_sale_bank(db, sale_id=resolved_id, force_zero=True)
 
     if client:
         try:
-            sb_res = client.table("sales").delete().eq("sales_id", sales_id).execute()
+            sb_res = client.table("sales").delete().eq("sales_id", resolved_id).execute()
             if sb_res.data and len(sb_res.data) > 0:
                 deleted_from_supabase = True
         except Exception as e:
             print(f"Supabase delete error: {e}")
 
-    sale = db.query(Sale).filter(Sale.sales_id == sales_id).first()
+    sale = db.query(Sale).filter(Sale.sales_id == resolved_id).first()
     if sale:
         db.delete(sale)
         db.commit()
@@ -1789,7 +1811,7 @@ def delete_sale(
     # The sale is gone, so none of its bank entries (originals or reversals) should remain
     try:
         from app.services.bank_service import BankService
-        BankService(db).purge_linked_entries(link_attr="source_sale_id", link_id=sales_id)
+        BankService(db).purge_linked_entries(link_attr="source_sale_id", link_id=resolved_id)
     except Exception as e:
         db.rollback()
         print(f"Bank entry purge error on sale delete: {e}")
@@ -1804,7 +1826,7 @@ def delete_sale(
             db, AuditAction.SALE_DELETED,
             user_id=current_user.get("user_id"), company_id=deleted_company_id,
             ip_address=request.client.host if request.client else "unknown",
-            record_id=sales_id, record_type="sale",
+            record_id=resolved_id, record_type="sale",
         )
     except Exception as e:
         print(f"Audit log error on sale delete: {e}")
@@ -1812,6 +1834,6 @@ def delete_sale(
     return {
         "message": "Sale deleted successfully",
         "success": True,
-        "sales_id": sales_id,
+        "sales_id": resolved_id,
         "supabase_deleted": deleted_from_supabase
     }

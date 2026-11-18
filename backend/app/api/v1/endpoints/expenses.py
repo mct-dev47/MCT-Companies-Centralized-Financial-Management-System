@@ -154,17 +154,22 @@ def get_supabase_mappings(client=None, db: Optional[Session] = None):
     return company_map, cat_map
 
 def _current_expense_row(db: Session, expense_id: int) -> Optional[dict]:
-    """Company, payment method and amount of an existing expense (Supabase first, then local)."""
+    """Company, payment method, amount and audit status of an existing expense (Supabase first, then local)."""
     try:
         client = get_supabase_admin_client()
-        res = client.table("expenses").select("company_id, payment_method, amount").eq("expense_id", expense_id).execute()
+        res = client.table("expenses").select("company_id, payment_method, amount, audit_status").eq("expense_id", expense_id).execute()
         if res.data:
             return res.data[0]
     except Exception:
         pass
     exp = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if exp:
-        return {"company_id": exp.company_id, "payment_method": exp.payment_method, "amount": exp.amount}
+        return {
+            "company_id": exp.company_id,
+            "payment_method": exp.payment_method,
+            "amount": exp.amount,
+            "audit_status": exp.audit_status,
+        }
     return None
 
 def _build_expenses_query(
@@ -1112,6 +1117,12 @@ def update_expense(
     if current and current.get("company_id"):
         check_company_access(current_user, current.get("company_id"))
 
+    if current and (current.get("audit_status") or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This expense has been Verified by an Auditor and is locked as read-only.",
+        )
+
     # Paid with petty cash (newly chosen, or already petty cash): the category is always Petty Cash
     effective_payment_method = (
         expense_in.payment_method if expense_in.payment_method is not None else (current or {}).get("payment_method")
@@ -1123,7 +1134,12 @@ def update_expense(
 
     # No petty cash balance block on edit either: the wallet may go negative (paid out of pocket).
 
-    update_payload = {}
+    update_payload = {
+        "audit_status": "Pending Audit",
+        "audited_by": None,
+        "audited_at": None,
+        "audit_remarks": None,
+    }
     if expense_in.expense_date:
         update_payload["expense_date"] = expense_in.expense_date.isoformat()
     if target_amt is not None:
@@ -1199,6 +1215,10 @@ def update_expense(
             expense.payment_method = update_payload["payment_method"]
         if "remarks" in update_payload:
             expense.remarks = update_payload["remarks"]
+        expense.audit_status = "Pending Audit"
+        expense.audited_by = None
+        expense.audited_at = None
+        expense.audit_remarks = None
         db.commit()
         db.refresh(expense)
 
@@ -1415,6 +1435,8 @@ def review_expense_audit(
     except Exception:
         pass
     return get_expense(resolved_id, current_user, db)
+
+
 @router.delete("/{expense_id}", status_code=status.HTTP_200_OK, summary="Delete an expense")
 def delete_expense(
     expense_id: Union[int, str],
@@ -1426,20 +1448,27 @@ def delete_expense(
     from app.services.income_bank_links import assert_not_linked_expense
     assert_not_linked_expense(db, resolved_id)
 
+    current = _current_expense_row(db, resolved_id)
+    if current and (current.get("audit_status") or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This expense has been Verified by an Auditor and cannot be deleted.",
+        )
+
     deleted_from_supabase = False
     deleted_company_id = None
     deleted_day = None
     client = None
     try:
         client = get_supabase_admin_client()
-        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", expense_id).limit(1).execute()
+        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", resolved_id).limit(1).execute()
         if existing.data:
             deleted_company_id = existing.data[0].get("company_id")
             deleted_day = existing.data[0].get("expense_date")
     except Exception as e:
         print(f"Supabase fetch before delete error: {e}")
 
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    expense = db.query(Expense).filter(Expense.expense_id == resolved_id).first()
     if expense:
         deleted_company_id = deleted_company_id or expense.company_id
         deleted_day = deleted_day or expense.expense_date
@@ -1451,7 +1480,7 @@ def delete_expense(
 
     if client:
         try:
-            sb_res = client.table("expenses").delete().eq("expense_id", expense_id).execute()
+            sb_res = client.table("expenses").delete().eq("expense_id", resolved_id).execute()
             if sb_res.data and len(sb_res.data) > 0:
                 deleted_from_supabase = True
         except Exception as e:
@@ -1459,13 +1488,13 @@ def delete_expense(
 
     if expense:
         # Undo the bank debit first, while the expense (and its bank entries) can still be found
-        reconcile_expense_bank(db, expense_id=expense_id, force_zero=True)
+        reconcile_expense_bank(db, expense_id=resolved_id, force_zero=True)
         db.delete(expense)
         db.commit()
         # The expense is gone, so none of its bank entries (originals or reversals) should remain
         try:
             from app.services.bank_service import BankService
-            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
+            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=resolved_id)
         except Exception as e:
             db.rollback()
             print(f"Bank entry purge error on expense delete: {e}")
@@ -1482,7 +1511,7 @@ def delete_expense(
             db, AuditAction.EXPENSE_DELETED,
             user_id=current_user.get("user_id"), company_id=deleted_company_id,
             ip_address=request.client.host if request.client else "unknown",
-            record_id=expense_id, record_type="expense",
+            record_id=resolved_id, record_type="expense",
         )
     except Exception as e:
         print(f"Audit log error on expense delete: {e}")
@@ -1492,7 +1521,7 @@ def delete_expense(
         ws_manager.broadcast_sync({
             "type": "EXPENSE_DELETED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "company_id": deleted_company_id,
             }
         })
@@ -1502,7 +1531,7 @@ def delete_expense(
     return {
         "message": "Expense deleted successfully",
         "success": True,
-        "expense_id": expense_id,
+        "expense_id": resolved_id,
         "supabase_deleted": deleted_from_supabase
     }
 

@@ -161,14 +161,6 @@ class ReceivablesStore {
     }
   }
 
-  private saveToStorageOnly(): void {
-    // Strictly live backend data, no localStorage caching
-  }
-
-  private load(): void {
-    this.sales = []
-  }
-
   private save(): void {
     this.notify()
   }
@@ -634,7 +626,7 @@ class ReceivablesStore {
   /**
    * Add a new food sale / receivable entry.
    */
-  public addNewSale(params: {
+  public async addNewSale(params: {
     customer_name: string
     customer_type: CustomerType
     items_summary: string
@@ -649,101 +641,66 @@ class ReceivablesStore {
     company_id?: number
     sale_id?: number
     sale_line_index?: number
-  }): UtangSale {
-    const saleId = `SALE-2026-${String(this.sales.length + 101).padStart(3, '0')}`
+  }): Promise<UtangSale> {
     const todayStr = params.date || getLocalTodayStr()
     const totalAmount = Math.max(0, params.total_amount)
 
     let amountPaid = 0
     let paymentStatus: PaymentStatus = 'Unpaid'
-    const payments: UtangPayment[] = []
 
     if (params.payment_option === 'Paid in full') {
       amountPaid = totalAmount
       paymentStatus = 'Paid'
-      payments.push({
-        id: `PAY-${Date.now()}`,
-        sale_id: saleId,
-        customer_name: params.customer_name,
-        amount: totalAmount,
-        date: todayStr,
-        method: params.payment_method || 'Cash',
-        bank_account_id: params.bank_account_id || null,
-        notes: 'Paid in full at counter',
-        createdAt: new Date().toISOString(),
-      })
     } else if (params.payment_option === 'Partial') {
       amountPaid = Math.min(totalAmount, Math.max(0, params.amount_paid || 0))
       paymentStatus = amountPaid >= totalAmount ? 'Paid' : amountPaid > 0 ? 'Partial' : 'Unpaid'
-      if (amountPaid > 0) {
-        payments.push({
-          id: `PAY-${Date.now()}`,
-          sale_id: saleId,
-          customer_name: params.customer_name,
-          amount: amountPaid,
-          date: todayStr,
-          method: params.payment_method || 'Cash',
-          bank_account_id: params.bank_account_id || null,
-          notes: 'Partial payment on food sale',
-          createdAt: new Date().toISOString(),
-        })
-      }
     } else {
       amountPaid = 0
       paymentStatus = 'Unpaid'
     }
 
-    const newSale: UtangSale = {
-      id: saleId,
-      company: params.company || '',
-      company_id: params.company_id,
-      sale_id: params.sale_id ?? null,
-      sale_line_index: params.sale_line_index ?? null,
-      is_locked: false,
-      date: todayStr,
+    const customerTypeApi = params.customer_type === 'Staff' ? 'Internal' : 'External'
+    const created = await receivablesService.createReceivable({
       customer_name: params.customer_name.trim(),
-      customer_type: params.customer_type,
+      customer_type: customerTypeApi,
       items_summary: params.items_summary.trim(),
       total_amount: totalAmount,
       amount_paid: amountPaid,
-      balance: Math.max(0, totalAmount - amountPaid),
+      payment_option: params.payment_option,
+      payment_method: params.payment_method,
+      bank_account_id: params.bank_account_id,
+      notes: params.notes,
+      company_name: params.company || '',
+      company_id: params.company_id,
+      sale_id: params.sale_id,
+      sale_line_index: params.sale_line_index,
+      date: todayStr,
+    })
+
+    salesService.invalidateCache()
+    await this.refreshFromBackend()
+
+    const realSale = this.sales.find((s) => s.id === String(created.receivable_id))
+    if (realSale) return realSale
+
+    return {
+      id: String(created.receivable_id),
+      company: created.company_name || params.company || '',
+      company_id: created.company_id || params.company_id,
+      sale_id: created.sale_id ?? params.sale_id ?? null,
+      sale_line_index: created.sale_line_index ?? params.sale_line_index ?? null,
+      is_locked: false,
+      date: created.transaction_date || todayStr,
+      customer_name: created.customer_name,
+      customer_type: params.customer_type,
+      items_summary: created.items_summary,
+      total_amount: Number(created.total_amount || 0),
+      amount_paid: Number(created.amount_paid || 0),
+      balance: Number(created.balance || 0),
       payment_status: paymentStatus,
-      notes: params.notes || undefined,
-      payments,
+      notes: created.notes || undefined,
+      payments: [],
     }
-
-    this.sales.unshift(newSale)
-    this.save()
-
-    const customerTypeApi = params.customer_type === 'Staff' ? 'Internal' : 'External'
-    receivablesService
-      .createReceivable({
-        customer_name: params.customer_name.trim(),
-        customer_type: customerTypeApi,
-        items_summary: params.items_summary.trim(),
-        total_amount: totalAmount,
-        amount_paid: amountPaid,
-        payment_option: params.payment_option,
-        payment_method: params.payment_method,
-        bank_account_id: params.bank_account_id,
-        notes: params.notes,
-        company_name: params.company || '',
-        company_id: params.company_id,
-        sale_id: params.sale_id,
-        sale_line_index: params.sale_line_index,
-        date: todayStr,
-      })
-      .then((created) => {
-        if (created?.receivable_id) {
-          newSale.id = String(created.receivable_id)
-          newSale.company_id = created.company_id
-          this.saveToStorageOnly()
-          this.notify()
-        }
-      })
-      .catch(() => {})
-
-    return newSale
   }
 
   public async editSale(

@@ -876,13 +876,24 @@ class SalesReceivablesSyncService:
                 if client is not None:
                     try:
                         client.table("sales").update(
-                            {"particulars": new_particulars, "amount": float(remaining_amount)}
+                            {
+                                "particulars": new_particulars,
+                                "amount": float(remaining_amount),
+                                "audit_status": "Pending Audit",
+                                "audited_by": None,
+                                "audited_at": None,
+                                "audit_remarks": None,
+                            }
                         ).eq("sales_id", sale_id).execute()
                     except Exception as exc:
                         logger.warning("Failed updating parent sale %s in Supabase on delete: %s", sale_id, exc)
                 if local_sale is not None:
                     local_sale.particulars = new_particulars
                     local_sale.amount = remaining_amount
+                    local_sale.audit_status = "Pending Audit"
+                    local_sale.audited_by = None
+                    local_sale.audited_at = None
+                    local_sale.audit_remarks = None
 
                 if idx is not None:
                     siblings = (
@@ -935,6 +946,10 @@ class SalesReceivablesSyncService:
             sb_payload: Dict[str, Any] = {
                 "particulars": new_particulars,
                 "amount": float(new_sale_amount),
+                "audit_status": "Pending Audit",
+                "audited_by": None,
+                "audited_at": None,
+                "audit_remarks": None,
             }
             if len(lines) <= 1 and rec.transaction_date:
                 sb_payload["transaction_date"] = rec.transaction_date.isoformat()
@@ -996,6 +1011,10 @@ class SalesReceivablesSyncService:
             if local_sale is not None:
                 local_sale.particulars = new_particulars
                 local_sale.amount = new_sale_amount
+                local_sale.audit_status = "Pending Audit"
+                local_sale.audited_by = None
+                local_sale.audited_at = None
+                local_sale.audit_remarks = None
                 if len(lines) <= 1 and rec.transaction_date:
                     local_sale.transaction_date = rec.transaction_date
             elif sb_row is not None:
@@ -1010,7 +1029,7 @@ class SalesReceivablesSyncService:
                         cheque_no=sb_row.get("cheque_number") or sb_row.get("cheque_no"),
                         amount=new_sale_amount,
                         particulars=new_particulars,
-                        audit_status=sb_row.get("audit_status") or "Pending Audit",
+                        audit_status="Pending Audit",
                     )
                     self.db.merge(merged_sale)
                 except Exception:
