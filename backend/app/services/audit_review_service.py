@@ -99,6 +99,38 @@ def apply_audit_review(
     if not remote_saved and not local_saved:
         raise HTTPException(status_code=500, detail="Could not save the audit status. Please try again.")
 
+    # Keep any linked bank transactions in sync with the audit review
+    try:
+        from app.models.bank import BankTransaction
+        if supabase_table == "expenses":
+            linked_txs = db.query(BankTransaction).filter(BankTransaction.source_expense_id == record_id).all()
+            for btx in linked_txs:
+                btx.audit_status = status
+                btx.audited_by = audited_by
+                btx.audited_at = audited_at
+                btx.audit_remarks = remarks
+            if linked_txs:
+                db.commit()
+                ws_manager.broadcast_sync({
+                    "type": "BANK_UPDATED",
+                    "payload": {"action": "audited", "expense_id": record_id},
+                })
+        elif supabase_table == "sales":
+            linked_txs = db.query(BankTransaction).filter(BankTransaction.source_sale_id == record_id).all()
+            for btx in linked_txs:
+                btx.audit_status = status
+                btx.audited_by = audited_by
+                btx.audited_at = audited_at
+                btx.audit_remarks = remarks
+            if linked_txs:
+                db.commit()
+                ws_manager.broadcast_sync({
+                    "type": "BANK_UPDATED",
+                    "payload": {"action": "audited", "sale_id": record_id},
+                })
+    except Exception as e:
+        print(f"BankTransaction audit sync warning: {e}")
+
     if supabase_table == "expenses":
         system_cache.invalidate_tag("petty_cash")
 

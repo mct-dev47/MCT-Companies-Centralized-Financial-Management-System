@@ -266,6 +266,72 @@ class TestMigrations(unittest.TestCase):
             self.assertEqual(conn.execute(text("SELECT description FROM petty_cash_topups WHERE topup_id = 1")).scalar(), "Topup")
             self.assertEqual(conn.execute(text("SELECT particulars FROM sales WHERE sales_id = 1")).scalar(), "Room")
 
+    def test_0073_bank_transactions_audit_fields_migration(self):
+        """Verify migration 0073 adds audit/remarks columns and ix_bank_transactions_audit_status in SQLite and Postgres."""
+        from unittest.mock import MagicMock
+        from app.db.migrations import _run_postgresql_migrations
+
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS bank_transactions (id VARCHAR(100) PRIMARY KEY, bank_account_id VARCHAR(100) NOT NULL);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0073_bank_transactions_audit_fields", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0073_bank_transactions_audit_fields", applied_second)
+
+        inspector = inspect(self.engine)
+        bt_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+        for expected_col in ("audit_status", "audited_by", "audited_at", "audit_remarks", "remarks"):
+            self.assertIn(expected_col, bt_cols)
+
+        with self.engine.connect() as conn:
+            bt_idx = {row[1] for row in conn.execute(text("PRAGMA index_list(bank_transactions)")).fetchall()}
+            self.assertIn("ix_bank_transactions_audit_status", bt_idx)
+
+        # Also verify _run_postgresql_migrations executes 0073 when not yet applied
+        executed_sql: list[str] = []
+        pg_conn = MagicMock()
+
+        def fake_execute(stmt, *args, **kwargs):
+            s = str(stmt)
+            executed_sql.append(s)
+            res = MagicMock()
+            if "SELECT 1 FROM schema_migrations" in s:
+                res.first.return_value = None if "0073_bank_transactions_audit_fields" in s else (1,)
+            return res
+
+        pg_conn.execute.side_effect = fake_execute
+        pg_applied = _run_postgresql_migrations(pg_conn)
+        self.assertIn("0073_bank_transactions_audit_fields", pg_applied)
+        self.assertTrue(any("ix_bank_transactions_audit_status" in s for s in executed_sql))
+
+    def test_0074_loan_repayment_links_migration(self):
+        """Verify migration 0074 adds expense_id/bank_account_id on loans_repayments and source_loan_repayment_id on bank_transactions with indexes."""
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS expenses (expense_id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS loans_repayments (loan_repayment_id INTEGER PRIMARY KEY AUTOINCREMENT, loan_id INTEGER NOT NULL, amount NUMERIC(15, 2) NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS bank_transactions (id VARCHAR(100) PRIMARY KEY, bank_account_id VARCHAR(100) NOT NULL);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0074_loan_repayment_links", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0074_loan_repayment_links", applied_second)
+
+        inspector = inspect(self.engine)
+        lr_cols = {col["name"] for col in inspector.get_columns("loans_repayments")}
+        bt_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+        self.assertIn("expense_id", lr_cols)
+        self.assertIn("bank_account_id", lr_cols)
+        self.assertIn("source_loan_repayment_id", bt_cols)
+
+        with self.engine.connect() as conn:
+            lr_idx = {row[1] for row in conn.execute(text("PRAGMA index_list(loans_repayments)")).fetchall()}
+            bt_idx = {row[1] for row in conn.execute(text("PRAGMA index_list(bank_transactions)")).fetchall()}
+            self.assertIn("ix_loans_repayments_expense_id", lr_idx)
+            self.assertIn("ix_bank_transactions_source_loan_repayment_id", bt_idx)
+
 
 if __name__ == "__main__":
     unittest.main()

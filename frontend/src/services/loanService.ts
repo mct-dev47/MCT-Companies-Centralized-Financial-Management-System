@@ -118,6 +118,17 @@ function saveStoredLoans(items: LoanItem[]): void {
   inMemoryLoans = items
 }
 
+async function invalidateRelatedFinancialCaches(): Promise<void> {
+  try {
+    const { expenseService } = await import('./expenseService')
+    expenseService.invalidateCache()
+  } catch {}
+  try {
+    const { bankService } = await import('./bankService')
+    bankService.invalidateCache()
+  } catch {}
+}
+
 const companyNameCache = new Map<string, string>()
 
 function mapBackendLoanToItem(l: any): LoanItem {
@@ -719,6 +730,8 @@ export const loanService = {
 
     inMemoryLoans[index] = updatedLoan
     saveStoredLoans(inMemoryLoans)
+    this.invalidateCache()
+    await invalidateRelatedFinancialCaches()
     websocketService.emitLocal('LOANS_UPDATED')
     websocketService.emitLocal('BANK_UPDATED')
     websocketService.emitLocal('EXPENSE_CREATED')

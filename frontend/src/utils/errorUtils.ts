@@ -13,6 +13,7 @@
  */
 
 import { pushToast } from '@/lib/toastStore'
+import { setHttpErrorNotifier } from '@/services/httpErrorService'
 
 export function formatSecondsToMMSS(totalSeconds: number): string {
   if (isNaN(totalSeconds) || totalSeconds < 0) return '00:00'
@@ -384,3 +385,6 @@ export function notifyInfo(message: string): void {
 }
 
 export const getErrorMessage = formatUserFriendlyErrorMessage
+
+// Register global notification handler with HTTP error service
+setHttpErrorNotifier(notifyError)

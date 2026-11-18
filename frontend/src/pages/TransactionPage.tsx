@@ -35,7 +35,6 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import { Skeleton } from '@/components/ui/skeleton'
 import { TablePagination } from '@/components/common/TablePagination'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
@@ -64,17 +63,17 @@ import { TransactionStatusBadge } from '@/components/transactions/TransactionPro
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 import { salesService } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
-import { loanService, type LoanItem } from '@/services/loanService'
-import { pettyCashService, type PettyCashMovement } from '@/services/pettyCashService'
-import { tenantService, TENANT_COMPANY_NAME, type TenantLease } from '@/services/tenantService'
+import { loanService } from '@/services/loanService'
+import { pettyCashService } from '@/services/pettyCashService'
+import { tenantService } from '@/services/tenantService'
 import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction } from '@/services/bankService'
+import { transactionService } from '@/services/transactionService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatPHP } from '@/lib/format'
 import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { getPaidDepositForSale, getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError, notifyWarning, notifySuccess } from '@/utils/errorUtils'
 import { websocketService } from '@/services/websocketService'
@@ -85,24 +84,6 @@ import { cn } from '@/lib/utils'
 // ── Loan and petty cash rows (spec 0013) ─────────────────────────────────────────────────────
 // The company that receives the money sees a Deposit; the company that funds it sees a Withdrawal.
 // A record shows up from the moment Finance endorses it, and disappears if it is rejected.
-
-/** Loan statuses that appear in the ledger: endorsed by Finance, through approval and repayment. */
-const LEDGER_LOAN_STATUSES = new Set([
-  'pending audit approval',
-  'approved',
-  'disbursed',
-  'paid',
-  'partially paid',
-  'fully paid',
-  'overdue',
-])
-
-/**
- * Statuses where the money has actually left the lender's bank (spec 0046), the same rule the bank uses.
- * "Approved" means Audit approved but Finance has not disbursed yet, so it shows as Pending and is not
- * counted in the totals.
- */
-const DISBURSED_LOAN_STATUSES = new Set(['disbursed', 'paid', 'partially paid', 'fully paid', 'overdue'])
 
 /**
  * The day a sale's money was deposited, as MM/DD/YY (same format as the row date).
@@ -115,9 +96,6 @@ const getDepositDayShort = (tx: DashboardTransactionItem): string | null => {
   const [y, m, d] = day.split('-')
   return y && m && d ? `${m.padStart(2, '0')}/${d.padStart(2, '0')}/${y}` : null
 }
-
-const isAwaitingAudit = (status?: string | null): boolean =>
-  (status || '').trim().toLowerCase() === 'pending audit approval'
 
 /** Any date input -> MM/DD/YYYY, uniform display format. */
 const toLedgerDate = (iso: string | null | undefined): string => {
@@ -167,209 +145,9 @@ const getTxEncodedTimestamp = (tx: DashboardTransactionItem): number => {
   return 0
 }
 
-/** The company has a real lender (not "Pending Finance Assignment" or an external lender). */
-const loanHasLender = (l: LoanItem): boolean => {
-  if (l.lenderId) return true
-  const name = (l.lender || '').trim().toLowerCase()
-  return !!name && name !== 'pending finance assignment' && name !== 'external lender'
-}
-
-/**
- * One loan becomes up to two rows: a Deposit for the borrower, a Withdrawal for the lender.
- */
-const buildLoanRows = (l: LoanItem): DashboardTransactionItem[] => {
-  const statusLower = (l.status || '').trim().toLowerCase()
-  if (!LEDGER_LOAN_STATUSES.has(statusLower)) return []
-
-  // Not money yet: waiting for Audit, or approved but not disbursed. Shown as Pending, left out of totals.
-  const awaitingAudit = isAwaitingAudit(l.status) || !DISBURSED_LOAN_STATUSES.has(statusLower)
-  const status: DashboardTransactionItem['status'] = awaitingAudit
-    ? 'Pending'
-    : statusLower === 'overdue'
-    ? 'Overdue'
-    : 'Paid'
-  const amount = l.amount || 0
-
-  const base = {
-    refNo: l.refNo,
-    chequeNo: l.chequeNo || '',
-    date: l.date,
-    type: 'Loan' as const,
-    amount,
-    category: l.category as any,
-    status,
-    awaitingAudit,
-    auditStatus: l.auditStatus,
-    auditedBy: l.auditedBy,
-    auditNotes: l.auditNotes,
-    auditDate: l.auditDate,
-    createdBy: l.createdBy,
-    createdAt: l.createdAt || l.rawDate,
-    updatedAt: l.updatedAt,
-    attachments: [],
-  }
-
-  const sameCompany =
-    (!!l.lenderId && !!l.borrowerId && l.lenderId === l.borrowerId) ||
-    (l.lender || '').trim().toLowerCase() === (l.borrower || '').trim().toLowerCase()
-
-  const rows: DashboardTransactionItem[] = [
-    {
-      ...base,
-      // The borrower's row sits on the bank that received the money; the lender's on the funding bank
-      bankAccountId: sameCompany ? l.bankAccountId : l.borrowerBankAccountId,
-      id: l.id,
-      company: l.borrower || l.company,
-      description: l.particulars,
-      particulars: l.particulars,
-      deposit: amount,
-      withdrawal: 0,
-    },
-  ]
-
-  if (loanHasLender(l) && !sameCompany) {
-    const particulars = `Loan disbursed to ${l.borrower}${l.particulars ? `: ${l.particulars}` : ''}`
-    rows.push({
-      ...base,
-      bankAccountId: l.bankAccountId,
-      id: `${l.id}:lender`,
-      company: l.lender,
-      description: particulars,
-      particulars,
-      deposit: 0,
-      withdrawal: amount,
-      isMirrorRow: true,
-    })
-  }
-  return rows
-}
-
-/**
- * One petty cash top up becomes:
- *  - funded by another company: a Deposit for the requesting company, a Withdrawal for the funder
- *  - funded from the company's own bank account: a single Withdrawal, and no Deposit
- * Every petty cash row is a read only mirror (petty cash is audited on its own page).
- */
-/**
- * One petty cash top up or reimbursement becomes:
- *  - for top up: funded by another company: a Deposit for the requesting company, a Withdrawal for the funder
- */
-
 const isPettyCashLedgerRow = (t: DashboardTransactionItem): boolean => {
   if (t.type === 'Expense') return (t.paymentMethod || '').trim().toLowerCase().includes('petty cash')
   return t.type === 'Petty Cash' && !t.bankAccountId
-}
-
-const buildPettyCashRows = (m: PettyCashMovement): DashboardTransactionItem[] => {
-  const reqType = (m.requestType || '').trim().toLowerCase()
-  const isReimbursement = reqType === 'reimbursement' || reqType === 'replenishment' || reqType === 'replenishment_disbursement'
-  const statusLower = (m.status || '').trim().toLowerCase()
-  const awaitingAudit = isAwaitingAudit(m.status) || statusLower.includes('pending')
-  const isDisapproved = statusLower.includes('disapproved') || statusLower.includes('rejected')
-  const auditStatus: DashboardTransactionItem['auditStatus'] = awaitingAudit ? 'Pending Audit' : isDisapproved ? 'Flagged' : 'Verified'
-  const txStatus: DashboardTransactionItem['status'] = awaitingAudit ? 'Pending' : 'Paid'
-
-  const base = {
-    refNo: m.refNo,
-    chequeNo: '',
-    date: toLedgerDate(m.date),
-    type: 'Petty Cash' as const,
-    amount: m.amount,
-    category: (m.category || 'Petty Cash') as any,
-    paymentMethod: m.isOwnAccount || !m.fundingCompanyId ? 'Cash Float' : 'Bank Transfer',
-    status: txStatus,
-    awaitingAudit,
-    auditStatus,
-    auditedBy: m.reviewedBy || undefined,
-    auditDate: m.reviewedAt ? toLedgerDate(m.reviewedAt) : undefined,
-    auditNotes: m.remark || m.financeRemark || undefined,
-    createdBy: m.createdByName || (m.createdBy ? String(m.createdBy) : undefined),
-    createdAt: m.createdAt || m.date,
-    attachments: m.receiptUrl ? [m.receiptUrl] : [],
-    isMirrorRow: true,
-    paidAmount: m.amountReimbursed || m.amount,
-    bankAccountId: m.fundingBankId || undefined,
-    bankName: m.fundingBankName || undefined,
-  }
-
-  if (isReimbursement) {
-    const claimant = m.paidBy || 'Employee'
-    const desc = m.description || `Petty cash reimbursement for ${claimant}`
-
-    if (m.isOwnAccount || !m.fundingCompanyId || m.fundingCompanyName === m.companyName) {
-      return [
-        {
-          ...base,
-          id: `pc_${m.topupId}:out`,
-          company: m.companyName,
-          description: desc,
-          particulars: desc,
-          deposit: 0,
-          withdrawal: m.amount,
-        },
-      ]
-    }
-
-    const fundingDesc = `Petty cash reimbursement funded for ${m.companyName}`
-    return [
-      {
-        ...base,
-        id: `pc_${m.topupId}:exp`,
-        company: m.companyName,
-        description: desc,
-        particulars: desc,
-        deposit: 0,
-        withdrawal: m.amount,
-      },
-      {
-        ...base,
-        id: `pc_${m.topupId}:out`,
-        company: m.fundingCompanyName,
-        description: fundingDesc,
-        particulars: fundingDesc,
-        deposit: 0,
-        withdrawal: m.amount,
-      },
-    ]
-  }
-
-  if (m.isOwnAccount) {
-    const particulars = 'Petty cash top up funded from own bank account'
-    return [
-      {
-        ...base,
-        id: `pc_${m.topupId}:out`,
-        company: m.companyName,
-        description: particulars,
-        particulars,
-        deposit: 0,
-        withdrawal: m.amount,
-      },
-    ]
-  }
-
-  const received = `Petty cash top up from ${m.fundingCompanyName}`
-  const funded = `Petty cash top up funded for ${m.companyName}`
-  return [
-    {
-      ...base,
-      id: `pc_${m.topupId}:in`,
-      company: m.companyName,
-      description: received,
-      particulars: received,
-      deposit: m.amount,
-      withdrawal: 0,
-    },
-    {
-      ...base,
-      id: `pc_${m.topupId}:out`,
-      company: m.fundingCompanyName,
-      description: funded,
-      particulars: funded,
-      deposit: 0,
-      withdrawal: m.amount,
-    },
-  ]
 }
 
 const isTxMatchingBankAccount = (tx: DashboardTransactionItem, account: BankAccount): boolean => {
@@ -609,7 +387,7 @@ export const TransactionPage: React.FC = () => {
   const { user } = useSession()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { activeCompany, setActiveCompany, allCompanies } = useCompany()
+  const { activeCompany, allCompanies } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole.includes('audit')
   const isFinance = userRole.includes('finance')
@@ -684,21 +462,6 @@ export const TransactionPage: React.FC = () => {
   const [bankChosenByUser, setBankChosenByUser] = React.useState(false)
   const [depositCurrentPage, setDepositCurrentPage] = React.useState(1)
   const [salesCurrentPage, setSalesCurrentPage] = React.useState(1)
-
-  const handleSelectCompany = (c: string) => {
-    setActiveCompany(c)
-    setSelectedBankAccountId('')
-    setBankChosenByUser(false)
-    setDepositCurrentPage(1)
-    setSalesCurrentPage(1)
-  }
-
-  const handleResetCompany = React.useCallback(() => {
-    setSelectedBankAccountId('')
-    setBankChosenByUser(false)
-    setDepositCurrentPage(1)
-    setSalesCurrentPage(1)
-  }, [])
 
   const [transactions, setTransactions] = React.useState<DashboardTransactionItem[]>([])
   const [bankAccounts, setBankAccounts] = React.useState<BankAccount[]>([])
@@ -801,17 +564,18 @@ export const TransactionPage: React.FC = () => {
   }, [selectedBankAccount, effectiveTargetCompany, getStartingBalanceForCompany, bankAccounts])
 
   const isOwner = userRole === 'owner'
-  const isViewOnlyUser = isOwner
-  const showActionColumn = !isOwner
-  const canAudit = (isAdmin || isAudit) && !isOwner
+  const isPureAdmin = userRole === 'admin'
+  const showActionColumn = !isOwner && !isPureAdmin
+  const canAudit = isAudit && !isOwner
   const isSupervisor =
     userRole.includes('supervisor') ||
     userRole.includes('company') ||
-    (!isAudit && !isFinance && !isOwner)
+    (!isAudit && !isFinance && !isOwner && !isPureAdmin)
   const isBusinessWriter =
-    (isSupervisor || isFinance || isAdmin) &&
+    (isSupervisor || isFinance) &&
     !isAudit &&
-    !isOwner
+    !isOwner &&
+    !isPureAdmin
 
   // Row delete confirmation state
   const [deleteConfirmTx, setDeleteConfirmTx] = React.useState<DashboardTransactionItem | null>(null)
@@ -891,7 +655,7 @@ export const TransactionPage: React.FC = () => {
 
   // Shared filters & group-by choice persisted across tab switches
   const [searchQuery, setSearchQuery] = React.useState('')
-  const [typeFilter, setTypeFilter] = React.useState<'All' | 'Sales' | 'Expenses'>('All')
+  const [typeFilter] = React.useState<'All' | 'Sales' | 'Expenses'>('All')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
     endDate: null,
@@ -923,8 +687,8 @@ export const TransactionPage: React.FC = () => {
     ],
     []
   )
-  const [categoryFilter, setCategoryFilter] = React.useState<string>('All')
-  const [paymentMethodFilter, setPaymentMethodFilter] = React.useState<string>('All')
+  const [categoryFilter] = React.useState<string>('All')
+  const [paymentMethodFilter] = React.useState<string>('All')
   const [sortOrder, setSortOrder] = React.useState<'desc' | 'asc'>('desc')
 
   // Help popover state
@@ -946,6 +710,29 @@ export const TransactionPage: React.FC = () => {
   // Modal inspection
   const [selectedTx, setSelectedTx] = React.useState<DashboardTransactionItem | null>(null)
   const [isModalOpen, setIsModalOpen] = React.useState(false)
+
+  // Auto-open transaction modal if URL specifies ?ref= or ?txRef= or ?txId= or ?id=
+  React.useEffect(() => {
+    const targetRef =
+      searchParams.get('ref') ||
+      searchParams.get('txRef') ||
+      searchParams.get('txId') ||
+      searchParams.get('id')
+    if (!targetRef || transactions.length === 0) return
+
+    const normalizedTarget = targetRef.trim().toLowerCase()
+    const match = transactions.find((t) => {
+      if (String(t.id).toLowerCase() === normalizedTarget) return true
+      if (t.refNo && t.refNo.toLowerCase() === normalizedTarget) return true
+      if (t.particulars && t.particulars.toLowerCase().includes(normalizedTarget)) return true
+      return false
+    })
+
+    if (match) {
+      setSelectedTx(match)
+      setIsModalOpen(true)
+    }
+  }, [searchParams, transactions])
 
   // Close dropdowns / popovers on click outside or Escape
   React.useEffect(() => {
@@ -972,11 +759,13 @@ export const TransactionPage: React.FC = () => {
     }
   }, [])
 
-  // Fetch all transactions across Sales, Expenses, and Loans
+  const [fetchError, setFetchError] = React.useState<string | null>(null)
+
+  // Fetch all transactions directly from database-backed backend API
   const fetchAllTransactions = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
-    // The bank ledger compares the records against the bank, so both sides must come from the
-    // server at the same moment. A cached copy of either one shows a difference that is already fixed.
+    setFetchError(null)
+    // Invalidate caches to guarantee fresh database reads
     salesService.invalidateCache()
     expenseService.invalidateCache()
     loanService.invalidateCache()
@@ -984,155 +773,17 @@ export const TransactionPage: React.FC = () => {
     bankService.invalidateCache()
     try {
       const targetCompany = effectiveTargetCompany
-      const shouldFetchTenants = !targetCompany || isCompanyMatch(TENANT_COMPANY_NAME, targetCompany)
-      const [salesData, expenseData, loanData, pettyCashData, tenantLeases, bankAccountsData] = await Promise.all([
-        salesService.getSales(targetCompany),
-        expenseService.getExpenses({ company: targetCompany }),
-        loanService.getLoans({ company: targetCompany }),
-        // A petty cash failure must not break the rest of the ledger.
-        pettyCashService.getMovements(targetCompany).catch(() => [] as PettyCashMovement[]),
-        shouldFetchTenants
-          ? tenantService.listLeases().catch(() => [] as TenantLease[])
-          : Promise.resolve([] as TenantLease[]),
-        bankService.getAccounts(targetCompany).catch(() => [] as BankAccount[]),
+      const [txData, bankAccountsData] = await Promise.all([
+        transactionService.getTransactions({ company: targetCompany }),
+        bankService.getAccounts(targetCompany).catch((err) => {
+          notifyWarning(err instanceof Error ? `Failed to load bank accounts: ${err.message}` : 'Failed to load bank accounts')
+          return [] as BankAccount[]
+        }),
       ])
-
-      const unifiedSales: DashboardTransactionItem[] = salesData.map((s) => ({
-        id: s.id,
-        refNo: s.refNo,
-        chequeNo: s.chequeNo || '',
-        date: s.date,
-        type: 'Sales',
-        company: s.company,
-        description: s.particulars,
-        particulars: s.particulars,
-        amount: s.deposit || s.withdrawal || 0,
-        withdrawal: s.withdrawal || 0,
-        deposit: s.deposit || 0,
-        category: s.category as any,
-        paymentMethod: s.paymentMethod,
-        status: s.status,
-        auditStatus: s.auditStatus,
-        auditedBy: s.auditedBy,
-        auditNotes: s.auditNotes,
-        auditDate: s.auditDate,
-        createdBy: s.createdBy,
-        createdAt: s.createdAt || s.rawDate,
-        updatedAt: s.updatedAt,
-        attachments: [],
-        items: s.items,
-        paidAmount: getPaidDepositForSale(s),
-        depositStatus: s.depositStatus || (s as any).deposit_status || 'Pending',
-        deposit_status: s.depositStatus || (s as any).deposit_status || 'Pending',
-        remarks: s.remarks || '',
-        sourceModule: s.sourceModule,
-        bankAccountId: (s as any).bankAccountId || (s as any).bank_account_id,
-        bankName: (s as any).bankName || (s as any).bank_name,
-        // The row stays on the sale date for auditing; the bank deposit date rides along
-        saleDate: s.rawDate,
-        deposit_date: s.deposit_date ?? s.depositDate ?? null,
-        depositDate: s.deposit_date ?? s.depositDate ?? null,
-      }))
-
-      const unifiedExpenses: DashboardTransactionItem[] = expenseData.map((e) => ({
-        id: e.id,
-        refNo: e.refNo,
-        chequeNo: e.chequeNo || '',
-        date: e.date,
-        type: 'Expense',
-        company: e.company,
-        description: e.particulars,
-        particulars: e.particulars,
-        amount: e.withdrawal || e.netAmount || 0,
-        withdrawal: e.withdrawal || e.netAmount || 0,
-        deposit: 0,
-        category: e.category as any,
-        paymentMethod: e.paymentMethod,
-        status: e.status,
-        auditStatus: e.auditStatus,
-        auditedBy: e.auditedBy,
-        auditNotes: e.auditNotes,
-        auditDate: e.auditDate,
-        createdBy: e.createdBy,
-        createdAt: e.createdAt || e.rawDate,
-        updatedAt: e.updatedAt,
-        attachments: [],
-        items: e.items,
-        paidAmount: getPaidDisbursementForExpense(e),
-        remarks: e.remarks || '',
-        sourceModule: e.sourceModule,
-        bankAccountId: (e as any).bankAccountId || (e as any).bank_account_id,
-        bankName: (e as any).bankName || (e as any).bank_name,
-      }))
-
-      // Spec 0013: each loan and petty cash top up shows each company's own side of the money.
-      const unifiedLoans: DashboardTransactionItem[] = loanData.flatMap(buildLoanRows)
-      const unifiedPettyCash: DashboardTransactionItem[] = pettyCashData.flatMap(buildPettyCashRows)
-
-      const unifiedTenants: DashboardTransactionItem[] = []
-      tenantLeases.forEach((lease) => {
-        const leaseCompany = lease.companyName || TENANT_COMPANY_NAME
-        if (targetCompany && !isCompanyMatch(leaseCompany, targetCompany)) return
-
-        if (lease.dailyPayments && lease.dailyPayments.length > 0) {
-          lease.dailyPayments.forEach((p) => {
-            if (p.status === "Missed" || (p.amount || 0) <= 0) return
-            // A payment credited to a bank already shows as its Rental Income sale; adding it here too doubled it.
-            if (p.saleId) return
-            unifiedTenants.push({
-              id: `tenant_pmt_${p.id}`,
-              refNo: p.referenceNo || lease.tenantId,
-              chequeNo: "",
-              date: p.date,
-              type: "Income",
-              company: leaseCompany,
-              description: `Rental Collection - ${lease.tenantName} (${lease.unitName})`,
-              particulars: `Rental Payment - ${lease.tenantName} (${lease.unitName})`,
-              amount: p.amount,
-              withdrawal: 0,
-              deposit: p.amount,
-              category: "Rental Income" as any,
-              paymentMethod: p.method,
-              status: "Paid",
-              auditStatus: (lease.auditStatus as any) || "Pending Audit",
-              auditedBy: lease.auditedBy,
-              auditNotes: lease.auditRemarks,
-              auditDate: lease.auditDate,
-              createdAt: p.timestamp || `${p.date}T00:00:00Z`,
-              isMirrorRow: true,
-              paidAmount: p.amount,
-            })
-          })
-        } else if (lease.amountPaid > 0) {
-          unifiedTenants.push({
-            id: `tenant_lease_${lease.id}`,
-            refNo: lease.tenantId,
-            chequeNo: "",
-            date: lease.contractDate,
-            type: "Income",
-            company: leaseCompany,
-            description: `Rental Collection - ${lease.tenantName} (${lease.unitName})`,
-            particulars: `Rental Payment - ${lease.tenantName} (${lease.unitName})`,
-            amount: lease.amountPaid,
-            withdrawal: 0,
-            deposit: lease.amountPaid,
-            category: "Rental Income" as any,
-            paymentMethod: "Cash",
-            status: "Paid",
-            auditStatus: (lease.auditStatus as any) || "Pending Audit",
-            auditedBy: lease.auditedBy,
-            auditNotes: lease.auditRemarks,
-            auditDate: lease.auditDate,
-            createdAt: `${lease.contractDate}T00:00:00Z`,
-            isMirrorRow: true,
-            paidAmount: lease.amountPaid,
-          })
-        }
-      })
-
-      const combined = [...unifiedSales, ...unifiedExpenses, ...unifiedLoans, ...unifiedPettyCash, ...unifiedTenants]
-      setTransactions(combined)
+      setTransactions(txData)
       setBankAccounts(bankAccountsData)
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Failed to load transactions')
     } finally {
       setLoading(false)
       setIsRefreshing(false)
@@ -1254,10 +905,20 @@ export const TransactionPage: React.FC = () => {
     const posted = new Map<string, number>()
     bankAccounts.forEach((acc) =>
       (acc.transactions || []).forEach((bt) => {
-        const key = bt.sourceSaleId != null ? String(bt.sourceSaleId) : bt.sourceExpenseId != null ? `exp_${bt.sourceExpenseId}` : null
         const at = Date.parse(bt.createdAt || '')
-        if (!key || isNaN(at)) return
-        if (at > (posted.get(key) ?? 0)) posted.set(key, at)
+        if (isNaN(at)) return
+        if (bt.sourceSaleId != null) {
+          const sId = String(bt.sourceSaleId)
+          const saleKey = `sale_${sId}`
+          if (at > (posted.get(sId) ?? 0)) posted.set(sId, at)
+          if (at > (posted.get(saleKey) ?? 0)) posted.set(saleKey, at)
+        }
+        if (bt.sourceExpenseId != null) {
+          const eId = String(bt.sourceExpenseId)
+          const expKey = `exp_${eId}`
+          if (at > (posted.get(eId) ?? 0)) posted.set(eId, at)
+          if (at > (posted.get(expKey) ?? 0)) posted.set(expKey, at)
+        }
       })
     )
     return posted
@@ -1269,7 +930,11 @@ export const TransactionPage: React.FC = () => {
       const time = (t: DashboardTransactionItem) => {
         const rawId = String(t.id)
         const expKey = rawId.startsWith('exp_') ? rawId : `exp_${rawId}`
-        const posted = bankPostedAt.get(rawId) ?? (t.type === 'Expense' ? bankPostedAt.get(expKey) : undefined)
+        const saleKey = rawId.startsWith('sale_') ? rawId : `sale_${rawId}`
+        const posted =
+          bankPostedAt.get(rawId) ??
+          (t.type === 'Expense' ? bankPostedAt.get(expKey) : undefined) ??
+          (t.type === 'Sales' ? bankPostedAt.get(saleKey) : undefined)
         if (posted !== undefined) return posted
         return getTxEncodedTimestamp(t)
       }
@@ -1386,8 +1051,14 @@ export const TransactionPage: React.FC = () => {
         net.set(key, round((net.get(key) || 0) + value))
         if (day && value !== 0) days.set(key, (days.get(key) || new Set()).add(day))
       }
-      if (bt.sourceSaleId != null) link(bankNetBySale, bankDaysBySale, String(bt.sourceSaleId), dep - wd)
-      if (bt.sourceExpenseId != null) link(bankNetByExpense, bankDaysByExpense, `exp_${bt.sourceExpenseId}`, wd - dep)
+      if (bt.sourceSaleId != null) {
+        link(bankNetBySale, bankDaysBySale, String(bt.sourceSaleId), dep - wd)
+        link(bankNetBySale, bankDaysBySale, `sale_${bt.sourceSaleId}`, dep - wd)
+      }
+      if (bt.sourceExpenseId != null) {
+        link(bankNetByExpense, bankDaysByExpense, String(bt.sourceExpenseId), wd - dep)
+        link(bankNetByExpense, bankDaysByExpense, `exp_${bt.sourceExpenseId}`, wd - dep)
+      }
     })
 
     const ledgerByDay = new Map<string, { deposit: number; withdrawal: number }>()
@@ -1461,7 +1132,12 @@ export const TransactionPage: React.FC = () => {
             issues.push(`${label}: posted to the bank on ${Array.from(bankDays).sort().join(', ')} instead of this day.`)
           }
         })
-        dayTxs.forEach((t) => linkedEntryIds.add(String(t.id)))
+        dayTxs.forEach((t) => {
+          const sid = String(t.id)
+          linkedEntryIds.add(sid)
+          if (sid.startsWith('sale_')) linkedEntryIds.add(sid.replace(/^sale_/, ''))
+          if (sid.startsWith('exp_')) linkedEntryIds.add(sid.replace(/^exp_/, ''))
+        })
         // Bank entries on this day that no Transactions row on this day accounts for
         ;(bankDay?.entries || []).forEach((bt) => {
           const key = bt.sourceSaleId != null ? String(bt.sourceSaleId) : bt.sourceExpenseId != null ? `exp_${bt.sourceExpenseId}` : null
@@ -1493,7 +1169,9 @@ export const TransactionPage: React.FC = () => {
   /** One sale's deposit against the bank entries posted for it. diff > 0 means the bank holds more. */
   const getSaleBankDiff = React.useCallback(
     (tx: DashboardTransactionItem, depositAmt: number) => {
-      const inBank = passbook.bankNetBySale.get(String(tx.id)) || 0
+      const rawId = String(tx.id)
+      const saleKey = rawId.startsWith('sale_') ? rawId : `sale_${rawId}`
+      const inBank = passbook.bankNetBySale.get(saleKey) ?? passbook.bankNetBySale.get(rawId) ?? 0
       return Math.round((inBank - depositAmt) * 100) / 100
     },
     [passbook]
@@ -1590,16 +1268,6 @@ export const TransactionPage: React.FC = () => {
     [paymentMethodFilter]
   )
 
-  const paymentMethodOptions = React.useMemo(() => {
-    const set = new Set<string>(['Cash', 'GCash', 'Cheque'])
-    transactions.forEach((t) => {
-      if (t.paymentMethod && t.paymentMethod.trim()) {
-        set.add(t.paymentMethod.trim())
-      }
-    })
-    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))]
-  }, [transactions])
-
   const matchesCategoryFilter = React.useCallback(
     (t: DashboardTransactionItem): boolean => {
       if (categoryFilter === 'All') return true
@@ -1608,16 +1276,6 @@ export const TransactionPage: React.FC = () => {
     },
     [categoryFilter]
   )
-
-  const categoryOptions = React.useMemo(() => {
-    const set = new Set<string>()
-    transactions.forEach((t) => {
-      if (t.category && String(t.category).trim()) {
-        set.add(String(t.category).trim())
-      }
-    })
-    return ['All', ...Array.from(set).sort((a, b) => a.localeCompare(b))]
-  }, [transactions])
 
   const filteredDepositTransactions = React.useMemo(() => {
     let list = depositBaseList
@@ -1815,6 +1473,10 @@ export const TransactionPage: React.FC = () => {
         return { deposit: 0, withdrawal: t.withdrawal }
       }
       // Fall back to the record type to decide the direction of the raw amount.
+      // Petty Cash and Loan rows carry explicit deposit/withdrawal; 0 means no bank cash moved.
+      if (t.type === 'Petty Cash' || t.type === 'Loan') {
+        return { deposit: 0, withdrawal: 0 }
+      }
       const amt = t.amount || 0
       if (t.type === 'Sales' || t.type === 'Income') {
         return { deposit: amt, withdrawal: 0 }
@@ -1969,120 +1631,6 @@ export const TransactionPage: React.FC = () => {
     </div>
   )
 
-  const activeFilterChips = React.useMemo(() => {
-    const chips: { key: string; label: string; onClear: () => void }[] = []
-
-    if (typeFilter !== 'All') {
-      chips.push({
-        key: 'type',
-        label: `Type: ${typeFilter}`,
-        onClear: () => {
-          setTypeFilter('All')
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (searchQuery.trim()) {
-      chips.push({
-        key: 'search',
-        label: `Search: "${searchQuery.trim()}"`,
-        onClear: () => {
-          setSearchQuery('')
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (selectedBankAccount) {
-      chips.push({
-        key: 'bank',
-        label: `Bank: ${selectedBankAccount.bankName}${selectedBankAccount.accountName ? ` – ${selectedBankAccount.accountName}` : ''}`,
-        onClear: () => {
-          setSelectedBankAccountId('')
-          setBankChosenByUser(true)
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (dateRange.startDate || dateRange.endDate) {
-      chips.push({
-        key: 'date',
-        label: dateRange.label || `${dateRange.startDate} – ${dateRange.endDate}`,
-        onClear: () => {
-          setDateRange({ startDate: null, endDate: null, label: 'All Dates', preset: 'All Dates' })
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (statusFilter !== 'All') {
-      chips.push({
-        key: 'status',
-        label: `Status: ${statusFilter}`,
-        onClear: () => {
-          setStatusFilter('All')
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (categoryFilter !== 'All') {
-      chips.push({
-        key: 'category',
-        label: `Category: ${categoryFilter}`,
-        onClear: () => {
-          setCategoryFilter('All')
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    if (paymentMethodFilter !== 'All') {
-      chips.push({
-        key: 'method',
-        label: `Method: ${paymentMethodFilter}`,
-        onClear: () => {
-          setPaymentMethodFilter('All')
-          setDepositCurrentPage(1)
-          setSalesCurrentPage(1)
-        },
-      })
-    }
-
-    return chips
-  }, [
-    typeFilter,
-    searchQuery,
-    canSelectAllCompanies,
-    selectedCompany,
-    supervisorCompanies.length,
-    defaultSupervisorCompany,
-    selectedBankAccount,
-    dateRange,
-    categoryFilter,
-    statusFilter,
-    paymentMethodFilter,
-    handleResetCompany,
-  ])
-
-  const handleClearAllFilters = () => {
-    setTypeFilter('All')
-    setSearchQuery('')
-    setDateRange({ startDate: null, endDate: null, label: 'All Dates', preset: 'All Dates' })
-    setCategoryFilter('All')
-    setStatusFilter('All')
-    setPaymentMethodFilter('All')
-    handleResetCompany()
-  }
-
   // Totals of the rows that match the current filters on the active tab (spec 0016)
   const activeTotals = React.useMemo(() => {
     let deposits = 0
@@ -2120,31 +1668,22 @@ export const TransactionPage: React.FC = () => {
   const canEditTx = (tx: DashboardTransactionItem) =>
     !canAudit &&
     !isOwner &&
-    (isSupervisor || isFinance || isAdmin) &&
-    (tx.type === 'Sales' || tx.type === 'Expense') &&
-    !tx.isMirrorRow &&
-    !tx.sourceModule &&
-    tx.auditStatus !== 'Verified'
-
-  // Unaudited Sales/Expenses can be deleted by Finance/Supervisors (never audited/verified or deposited sales)
-  const canShowDeleteOption = (tx: DashboardTransactionItem) =>
     isBusinessWriter &&
     (tx.type === 'Sales' || tx.type === 'Expense') &&
     !tx.isMirrorRow &&
     !tx.sourceModule &&
     tx.auditStatus !== 'Verified'
 
-  const getDeleteBlockedReason = (tx: DashboardTransactionItem): string | null => {
-    if (tx.auditStatus === 'Verified') return 'Audited records cannot be deleted'
-    if (tx.sourceModule) return `Recorded from ${tx.sourceModule}. Remove it on the ${tx.sourceModule} page`
-    if (tx.type === 'Sales' && (tx.depositStatus === 'Deposited' || tx.deposit_status === 'Deposited')) {
-      return 'Deposited sales cannot be deleted'
-    }
-    if (tx.type === 'Sales' && String(tx.id).startsWith('utang-')) {
-      return 'Manage standalone receivables from the Receivables page'
-    }
-    return null
-  }
+  // Unaudited transactions can be deleted with full cascade (never audited/verified)
+  const canShowDeleteOption = (tx: DashboardTransactionItem) =>
+    isBusinessWriter &&
+    (tx.type === 'Sales' || tx.type === 'Expense' || tx.type === 'Bank') &&
+    !tx.isMirrorRow &&
+    !tx.sourceModule &&
+    tx.auditStatus !== 'Verified'
+
+  const canEditRemarks = (tx: DashboardTransactionItem) =>
+    tx.type === 'Sales' || tx.type === 'Expense' || tx.type === 'Bank' || String(tx.id).startsWith('tx-')
 
   const handleMenuEdit = (tx: DashboardTransactionItem) => {
     setOpenMenuTxId(null)
@@ -2171,16 +1710,21 @@ export const TransactionPage: React.FC = () => {
     const target = deleteConfirmTx
     setIsDeletingTx(true)
     try {
-      if (target.type === 'Expense') {
-        await expenseService.deleteExpense(target.id).catch(() => {})
+      if (target.id.startsWith('tx-') || target.type === 'Bank') {
+        await transactionService.deleteTransaction(target.id)
+      } else if (target.type === 'Expense') {
+        await expenseService.deleteExpense(target.id)
       } else if (target.type === 'Sales') {
-        await salesService.deleteSale(target.id).catch(() => {})
+        await salesService.deleteSale(target.id)
+      } else {
+        await transactionService.deleteTransaction(target.id)
       }
       setTransactions((prev) =>
         prev.filter((t) => !(t.id === target.id && t.type === target.type))
       )
       setDeleteConfirmTx(null)
       notifySuccess(`${target.type || 'Transaction'} record deleted.`)
+      void fetchAllTransactions(true)
     } catch (err) {
       notifyError(err, 'Failed to delete transaction. Please try again.')
     } finally {
@@ -2212,11 +1756,7 @@ export const TransactionPage: React.FC = () => {
 
   const submitMarkAudit = async (tx: DashboardTransactionItem, trimmedNotes: string | undefined) => {
     setIsSubmittingAudit(true)
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
@@ -2229,18 +1769,23 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.type === 'Sales') {
+      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Verified', trimmedNotes)
+        const finalTx: DashboardTransactionItem = {
+          ...updatedTx,
+          auditedBy: res.auditedBy || auditorName,
+          auditDate: res.auditDate || today,
+        }
+        setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
+      } else if (tx.type === 'Sales') {
         await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
       } else if (tx.type === 'Loan') {
-        const loanId = tx.id.replace(/:lender$/, '')
-        await loanService.updateLoan(loanId, {
-          auditStatus: 'Verified',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedNotes,
-        })
+        setIsMarkAuditModalOpen(false)
+        setMarkAuditRemarks('')
+        setMarkAuditTargetTx(null)
+        return
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
         await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
@@ -2256,10 +1801,9 @@ export const TransactionPage: React.FC = () => {
     }
   }
 
-  // Sales and Expense rows the auditor can review here (petty cash is a read only mirror,
-  // loans awaiting audit are handled on their own page)
+  // Sales and Expense rows the auditor can review here (petty cash and loans are handled on their own workflows)
   const isRowAuditable = (tx: DashboardTransactionItem) =>
-    tx.type !== 'Petty Cash' && !tx.awaitingAudit
+    tx.type !== 'Petty Cash' && tx.type !== 'Loan' && !tx.awaitingAudit
 
   // Audit a whole day in one go: every auditable row that is not already audited or flagged.
   // Flagged rows keep their discrepancy and must be re-audited by hand.
@@ -2281,7 +1825,7 @@ export const TransactionPage: React.FC = () => {
     const notes = dayAuditRemarks.trim() || undefined
     setIsSubmittingDayAudit(true)
 
-    const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const keys = new Set(targets.map((t) => `${t.type}:${t.id}`))
 
@@ -2295,12 +1839,12 @@ export const TransactionPage: React.FC = () => {
 
     const results = await Promise.allSettled(
       targets.map((tx) => {
+        if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+          return bankService.updateTransactionAuditStatus(tx.id, action, notes)
+        }
         if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
         if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
-        if (tx.type === 'Loan') {
-          const loanId = tx.id.replace(/:lender$/, '')
-          return loanService.updateLoan(loanId, { auditStatus: action, auditedBy: auditorName, auditDate: today, auditNotes: notes })
-        }
+        if (tx.type === 'Loan') return Promise.resolve()
         if (tx.type === 'Income') {
           const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
           return tenantService.saveAuditReview(leaseId, action, notes)
@@ -2332,11 +1876,7 @@ export const TransactionPage: React.FC = () => {
     setIsSubmittingAudit(true)
     const tx = discrepancyTargetTx
     const trimmed = discrepancyReason.trim()
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: 'numeric',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
 
     const updatedTx: DashboardTransactionItem = {
@@ -2349,13 +1889,18 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.type === 'Sales') {
+      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
+        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Flagged', trimmed)
+        const finalTx: DashboardTransactionItem = {
+          ...updatedTx,
+          auditedBy: res.auditedBy || auditorName,
+          auditDate: res.auditDate || today,
+        }
+        setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
+      } else if (tx.type === 'Sales') {
         await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
       } else if (tx.type === 'Expense') {
         await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
-      } else if (tx.type === 'Loan') {
-        const loanId = tx.id.replace(/:lender$/, '')
-        await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmed })
       } else if (tx.type === 'Income') {
         const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
         await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
@@ -2387,14 +1932,41 @@ export const TransactionPage: React.FC = () => {
       const isExp = remarksTargetTx.type === 'Expense' || (remarksTargetTx.type as string) === 'Bill'
       if (isExp) {
         const updatedExpense = await expenseService.updateExpenseRemarks(remarksTargetTx.id, trimmed)
-        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        const tx = {
+          ...expenseService.toDashboardTransaction(updatedExpense),
+          id: remarksTargetTx.id,
+          remarks: trimmed,
+          paidAmount: remarksTargetTx.paidAmount,
+          bankAccountId: remarksTargetTx.bankAccountId,
+          bankName: remarksTargetTx.bankName,
+          sourceModule: remarksTargetTx.sourceModule,
+          isMirrorRow: remarksTargetTx.isMirrorRow,
+        }
         handleTransactionUpdated(tx)
       } else if (remarksTargetTx.type === 'Sales') {
         const updatedSale = await salesService.updateSaleRemarks(remarksTargetTx.id, trimmed)
-        const tx = salesService.toDashboardTransaction(updatedSale)
+        const tx = {
+          ...salesService.toDashboardTransaction(updatedSale),
+          id: remarksTargetTx.id,
+          remarks: trimmed,
+          paidAmount: remarksTargetTx.paidAmount,
+          bankAccountId: remarksTargetTx.bankAccountId,
+          bankName: remarksTargetTx.bankName,
+          depositStatus: remarksTargetTx.depositStatus,
+          depositDate: remarksTargetTx.depositDate,
+          saleDate: remarksTargetTx.saleDate,
+          sourceModule: remarksTargetTx.sourceModule,
+          isMirrorRow: remarksTargetTx.isMirrorRow,
+        }
         handleTransactionUpdated(tx)
-      } else {
+      } else if (remarksTargetTx.type === 'Bank' || String(remarksTargetTx.id).startsWith('tx-')) {
+        await bankService.updateTransactionRemarks(remarksTargetTx.id, trimmed)
         handleTransactionUpdated({ ...remarksTargetTx, remarks: trimmed })
+      } else {
+        notifyWarning('Remarks editing is only supported for Sales, Expense, and Bank entries.')
+        setIsRemarksDialogOpen(false)
+        setRemarksTargetTx(null)
+        return
       }
       notifySuccess(trimmed ? 'Remarks updated successfully' : 'Remarks removed successfully')
       setIsRemarksDialogOpen(false)
@@ -2423,7 +1995,7 @@ export const TransactionPage: React.FC = () => {
       if (isDeposit) {
         return [
           csvCell(formatToShortDate(t.date)),
-          csvCell(isSales ? formatToShortDate(t.saleDate || t.rawDate) : ''),
+          csvCell(isSales ? formatToShortDate(t.saleDate || t.date) : ''),
           csvCell(t.company),
           csvCell(t.chequeNo || '—'),
           csvCell(t.particulars || t.description),
@@ -2495,7 +2067,7 @@ export const TransactionPage: React.FC = () => {
                 return `
         <tr>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(formatToShortDate(tx.date))}</td>
-          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(isSales ? formatToShortDate(tx.saleDate || tx.rawDate) : '—')}</td>
+          <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(isSales ? formatToShortDate(tx.saleDate || tx.date) : '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px; font-weight: 600;">${escapeHtml(tx.company || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px;">${escapeHtml(tx.chequeNo || '—')}</td>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11px;">${escapeHtml(tx.particulars || tx.description)}</td>
@@ -3022,6 +2594,12 @@ export const TransactionPage: React.FC = () => {
               <TableBody>
                 {loading ? (
                   <TableSkeleton rows={5} columns={dayColCount} />
+                ) : fetchError ? (
+                  <TableErrorState
+                    colSpan={dayColCount}
+                    message={fetchError}
+                    onRetry={() => void fetchAllTransactions(false)}
+                  />
                 ) : visibleDayGroups.length === 0 ? (
                   <TableEmptyState
                     colSpan={dayColCount}
@@ -3031,25 +2609,15 @@ export const TransactionPage: React.FC = () => {
                 ) : (
                   visibleDayGroups.map((group) => {
                     const isExpanded = expandedDates.has(group.id)
-                    const parsed = new Date(`${group.date}T00:00:00`)
-                    const validDate = !isNaN(parsed.getTime())
                     const dayTxs = group.banks.flatMap((b) => b.transactions)
 
                     if (activeTab === 'deposit') {
                       // Ledger side vs the bank's own entries (not the ledger checked against itself)
                       const check = getPassbookCheck(group.date, dayTxs)
                       const closingBal = check.ledgerClosing
-                      const openingBal = check.ledgerOpening
-                      const passbookDiff = check.diff
-                      const isBalanced = check.isBalanced
 
                       const pendingCount = dayTxs.filter((t) => t.auditStatus !== 'Verified' && t.auditStatus !== 'Flagged').length
                       const hasDiscrepancy = dayTxs.some((t) => t.auditStatus === 'Flagged')
-
-                      const dayDeposits = dayTxs.filter((t) => t.type === 'Sales' || t.type === 'Income' || (t.deposit || 0) > 0)
-                      const dayWithdrawals = dayTxs.filter((t) => t.type !== 'Sales' && t.type !== 'Income' && (t.withdrawal || 0) > 0)
-                      const dayDepositsTotal = Math.round(dayDeposits.reduce((acc, t) => acc + (t.deposit || t.amount || 0), 0) * 100) / 100
-                      const dayWithdrawalsTotal = Math.round(dayWithdrawals.reduce((acc, t) => acc + (t.withdrawal || t.amount || 0), 0) * 100) / 100
 
                       const dateFormatted = formatToShortDate(group.date)
 
@@ -3167,28 +2735,6 @@ export const TransactionPage: React.FC = () => {
                             <TableRow className="bg-slate-50/40 border-b border-slate-200 hover:bg-slate-50/40">
                               <TableCell colSpan={showActionColumn ? 7 : 6} className="p-3 sm:p-4">
                                 <div className="space-y-3.5">
-                                  {/* Formula Banner: only shown when the day does not balance
-                                      (the Passbook Check column already says "Balanced" otherwise) */}
-                                  {!isBalanced && (
-                                    <div className="rounded-xl px-4 py-2.5 text-xs font-semibold flex items-center justify-between border bg-amber-50/70 border-amber-200 text-amber-900">
-                                      <div className="space-y-1">
-                                        <div>
-                                          Transactions: Opening {formatPHP(openingBal)} + Deposits {formatPHP(check.ledgerDeposit)} − Withdrawals {formatPHP(check.ledgerWithdrawal)} = Closing {formatPHP(closingBal)}
-                                        </div>
-                                        <div>
-                                          Bank passbook: Deposits {formatPHP(check.bankDeposit)} − Withdrawals {formatPHP(check.bankWithdrawal)}, Closing {formatPHP(check.bankClosing)}{' '}
-                                          {`(⚠ ${formatPHP(Math.abs(passbookDiff))} ${passbookDiff < 0 ? 'short' : 'over'})`}
-                                        </div>
-                                        {check.issues.length > 0 && (
-                                          <ul className="list-disc pl-5 font-medium">
-                                            {check.issues.map((issue, i) => (
-                                              <li key={i}>{issue}</li>
-                                            ))}
-                                          </ul>
-                                        )}
-                                      </div>
-                                    </div>
-                                  )}
 
                                   {/* Transactions table on this day */}
                                   <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -3240,7 +2786,7 @@ export const TransactionPage: React.FC = () => {
                                         ) : (
                                           dayTxs.map((tx) => {
                                             const txKey = `${tx.type}:${tx.id}`
-                                            const { displayType, title: ledgerTitle, subtitle, itemCount } = getBankLedgerParticulars(tx)
+                                            const { displayType, title: ledgerTitle, itemCount } = getBankLedgerParticulars(tx)
                                             const { deposit: depAmt, withdrawal: withAmt } = getRowAmounts(tx)
                                             const matchedBank = resolveTxBank(tx)
                                             const bankMethod = matchedBank?.bankName || tx.bankName || tx.paymentMethod || 'Cash'
@@ -3559,7 +3105,7 @@ export const TransactionPage: React.FC = () => {
                                     {dayTxs.map((tx) => {
                                       const { deposit, withdrawal } = getRowAmounts(tx)
                                       const lifecycle = deriveTransactionLifecycle(tx)
-                                      const { displayType, title: ledgerTitle, subtitle, itemCount } = getBankLedgerParticulars(tx)
+                                      const { displayType, title: ledgerTitle, itemCount } = getBankLedgerParticulars(tx)
                                       const matchedBank = resolveTxBank(tx)
                                       const bankMethod = matchedBank?.bankName || tx.bankName || tx.paymentMethod || 'Cash'
                                       const isSalesRow = displayType === 'Sales'
@@ -3816,6 +3362,12 @@ export const TransactionPage: React.FC = () => {
             <TableBody>
               {loading ? (
                 <TableSkeleton rows={8} columns={showActionColumn ? 9 : 8} />
+              ) : fetchError ? (
+                <TableErrorState
+                  colSpan={showActionColumn ? 9 : 8}
+                  message={fetchError}
+                  onRetry={() => void fetchAllTransactions(false)}
+                />
               ) : (activeTab === 'deposit' ? displayedDepositTransactions : displayedSalesTransactions).length === 0 ? (
                 <TableEmptyState
                   colSpan={showActionColumn ? 9 : 8}
@@ -3847,10 +3399,10 @@ export const TransactionPage: React.FC = () => {
                   const txKey = `${tx.type}:${tx.id}`
 
                   if (activeTab === 'deposit') {
-                    const { displayType, title: ledgerTitle, subtitle, itemCount: ledgerItemCount } = getBankLedgerParticulars(tx)
+                    const { title: ledgerTitle, itemCount: ledgerItemCount } = getBankLedgerParticulars(tx)
                     const dateShort = formatToShortDate(tx.date)
                     const isSalesRow = tx.type === 'Sales'
-                    const salesDateShort = isSalesRow ? formatToShortDate(tx.saleDate || tx.rawDate) : null
+                    const salesDateShort = isSalesRow ? formatToShortDate(tx.saleDate || tx.date) : null
                     const depositDiff = isSalesRow ? getSaleBankDiff(tx, depositAmt) : 0
 
                     return (
@@ -4290,7 +3842,7 @@ export const TransactionPage: React.FC = () => {
             )}
 
             {/* 4. Supervisor / Finance / Admin: Add Remarks */}
-            {(isSupervisor || isFinance || isAdmin) && !isAudit && (
+            {(isSupervisor || isFinance || isAdmin) && !isAudit && canEditRemarks(activeMenuTx) && (
               <button
                 type="button"
                 onClick={() => {

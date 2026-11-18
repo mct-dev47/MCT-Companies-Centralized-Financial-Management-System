@@ -3232,8 +3232,15 @@ export const BankManagementPage: React.FC = () => {
                         category: tx.category as any,
                         paymentMethod: tx.chequeNo ? 'Cheque' : 'Bank Transfer',
                         status: 'Paid',
-                        auditStatus: (tx as any).auditStatus || 'Pending Audit',
-                        createdAt: tx.date,
+                        auditStatus: (tx.auditStatus || 'Pending Audit') as any,
+                        auditedBy: tx.auditedBy,
+                        auditDate: tx.auditDate,
+                        auditNotes: tx.auditNotes,
+                        remarks: tx.remarks,
+                        createdAt: tx.createdAt || tx.date,
+                        sourceExpenseId: tx.sourceExpenseId,
+                        sourceSaleId: tx.sourceSaleId,
+                        bankAccountId: tx.bankAccountId || activeAccount?.id,
                         attachments: [],
                       })
                       setIsViewTxModalOpen(true)
@@ -4726,13 +4733,34 @@ export const BankManagementPage: React.FC = () => {
       {/* Modal: View Bank Transaction Breakdown & Particulars */}
 
       <AuditTransactionModal
-
         open={isViewTxModalOpen}
-
         onOpenChange={setIsViewTxModalOpen}
-
         transaction={viewingBankTx}
-
+        onTransactionUpdated={(updatedTx) => {
+          setViewingBankTx(updatedTx)
+          if (activeAccount) {
+            setActiveAccount((prev) => {
+              if (!prev) return prev
+              const updatedTransactions = (prev.transactions || []).map((t) => {
+                if (t.id === updatedTx.id) {
+                  return {
+                    ...t,
+                    auditStatus: updatedTx.auditStatus as any,
+                    auditedBy: updatedTx.auditedBy,
+                    auditDate: updatedTx.auditDate,
+                    auditNotes: updatedTx.auditNotes,
+                    remarks: updatedTx.remarks,
+                  }
+                }
+                return t
+              })
+              return {
+                ...prev,
+                transactions: updatedTransactions,
+              }
+            })
+          }
+        }}
       />
 
     </div>

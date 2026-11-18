@@ -10,7 +10,6 @@ import { Dropdown } from '@/components/ui/Dropdown'
 import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
-import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -376,7 +375,7 @@ export const AddSalesModal: React.FC<AddSalesModalProps> = ({
       // Only record in receivables if there is an unpaid balance (Utang / Partial)
       if (paymentOption !== 'Paid in full') {
         const parsedSaleId = created?.id ? Number(created.id) : undefined
-        receivablesStore.addNewSale({
+        await receivablesStore.addNewSale({
           customer_name: customerName.trim() || 'Walk-in Customer',
           customer_type: customerType,
           items_summary: particulars.trim(),

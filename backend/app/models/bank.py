@@ -70,6 +70,8 @@ class BankTransaction(Base):
     source_sale_id = Column(Integer, nullable=True, index=True)
     # Same for an expense (spec 0044): the bank holds only the PAID part of an expense, kept in step on every edit.
     source_expense_id = Column(Integer, nullable=True, index=True)
+    # Links a bank entry (borrower withdrawal or lender deposit) to a LoanRepayment.
+    source_loan_repayment_id = Column(Integer, nullable=True, index=True)
     # 'manual' = typed directly in Bank Management (no sale/expense/loan/petty-cash record behind it).
     # Part of the table (so create_all / new databases get it) but NOT mapped by the ORM (see __mapper_args__):
     # the ORM never names it in an INSERT or SELECT, so bank reads and writes keep working on a database where
@@ -78,6 +80,11 @@ class BankTransaction(Base):
     __mapper_args__ = {"exclude_properties": ["entry_source"]}
     # Which owner company this entry belongs to (only meaningful when the account has more than one owner).
     company_name = Column(String(255), nullable=True)
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
+    remarks = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     account = relationship("BankAccount", back_populates="transactions")

@@ -571,17 +571,45 @@ class ActivityLogService:
             norm_type = "loan"
         elif norm_type in ("tenants", "tenant", "lease", "income"):
             norm_type = "tenant"
+        elif norm_type in ("bank", "bank_transaction", "bank_transactions"):
+            norm_type = "bank_transaction"
+
+        def _format_iso(dt_val) -> Optional[str]:
+            if not dt_val:
+                return None
+            if isinstance(dt_val, str):
+                s = dt_val.strip()
+                if re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", s) and not re.search(r"([zZ]|[+-]\d{2}:?\d{2})$", s):
+                    return f"{s.replace(' ', 'T')}Z"
+                return s
+            if hasattr(dt_val, "tzinfo") and dt_val.tzinfo is not None:
+                return dt_val.isoformat()
+            elif hasattr(dt_val, "isoformat"):
+                return f"{dt_val.isoformat()}Z"
+            return str(dt_val)
 
         raw_id_str = str(record_id or "").strip()
         parsed_id: Optional[int] = None
-        match = re.search(r"(\d+)", raw_id_str)
-        if match:
-            parsed_id = int(match.group(1))
 
         close_session = False
         if db is None:
             db = SessionLocal()
             close_session = True
+
+        if raw_id_str.startswith("tx-"):
+            from app.models.bank import BankTransaction
+            bank_tx = db.query(BankTransaction).filter(BankTransaction.id == raw_id_str).first()
+            if bank_tx:
+                if bank_tx.source_expense_id:
+                    norm_type = "expense"
+                    parsed_id = bank_tx.source_expense_id
+                elif bank_tx.source_sale_id:
+                    norm_type = "sale"
+                    parsed_id = bank_tx.source_sale_id
+        if parsed_id is None and not raw_id_str.startswith("tx-"):
+            match = re.search(r"(\d+)", raw_id_str)
+            if match:
+                parsed_id = int(match.group(1))
 
         timeline: List[TimelineEventOut] = []
 
@@ -592,6 +620,8 @@ class ActivityLogService:
             id_needles: List[str] = []
             if parsed_id is not None:
                 id_needles.append(str(parsed_id))
+            if raw_id_str and raw_id_str != str(parsed_id):
+                id_needles.append(raw_id_str.lower())
             if ref_no and ref_no.strip():
                 id_needles.append(ref_no.strip().lower())
 
@@ -605,6 +635,7 @@ class ActivityLogService:
                     "petty_cash": "PETTY_CASH_",
                     "loan": "LOAN_",
                     "tenant": "TENANT_",
+                    "bank_transaction": "BANK_",
                 }.get(norm_type)
                 type_clauses = [details_lower.contains(norm_type, autoescape=True)] if norm_type else []
                 if action_prefix:
@@ -638,12 +669,16 @@ class ActivityLogService:
                     is_type_match = True
                 elif norm_type == "tenant" and al.action.startswith("TENANT_"):
                     is_type_match = True
+                elif norm_type == "bank_transaction" and (al.action.startswith("BANK_") or al_rec_type in ("bank", "bank_transaction", "bank_transactions")):
+                    is_type_match = True
 
                 if not is_type_match:
                     continue
 
                 id_matches = False
                 if parsed_id is not None and al_rec_id == str(parsed_id):
+                    id_matches = True
+                elif raw_id_str and (al_rec_id == raw_id_str or raw_id_str in al.details.lower()):
                     id_matches = True
                 elif ref_no and al_ref and al_ref.lower() == ref_no.strip().lower():
                     id_matches = True
@@ -706,7 +741,7 @@ class ActivityLogService:
                             title=title,
                             actor_name=item.user_name,
                             actor_role=item.module or None,
-                            timestamp=item.created_at,
+                            timestamp=_format_iso(item.created_at),
                             description=item.description,
                             changes=changes_val,
                             notes=str(notes_val) if notes_val else None,
@@ -729,7 +764,7 @@ class ActivityLogService:
                                 title="Sale Recorded",
                                 actor_name="Authorized Staff",
                                 actor_role="Staff",
-                                timestamp=str(sale.created_at) if sale.created_at else str(sale.transaction_date),
+                                timestamp=_format_iso(sale.created_at) or str(sale.transaction_date),
                                 description=f"Initial sale recorded: {sale.particulars} (₱{sale.amount:,.2f})",
                                 status_badge=sale.payment_status,
                             )
@@ -747,7 +782,7 @@ class ActivityLogService:
                                     title="Audited & Verified" if sale.audit_status == "Verified" else "Flagged for Audit Review",
                                     actor_name=auditor,
                                     actor_role="Audit Officer",
-                                    timestamp=str(sale.audited_at) if sale.audited_at else str(sale.updated_at or sale.created_at),
+                                    timestamp=_format_iso(sale.audited_at) or _format_iso(sale.updated_at) or _format_iso(sale.created_at),
                                     description=f"Transaction audited and marked as {sale.audit_status}",
                                     notes=sale.audit_remarks,
                                     status_badge=sale.audit_status,
@@ -765,7 +800,7 @@ class ActivityLogService:
                                     title="Details Modified",
                                     actor_name="Authorized Staff",
                                     actor_role="Supervisor",
-                                    timestamp=str(sale.updated_at),
+                                    timestamp=_format_iso(sale.updated_at),
                                     description="Transaction particulars, amount, or status updated",
                                 )
                             )
@@ -786,7 +821,7 @@ class ActivityLogService:
                                 title="Expense Recorded",
                                 actor_name=creator_name,
                                 actor_role="Staff",
-                                timestamp=str(exp.created_at) if exp.created_at else str(exp.expense_date),
+                                timestamp=_format_iso(exp.created_at) or str(exp.expense_date),
                                 description=f"Initial expense recorded: {exp.description or exp.particulars} (₱{exp.amount:,.2f})",
                                 status_badge="Paid",
                             )
@@ -804,7 +839,7 @@ class ActivityLogService:
                                     title="Audited & Verified" if exp.audit_status == "Verified" else "Flagged for Audit Review",
                                     actor_name=auditor,
                                     actor_role="Audit Officer",
-                                    timestamp=str(exp.audited_at) if exp.audited_at else str(exp.updated_at or exp.created_at),
+                                    timestamp=_format_iso(exp.audited_at) or _format_iso(exp.updated_at) or _format_iso(exp.created_at),
                                     description=f"Expense audited and marked as {exp.audit_status}",
                                     notes=exp.audit_remarks,
                                     status_badge=exp.audit_status,
@@ -822,7 +857,7 @@ class ActivityLogService:
                                     title="Details Modified",
                                     actor_name="Authorized Staff",
                                     actor_role="Supervisor",
-                                    timestamp=str(exp.updated_at),
+                                    timestamp=_format_iso(exp.updated_at),
                                     description="Expense details, amounts, or receipts updated",
                                 )
                             )
@@ -949,11 +984,49 @@ class ActivityLogService:
                                 title="Audited & Verified",
                                 actor_name=resolve_real_name(getattr(loan, "audited_by", "Internal Auditor")),
                                 actor_role="Audit Officer",
-                                timestamp=str(getattr(loan, "audited_at", loan.date)),
+                                timestamp=_format_iso(getattr(loan, "audited_at", None)) or str(loan.date),
                                 description=f"Loan verified by audit. Status: {loan.audit_status}",
                                 status_badge=loan.audit_status,
                             )
                         )
+
+            elif norm_type == "bank_transaction" or (raw_id_str.startswith("tx-") and parsed_id is None):
+                from app.models.bank import BankTransaction
+                bank_tx = db.query(BankTransaction).filter(BankTransaction.id == raw_id_str).first()
+                if bank_tx:
+                    has_created = any(t.event_type == "created" for t in timeline)
+                    if not has_created:
+                        timeline.append(
+                            TimelineEventOut(
+                                id=f"bank-{bank_tx.id}-created",
+                                action="BANK_TRANSACTION_RECORDED",
+                                event_type="created",
+                                title="Bank Transaction Recorded",
+                                actor_name="Finance Officer",
+                                actor_role="Finance",
+                                timestamp=_format_iso(bank_tx.created_at) or str(bank_tx.transaction_date),
+                                description=f"{bank_tx.particulars} ({'Withdrawal' if bank_tx.withdrawal and bank_tx.withdrawal > 0 else 'Deposit'}: ₱{(bank_tx.withdrawal or bank_tx.deposit or 0):,.2f})",
+                                status_badge="Paid",
+                            )
+                        )
+                    if bank_tx.audit_status and bank_tx.audit_status != "Pending Audit":
+                        has_audit = any(t.event_type == "audited" for t in timeline)
+                        if not has_audit:
+                            auditor = resolve_real_name(bank_tx.audited_by) if bank_tx.audited_by else "Internal Auditor"
+                            timeline.append(
+                                TimelineEventOut(
+                                    id=f"bank-{bank_tx.id}-audited",
+                                    action="BANK_TRANSACTION_AUDITED",
+                                    event_type="audited",
+                                    title="Audited & Verified" if bank_tx.audit_status == "Verified" else "Flagged for Audit Review",
+                                    actor_name=auditor,
+                                    actor_role="Audit Officer",
+                                    timestamp=_format_iso(bank_tx.audited_at) or _format_iso(bank_tx.created_at),
+                                    description=f"Transaction audited and marked as {bank_tx.audit_status}",
+                                    notes=bank_tx.audit_remarks,
+                                    status_badge=bank_tx.audit_status,
+                                )
+                            )
 
             # Sort chronological
             timeline.sort(key=lambda x: str(x.timestamp or ""))

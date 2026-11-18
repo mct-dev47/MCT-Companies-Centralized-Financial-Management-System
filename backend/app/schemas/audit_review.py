@@ -1,7 +1,7 @@
 """Audit review fields shared by sales and expenses (spec 0014)."""
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 AuditStatusValue = Literal["Pending Audit", "Verified", "Flagged"]
 
@@ -12,7 +12,18 @@ VALID_AUDIT_STATUSES = ("Pending Audit", "Verified", "Flagged")
 class AuditReviewIn(BaseModel):
     audit_status: AuditStatusValue
     remarks: Optional[str] = Field(None, max_length=2000)
+    audit_remarks: Optional[str] = Field(None, max_length=2000)
     auditor_name: Optional[str] = Field(None, max_length=150)
+
+    @model_validator(mode="before")
+    @classmethod
+    def unify_remarks(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("remarks") and data.get("audit_remarks"):
+                data["remarks"] = data["audit_remarks"]
+            elif not data.get("audit_remarks") and data.get("remarks"):
+                data["audit_remarks"] = data["remarks"]
+        return data
 
 
 def audit_fields(source: Any) -> dict:

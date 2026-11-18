@@ -2094,45 +2094,63 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
     }
 
     // Pre-fill debtor name and customer type if editing an unpaid sale
-    const saleIdNum = Number(editItem.id)
+    const rawIdStr = typeof editItem.id === 'string' ? editItem.id.replace(/^sale_/, '') : String(editItem.id)
+    const saleIdNum = Number(rawIdStr)
     const recIdFromUtang =
       typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
         ? Number(editItem.id.replace('utang-', ''))
-        : !Number.isNaN(saleIdNum)
-          ? saleIdNum
-          : undefined
-
-    const linkedRec = !Number.isNaN(saleIdNum)
-      ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
-      : recIdFromUtang
-        ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
         : undefined
 
-    const debtorName =
-      editItem.customer_name ||
-      linkedRec?.customer_name ||
-      ''
-    const rawType = editItem.customer_type || linkedRec?.customer_type
-    const debtorType: CustomerType =
-      rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+    const findMatchingReceivable = () =>
+      !Number.isNaN(saleIdNum)
+        ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
+        : recIdFromUtang
+          ? receivablesStore.getSales().find((u) => Number(u.id) === recIdFromUtang)
+          : undefined
 
-    if (debtorName) {
-      const initialRowId =
-        editItem.items && editItem.items.length > 0 && editItem.items[0].id
-          ? editItem.items[0].id
-          : generateSheetRowId(1)
-      setUnpaidAssignments([
-        {
-          rowId: initialRowId,
-          saleLineIndex: 0,
-          particulars: editItem.particulars || '',
-          quantity: 1,
-          unitPrice: fallbackTotal,
-          total: fallbackTotal,
-          customerType: debtorType,
-          customerName: debtorName,
-        },
-      ])
+    const linkedRec = findMatchingReceivable()
+
+    const applyLinkedDebtor = (rec: typeof linkedRec) => {
+      const name = editItem.customer_name || rec?.customer_name || ''
+      const rawType = editItem.customer_type || rec?.customer_type
+      const dType: CustomerType =
+        rawType === 'Staff' || rawType === 'Internal' ? 'Staff' : 'External'
+
+      if (name) {
+        const initialRowId =
+          editItem.items && editItem.items.length > 0 && editItem.items[0].id
+            ? editItem.items[0].id
+            : generateSheetRowId(1)
+        setUnpaidAssignments([
+          {
+            rowId: initialRowId,
+            saleLineIndex: 0,
+            particulars: editItem.particulars || '',
+            quantity: 1,
+            unitPrice: fallbackTotal,
+            total: fallbackTotal,
+            customerType: dType,
+            customerName: name,
+          },
+        ])
+      }
+    }
+
+    applyLinkedDebtor(linkedRec)
+
+    if (!linkedRec && !editItem.customer_name && (!Number.isNaN(saleIdNum) || recIdFromUtang)) {
+      let cancelled = false
+      void receivablesStore.refreshFromBackend().then(() => {
+        if (cancelled) return
+        setKnownDebtors(receivablesStore.getPeopleSummaries())
+        const refreshedRec = findMatchingReceivable()
+        if (refreshedRec) {
+          applyLinkedDebtor(refreshedRec)
+        }
+      })
+      return () => {
+        cancelled = true
+      }
     }
   }, [editItem])
 
@@ -2895,13 +2913,17 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
       unpaidRows.length > 0 &&
       currentStep === 'encode'
     ) {
-      const saleIdNum = editItem ? Number(editItem.id) : NaN
+      const saleIdNum = editItem
+        ? Number(
+            typeof editItem.id === 'string'
+              ? editItem.id.replace(/^sale_/, '')
+              : editItem.id,
+          )
+        : NaN
       const recIdFromUtang =
         editItem && typeof editItem.id === 'string' && editItem.id.startsWith('utang-')
           ? Number(editItem.id.replace('utang-', ''))
-          : !Number.isNaN(saleIdNum)
-            ? saleIdNum
-            : undefined
+          : undefined
 
       const linkedRec = !Number.isNaN(saleIdNum)
         ? receivablesStore.getSales().find((u) => Number(u.sale_id) === saleIdNum)
@@ -3160,7 +3182,8 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           })
 
           // Synchronize receivables for unpaid / paid edit
-          const saleIdNum = Number(editItem.id)
+          const rawIdStr = typeof editItem.id === 'string' ? editItem.id.replace(/^sale_/, '') : String(editItem.id)
+          const saleIdNum = Number(rawIdStr)
           // Only an "utang-<id>" row id names a receivable. A plain numeric id is a SALE id and must
           // never be used as a receivable id (that caused "Receivable with ID 81 not found").
           const recIdFromUtang =

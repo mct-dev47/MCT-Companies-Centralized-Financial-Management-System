@@ -93,7 +93,11 @@ interface RawAuditLogRow {
 }
 
 function getAuthHeaders(): HeadersInit {
-  const token = getAuthToken() || sessionStorage.getItem('mct_access_token')
+  const token =
+    getAuthToken() ||
+    sessionStorage.getItem('mct_access_token') ||
+    sessionStorage.getItem('auth_token') ||
+    localStorage.getItem('auth_token')
   return token ? { Authorization: 'Bearer ' + token } : {}
 }
 

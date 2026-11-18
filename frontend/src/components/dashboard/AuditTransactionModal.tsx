@@ -39,7 +39,7 @@ import { normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatDisplayDate } from '@/
 import { bankService } from '@/services/bankService'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 import { DayRemarkCell } from './DayRemark'
-import { notifyError } from '@/utils/errorUtils'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {
   salesService,
   type SalesItem,
@@ -121,8 +121,13 @@ const DEFAULT_SPECIFIC_CATEGORIES = [
 function formatTimelineDateTime(dateStr?: string | null): string {
   if (!dateStr) return '—'
   try {
-    const d = new Date(dateStr)
-    if (isNaN(d.getTime())) return String(dateStr)
+    const str = String(dateStr).trim()
+    if (!str) return '—'
+    const hasExplicitTz = /([zZ]|[+-]\d{2}:?\d{2})$/.test(str)
+    const isIsoLike = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(str)
+    const normalized = isIsoLike && !hasExplicitTz ? `${str.replace(' ', 'T')}Z` : str
+    const d = new Date(normalized)
+    if (isNaN(d.getTime())) return str
     return d.toLocaleString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -156,19 +161,15 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const { user } = useSession()
   const roleLower = (user?.role || '').toLowerCase()
   const isAudit = roleLower.includes('audit')
-  const isAdmin = roleLower === 'admin' || isAudit
+  const isAdmin = roleLower === 'admin'
   const isOwner = roleLower === 'owner'
   const isFinance = roleLower.includes('finance')
-  const canAudit = isAdmin && !isOwner
+  const canAudit = isAudit && !isOwner
 
   const [isDiscrepancyModalOpen, setIsDiscrepancyModalOpen] = React.useState(false)
   const [discrepancyReason, setDiscrepancyReason] = React.useState('')
   const [isMarkAuditModalOpen, setIsMarkAuditModalOpen] = React.useState(false)
   const [markAuditRemarks, setMarkAuditRemarks] = React.useState('')
-  const [localRemarksAuthor, setLocalRemarksAuthor] = React.useState<{
-    name: string
-    timestamp?: string
-  } | null>(null)
   const [isSubmittingAudit, setIsSubmittingAudit] = React.useState(false)
 
   const [currentTx, setCurrentTx] = React.useState<DashboardTransactionItem | null>(transaction)
@@ -180,7 +181,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
 
   const [timelineEvents, setTimelineEvents] = React.useState<EntityTimelineEvent[]>([])
   const [isLoadingTimeline, setIsLoadingTimeline] = React.useState(false)
-  const [isRemarksExpanded, setIsRemarksExpanded] = React.useState(false)
   const [isTimelineExpanded, setIsTimelineExpanded] = React.useState(false)
 
   // Form states for editing
@@ -294,11 +294,9 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       }
     } else {
       setIsEditing(false)
-      setIsRemarksExpanded(false)
       setIsTimelineExpanded(false)
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
-      setLocalRemarksAuthor(null)
       setError('')
       setFieldErrors({})
     }
@@ -348,12 +346,28 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const activeExpense = currentExpense || expense
   const activeLoan = currentLoan || loan
 
+  const canEditRemarks = Boolean(
+    activeSale ||
+    activeExpense ||
+    (activeTx && (activeTx.type === 'Sales' || activeTx.type === 'Expense' || activeTx.type === 'Bank' || String(activeTx.id).startsWith('tx-') || String(activeTx.id).startsWith('sale_') || String(activeTx.id).startsWith('exp_')))
+  )
+
+  const isAuditableType =
+    !activeLoan &&
+    activeTx?.type !== 'Petty Cash' &&
+    activeTx?.type !== 'Loan' &&
+    !activeTx?.awaitingAudit
+
   const resolvedTarget = React.useMemo(() => {
     let type = 'transaction'
     let id: string | number | undefined = undefined
     let ref: string | undefined = undefined
 
-    if (activeSale || activeTx?.type === 'Sales') {
+    if (activeTx?.id && String(activeTx.id).startsWith('tx-')) {
+      type = activeTx.sourceExpenseId ? 'expense' : activeTx.sourceSaleId ? 'sale' : 'bank_transaction'
+      id = activeTx.sourceExpenseId || activeTx.sourceSaleId || activeTx.id
+      ref = activeTx.refNo || activeTx.chequeNo
+    } else if (activeSale || activeTx?.type === 'Sales') {
       type = 'sale'
       const rawId = activeSale?.id || activeTx?.id
       id = rawId ? String(rawId).replace(/^sale_/, '') : undefined
@@ -368,13 +382,13 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       const rawId = activeLoan?.id || activeTx?.id
       id = rawId ? String(rawId).replace(/^loan_/, '').replace(/:lender$/, '') : undefined
       ref = activeLoan?.refNo || activeTx?.refNo
-    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && String(activeTx.id).startsWith('pc_'))) {
+    } else if (activeTx?.type === 'Petty Cash' || (activeTx?.id && (String(activeTx.id).startsWith('pc_') || String(activeTx.id).startsWith('petty_')))) {
       type = 'petty_cash'
-      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').split(':')[0] : undefined
+      id = activeTx?.id ? String(activeTx.id).replace('pc_', '').replace('petty_', '').split(':')[0] : undefined
       ref = activeTx?.refNo
     } else if (activeTx?.id && String(activeTx.id).startsWith('tenant_')) {
       type = 'tenant'
-      id = activeTx?.id ? String(activeTx.id).replace('tenant_lease_', '').replace('tenant_pmt_', '') : undefined
+      id = activeTx?.id ? String(activeTx.id).replace(/^tenant_lease_/, '').replace(/^tenant_pmt_/, '').split('_')[0] : undefined
       ref = activeTx?.refNo
     }
 
@@ -475,7 +489,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayParticulars =
     activeSale?.particulars || activeExpense?.particulars || activeLoan?.particulars || activeTx?.particulars || activeTx?.description || '—'
   const displayStatus = isExpense
-    ? 'Paid'
+    ? (activeExpense?.status || activeTx?.status || 'Paid')
     : (activeSale?.status || activeExpense?.status || activeLoan?.status || activeTx?.status || '—')
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
@@ -517,28 +531,38 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayRemarks =
     activeSale?.remarks || activeExpense?.remarks || activeTx?.remarks || ''
 
-  const timelineRemarksEvent = React.useMemo(() => {
-    return [...timelineEvents].reverse().find((e) => {
-      if (e.event_type === 'audited') return false
-      if (e.notes && String(e.notes).trim()) return true
-      return Boolean(e.changes && Object.prototype.hasOwnProperty.call(e.changes, 'remarks'))
-    })
-  }, [timelineEvents])
+  const currentAuditStatus =
+    activeSale?.auditStatus ||
+    activeExpense?.auditStatus ||
+    activeLoan?.auditStatus ||
+    activeTx?.auditStatus ||
+    'Pending Audit'
 
-  const remarksAuthorInfo = React.useMemo(() => {
-    if (!displayRemarks) return null
-    if (localRemarksAuthor) return localRemarksAuthor
-    if (timelineRemarksEvent?.actor_name) {
-      return {
-        name: formatRealName(timelineRemarksEvent.actor_name, timelineRemarksEvent.actor_role || 'Staff'),
-        timestamp: timelineRemarksEvent.timestamp,
-      }
-    }
-    if ((!displayUpdatedAt || displayUpdatedAt === displayCreatedAt) && displayCreatedBy !== '—') {
-      return { name: displayCreatedBy, timestamp: displayCreatedAt }
-    }
-    return null
-  }, [displayRemarks, localRemarksAuthor, timelineRemarksEvent, displayUpdatedAt, displayCreatedAt, displayCreatedBy])
+  const isAudited = currentAuditStatus === 'Verified'
+
+  const displayAuditedBy =
+    activeSale?.auditedBy ||
+    activeExpense?.auditedBy ||
+    activeLoan?.auditedBy ||
+    activeTx?.auditedBy
+
+  const displayAuditDate =
+    activeSale?.auditDate ||
+    activeExpense?.auditDate ||
+    activeLoan?.auditDate ||
+    activeTx?.auditDate
+
+  const preserveLedgerFields = (t: DashboardTransactionItem) => ({
+    id: t.id,
+    paidAmount: t.paidAmount,
+    bankAccountId: t.bankAccountId,
+    bankName: t.bankName,
+    depositStatus: t.depositStatus,
+    depositDate: t.depositDate,
+    saleDate: t.saleDate,
+    sourceModule: t.sourceModule,
+    isMirrorRow: t.isMirrorRow,
+  })
 
   const handleSaveImmediateRemarks = async () => {
     const targetId = activeSale?.id || activeExpense?.id || activeTx?.id
@@ -546,29 +570,47 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmittingRemarks(true)
     try {
       const trimmed = remarksInput.trim()
-      if (isExpense || activeTx?.type === 'Expense') {
+      if (activeTx?.id && (String(activeTx.id).startsWith('tx-') || activeTx.type === 'Bank')) {
+        await bankService.updateTransactionRemarks(activeTx.id, trimmed)
+        const updatedTx: DashboardTransactionItem = {
+          ...activeTx,
+          remarks: trimmed,
+          ...(isFinance ? { financeRemark: trimmed } : { supervisorRemark: trimmed }),
+        }
+        setCurrentTx(updatedTx)
+        if (onTransactionUpdated) onTransactionUpdated(updatedTx)
+      } else if (isExpense || activeTx?.type === 'Expense') {
         const updatedExpense = await expenseService.updateExpenseRemarks(targetId, trimmed)
         setCurrentExpense(updatedExpense)
-        const tx = expenseService.toDashboardTransaction(updatedExpense)
+        const tx = {
+          ...expenseService.toDashboardTransaction(updatedExpense),
+          ...(activeTx ? preserveLedgerFields(activeTx) : {}),
+          remarks: trimmed,
+        }
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onExpenseUpdated) onExpenseUpdated(updatedExpense)
         if (onTransactionUpdated) onTransactionUpdated(tx)
-      } else {
-        const updatedSale = await salesService.updateSaleRemarks(targetId, trimmed)
+      } else if (activeSale || activeTx?.type === 'Sales' || String(targetId).startsWith('sale_')) {
+        const cleanId = String(targetId).replace(/^sale_/, '')
+        const updatedSale = await salesService.updateSaleRemarks(cleanId, trimmed)
         setCurrentSale(updatedSale)
-        const tx = salesService.toDashboardTransaction(updatedSale)
+        const tx = {
+          ...salesService.toDashboardTransaction(updatedSale),
+          ...(activeTx ? preserveLedgerFields(activeTx) : {}),
+          remarks: trimmed,
+        }
+        if (isFinance) tx.financeRemark = trimmed
+        else tx.supervisorRemark = trimmed
         setCurrentTx(tx)
         if (onSaleUpdated) onSaleUpdated(updatedSale)
         if (onTransactionUpdated) onTransactionUpdated(tx)
+      } else {
+        notifyWarning('Remarks are only supported for Sales, Expenses, and Bank transactions.')
+        setIsSubmittingRemarks(false)
+        return
       }
-      setLocalRemarksAuthor(
-        trimmed
-          ? {
-              name: formatRealName(user?.fullName || user?.email || 'Staff', user?.role || 'Staff'),
-              timestamp: new Date().toISOString(),
-            }
-          : null
-      )
       setIsRemarksModalOpen(false)
     } catch (err: any) {
       notifyError(err?.message || 'Failed to update remarks')
@@ -587,18 +629,19 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const netAmount = isLoan
     ? loanVal
     : isExpense
-    ? (activeExpense?.netAmount ?? withdrawalVal)
+    ? (activeExpense?.netAmount ?? (withdrawalVal || activeTx?.amount || 0))
     : ((depositVal || 0) - (withdrawalVal || 0))
 
-  const currentAuditStatus =
-    activeSale?.auditStatus ||
-    activeExpense?.auditStatus ||
-    activeLoan?.auditStatus ||
-    activeTx?.auditStatus ||
-    'Pending Audit'
-
-  const isAudited = currentAuditStatus === 'Verified'
-  const isEditable = Boolean(!viewOnly && editable && !isAdmin && !isAudited && !isOwner)
+  const isEditableType = Boolean(
+    !activeTx?.sourceModule &&
+    !activeTx?.isMirrorRow &&
+    (activeSale ||
+      activeExpense ||
+      isLoan ||
+      activeTx?.type === 'Sales' ||
+      activeTx?.type === 'Expense')
+  )
+  const isEditable = Boolean(!viewOnly && editable && isEditableType && !isAdmin && !isAudited && !isOwner)
 
   const handleEditInSheet = () => {
     if (isAudited) return
@@ -618,26 +661,10 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     }
   }
 
-  const displayAuditedBy =
-    activeSale?.auditedBy ||
-    activeExpense?.auditedBy ||
-    activeLoan?.auditedBy ||
-    activeTx?.auditedBy
-
-  const displayAuditDate =
-    activeSale?.auditDate ||
-    activeExpense?.auditDate ||
-    activeLoan?.auditDate ||
-    activeTx?.auditDate
-
   const handleMarkAudit = async (optionalRemarks?: string) => {
     setIsSubmittingAudit(true)
     const trimmedNotes = (optionalRemarks ?? markAuditRemarks).trim() || undefined
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
     try {
@@ -665,23 +692,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Verified', auditorName, trimmedNotes)
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Verified',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedNotes,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, {
-          auditStatus: 'Verified',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedNotes,
-        })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -691,23 +701,31 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: trimmedNotes,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, {
-            auditStatus: 'Verified',
-            auditedBy: auditorName,
-            auditDate: today,
-            auditNotes: trimmedNotes,
-          })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Verified', trimmedNotes)
+            const finalTx: DashboardTransactionItem = {
+              ...updated,
+              auditedBy: res.auditedBy || auditorName,
+              auditDate: res.auditDate || today,
+            }
+            setCurrentTx(finalTx)
+            if (onTransactionUpdated) onTransactionUpdated(finalTx)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
@@ -723,11 +741,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     const trimmedRemarks = discrepancyReason.trim()
     if (!trimmedRemarks) return
     setIsSubmittingAudit(true)
-    const today = new Date().toLocaleDateString('en-US', {
-      month: '2-digit',
-      day: '2-digit',
-      year: '2-digit',
-    })
+    const today = new Date().toISOString()
     const auditorName = formatRealName(user?.fullName || user?.email || 'Internal Auditor', user?.role || 'Audit Officer')
 
     try {
@@ -755,18 +769,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Flagged', auditorName, trimmedRemarks)
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Flagged',
-          auditedBy: auditorName,
-          auditDate: today,
-          auditNotes: trimmedRemarks,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -776,18 +778,31 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: trimmedRemarks,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, { auditStatus: 'Flagged', auditedBy: auditorName, auditDate: today, auditNotes: trimmedRemarks })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Flagged', trimmedRemarks)
+            const finalTx: DashboardTransactionItem = {
+              ...updated,
+              auditedBy: res.auditedBy || auditorName,
+              auditDate: res.auditDate || today,
+            }
+            setCurrentTx(finalTx)
+            if (onTransactionUpdated) onTransactionUpdated(finalTx)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')
@@ -826,18 +841,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         setCurrentTx(expenseService.toDashboardTransaction(updated))
         await expenseService.updateExpenseAuditStatus(updated.id, 'Pending Audit')
         if (onExpenseUpdated) onExpenseUpdated(updated)
-      } else if (activeLoan) {
-        const updated: LoanItem = {
-          ...activeLoan,
-          auditStatus: 'Pending Audit',
-          auditedBy: undefined,
-          auditDate: undefined,
-          auditNotes: undefined,
-        }
-        setCurrentLoan(updated)
-        setCurrentTx(loanService.toDashboardTransaction(updated))
-        await loanService.updateLoan(updated.id, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined, auditNotes: undefined })
-        if (onLoanUpdated) onLoanUpdated(updated)
       } else if (activeTx) {
         const updated: DashboardTransactionItem = {
           ...activeTx,
@@ -847,18 +850,25 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
           auditNotes: undefined,
         }
         setCurrentTx(updated)
-        if (activeTx.type === 'Sales') {
-          await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
-        } else if (activeTx.type === 'Expense') {
-          await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-        } else if (activeTx.type === 'Loan') {
-          const loanId = activeTx.id.replace(/:lender$/, '')
-          await loanService.updateLoan(loanId, { auditStatus: 'Pending Audit', auditedBy: undefined, auditDate: undefined })
-        } else if (activeTx.type === 'Income') {
-          const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+        try {
+          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
+            await bankService.updateTransactionAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Sales') {
+            await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Expense') {
+            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          } else if (activeTx.type === 'Income') {
+            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
+            await tenantService.saveAuditReview(leaseId, 'Pending Audit')
+            if (onTransactionUpdated) onTransactionUpdated(updated)
+          }
+        } catch (err: any) {
+          setCurrentTx(activeTx)
+          throw err
         }
-        if (onTransactionUpdated) onTransactionUpdated(updated)
       }
     } catch (err: any) {
       console.error('Failed to reset audit status:', err)
@@ -1448,7 +1458,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                 )}
                 {displayAuditedBy && currentAuditStatus !== 'Pending Audit' && (
                   <span className="text-xs text-muted-fg">
-                    by {formatRealName(displayAuditedBy, 'Audit Officer')}{displayAuditDate ? ` · ${displayAuditDate}` : ''}
+                    by {formatRealName(displayAuditedBy, 'Audit Officer')}{displayAuditDate ? ` · ${formatTimelineDateTime(displayAuditDate)}` : ''}
                   </span>
                 )}
               </div>
@@ -1666,30 +1676,31 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
               )}
             </div>
 
-            {/* 4. Collapsible Sections (Remarks + Day Remark + Activity Timeline) */}
+            {/* 4. Activity Timeline & Remarks */}
             <div className="space-y-2.5">
-              {/* Remarks (Collapsible Chevron) */}
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 min-w-0">
+              {/* Activity Timeline & Remarks Section (Collapsible Chevron) */}
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <button
                     type="button"
-                    onClick={() => setIsRemarksExpanded((prev) => !prev)}
-                    aria-expanded={isRemarksExpanded}
-                    className="inline-flex items-center gap-2 min-h-[36px] py-1 text-left text-xs font-bold uppercase tracking-wider text-muted-fg hover:text-focus transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                    onClick={() => setIsTimelineExpanded((prev) => !prev)}
+                    aria-expanded={isTimelineExpanded}
+                    className="inline-flex items-center gap-2 min-h-[36px] py-1 text-left cursor-pointer rounded-md hover:text-focus transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
                   >
-                    {isRemarksExpanded ? (
-                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
-                    )}
-                    <span>Remarks</span>
-                    {!isRemarksExpanded && (displayRemarks || displayAuditNotes) && (
-                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-primary/10 text-primary normal-case tracking-normal">
-                        Has note
-                      </span>
-                    )}
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted-fg flex items-center gap-2">
+                      {isTimelineExpanded ? (
+                        <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
+                      )}
+                      <History className="w-3.5 h-3.5 text-primary" />
+                      <span>Activity Timeline & Remarks</span>
+                    </span>
+                    <span className="text-xs text-muted-fg font-mono">
+                      ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
+                    </span>
                   </button>
-                  {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && (
+                  {!isAudited && !isOwner && (!viewOnly || isFinance) && (!isAdmin || isFinance) && canEditRemarks && (
                     <Button
                       type="button"
                       variant="outline"
@@ -1707,76 +1718,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
                     </Button>
                   )}
                 </div>
-                {isRemarksExpanded && (
-                  <div className="mt-2 pb-1.5 pl-6 space-y-2.5">
-                    <div>
-                      {displayRemarks ? (
-                        <div className="space-y-1">
-                          <p className="text-sm font-medium text-focus whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                            {displayRemarks}
-                          </p>
-                          {remarksAuthorInfo && (
-                            <p className="text-xs text-muted-fg">
-                              Added by <span className="font-semibold text-focus">{remarksAuthorInfo.name}</span>
-                              {remarksAuthorInfo.timestamp
-                                ? ` · ${formatTimelineDateTime(remarksAuthorInfo.timestamp)}`
-                                : ''}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-muted-fg/70 italic font-normal text-xs">No operational remarks provided</span>
-                      )}
-                    </div>
-
-                    {displayAuditNotes && (
-                      <div
-                        className={cn(
-                          'rounded-lg border px-3 py-2 text-xs space-y-1',
-                          currentAuditStatus === 'Verified'
-                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
-                            : 'bg-rose-50/70 border-rose-200 text-rose-900'
-                        )}
-                      >
-                        <span className="font-bold block">
-                          {currentAuditStatus === 'Verified' ? 'Audit Remarks' : 'Audit Discrepancy Note'}
-                        </span>
-                        <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] leading-relaxed">
-                          {displayAuditNotes}
-                        </p>
-                        {displayAuditedBy && (
-                          <p className="text-[11px] opacity-85">
-                            By <span className="font-semibold">{formatRealName(displayAuditedBy, 'Audit Officer')}</span>
-                            {displayAuditDate ? ` · ${displayAuditDate}` : ''}
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Activity Timeline & Remarks Section (Collapsible Chevron) */}
-              <div className="rounded-xl border border-slate-200/80 bg-slate-50/50 px-3.5 py-2 space-y-2.5">
-                <button
-                  type="button"
-                  onClick={() => setIsTimelineExpanded((prev) => !prev)}
-                  aria-expanded={isTimelineExpanded}
-                  className="w-full flex items-center justify-between min-h-[36px] py-1 text-left cursor-pointer rounded-md hover:text-focus transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-                >
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-fg flex items-center gap-2">
-                    {isTimelineExpanded ? (
-                      <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4 text-muted-fg shrink-0" />
-                    )}
-                    <History className="w-3.5 h-3.5 text-primary" />
-                    <span>Activity Timeline & Remarks</span>
-                  </span>
-                  <span className="text-xs text-muted-fg font-mono">
-                    ID: {activeTx?.id || activeSale?.id || activeExpense?.id || '—'}
-                  </span>
-                </button>
 
                 {isTimelineExpanded && (
                   <div className="rounded-xl border border-stroke/20 bg-white p-3 space-y-2.5 text-xs">
@@ -2034,7 +1975,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
             </div>
 
             {/* Audit Actions: Mark as Audited (or Re-Audit when already audited), Flag Discrepancy when not audited */}
-            {canAudit && (
+            {canAudit && isAuditableType && (
               <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 mt-2 border-t border-stroke/20">
                 <div className="text-[11px] text-muted-fg font-medium">
                   {currentAuditStatus === 'Verified' ? (

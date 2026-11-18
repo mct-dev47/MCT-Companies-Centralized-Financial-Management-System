@@ -85,9 +85,13 @@ class BankService:
         return query.options(selectinload(BankAccount.transactions)).execution_options(populate_existing=True)
 
     def _attach_entry_sources(self, accounts):
-        """Attach entry_source to the loaded entries with one query (skipped until the column exists)."""
+        """Attach entry_source and audit fields to loaded entries."""
         accounts = [a for a in (accounts if isinstance(accounts, list) else [accounts]) if a is not None]
-        if not accounts or not entry_source_supported(self.db):
+        if not accounts:
+            return
+        all_txs = [t for a in accounts for t in (a.transactions or [])]
+        self._hydrate_audit_fields(all_txs)
+        if not entry_source_supported(self.db):
             return
         from sqlalchemy import bindparam, text
 
@@ -102,6 +106,54 @@ class BankService:
         for a in accounts:
             for t in a.transactions:
                 t._entry_source = by_id.get(t.id)
+
+    def _hydrate_audit_fields(self, rows: List[BankTransaction]) -> None:
+        """
+        If a bank transaction is linked to an expense or sale, ensure its audit_status,
+        audited_by, audited_at, audit_remarks, and remarks reflect the source record
+        if not already stamped on the bank transaction itself.
+        """
+        if not rows:
+            return
+        from app.models.finance import Expense, Sale
+        exp_ids = [r.source_expense_id for r in rows if r.source_expense_id]
+        sale_ids = [r.source_sale_id for r in rows if r.source_sale_id]
+
+        exp_map = {}
+        if exp_ids:
+            exps = self.db.query(Expense).filter(Expense.expense_id.in_(set(exp_ids))).all()
+            exp_map = {e.expense_id: e for e in exps}
+
+        sale_map = {}
+        if sale_ids:
+            sales = self.db.query(Sale).filter(Sale.sales_id.in_(set(sale_ids))).all()
+            sale_map = {s.sales_id: s for s in sales}
+
+        for r in rows:
+            if r.source_expense_id and r.source_expense_id in exp_map:
+                exp = exp_map[r.source_expense_id]
+                if (not r.audit_status or r.audit_status == "Pending Audit") and exp.audit_status and exp.audit_status != "Pending Audit":
+                    r.audit_status = exp.audit_status
+                if not r.audited_by and exp.audited_by:
+                    r.audited_by = exp.audited_by
+                if not r.audited_at and exp.audited_at:
+                    r.audited_at = exp.audited_at
+                if not r.audit_remarks and exp.audit_remarks:
+                    r.audit_remarks = exp.audit_remarks
+                if not r.remarks and exp.remarks:
+                    r.remarks = exp.remarks
+            elif r.source_sale_id and r.source_sale_id in sale_map:
+                s = sale_map[r.source_sale_id]
+                if (not r.audit_status or r.audit_status == "Pending Audit") and s.audit_status and s.audit_status != "Pending Audit":
+                    r.audit_status = s.audit_status
+                if not r.audited_by and s.audited_by:
+                    r.audited_by = s.audited_by
+                if not r.audited_at and s.audited_at:
+                    r.audited_at = s.audited_at
+                if not r.audit_remarks and s.audit_remarks:
+                    r.audit_remarks = s.audit_remarks
+                if not r.remarks and s.remarks:
+                    r.remarks = s.remarks
 
     def _save_entry_source(self, tx: BankTransaction) -> None:
         """Persist tx._entry_source (after the entry is inserted), only when the column exists."""
@@ -235,6 +287,7 @@ class BankService:
             src_map = {str(r[0]): r[1] for r in src_rows}
             for r in rows:
                 r._entry_source = src_map.get(str(r.id))
+        self._hydrate_audit_fields(rows)
         return rows, total
 
     def get_account(self, account_id: str, with_entries: bool = False) -> Optional[BankAccount]:
@@ -279,7 +332,7 @@ class BankService:
         Needs no database round trip and stays unique when several saves run at once
         (the old count()+1 scheme handed two concurrent saves the same id). Ids still sort oldest first.
         """
-        return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(3)}"
+        return f"tx-{time.time_ns() // 1_000_000:013d}{secrets.token_hex(4)}"
 
     def _sync_balance(self, account: BankAccount) -> None:
         """
@@ -430,7 +483,7 @@ class BankService:
         self.db.refresh(account)
         return account
 
-    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None) -> Tuple[BankAccount, BankTransaction]:
+    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_repayment_id: Optional[int] = None, commit: bool = True) -> Tuple[BankAccount, BankTransaction]:
         account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -455,15 +508,19 @@ class BankService:
             category=tx_category,
             net_amount=amount,
             source_sale_id=source_sale_id,
+            source_loan_repayment_id=source_loan_repayment_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
         tx._entry_source = entry_source
         self.db.add(tx)
         self._sync_balance(account)
         self._save_entry_source(tx)
-        self.db.commit()
-        self.db.refresh(account)
-        self.db.refresh(tx)
+        if commit:
+            self.db.commit()
+            self.db.refresh(account)
+            self.db.refresh(tx)
+        else:
+            self.db.flush()
         return account, tx
 
     def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None) -> Tuple[BankAccount, BankTransaction]:
@@ -617,9 +674,11 @@ class BankService:
         tx_date: Optional[str],
         is_reversal: bool = False,
         company_name: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> BankTransaction:
         """Add one bank entry linked to its source record and move the account balance with it."""
         label = particulars or "Bank entry"
+        resolved_category = category or ("Loan Repayment" if link_attr == "source_loan_repayment_id" else "Cash")
         tx = BankTransaction(
             company_name=self.resolve_tx_company(account, company_name),
             id=self._generate_transaction_id(),
@@ -629,101 +688,13 @@ class BankService:
             particulars=f"Reversal: {label}" if is_reversal else label,
             withdrawal=Decimal("0.00") if is_deposit else amount,
             deposit=amount if is_deposit else Decimal("0.00"),
-            category="Cash",
+            category=resolved_category,
             net_amount=amount,
         )
         setattr(tx, link_attr, link_id)
         self.db.add(tx)
         self._sync_balance(account)
         self.db.flush()
-        return tx
-
-    def _sync_linked_entries(
-        self,
-        *,
-        link_attr: str,
-        link_id: int,
-        credit: bool,
-        target_amount: Decimal,
-        company_name: Optional[str],
-        account_id: Optional[str],
-        particulars: Optional[str],
-        reference_no: Optional[str],
-        tx_date: Optional[str],
-        linked: List[BankTransaction],
-    ) -> Optional[BankTransaction]:
-        """
-        Make the bank net for one record equal `target_amount`, on the record's OWN bank account.
-        `credit=True` is a sale (money in), `credit=False` an expense (money out). Only the difference
-        is posted, so the bank always equals what the Transactions ledger counts for the record.
-        If entries sit on a different account than the record's bank, they are moved over.
-        """
-        target = Decimal(str(target_amount or 0)).quantize(Decimal("0.01"))
-        sign = Decimal("1") if credit else Decimal("-1")
-
-        def recognized(t: BankTransaction) -> Decimal:
-            return (Decimal(str(t.deposit or 0)) - Decimal(str(t.withdrawal or 0))) * sign
-
-        # Which account should hold this record: its own bank, else where it already is, else the company's
-        account = self._get_account_for_update(account_id) if account_id else None
-        if not account and linked:
-            account = self._get_account_for_update(linked[0].bank_account_id)
-        if not account and company_name:
-            found_acct = self.find_account_for_company(company_name)
-            account = self._get_account_for_update(found_acct.id) if found_acct else None
-        if not account:
-            self.db.commit()
-            return None
-
-        # Move anything recorded on another account: offset it there, count it here instead
-        by_account: Dict[str, Decimal] = {}
-        for t in linked:
-            by_account[t.bank_account_id] = by_account.get(t.bank_account_id, Decimal("0")) + recognized(t)
-        for other_id, net in by_account.items():
-            if other_id == account.id or net == Decimal("0.00"):
-                continue
-            other = self._get_account_for_update(other_id)
-            if other is None:
-                continue
-            # Entries that recognized `net` there are undone by posting the opposite direction
-            undo_as_deposit = (net < 0) if credit else (net > 0)
-            self._post_linked_entry(
-                other,
-                link_attr=link_attr,
-                link_id=link_id,
-                is_deposit=undo_as_deposit,
-                amount=abs(net),
-                particulars=particulars or "Bank entry",
-                reference_no=reference_no,
-                tx_date=tx_date,
-                is_reversal=True,
-                company_name=next((t.company_name for t in linked if t.bank_account_id == other_id and t.company_name), None),
-            )
-
-        current = sum((recognized(t) for t in linked if t.bank_account_id == account.id), Decimal("0.00"))
-        delta = (target - current).quantize(Decimal("0.01"))
-        tx = None
-        if delta != Decimal("0.00"):
-            more = delta > 0
-            tx = self._post_linked_entry(
-                account,
-                link_attr=link_attr,
-                link_id=link_id,
-                is_deposit=(more if credit else not more),
-                amount=abs(delta),
-                particulars=particulars or "Bank entry",
-                reference_no=reference_no,
-                tx_date=tx_date,
-                is_reversal=not more,
-                company_name=company_name or next((t.company_name for t in linked if t.bank_account_id == account.id and t.company_name), None),
-            )
-        elif len(linked) == 1 and linked[0].bank_account_id == account.id and particulars:
-            if linked[0].particulars != particulars:
-                linked[0].particulars = particulars
-                tx = linked[0]
-        self.db.commit()
-        if tx is not None:
-            self.db.refresh(tx)
         return tx
 
     def patch_linked_entry(
@@ -734,10 +705,12 @@ class BankService:
         credit: bool,
         amount: Decimal,
         account_id: Optional[str],
-        particulars: str,
+        particulars: Optional[str],
         reference_no: Optional[str],
         tx_date: Optional[str],
         company_name: Optional[str] = None,
+        category: Optional[str] = None,
+        commit: bool = True,
     ) -> Optional[BankTransaction]:
         """
         Keep ONE bank entry for a record and edit it to match: amount, bank, date, text. Used for records
@@ -745,16 +718,22 @@ class BankService:
         2,000 entry instead of the original plus a reversal. Any extra entries the record built up are
         removed. Balances are re-derived from the entries of every account touched.
         """
-        if link_attr not in ("source_sale_id", "source_expense_id"):
+        if link_attr not in ("source_sale_id", "source_expense_id", "source_loan_repayment_id"):
             raise ValueError("Unsupported link attribute.")
         amount = Decimal(str(amount or 0)).quantize(Decimal("0.01"))
-        linked = (
-            self.db.query(BankTransaction)
-            .filter(getattr(BankTransaction, link_attr) == link_id)
-            .order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc())
-            .all()
+        q = self.db.query(BankTransaction).filter(getattr(BankTransaction, link_attr) == link_id)
+        if link_attr == "source_loan_repayment_id":
+            q = q.filter(BankTransaction.deposit > 0 if credit else BankTransaction.withdrawal > 0)
+        linked = q.order_by(BankTransaction.created_at.asc(), BankTransaction.id.asc()).all()
+        if (not account_id or amount <= Decimal("0.00")) and not linked:
+            return None
+
+        resolved_account_id = account_id or (linked[0].bank_account_id if linked else None)
+        account = (
+            self._get_account_for_update(resolved_account_id)
+            if (resolved_account_id and amount > Decimal("0.00"))
+            else None
         )
-        account = self._get_account_for_update(account_id) if account_id else None
         touched = {t.bank_account_id for t in linked}
 
         if account is None or amount <= Decimal("0.00"):
@@ -765,15 +744,37 @@ class BankService:
             keep, extras = linked[0], linked[1:]
             for t in extras:
                 self.db.delete(t)
+            new_company = self.resolve_tx_company(account, company_name)
+            new_dep = amount if credit else Decimal("0.00")
+            new_wd = Decimal("0.00") if credit else amount
+            new_date = tx_date or keep.transaction_date
+            new_particulars = particulars if particulars is not None else keep.particulars
+            norm_ref = (reference_no or "").strip() or None
+            changed = (
+                bool(extras)
+                or keep.bank_account_id != account.id
+                or keep.company_name != new_company
+                or Decimal(str(keep.deposit or 0)) != new_dep
+                or Decimal(str(keep.withdrawal or 0)) != new_wd
+                or keep.particulars != new_particulars
+                or ((keep.cheque_no or "").strip() or None) != norm_ref
+                or keep.transaction_date != new_date
+            )
             keep.bank_account_id = account.id
-            keep.company_name = self.resolve_tx_company(account, company_name)
-            keep.deposit = amount if credit else Decimal("0.00")
-            keep.withdrawal = Decimal("0.00") if credit else amount
+            keep.company_name = new_company
+            keep.deposit = new_dep
+            keep.withdrawal = new_wd
             keep.net_amount = amount
-            keep.particulars = particulars
-            keep.cheque_no = reference_no
-            if tx_date:
-                keep.transaction_date = tx_date
+            keep.particulars = new_particulars
+            keep.cheque_no = norm_ref
+            keep.transaction_date = new_date
+            if category is not None:
+                keep.category = category
+            if changed:
+                keep.audit_status = "Pending Audit"
+                keep.audited_by = None
+                keep.audited_at = None
+                keep.audit_remarks = None
         else:
             keep = self._post_linked_entry(
                 account,
@@ -781,10 +782,11 @@ class BankService:
                 link_id=link_id,
                 is_deposit=credit,
                 amount=amount,
-                particulars=particulars,
+                particulars=particulars or "Bank entry",
                 reference_no=reference_no,
                 tx_date=tx_date,
                 company_name=company_name,
+                category=category,
             )
         if account is not None:
             touched.add(account.id)
@@ -793,12 +795,15 @@ class BankService:
             acc = self._get_account_for_update(acc_id)
             if acc is not None:
                 self._sync_balance(acc)
-        self.db.commit()
-        if keep is not None:
-            self.db.refresh(keep)
+        if commit:
+            self.db.commit()
+            if keep is not None:
+                self.db.refresh(keep)
+        else:
+            self.db.flush()
         return keep
 
-    def purge_linked_entries(self, *, link_attr: str, link_id: int) -> int:
+    def purge_linked_entries(self, *, link_attr: str, link_id: int, commit: bool = True) -> int:
         """
         Delete every bank entry linked to a deleted sale/expense (`source_sale_id` / `source_expense_id`).
         Each account's balance is corrected by the net of the entries removed, so balances stay right
@@ -820,7 +825,10 @@ class BankService:
             account = self._get_account_for_update(account_id)
             if account is not None:
                 self._sync_balance(account)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return len(linked)
 
     def sync_sale_deposit(
@@ -857,19 +865,26 @@ class BankService:
             )
             if legacy:
                 legacy.source_sale_id = sale_id
+                self.db.flush()  # sessions run with autoflush off: make patch_linked_entry see the adopted row
                 linked = [legacy]
 
-        return self._sync_linked_entries(
+        resolved_account_id = account_id
+        if not resolved_account_id and linked:
+            resolved_account_id = linked[0].bank_account_id
+        if not resolved_account_id and company_name and Decimal(str(target_amount or 0)) > Decimal("0.00"):
+            found_acct = self.find_account_for_company(company_name)
+            resolved_account_id = found_acct.id if found_acct else None
+
+        return self.patch_linked_entry(
             link_attr="source_sale_id",
             link_id=sale_id,
             credit=True,
-            target_amount=target_amount,
-            company_name=company_name,
-            account_id=account_id,
+            amount=target_amount,
+            account_id=resolved_account_id,
             particulars=particulars or "Sales Collection",
             reference_no=reference_no,
             tx_date=tx_date,
-            linked=linked,
+            company_name=company_name,
         )
 
     def sync_expense_disbursement(
@@ -882,6 +897,7 @@ class BankService:
         reference_no: Optional[str] = None,
         tx_date: Optional[str] = None,
         legacy_particulars: Optional[str] = None,
+        commit: bool = True,
     ) -> Optional[BankTransaction]:
         """
         Make the bank net for one expense equal `target_amount` (only the PAID part leaves the bank;
@@ -906,19 +922,27 @@ class BankService:
             )
             if legacy:
                 legacy.source_expense_id = expense_id
+                self.db.flush()  # sessions run with autoflush off: make patch_linked_entry see the adopted row
                 linked = [legacy]
 
-        return self._sync_linked_entries(
+        resolved_account_id = account_id
+        if not resolved_account_id and linked:
+            resolved_account_id = linked[0].bank_account_id
+        if not resolved_account_id and company_name and Decimal(str(target_amount or 0)) > Decimal("0.00"):
+            found_acct = self.find_account_for_company(company_name)
+            resolved_account_id = found_acct.id if found_acct else None
+
+        return self.patch_linked_entry(
             link_attr="source_expense_id",
             link_id=expense_id,
             credit=False,
-            target_amount=target_amount,
-            company_name=company_name,
-            account_id=account_id,
+            amount=target_amount,
+            account_id=resolved_account_id,
             particulars=particulars or "Expense Disbursement",
             reference_no=reference_no,
             tx_date=tx_date,
-            linked=linked,
+            company_name=company_name,
+            commit=commit,
         )
 
     def record_expense_cash_withdrawal(self, company_name: str, amount: Decimal, particulars: str, cheque_no: Optional[str] = None, tx_date: Optional[str] = None) -> Optional[BankTransaction]:

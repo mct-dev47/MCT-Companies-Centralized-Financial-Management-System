@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -422,8 +422,31 @@ class BillsService:
         return self._to_output(self.get_bill(bill_id))
 
     def delete_bill(self, bill_id: int) -> None:
-        self.db.delete(self.get_bill(bill_id))
-        self.db.commit()
+        bill = self.get_bill(bill_id)
+        # Check audit lock: if any linked expense is Verified, block deletion
+        for payment in bill.payments or []:
+            if payment.expense_id:
+                from app.models.finance import Expense
+                exp = self.db.query(Expense).filter(Expense.expense_id == payment.expense_id).first()
+                if exp and (exp.audit_status or "").strip().lower() == "verified":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="Cannot delete bill with an audited & verified payment expense.",
+                    )
+        # Cascade remove all funding expenses and bank entries (prevents ghost data)
+        removed_expense_ids: List[int] = []
+        try:
+            for payment in list(bill.payments or []):
+                exp_id = self._remove_funding_expense(payment)
+                if exp_id:
+                    removed_expense_ids.append(exp_id)
+            self.db.delete(bill)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses(removed_expense_ids)
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
 
     def schedule(self, bill_id: int, as_of: date = date.today()) -> BillScheduleOut:
@@ -619,25 +642,53 @@ class BillsService:
         self.db.flush()
         return expense
 
-    def _remove_funding_expense(self, payment: BillPayment) -> None:
-        """Undo a funded payment: give the money back to the bank / petty cash by removing its expense."""
+    def _remove_funding_expense(self, payment: BillPayment) -> Optional[int]:
+        """Undo a funded payment inside the caller's transaction (no commit here).
+
+        Returns the removed expense id so the caller can delete the remote copy after its own commit.
+        """
         if not payment.expense_id:
-            return
+            return None
         from app.api.v1.endpoints.expenses import reconcile_expense_bank
         from app.models.finance import Expense
         from app.services.bank_service import BankService
 
         expense_id = payment.expense_id
-        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True)
         expense = self.db.query(Expense).filter(Expense.expense_id == expense_id).first()
+        if expense is not None and (expense.audit_status or "").strip().lower() == "verified":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This bill payment has a Verified funding expense and cannot be deleted without audit unlock.",
+            )
+
+        reconcile_expense_bank(self.db, expense_id=expense_id, force_zero=True, commit=False)
         if expense is not None:
             self.db.delete(expense)
         self.db.flush()
+
+        # Failures here must abort the whole delete so nothing is half committed
+        BankService(self.db).purge_linked_entries(
+            link_attr="source_expense_id", link_id=expense_id, commit=False
+        )
+        return expense_id
+
+    def _delete_remote_expenses(self, expense_ids: List[int]) -> None:
+        """Remove the Supabase copies after the local commit succeeded. Failures are logged as errors."""
+        if not expense_ids:
+            return
         try:
-            BankService(self.db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
-        except Exception:
-            pass
-        system_cache.invalidate_tag("petty_cash")
+            from app.db.supabase import get_supabase_admin_client
+            client = get_supabase_admin_client()
+        except Exception as exc:
+            logger.error("Supabase client unavailable, remote bill funding expenses %s not deleted: %s", expense_ids, exc)
+            return
+        if not client:
+            return
+        for expense_id in expense_ids:
+            try:
+                client.table("expenses").delete().eq("expense_id", expense_id).execute()
+            except Exception as exc:
+                logger.error("Supabase delete failed for bill funding expense %s: %s", expense_id, exc)
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
         payment = self.db.query(BillPayment).filter(
@@ -646,9 +697,15 @@ class BillsService:
         ).first()
         if not payment:
             raise HTTPException(status_code=404, detail="Bill payment not found.")
-        self._remove_funding_expense(payment)
-        self.db.delete(payment)
-        self.db.commit()
+        try:
+            exp_id = self._remove_funding_expense(payment)
+            self.db.delete(payment)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses([exp_id] if exp_id else [])
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
 
@@ -661,11 +718,139 @@ class BillsService:
         )
         if not payment:
             raise HTTPException(status_code=404, detail="No bill payment found to undo.")
-        self._remove_funding_expense(payment)
-        self.db.delete(payment)
-        self.db.commit()
+        try:
+            exp_id = self._remove_funding_expense(payment)
+            self.db.delete(payment)
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        self._delete_remote_expenses([exp_id] if exp_id else [])
+        system_cache.invalidate_tag("petty_cash")
         system_cache.invalidate_tag("notifications")
         return self._to_output(self.get_bill(bill_id))
+
+    def prepare_payment_edit_from_expense(self, expense_id: int, new_paid_amount: Optional[Decimal]) -> Optional[int]:
+        """Validate a pending edit on a bill-linked expense before any Expense or bank mutation commits."""
+        payment = self.db.query(BillPayment).filter(BillPayment.expense_id == expense_id).first()
+        if not payment:
+            return None
+        if new_paid_amount is not None:
+            amt = Decimal(str(new_paid_amount)).quantize(Decimal("0.01"))
+            if amt <= Decimal("0.00"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="A bill payment expense cannot be marked as Pending or Unpaid. Delete the expense to undo the bill payment.",
+                )
+            bill = (
+                self.db.query(Bill)
+                .options(selectinload(Bill.payments))
+                .filter(Bill.bill_id == payment.bill_id)
+                .execution_options(populate_existing=True)
+                .first()
+            )
+            period_payments = [p for p in (bill.payments if bill else []) if p.period_key == payment.period_key]
+            billed_candidates = [
+                Decimal(str(p.billed_amount))
+                for p in period_payments
+                if p.billed_amount is not None and Decimal(str(p.billed_amount)) > Decimal("0.00")
+            ]
+            period_billed = (
+                max(billed_candidates) if billed_candidates else Decimal(str((bill.amount if bill else 0) or 0))
+            ).quantize(Decimal("0.01"))
+            if period_billed > Decimal("0.00"):
+                other_paid = sum(
+                    (
+                        Decimal(str(p.amount or 0))
+                        for p in period_payments
+                        if p.bill_payment_id != payment.bill_payment_id
+                    ),
+                    Decimal("0.00"),
+                )
+                remaining = max(Decimal("0.00"), period_billed - other_paid)
+                if amt > (remaining + Decimal("0.01")):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Payment amount (₱{amt:,.2f}) cannot exceed the remaining balance (₱{remaining:,.2f}).",
+                    )
+        return payment.bill_id
+
+    def sync_payment_from_expense(
+        self,
+        expense,
+        commit: bool = True,
+        paid_amount: Optional[Decimal] = None,
+    ) -> Optional[int]:
+        """Update the linked BillPayment and recompute Bill.status when its Expense is edited."""
+        from app.services.bank_service import BankService
+        from app.services.sales_receivables_sync import compute_paid_amount_from_particulars
+
+        payment = self.db.query(BillPayment).filter(BillPayment.expense_id == expense.expense_id).first()
+        if not payment:
+            return None
+        paid_amt = (
+            Decimal(str(paid_amount)).quantize(Decimal("0.01"))
+            if paid_amount is not None
+            else Decimal(str(compute_paid_amount_from_particulars(expense.description, expense.amount) or 0)).quantize(Decimal("0.01"))
+        )
+        self.prepare_payment_edit_from_expense(expense.expense_id, paid_amt)
+
+        payment.amount = paid_amt
+        if expense.expense_date is not None:
+            payment.payment_date = expense.expense_date
+        payment.payment_method = (expense.payment_method or "").strip() or "Cash"
+        is_petty = "petty cash" in payment.payment_method.lower()
+        payment.funding_source = "petty_cash" if is_petty else "bank"
+        if is_petty:
+            payment.bank_account_id = None
+        elif expense.bank_account_id:
+            payment.bank_account_id = expense.bank_account_id
+        elif not payment.bank_account_id and expense.company_id:
+            comp = self.db.query(Company).filter(Company.company_id == expense.company_id).first()
+            found_acct = BankService(self.db).find_account_for_company(comp.company_name) if comp else None
+            payment.bank_account_id = found_acct.id if found_acct else None
+        payment.reference_no = expense.cheque_no
+        payment.notes = expense.remarks
+        self.db.flush()
+        bill = (
+            self.db.query(Bill)
+            .options(selectinload(Bill.payments))
+            .filter(Bill.bill_id == payment.bill_id)
+            .execution_options(populate_existing=True)
+            .first()
+        )
+        if bill:
+            bill.status = self._status(bill)
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
+        system_cache.invalidate_tag("notifications")
+        return payment.bill_id
+
+    def delete_payment_from_expense(self, expense_id: int, commit: bool = True) -> Optional[int]:
+        """Delete the linked BillPayment and recompute Bill.status when its Expense is deleted."""
+        payment = self.db.query(BillPayment).filter(BillPayment.expense_id == expense_id).first()
+        if not payment:
+            return None
+        bill_id = payment.bill_id
+        self.db.delete(payment)
+        self.db.flush()
+        bill = (
+            self.db.query(Bill)
+            .options(selectinload(Bill.payments))
+            .filter(Bill.bill_id == bill_id)
+            .execution_options(populate_existing=True)
+            .first()
+        )
+        if bill:
+            bill.status = self._status(bill)
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
+        system_cache.invalidate_tag("notifications")
+        return bill_id
 
     def get_stats(
         self,

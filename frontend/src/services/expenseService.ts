@@ -478,12 +478,24 @@ export const expenseService = {
           ? sessionStorage.getItem('mct_access_token')
           : null
 
+      const amountPaid =
+        input.items && input.items.length > 0
+          ? Math.round(
+              input.items
+                .filter((it) => (it.status || input.status) === 'Paid')
+                .reduce((sum, it) => sum + Number(it.total || 0), 0) * 100
+            ) / 100
+          : input.status === 'Paid'
+            ? cleanAmount
+            : 0
+
       const payload = {
         company: input.company,
         expense_date: rawDate,
         particulars: input.particulars,
         description: input.particulars,
         amount: cleanAmount,
+        amount_paid: amountPaid,
         category: input.category,
         payment_method: input.paymentMethod || null,
         cheque_no: input.chequeNo || null,
@@ -593,6 +605,9 @@ export const expenseService = {
     }
     if (updates.remarks !== undefined) {
       payload.remarks = updates.remarks
+    }
+    if (updates.bankAccountId !== undefined) {
+      payload.bank_account_id = updates.bankAccountId || null
     }
 
     try {

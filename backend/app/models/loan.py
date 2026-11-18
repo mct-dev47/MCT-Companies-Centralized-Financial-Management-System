@@ -84,6 +84,8 @@ class LoanRepayment(Base):
     status = Column(String(50), default="completed")  # pending, completed, overdue
     received_at = Column(DateTime(timezone=True), nullable=True)
     notes = Column(Text, nullable=True)
+    expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True, index=True)
+    bank_account_id = Column(String(100), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

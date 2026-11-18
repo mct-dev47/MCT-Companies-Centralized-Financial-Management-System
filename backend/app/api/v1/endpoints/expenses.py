@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import date
 from decimal import Decimal
 from collections import defaultdict
 import logging
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from app.core.business_time import business_today
@@ -58,7 +59,14 @@ def _local_category_id(db: Session, name: str) -> Optional[int]:
     return cat.category_id
 
 
-def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = False) -> None:
+def reconcile_expense_bank(
+    db: Session,
+    *,
+    expense_id: int,
+    force_zero: bool = False,
+    commit: bool = True,
+    paid_amount: Optional[Decimal] = None,
+) -> None:
     """Keep the bank equal to the Transactions ledger for one expense: only the PAID part of an expense
     has left the bank (Pending and Unpaid lines have not), on the expense's own bank account.
     Petty cash expenses never touch a bank."""
@@ -71,11 +79,12 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             return
         # Same rule the petty cash wallet uses to count an expense as spent from petty cash
         is_petty = "petty cash" in (expense.payment_method or "").strip().lower()
-        target = (
-            Decimal("0.00")
-            if force_zero or is_petty
+        resolved_paid = (
+            Decimal(str(paid_amount)).quantize(Decimal("0.01"))
+            if paid_amount is not None
             else compute_paid_amount_from_particulars(expense.description, expense.amount)
         )
+        target = Decimal("0.00") if force_zero or is_petty else resolved_paid
         company = db.query(Company).filter(Company.company_id == expense.company_id).first()
         company_name = company.company_name if company else None
         exp_date = expense.expense_date
@@ -88,10 +97,14 @@ def reconcile_expense_bank(db: Session, *, expense_id: int, force_zero: bool = F
             reference_no=expense.cheque_number or expense.cheque_no,
             tx_date=exp_date.strftime("%m/%d/%y") if hasattr(exp_date, "strftime") else str(exp_date),
             legacy_particulars=expense.description,
+            commit=commit,
         )
-        ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
-    except Exception as exc:  # never block saving an expense on a bank sync problem
-        import logging
+        if commit:
+            system_cache.invalidate_tag("bank_accounts")
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"company": company_name}})
+    except Exception as exc:  # never block saving an expense unless running inside an atomic commit=False batch
+        if not commit:
+            raise
         logging.getLogger(__name__).warning("Bank reconcile skipped for expense %s: %s", expense_id, exc)
 
 
@@ -154,17 +167,22 @@ def get_supabase_mappings(client=None, db: Optional[Session] = None):
     return company_map, cat_map
 
 def _current_expense_row(db: Session, expense_id: int) -> Optional[dict]:
-    """Company, payment method and amount of an existing expense (Supabase first, then local)."""
+    """Company, payment method, amount and audit status of an existing expense (Supabase first, then local)."""
     try:
         client = get_supabase_admin_client()
-        res = client.table("expenses").select("company_id, payment_method, amount").eq("expense_id", expense_id).execute()
+        res = client.table("expenses").select("company_id, payment_method, amount, audit_status").eq("expense_id", expense_id).execute()
         if res.data:
             return res.data[0]
     except Exception:
         pass
     exp = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if exp:
-        return {"company_id": exp.company_id, "payment_method": exp.payment_method, "amount": exp.amount}
+        return {
+            "company_id": exp.company_id,
+            "payment_method": exp.payment_method,
+            "amount": exp.amount,
+            "audit_status": exp.audit_status,
+        }
     return None
 
 def _build_expenses_query(
@@ -312,6 +330,12 @@ def get_expenses(
         sort_by = "expense_date"
     if hasattr(sort_dir, "default"):
         sort_dir = "desc"
+
+    try:
+        from app.api.v1.endpoints.loans import ensure_repayment_expenses_deduplicated
+        ensure_repayment_expenses_deduplicated(db)
+    except Exception:
+        pass
 
     query = _build_expenses_query(
         db=db,
@@ -623,7 +647,6 @@ def _enqueue_large_expense_alert_if_enabled(
             )
         db.commit()
     except Exception as exc:
-        import logging
         logging.getLogger(__name__).warning("Large expense alert enqueue skipped for expense %s: %s", expense_id, exc)
 
 
@@ -663,6 +686,11 @@ def create_expense(
 
     cheque = (expense_in.cheque_no or expense_in.chequeNo or "").strip() or None
     effective_bank_id = getattr(expense_in, "bank_account_id", None)
+    effective_paid_amount = (
+        Decimal(str(expense_in.amount_paid)).quantize(Decimal("0.01"))
+        if expense_in.amount_paid is not None
+        else compute_paid_amount_from_particulars(parts, expense_in.amount)
+    )
     created_row = None
     sb_expense_id = None
 
@@ -725,7 +753,7 @@ def create_expense(
             "expense_date": expense_in.expense_date.isoformat(),
             "cheque_number": cheque,
             "amount": float(expense_in.amount),
-            "amount_paid": float(expense_in.amount_paid or 0.0),
+            "amount_paid": float(effective_paid_amount),
             "description": parts,
             "remarks": expense_in.remarks,
             "bank_account_id": effective_bank_id,
@@ -769,7 +797,7 @@ def create_expense(
                 cheque_no=cheque,
                 cheque_number=cheque,
                 amount=expense_in.amount,
-                amount_paid=expense_in.amount_paid or Decimal("0.00"),
+                amount_paid=effective_paid_amount,
                 description=parts,
                 remarks=expense_in.remarks,
                 bank_account_id=effective_bank_id,
@@ -912,7 +940,7 @@ def create_expense(
             cheque_no=cheque,
             cheque_number=cheque,
             amount=expense_in.amount,
-            amount_paid=expense_in.amount_paid or Decimal("0.00"),
+            amount_paid=effective_paid_amount,
             description=parts,
             remarks=expense_in.remarks,
             bank_account_id=effective_bank_id,
@@ -978,6 +1006,7 @@ def create_expense(
             company_name=target_company.company_name,
             category_id=expense.category_id,
             category_name=cat.name if cat else "None",
+            payment_method=expense.payment_method,
             created_by=expense.created_by,
             expense_date=expense.expense_date,
             cheque_no=expense.cheque_number or expense.cheque_no or cheque,
@@ -992,17 +1021,33 @@ def create_expense(
             **audit_fields(expense)
         )
 
+def _resolve_expense_id(db: Session, raw_id: Union[str, int]) -> int:
+    s = str(raw_id).strip()
+    if s.startswith("tx-"):
+        from app.models.bank import BankTransaction
+        bt = db.query(BankTransaction).filter(BankTransaction.id == s).first()
+        if bt and bt.source_expense_id:
+            return bt.source_expense_id
+        raise HTTPException(status_code=404, detail=f"Linked expense not found for transaction {s}")
+    s = re.sub(r"^(exp|expense)_", "", s)
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail=f"Invalid expense_id: {raw_id}")
+
+
 @router.get("/{expense_id}", response_model=ExpenseOut, summary="Get expense details")
 def get_expense(
-    expense_id: int,
+    expense_id: Union[int, str],
     current_user: AuthenticatedUser = Depends(require_business_reader),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
 
     try:
         client = get_supabase_admin_client()
         company_map, cat_map = get_supabase_mappings(client, db=db)
-        res = client.table("expenses").select("*").eq("expense_id", expense_id).execute()
+        res = client.table("expenses").select("*").eq("expense_id", resolved_id).execute()
         if res.data:
             row = res.data[0]
             check_company_access(current_user, row.get("company_id"))
@@ -1039,7 +1084,7 @@ def get_expense(
         )
         .outerjoin(Company, Expense.company_id == Company.company_id)
         .outerjoin(Category, Expense.category_id == Category.category_id)
-        .filter(Expense.expense_id == expense_id)
+        .filter(Expense.expense_id == resolved_id)
         .first()
     )
     if not result:
@@ -1091,6 +1136,12 @@ def update_expense(
     if current and current.get("company_id"):
         check_company_access(current_user, current.get("company_id"))
 
+    if current and (current.get("audit_status") or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This expense has been Verified by an Auditor and is locked as read-only.",
+        )
+
     # Paid with petty cash (newly chosen, or already petty cash): the category is always Petty Cash
     effective_payment_method = (
         expense_in.payment_method if expense_in.payment_method is not None else (current or {}).get("payment_method")
@@ -1102,17 +1153,59 @@ def update_expense(
 
     # No petty cash balance block on edit either: the wallet may go negative (paid out of pocket).
 
-    update_payload = {}
+    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    old_exp_date = expense.expense_date if expense else None
+    had_bank_link = bool(expense and expense.bank_account_id)
+
+    update_payload = {
+        "audit_status": "Pending Audit",
+        "audited_by": None,
+        "audited_at": None,
+        "audit_remarks": None,
+    }
     if expense_in.expense_date:
         update_payload["expense_date"] = expense_in.expense_date.isoformat()
     if target_amt is not None:
         update_payload["amount"] = float(target_amt)
-    if expense_in.amount_paid is not None:
-        update_payload["amount_paid"] = float(expense_in.amount_paid)
 
     parts = expense_in.particulars or expense_in.description
     if parts is not None:
         update_payload["description"] = parts.strip()
+
+    # Always keep amount_paid aligned with amount and [Paid]/[Pending] lines whenever amount or particulars change,
+    # and pass the validated effective_paid_amount explicitly to bank, bill, and loan sync helpers.
+    base_desc = parts.strip() if parts is not None else (expense.description if expense else None)
+    base_amt = target_amt if target_amt is not None else (current or {}).get("amount")
+    if base_amt is not None and (target_amt is not None or parts is not None):
+        effective_paid_amount = compute_paid_amount_from_particulars(base_desc, base_amt)
+        update_payload["amount_paid"] = float(effective_paid_amount)
+    elif expense_in.amount_paid is not None:
+        effective_paid_amount = Decimal(str(expense_in.amount_paid)).quantize(Decimal("0.01"))
+        update_payload["amount_paid"] = float(effective_paid_amount)
+    elif expense is not None:
+        effective_paid_amount = (
+            Decimal(str(expense.amount_paid)).quantize(Decimal("0.01"))
+            if expense.amount_paid is not None
+            else compute_paid_amount_from_particulars(expense.description, expense.amount)
+        )
+    else:
+        effective_paid_amount = None
+
+    if target_amt is None and effective_paid_amount is not None and base_amt is not None:
+        if effective_paid_amount > Decimal(str(base_amt)).quantize(Decimal("0.01")):
+            target_amt = effective_paid_amount
+            update_payload["amount"] = float(effective_paid_amount)
+
+    # Validate linked loan repayment and bill payment limits BEFORE mutating Supabase, Expense, or bank rows.
+    from app.api.v1.endpoints.loans import (
+        prepare_loan_repayment_edit,
+        sync_loan_repayment_from_expense,
+        sync_remote_loan_status,
+    )
+    from app.services.bills_service import BillsService
+
+    prepare_loan_repayment_edit(db, expense_id, effective_paid_amount)
+    BillsService(db).prepare_payment_edit_from_expense(expense_id, effective_paid_amount)
 
     cheque = expense_in.cheque_no if expense_in.cheque_no is not None else expense_in.chequeNo
     if cheque is not None:
@@ -1121,56 +1214,75 @@ def update_expense(
     if expense_in.remarks is not None:
         update_payload["remarks"] = expense_in.remarks.strip() if expense_in.remarks else None
 
-    # Update in Supabase
-    updated_row = None
+    if force_petty_category:
+        update_payload["bank_account_id"] = None
+    else:
+        new_bank_id = (expense_in.bank_account_id or "").strip() or None if expense_in.bank_account_id is not None else None
+        if new_bank_id:
+            if current and current.get("company_id"):
+                from app.services.income_bank_links import validate_company_bank
+                validate_company_bank(db, int(current["company_id"]), new_bank_id)
+            update_payload["bank_account_id"] = new_bank_id
+        elif expense is not None and expense.bank_account_id:
+            update_payload["bank_account_id"] = expense.bank_account_id
+        elif expense is not None and expense.company_id:
+            from app.services.bank_service import BankService
+            comp = db.query(Company).filter(Company.company_id == expense.company_id).first()
+            found_acct = BankService(db).find_account_for_company(comp.company_name) if comp else None
+            if found_acct is not None:
+                update_payload["bank_account_id"] = str(found_acct.id)
+
+    if expense_in.payment_method is not None:
+        update_payload["payment_method"] = (expense_in.payment_method or "").strip() or None
+
+    # Resolve category_id before mutating locally
+    client = None
     try:
         client = get_supabase_admin_client()
-        company_map, cat_map = get_supabase_mappings(client, db=db)
+    except Exception:
+        client = None
 
-        category_str = (expense_in.category or "").strip()
-        if category_str:
-            if category_str.lower() == "none":
-                update_payload["category_id"] = None
-            else:
-                cat_id = None
-                for cid, cname in cat_map.items():
-                    if cname.lower() == category_str.lower():
-                        cat_id = cid
-                        break
-                if not cat_id:
-                    ins_cat = client.table("category").insert({"name": category_str}).execute()
-                    if ins_cat.data:
-                        cat_id = ins_cat.data[0]["category_id"]
-                update_payload["category_id"] = cat_id
-        elif expense_in.category_id is not None:
-            update_payload["category_id"] = expense_in.category_id
+    category_str = (expense_in.category or "").strip()
+    if category_str:
+        if category_str.lower() == "none":
+            update_payload["category_id"] = None
+        else:
+            cat_id = None
+            if client is not None:
+                try:
+                    _, cat_map = get_supabase_mappings(client, db=db)
+                    for cid, cname in cat_map.items():
+                        if cname.lower() == category_str.lower():
+                            cat_id = cid
+                            break
+                    if not cat_id:
+                        ins_cat = client.table("category").insert({"name": category_str}).execute()
+                        if ins_cat.data:
+                            cat_id = ins_cat.data[0]["category_id"]
+                except Exception:
+                    cat_id = None
+            if not cat_id:
+                cat_id = _local_category_id(db, category_str)
+            update_payload["category_id"] = cat_id
+    elif expense_in.category_id is not None:
+        update_payload["category_id"] = expense_in.category_id
 
-        if expense_in.payment_method is not None:
-            update_payload["payment_method"] = (expense_in.payment_method or "").strip() or None
-
-        if update_payload:
-            sb_res = client.table("expenses").update(update_payload).eq("expense_id", expense_id).execute()
-            if sb_res.data:
-                updated_row = sb_res.data[0]
-    except Exception as e:
-        print(f"Supabase expense update error: {e}")
-
-    # Also update in local SQLite
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
     if expense and force_petty_category and "category_id" not in update_payload:
-        # Supabase step did not run: still file the expense under Petty Cash locally
         update_payload["category_id"] = _local_category_id(db, PETTY_CASH_CATEGORY)
+
+    # Atomically update Expense, borrower bank, BillPayment, and LoanRepayment (+ lender bank) together
+    affected_bill_id = None
+    affected_loan_id = None
     if expense:
         if "expense_date" in update_payload:
             expense.expense_date = expense_in.expense_date
         if "amount" in update_payload:
             expense.amount = target_amt
         if "amount_paid" in update_payload:
-            expense.amount_paid = expense_in.amount_paid
+            expense.amount_paid = effective_paid_amount
         if "description" in update_payload:
             expense.description = update_payload["description"]
         if "cheque_number" in update_payload:
-            expense.cheque_number = update_payload["cheque_number"]
             expense.cheque_no = update_payload["cheque_number"]
         if "category_id" in update_payload:
             expense.category_id = update_payload["category_id"]
@@ -1178,12 +1290,50 @@ def update_expense(
             expense.payment_method = update_payload["payment_method"]
         if "remarks" in update_payload:
             expense.remarks = update_payload["remarks"]
+        if "bank_account_id" in update_payload:
+            expense.bank_account_id = update_payload["bank_account_id"]
+        expense.audit_status = "Pending Audit"
+        expense.audited_by = None
+        expense.audited_at = None
+        expense.audit_remarks = None
+        db.flush()
+
+        reconcile_expense_bank(db, expense_id=expense_id, commit=False, paid_amount=effective_paid_amount)
+        affected_bill_id = BillsService(db).sync_payment_from_expense(
+            expense, commit=False, paid_amount=effective_paid_amount
+        )
+        affected_loan_id = sync_loan_repayment_from_expense(
+            db, expense, commit=False, old_pay_date=old_exp_date, paid_amount=effective_paid_amount
+        )
         db.commit()
         db.refresh(expense)
 
-    # Keep the bank equal to the ledger after any edit to amount, particulars, paid status or bank
-    reconcile_expense_bank(db, expense_id=expense_id)
+    # Sync to Supabase after local atomic commit succeeds (skip redundant write when sharing Postgres)
+    updated_row = None
+    if client is not None and update_payload and (not expense or not rest_and_orm_share_database()):
+        try:
+            sb_res = client.table("expenses").update(update_payload).eq("expense_id", expense_id).execute()
+            if sb_res.data:
+                updated_row = sb_res.data[0]
+        except Exception as e:
+            print(f"Supabase expense update error: {e}")
+
     system_cache.invalidate_tag("petty_cash")
+    from app.core.websocket import ws_manager
+    if not force_petty_category or had_bank_link:
+        system_cache.invalidate_tag("bank_accounts")
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+    if affected_bill_id is not None:
+        system_cache.invalidate_tag("bills")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"bill_id": affected_bill_id}})
+    if affected_loan_id is not None:
+        sync_remote_loan_status(db, affected_loan_id)
+        system_cache.invalidate_tag("loans")
+        system_cache.invalidate_tag("bank_accounts")
+        system_cache.invalidate_tag("notifications")
+        ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"loan_id": affected_loan_id}})
+        ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
 
     # Auto-save updated particulars to company library
     if parts:
@@ -1290,15 +1440,16 @@ def update_expense(
 
 @router.patch("/{expense_id}/remarks", response_model=ExpenseOut, summary="Update operational remarks of an expense")
 def update_expense_remarks(
-    expense_id: int,
+    expense_id: Union[int, str],
     remarks_in: RemarksUpdate,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     target_remarks = remarks_in.remarks.strip() if remarks_in.remarks and remarks_in.remarks.strip() else None
 
-    current = _current_expense_row(db, expense_id)
+    current = _current_expense_row(db, resolved_id)
     if not current:
         raise HTTPException(status_code=404, detail="Expense not found")
 
@@ -1307,22 +1458,38 @@ def update_expense_remarks(
 
     try:
         client = get_supabase_admin_client()
-        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", expense_id).execute()
+        client.table("expenses").update({"remarks": target_remarks}).eq("expense_id", resolved_id).execute()
     except Exception as e:
         pass
 
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    expense = db.query(Expense).filter(Expense.expense_id == resolved_id).first()
     if expense:
         expense.remarks = target_remarks
         db.commit()
         db.refresh(expense)
+
+    # Sync remarks to any linked bank transaction
+    try:
+        from app.models.bank import BankTransaction
+        linked_txs = db.query(BankTransaction).filter(BankTransaction.source_expense_id == resolved_id).all()
+        for ltx in linked_txs:
+            ltx.remarks = target_remarks
+        if linked_txs:
+            db.commit()
+            from app.core.websocket import ws_manager
+            ws_manager.broadcast_sync({
+                "type": "BANK_UPDATED",
+                "payload": {"action": "remarks_updated", "expense_id": resolved_id, "remarks": target_remarks},
+            })
+    except Exception:
+        pass
 
     try:
         from app.core.websocket import ws_manager
         ws_manager.broadcast_sync({
             "type": "EXPENSE_UPDATED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "company_id": existing_company_id,
                 "action": "remarks_updated",
                 "remarks": target_remarks,
@@ -1336,31 +1503,32 @@ def update_expense_remarks(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=existing_company_id,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=expense_id, record_type="expense",
+        record_id=resolved_id, record_type="expense",
         extra={"remarks": target_remarks, "actor_name": actor_name},
     )
 
-    return get_expense(expense_id, current_user, db)
+    return get_expense(resolved_id, current_user, db)
 
 
 @router.patch("/{expense_id}/audit", response_model=ExpenseOut, summary="Save the audit review of an expense (Auditor only)")
 def review_expense_audit(
-    expense_id: int,
+    expense_id: Union[int, str],
     review_in: AuditReviewIn,
     request: Request,
     current_user: AuthenticatedUser = Depends(require_auditor_user),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     apply_audit_review(
         db, current_user,
         model=Expense, pk_column="expense_id", supabase_table="expenses",
-        record_id=expense_id, payload=review_in, not_found="Expense not found",
+        record_id=resolved_id, payload=review_in, not_found="Expense not found",
     )
     log_transaction(
         db, AuditAction.EXPENSE_UPDATED,
         user_id=current_user.get("user_id"), company_id=None,
         ip_address=request.client.host if request.client else "unknown",
-        record_id=expense_id, record_type="expense_audit_review",
+        record_id=resolved_id, record_type="expense_audit_review",
         extra={"audit_status": review_in.audit_status},
     )
 
@@ -1369,22 +1537,32 @@ def review_expense_audit(
         ws_manager.broadcast_sync({
             "type": "EXPENSE_UPDATED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "audit_status": review_in.audit_status,
             }
         })
     except Exception:
         pass
-    return get_expense(expense_id, current_user, db)
+    return get_expense(resolved_id, current_user, db)
+
+
 @router.delete("/{expense_id}", status_code=status.HTTP_200_OK, summary="Delete an expense")
 def delete_expense(
-    expense_id: int,
+    expense_id: Union[int, str],
     request: Request,
     current_user: AuthenticatedUser = Depends(require_business_writer),
     db: Session = Depends(get_db)
 ):
+    resolved_id = _resolve_expense_id(db, expense_id)
     from app.services.income_bank_links import assert_not_linked_expense
-    assert_not_linked_expense(db, expense_id)
+    assert_not_linked_expense(db, resolved_id)
+
+    current = _current_expense_row(db, resolved_id)
+    if current and (current.get("audit_status") or "").strip().lower() == "verified":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This expense has been Verified by an Auditor and cannot be deleted.",
+        )
 
     deleted_from_supabase = False
     deleted_company_id = None
@@ -1392,14 +1570,14 @@ def delete_expense(
     client = None
     try:
         client = get_supabase_admin_client()
-        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", expense_id).limit(1).execute()
+        existing = client.table("expenses").select("company_id, expense_date").eq("expense_id", resolved_id).limit(1).execute()
         if existing.data:
             deleted_company_id = existing.data[0].get("company_id")
             deleted_day = existing.data[0].get("expense_date")
     except Exception as e:
         print(f"Supabase fetch before delete error: {e}")
 
-    expense = db.query(Expense).filter(Expense.expense_id == expense_id).first()
+    expense = db.query(Expense).filter(Expense.expense_id == resolved_id).first()
     if expense:
         deleted_company_id = deleted_company_id or expense.company_id
         deleted_day = deleted_day or expense.expense_date
@@ -1409,26 +1587,48 @@ def delete_expense(
 
     check_company_access(current_user, deleted_company_id)
 
-    if client:
+    if expense:
+        # Cascade first, while the expense still exists everywhere: removing the (Supabase) expense row early
+        # fires its ON DELETE SET NULL / bank cascade trigger and would orphan the bill payment and bank rows.
+        from app.services.bank_service import BankService
+        from app.services.bills_service import BillsService
+        from app.api.v1.endpoints.loans import delete_loan_repayment_from_expense, sync_remote_loan_status
+        from app.core.websocket import ws_manager
+
+        had_bank_link = bool(expense.bank_account_id)
+        affected_bill_id = BillsService(db).delete_payment_from_expense(resolved_id, commit=False)
+        affected_loan_id = delete_loan_repayment_from_expense(db, resolved_id, commit=False)
+
+        # Undo the bank debit, purge all linked bank entries, and remove the expense in one atomic transaction
+        reconcile_expense_bank(db, expense_id=resolved_id, force_zero=True, commit=False)
+        BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=resolved_id, commit=False)
+        db.delete(expense)
+        db.commit()
+
+        if affected_loan_id is not None:
+            sync_remote_loan_status(db, affected_loan_id)
+        if not _is_petty_cash_payment(expense.payment_method) or had_bank_link:
+            system_cache.invalidate_tag("bank_accounts")
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+        if affected_bill_id is not None:
+            system_cache.invalidate_tag("bills")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"bill_id": affected_bill_id}})
+        if affected_loan_id is not None:
+            system_cache.invalidate_tag("loans")
+            system_cache.invalidate_tag("bank_accounts")
+            system_cache.invalidate_tag("notifications")
+            ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"loan_id": affected_loan_id}})
+            ws_manager.broadcast_sync({"type": "BANK_UPDATED"})
+
+    # Remote copy last: only needed when Supabase REST and SQLAlchemy do not share Postgres
+    if client and (not expense or not rest_and_orm_share_database()):
         try:
-            sb_res = client.table("expenses").delete().eq("expense_id", expense_id).execute()
+            sb_res = client.table("expenses").delete().eq("expense_id", resolved_id).execute()
             if sb_res.data and len(sb_res.data) > 0:
                 deleted_from_supabase = True
         except Exception as e:
             print(f"Supabase delete expense error: {e}")
-
-    if expense:
-        # Undo the bank debit first, while the expense (and its bank entries) can still be found
-        reconcile_expense_bank(db, expense_id=expense_id, force_zero=True)
-        db.delete(expense)
-        db.commit()
-        # The expense is gone, so none of its bank entries (originals or reversals) should remain
-        try:
-            from app.services.bank_service import BankService
-            BankService(db).purge_linked_entries(link_attr="source_expense_id", link_id=expense_id)
-        except Exception as e:
-            db.rollback()
-            print(f"Bank entry purge error on expense delete: {e}")
 
     # Cascade: the day's expense remark goes once no expense is left on that day
     if deleted_day:
@@ -1442,7 +1642,7 @@ def delete_expense(
             db, AuditAction.EXPENSE_DELETED,
             user_id=current_user.get("user_id"), company_id=deleted_company_id,
             ip_address=request.client.host if request.client else "unknown",
-            record_id=expense_id, record_type="expense",
+            record_id=resolved_id, record_type="expense",
         )
     except Exception as e:
         print(f"Audit log error on expense delete: {e}")
@@ -1452,7 +1652,7 @@ def delete_expense(
         ws_manager.broadcast_sync({
             "type": "EXPENSE_DELETED",
             "payload": {
-                "expense_id": expense_id,
+                "expense_id": resolved_id,
                 "company_id": deleted_company_id,
             }
         })
@@ -1462,7 +1662,7 @@ def delete_expense(
     return {
         "message": "Expense deleted successfully",
         "success": True,
-        "expense_id": expense_id,
+        "expense_id": resolved_id,
         "supabase_deleted": deleted_from_supabase
     }
 

@@ -1,0 +1,7 @@
+-- 0073_bank_transactions_audit_fields.sqlite.sql
+-- In SQLite, columns are added via Python migration checks if missing
+-- ALTER TABLE bank_transactions ADD COLUMN audit_status VARCHAR(20) DEFAULT 'Pending Audit';
+-- ALTER TABLE bank_transactions ADD COLUMN audited_by VARCHAR(100);
+-- ALTER TABLE bank_transactions ADD COLUMN audited_at TIMESTAMP;
+-- ALTER TABLE bank_transactions ADD COLUMN audit_remarks TEXT;
+-- ALTER TABLE bank_transactions ADD COLUMN remarks TEXT;

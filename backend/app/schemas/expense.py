@@ -13,7 +13,7 @@ class ExpenseBase(StrictBaseModel):
     expense_date: date
     cheque_no: Optional[str] = Field(None, max_length=100)
     amount: Decimal = Field(..., ge=1.0, decimal_places=2, description="Withdrawal amount must be at least 1.00 (cannot be negative or zero)")
-    amount_paid: Decimal = Field(default=Decimal("0.00"), ge=0, decimal_places=2)
+    amount_paid: Optional[Decimal] = Field(default=None, ge=0, decimal_places=2)
     particulars: Optional[str] = Field(None, max_length=500, description="Particulars / description")
     description: Optional[str] = Field(None, max_length=500)
     remarks: Optional[str] = Field(None, max_length=500, description="Operational remarks by supervisor/finance")
@@ -89,6 +89,7 @@ class ExpenseUpdate(StrictBaseModel):
     particulars: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=500)
     remarks: Optional[str] = Field(None, max_length=500)
+    bank_account_id: Optional[str] = Field(None, max_length=100)
 
     @field_validator('amount', 'withdrawal', mode='before')
     @classmethod
