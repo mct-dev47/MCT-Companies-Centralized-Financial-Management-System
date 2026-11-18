@@ -4731,27 +4731,30 @@ export const BankManagementPage: React.FC = () => {
         transaction={viewingBankTx}
         onTransactionUpdated={(updatedTx) => {
           setViewingBankTx(updatedTx)
-          if (activeAccount) {
-            setActiveAccount((prev) => {
-              if (!prev) return prev
-              const updatedTransactions = (prev.transactions || []).map((t) => {
-                if (t.id === updatedTx.id) {
-                  return {
-                    ...t,
-                    auditStatus: updatedTx.auditStatus as any,
-                    auditedBy: updatedTx.auditedBy,
-                    auditDate: updatedTx.auditDate,
-                    auditNotes: updatedTx.auditNotes,
-                    remarks: updatedTx.remarks,
+          const targetAccountId = activeAccount?.id || updatedTx.bankAccountId
+          if (targetAccountId) {
+            setAccounts((prev) =>
+              prev.map((acc) => {
+                if (acc.id !== targetAccountId) return acc
+                const updatedTransactions = (acc.transactions || []).map((t) => {
+                  if (t.id === updatedTx.id) {
+                    return {
+                      ...t,
+                      auditStatus: updatedTx.auditStatus as any,
+                      auditedBy: updatedTx.auditedBy,
+                      auditDate: updatedTx.auditDate,
+                      auditNotes: updatedTx.auditNotes,
+                      remarks: updatedTx.remarks,
+                    }
                   }
+                  return t
+                })
+                return {
+                  ...acc,
+                  transactions: updatedTransactions,
                 }
-                return t
               })
-              return {
-                ...prev,
-                transactions: updatedTransactions,
-              }
-            })
+            )
           }
         }}
       />
