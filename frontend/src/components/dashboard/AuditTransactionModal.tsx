@@ -528,6 +528,27 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayRemarks =
     activeSale?.remarks || activeExpense?.remarks || activeTx?.remarks || ''
 
+  const currentAuditStatus =
+    activeSale?.auditStatus ||
+    activeExpense?.auditStatus ||
+    activeLoan?.auditStatus ||
+    activeTx?.auditStatus ||
+    'Pending Audit'
+
+  const isAudited = currentAuditStatus === 'Verified'
+
+  const displayAuditedBy =
+    activeSale?.auditedBy ||
+    activeExpense?.auditedBy ||
+    activeLoan?.auditedBy ||
+    activeTx?.auditedBy
+
+  const displayAuditDate =
+    activeSale?.auditDate ||
+    activeExpense?.auditDate ||
+    activeLoan?.auditDate ||
+    activeTx?.auditDate
+
   const timelineRemarksEvent = React.useMemo(() => {
     return [...timelineEvents].reverse().find((e) => {
       if (e.event_type === 'audited') return false
@@ -822,14 +843,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     ? (activeExpense?.netAmount ?? withdrawalVal)
     : ((depositVal || 0) - (withdrawalVal || 0))
 
-  const currentAuditStatus =
-    activeSale?.auditStatus ||
-    activeExpense?.auditStatus ||
-    activeLoan?.auditStatus ||
-    activeTx?.auditStatus ||
-    'Pending Audit'
-
-  const isAudited = currentAuditStatus === 'Verified'
   const isEditable = Boolean(!viewOnly && editable && !isAdmin && !isAudited && !isOwner)
 
   const handleEditInSheet = () => {
@@ -849,18 +862,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
       })
     }
   }
-
-  const displayAuditedBy =
-    activeSale?.auditedBy ||
-    activeExpense?.auditedBy ||
-    activeLoan?.auditedBy ||
-    activeTx?.auditedBy
-
-  const displayAuditDate =
-    activeSale?.auditDate ||
-    activeExpense?.auditDate ||
-    activeLoan?.auditDate ||
-    activeTx?.auditDate
 
   const handleMarkAudit = async (optionalRemarks?: string) => {
     setIsSubmittingAudit(true)
