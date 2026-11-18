@@ -6,192 +6,169 @@ export interface UnpluggedCableIllustrationProps {
   height?: number | string
 }
 
+/**
+ * Premium standalone Unplugged Cable Illustration conforming to MCT OneUI standards.
+ * Features disconnected power plugs in brand maroon (#960C01) with metallic prongs,
+ * smooth flowing cables, and an electric disconnect spark.
+ * Rendered directly on the canvas without clunky enclosing boxes.
+ */
 export const UnpluggedCableIllustration: React.FC<UnpluggedCableIllustrationProps> = ({
-  className = 'w-56 sm:w-72 h-auto',
-  width = 280,
+  className = 'w-64 sm:w-80 h-auto',
+  width = 320,
   height = 140,
 }) => {
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 280 140"
+      viewBox="0 0 320 140"
       width={width}
       height={height}
       fill="none"
       role="img"
-      aria-label="Disconnected power cable"
-      className={className}
+      aria-label="Disconnected power cables"
+      className={`select-none ${className}`}
     >
       <defs>
-        {/* Soft drop shadow */}
-        <filter id="plug-shadow" x="-10%" y="-10%" width="130%" height="130%">
-          <feDropShadow dx="0" dy="4" stdDeviation="4" floodColor="#8E0F00" floodOpacity="0.12" />
+        {/* Soft shadow for plug heads */}
+        <filter id="plug-soft-shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="4" stdDeviation="6" floodColor="#960C01" floodOpacity="0.22" />
         </filter>
 
-        {/* Plug Body Gradient */}
-        <linearGradient id="plug-maroon-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#A81502" />
-          <stop offset="60%" stopColor="#8E0F00" />
-          <stop offset="100%" stopColor="#690900" />
+        {/* Brand Maroon Linear Gradient for Plugs */}
+        <linearGradient id="plug-maroon" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#AD1408" />
+          <stop offset="60%" stopColor="#960C01" />
+          <stop offset="100%" stopColor="#750900" />
         </linearGradient>
 
-        {/* Cable Gradient Left */}
-        <linearGradient id="cable-grad-left" x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stopColor="#CBD5E1" />
-          <stop offset="100%" stopColor="#94A3B8" />
-        </linearGradient>
-
-        {/* Cable Gradient Right */}
-        <linearGradient id="cable-grad-right" x1="0%" y1="50%" x2="100%" y2="50%">
-          <stop offset="0%" stopColor="#94A3B8" />
-          <stop offset="100%" stopColor="#CBD5E1" />
-        </linearGradient>
-
-        {/* Metal Prongs Gradient */}
-        <linearGradient id="prong-grad" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#F1F5F9" />
+        {/* Metallic Prongs Gradient */}
+        <linearGradient id="prongs-metal" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stopColor="#E2E8F0" />
           <stop offset="50%" stopColor="#CBD5E1" />
           <stop offset="100%" stopColor="#94A3B8" />
         </linearGradient>
 
-        {/* Spark Glow */}
+        {/* Wire Gradient */}
+        <linearGradient id="wire-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#E2E8F0" />
+          <stop offset="50%" stopColor="#CBD5E1" />
+          <stop offset="100%" stopColor="#94A3B8" />
+        </linearGradient>
+
+        {/* Disconnect Glow */}
         <radialGradient id="spark-glow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stopColor="#EF4444" stopOpacity="0.4" />
+          <stop offset="0%" stopColor="#EF4444" stopOpacity="0.35" />
           <stop offset="100%" stopColor="#EF4444" stopOpacity="0" />
         </radialGradient>
       </defs>
 
-      {/* Spark glow in center */}
-      <circle cx="140" cy="70" r="28" fill="url(#spark-glow)" />
+      {/* Ambient Disconnect Aura Glow in center */}
+      <circle cx="160" cy="70" r="32" fill="url(#spark-glow)" />
 
-      {/* LEFT SIDE: Cable trailing from bottom-left */}
+      {/* LEFT SIDE: Cable wire sweeping smoothly from bottom-left */}
       <path
-        d="M 12 118 C 36 118, 56 70, 88 70"
-        stroke="url(#cable-grad-left)"
-        strokeWidth="7"
+        d="M 24 116 C 56 116, 76 70, 114 70"
+        stroke="url(#wire-gradient)"
+        strokeWidth="6"
         strokeLinecap="round"
       />
 
-      {/* LEFT SIDE: Strain relief sleeve */}
+      {/* LEFT SIDE: Rubber Strain Relief Boot */}
       <path
-        d="M 80 66 L 90 66 L 90 74 L 80 74 Z"
+        d="M 104 64 L 118 64 L 118 76 L 104 76 Z"
         fill="#475569"
-        rx="2"
+        rx="2.5"
       />
 
       {/* LEFT SIDE: Male Plug Body */}
-      <g filter="url(#plug-shadow)">
+      <g filter="url(#plug-soft-shadow)">
         <rect
-          x="88"
-          y="52"
-          width="28"
-          height="36"
-          rx="6"
-          fill="url(#plug-maroon-grad)"
+          x="116"
+          y="48"
+          width="32"
+          height="44"
+          rx="7"
+          fill="url(#plug-maroon)"
         />
-        {/* Subtle ridge details on plug handle */}
-        <line x1="94" y1="58" x2="94" y2="82" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
-        <line x1="99" y1="58" x2="99" y2="82" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
-        <line x1="104" y1="58" x2="104" y2="82" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
+        {/* Subtle ergonomic grip ridges */}
+        <line x1="123" y1="56" x2="123" y2="84" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
+        <line x1="129" y1="56" x2="129" y2="84" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
+        <line x1="135" y1="56" x2="135" y2="84" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
       </g>
 
-      {/* LEFT SIDE: Metal Prongs extending towards right */}
+      {/* LEFT SIDE: Metallic Contact Prongs */}
       <rect
-        x="116"
-        y="58"
-        width="15"
-        height="6"
-        rx="1.5"
-        fill="url(#prong-grad)"
+        x="148"
+        y="55"
+        width="16"
+        height="7"
+        rx="2"
+        fill="url(#prongs-metal)"
         stroke="#64748B"
         strokeWidth="0.5"
       />
       <rect
-        x="116"
-        y="76"
-        width="15"
-        height="6"
-        rx="1.5"
-        fill="url(#prong-grad)"
+        x="148"
+        y="78"
+        width="16"
+        height="7"
+        rx="2"
+        fill="url(#prongs-metal)"
         stroke="#64748B"
         strokeWidth="0.5"
       />
 
-      {/* CENTER: Disconnection Sparks / Lightning Indicator */}
+      {/* CENTER: Disconnection Electric Spark / Bolt */}
       <g>
-        {/* Main electric bolt */}
         <path
-          d="M 143 56 L 137 68 L 143 68 L 137 82"
-          stroke="#8E0F00"
-          strokeWidth="2.5"
+          d="M 163 52 L 156 68 L 164 68 L 157 86"
+          stroke="#960C01"
+          strokeWidth="2.75"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
-        {/* Small spark dots / dashes */}
-        <circle cx="134" cy="58" r="1.5" fill="#DC2626" />
-        <circle cx="147" cy="80" r="1.5" fill="#DC2626" />
-        <path
-          d="M 132 72 Q 131 70, 130 68"
-          stroke="#EF4444"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
-        <path
-          d="M 149 66 Q 150 68, 151 70"
-          stroke="#EF4444"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
+        <circle cx="151" cy="54" r="1.75" fill="#DC2626" />
+        <circle cx="169" cy="84" r="1.75" fill="#DC2626" />
+        <circle cx="167" cy="56" r="1.25" fill="#F87171" />
+        <circle cx="153" cy="82" r="1.25" fill="#F87171" />
       </g>
 
       {/* RIGHT SIDE: Female Socket Receptacle Slots */}
-      <rect
-        x="151"
-        y="56"
-        width="3"
-        height="10"
-        rx="1"
-        fill="#1E293B"
-      />
-      <rect
-        x="151"
-        y="74"
-        width="3"
-        height="10"
-        rx="1"
-        fill="#1E293B"
-      />
+      <rect x="171" y="54" width="3.5" height="9" rx="1.5" fill="#0F172A" />
+      <rect x="171" y="77" width="3.5" height="9" rx="1.5" fill="#0F172A" />
 
       {/* RIGHT SIDE: Female Socket Body */}
-      <g filter="url(#plug-shadow)">
+      <g filter="url(#plug-soft-shadow)">
         <rect
-          x="153"
-          y="50"
-          width="32"
-          height="40"
-          rx="6"
-          fill="url(#plug-maroon-grad)"
+          x="173"
+          y="46"
+          width="36"
+          height="48"
+          rx="7"
+          fill="url(#plug-maroon)"
         />
-        {/* Subtle ridge details on socket */}
-        <line x1="162" y1="57" x2="162" y2="83" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
-        <line x1="167" y1="57" x2="167" y2="83" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
-        <line x1="172" y1="57" x2="172" y2="83" stroke="#FFFFFF" strokeWidth="1.5" strokeOpacity="0.3" strokeLinecap="round" />
+        {/* Subtle ergonomic grip ridges */}
+        <line x1="183" y1="55" x2="183" y2="85" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
+        <line x1="189" y1="55" x2="189" y2="85" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
+        <line x1="195" y1="55" x2="195" y2="85" stroke="#FFFFFF" strokeWidth="1.75" strokeOpacity="0.3" strokeLinecap="round" />
       </g>
 
-      {/* RIGHT SIDE: Strain relief sleeve */}
+      {/* RIGHT SIDE: Rubber Strain Relief Boot */}
       <path
-        d="M 185 66 L 195 66 L 195 74 L 185 74 Z"
+        d="M 207 64 L 221 64 L 221 76 L 207 76 Z"
         fill="#475569"
-        rx="2"
+        rx="2.5"
       />
 
-      {/* RIGHT SIDE: Cable trailing to bottom-right */}
+      {/* RIGHT SIDE: Cable wire sweeping smoothly to bottom-right */}
       <path
-        d="M 192 70 C 224 70, 244 118, 268 118"
-        stroke="url(#cable-grad-right)"
-        strokeWidth="7"
+        d="M 218 70 C 256 70, 276 116, 308 116"
+        stroke="url(#wire-gradient)"
+        strokeWidth="6"
         strokeLinecap="round"
       />
     </svg>
   )
 }
+
+export default UnpluggedCableIllustration
