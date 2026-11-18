@@ -179,7 +179,6 @@ export function getSidebarNavSections(
   const normalizedRole = (role || '').trim().toLowerCase()
   const isAudit = normalizedRole === 'audit' || normalizedRole.includes('auditor')
   const isAdmin = normalizedRole === 'admin'
-  const isFinance = normalizedRole === 'finance'
 
   // Company detection (checks current active dropdown company or user's assigned company)
   const targetCompany = activeCompany || assignedCompany || ''

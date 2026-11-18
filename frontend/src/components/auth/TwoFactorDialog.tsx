@@ -118,8 +118,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     const role = (sessionUser?.role || '').toLowerCase()
     const assignedCount = Math.max(
       sessionUser?.companyIds?.length || 0,
-      sessionUser?.companyNames?.length || 0,
-      sessionUser?.assignedCompanies?.length || 0
+            sessionUser?.assignedCompanies?.length || 0
     )
 
     if (role === 'admin') {
@@ -127,7 +126,7 @@ export const TwoFactorDialog: React.FC<TwoFactorDialogProps> = ({ open }) => {
     } else if (assignedCount >= 2 || role === 'audit' || role.includes('audit') || role === 'owner') {
       navigate('/centralized-auth', { replace: true })
     } else {
-      const singleComp = sessionUser?.companyNames?.[0] || sessionUser?.companyName
+      const singleComp = sessionUser?.assignedCompanies?.[0] || sessionUser?.assignedCompany
       if (singleComp && typeof window !== 'undefined') {
         sessionStorage.setItem('mct_selected_company', singleComp)
         sessionStorage.setItem('mct_active_company_session', singleComp)

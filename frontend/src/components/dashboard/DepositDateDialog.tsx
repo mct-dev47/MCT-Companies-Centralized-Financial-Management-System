@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Landmark, Loader2 } from 'lucide-react'
+import { Landmark } from 'lucide-react'
 import {
   Dialog,
   DialogContent,

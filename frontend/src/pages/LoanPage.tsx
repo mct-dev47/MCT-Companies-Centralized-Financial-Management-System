@@ -1,22 +1,18 @@
-import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { getLoanStatusDisplay, isLoanDisbursed } from '@/components/dashboard/loanStatusStyle'
 import {
   Landmark,
   Building2,
-  Calendar,
   ChevronDown,
   Check,
   Search,
   Plus,
-  Download,
   FileSpreadsheet,
   FileText,
   Trash2,
   Pencil,
   AlertCircle,
-  X,
   XCircle,
   CheckCircle2,
   HandCoins,
@@ -32,7 +28,6 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { TablePagination, ConfirmModal } from '@/components/common'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
-import { TableErrorState } from '@/components/common/TableErrorState'
 import { notifyError } from '@/utils/errorUtils'
 import {
   Table,
@@ -42,13 +37,6 @@ import {
   TableBody,
   TableCell,
 } from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
 import {
   type DateRange,
 } from '@/components/ui/DateRangePicker'
@@ -93,7 +81,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin'
   const isAuditor = isAudit
-  const { activeCompany, setActiveCompany, dbCompanies: contextDbCompanies, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const { activeCompany, dbCompanies: contextDbCompanies, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const isCompanyScoped = isStrictlyCompanyScoped
   const canApprove = (isFinance || isAdmin) && !isAudit && !isOwner
   const canAuditActions = isAudit && !isOwner

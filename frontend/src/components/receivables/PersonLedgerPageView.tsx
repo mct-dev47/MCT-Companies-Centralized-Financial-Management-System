@@ -6,11 +6,9 @@ import {
   ChevronRight,
   Check,
   AlertCircle,
-  AlertTriangle,
   Receipt,
   Pencil,
   Plus,
-  Sparkles,
   Lock,
   Edit2,
 } from 'lucide-react'
@@ -75,7 +73,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   onBack,
   onOpenRecordPayment,
   onOpenEditProfile,
-  onSettlePayrollDeduction,
   isAudit = false,
   canEdit = false,
   onEditSale,
@@ -85,7 +82,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   const [activeTab, setActiveTab] = React.useState<'payments' | 'orders'>('payments')
   const [detailSearchQuery, setDetailSearchQuery] = React.useState<string>('')
   const [historyPage, setHistoryPage] = React.useState<number>(1)
-  const [showPayrollConfirm, setShowPayrollConfirm] = React.useState(false)
 
   // Edit Order state
   const [editingSale, setEditingSale] = React.useState<UtangSale | null>(null)

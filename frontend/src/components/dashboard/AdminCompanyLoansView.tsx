@@ -82,7 +82,7 @@ interface AdminCompanyLoansViewProps {
 
 export const AdminCompanyLoansView: React.FC<AdminCompanyLoansViewProps> = ({
   assignedCompany,
-  companyNamesList,
+  companyNamesList: _companyNamesList,
   dbCompanies,
   onRequestLoan,
 }) => {

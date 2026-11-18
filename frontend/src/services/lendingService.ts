@@ -798,7 +798,6 @@ export function getMonthlyProgress(facility: LendingFacility) {
     totalMonths = Math.max(1, Math.round(termDays / 30))
   }
   const monthTarget = Math.round((facility.totalAmountPayable / totalMonths) * 100) / 100
-  const penaltyPerMonth = Math.round((monthTarget * 0.05) * 100) / 100
   const todayStr = formatToYYYYMMDD(new Date())
 
   // Aggregate payments by monthIndex, cycleIndex, cycleDueDate or payment date
@@ -848,9 +847,6 @@ export function getMonthlyProgress(facility: LendingFacility) {
     penalty?: number
   }> = []
 
-  let availableCredit = 0
-  let totalPenalties = 0
-  let missedCount = 0
 
   for (let i = 1; i <= totalMonths; i++) {
     const isLast = i === totalMonths
@@ -859,7 +855,6 @@ export function getMonthlyProgress(facility: LendingFacility) {
       : monthTarget
 
     const directPaid = monthPaidMap.get(i) || 0
-    const availableFunds = directPaid + availableCredit
     const cycleDueDate = getCycleDueDate(
       facility.dateBorrowed,
       facility.dueDate,
@@ -872,7 +867,6 @@ export function getMonthlyProgress(facility: LendingFacility) {
     let remaining = target
     let isLocked = false
     let isOverdue = false
-    let monthPenalty = 0
 
     if (directPaid >= target && target > 0) {
       remaining = 0
@@ -961,7 +955,6 @@ export function buildDailyLedger(facility: LendingFacility): DailyPaymentRecord[
 
   const termDays = facility.termDays || 40
   const target = facility.installmentTarget || Math.round((facility.totalAmountPayable / termDays) * 100) / 100
-  const penaltyPerCycle = facility.penaltyPerCycle || Math.round((target * 0.05) * 100) / 100
 
   const todayStr = formatToYYYYMMDD(new Date())
   const today = new Date(todayStr)
@@ -979,7 +972,6 @@ export function buildDailyLedger(facility: LendingFacility): DailyPaymentRecord[
   endDate.setDate(endDate.getDate() + Math.max(1, termDays) - 1)
   const finalEnd = today > endDate ? today : endDate
 
-  let availableCredit = 0
   const rows: DailyPaymentRecord[] = []
   const cur = new Date(start)
 

@@ -5,15 +5,12 @@ import {
   Check,
   UserPlus,
   UserCheck,
-  Loader2,
   Upload,
   Crop,
   Building2,
   User as UserIcon,
   AlertTriangle,
-  AlertCircle,
   Shield,
-  Mail,
   X,
 } from 'lucide-react'
 import {
@@ -24,7 +21,6 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
-import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,7 +41,6 @@ import {
   type Company,
   type EmployeeUser,
 } from '@/services/employeeService'
-import { ConfirmationDialog } from '@/components/ui/ConfirmationDialog'
 import { formatUserFriendlyErrorMessage, notifyError } from '@/utils/errorUtils'
 import { ImageCropperModal } from '@/components/common/ImageCropperModal'
 import { cn } from '@/lib/utils'

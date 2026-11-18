@@ -2,7 +2,6 @@ import { formatUserFriendlyErrorMessage, notifySuccess } from '@/utils/errorUtil
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import {
-  Download,
   Plus,
   Search,
   ChevronDown,
@@ -20,19 +19,14 @@ import {
   CheckCircle2,
   ShieldCheck,
   Eye,
-  Building2,
-  Calendar,
   Coins,
-  Lock,
   Receipt,
-  Wallet,
   Loader2,
   HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
-import { TableErrorState } from '@/components/common/TableErrorState'
 import { TablePagination } from '@/components/common/TablePagination'
 import { StatusPill } from '@/components/common/StatusPill'
 import { BackButton, ConfirmModal, FormFieldError } from '@/components/common'
@@ -70,25 +64,18 @@ import { cn } from '@/lib/utils'
 import { RepeatSelect, RepeatDetails } from '@/components/tenant/LeaseRepeatFields'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import {
-  buildSchedule,
   getDefaultDatesForRepeat,
   countPeriods,
   describeRepeat,
   getLeaseFinancials,
-  hasPeriodRecords,
   isRepeating,
-  previewPayment,
   round2,
-  sumRecordedPayments,
   validateEditAgainstPayments,
   validateRepeatSettings,
   getTenantPeriodFinancials,
-  getTenantEffectiveStatus,
   type TenantPeriodFinancials,
-  type TenantEffectiveStatus,
   type LeaseFinancials,
   type LeaseRepeat,
-  type PeriodStatus,
   type SchedulePeriod,
 } from '@/services/tenantScheduleService'
 import {
@@ -127,16 +114,6 @@ const PERIOD_OPTIONS = ['All Periods', 'Daily', 'Monthly'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 const ITEMS_PER_PAGE = 50
-const SCHEDULE_ITEMS_PER_PAGE = 13
-const HISTORY_ITEMS_PER_PAGE = 13
-
-const PERIOD_STATUS_STYLES: Record<PeriodStatus, string> = {
-  Paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  'Advance Paid': 'bg-sky-50 text-sky-700 border-sky-200',
-  'Partially Paid': 'bg-amber-50 text-amber-700 border-amber-200',
-  Missed: 'bg-rose-50 text-rose-700 border-rose-200',
-  Unpaid: 'bg-slate-100 text-slate-600 border-slate-200',
-}
 
 type LeaseFormData = {
   tenantName: string
@@ -271,7 +248,6 @@ export const TenantPage: React.FC = () => {
   // Filter states
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<'All' | 'Paid' | 'Unpaid' | 'Pending'>('All')
-  const [detailTab, setDetailTab] = React.useState<'schedule' | 'history'>('schedule')
   const [detailSearchQuery, setDetailSearchQuery] = React.useState('')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodType>('All Periods')
   const [isAuditConfirmModalOpen, setIsAuditConfirmModalOpen] = React.useState(false)
@@ -292,7 +268,6 @@ export const TenantPage: React.FC = () => {
   const [isSubmittingAdd, setIsSubmittingAdd] = React.useState(false)
   const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isSubmittingEdit, setIsSubmittingEdit] = React.useState(false)
-  const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isSubmittingDelete, setIsSubmittingDelete] = React.useState(false)
   const [dateRange, setDateRange] = React.useState<DateRange>({
     startDate: null,
@@ -337,9 +312,8 @@ export const TenantPage: React.FC = () => {
 
   // Active target tenant
   const [activeTenant, setActiveTenant] = React.useState<TenantLease | null>(null)
-  const [ledgerStatusFilter, setLedgerStatusFilter] = React.useState<'All' | 'Paid' | 'Pending'>('All')
-  const [ledgerPage, setLedgerPage] = React.useState(1)
-  const [paymentCalendarMonth, setPaymentCalendarMonth] = React.useState<Date>(() => new Date())
+  const [, setLedgerStatusFilter] = React.useState<'All' | 'Paid' | 'Pending'>('All')
+  const [, setLedgerPage] = React.useState(1)
 
   // Form state for Add / Edit
   const [formData, setFormData] = React.useState<LeaseFormData>(EMPTY_FORM)
@@ -350,16 +324,15 @@ export const TenantPage: React.FC = () => {
   const getFinancials = (lease: TenantLease): LeaseFinancials => getLeaseFinancials(lease, todayStr)
 
   // Form state for Daily Payment Update
-  const [paymentDate, setPaymentDate] = React.useState(formatToYYYYMMDD(new Date()))
-  const [paymentAmount, setPaymentAmount] = React.useState('')
-  const [paymentMethod, setPaymentMethod] = React.useState('Cash')
-  const [paymentRef, setPaymentRef] = React.useState('')
-  const [paymentNotes, setPaymentNotes] = React.useState('')
-  const [paymentStatusType, setPaymentStatusType] = React.useState<'Paid' | 'Missed'>('Paid')
-  const [missedReason, setMissedReason] = React.useState('Stall closed for the day')
-  const [paymentError, setPaymentError] = React.useState('')
+  const [, setPaymentDate] = React.useState(formatToYYYYMMDD(new Date()))
+  const [, setPaymentAmount] = React.useState('')
+  const [, setPaymentMethod] = React.useState('Cash')
+  const [, setPaymentRef] = React.useState('')
+  const [, setPaymentNotes] = React.useState('')
+  const [, setPaymentStatusType] = React.useState<'Paid' | 'Missed'>('Paid')
+  const [, setMissedReason] = React.useState('Stall closed for the day')
   // Repeating leases: the period a payment starts from, and the page of the payment history list
-  const [paymentPeriod, setPaymentPeriod] = React.useState<number>(1)
+  const [, setPaymentPeriod] = React.useState<number>(1)
   const [historyPage, setHistoryPage] = React.useState(1)
 
   // Edit and remove recorded payments (spec 0016)
@@ -599,7 +572,6 @@ export const TenantPage: React.FC = () => {
     const todayStr = formatToYYYYMMDD(new Date())
     setActiveTenant(tenant)
     setPaymentDate(todayStr)
-    setPaymentCalendarMonth(new Date(`${todayStr.slice(0, 7)}-01T00:00:00`))
     const dailyTarget = Math.max(500, Math.round(tenant.rentAmount / 30))
     if (isRepeating(tenant)) {
       // Repeating lease: start at the earliest period with a balance, amount defaults to what it still owes
@@ -614,7 +586,6 @@ export const TenantPage: React.FC = () => {
     setPaymentNotes('')
     setPaymentStatusType('Paid')
     setMissedReason('Stall closed for the day')
-    setPaymentError('')
     setMenuOpenTenantId(null)
     setMenuPosition(null)
     setEditingRecord(null)
@@ -875,120 +846,6 @@ export const TenantPage: React.FC = () => {
   }
 
   // Submit Daily Payment / Missed Record (AC-1 submission lock)
-  const handleSubmitDailyPayment = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isSubmittingPayment) return
-    if (!activeTenant) return
-
-    if (!paymentDate) {
-      setPaymentError('Date is required.')
-      return
-    }
-
-    let input: PaymentInput
-
-    if (isRepeating(activeTenant)) {
-      // Repeating leases: the payment starts at the chosen period and extra money flows forward
-      const fin = getLeaseFinancials(activeTenant, todayStr)
-      const period = fin.periods.find((p) => p.index === paymentPeriod)
-      if (!period) {
-        setPaymentError('Select the period this payment is for.')
-        return
-      }
-
-      if (paymentStatusType === 'Missed') {
-        if (activeTenant.repeat !== 'Daily') {
-          setPaymentError('Missed days can only be marked on Daily leases.')
-          return
-        }
-        if (period.remaining <= 0.005) {
-          setPaymentError(`${period.label} is already fully paid.`)
-          return
-        }
-        input = {
-          date: period.dueDate,
-          amount: 0,
-          method: 'N/A',
-          referenceNo: 'MISSED',
-          notes: paymentNotes.trim() || `Unpaid: ${missedReason}`,
-          status: 'Missed',
-          missedReason,
-          periodIndex: period.index,
-        }
-      } else {
-        const amt = round2(parseFloat(paymentAmount))
-        if (period.remaining <= 0.005) {
-          setPaymentError(`${period.label} is already fully paid. Pick a period with a balance.`)
-          return
-        }
-        if (isNaN(amt) || amt <= 0) {
-          setPaymentError('Payment amount must be greater than 0.')
-          return
-        }
-        const room = round2(fin.periods.filter((p) => p.index >= period.index).reduce((sum, p) => sum + p.remaining, 0))
-        if (amt > room + 0.005) {
-          setPaymentError(
-            `From ${period.label} onward the lease only has ${formatPHP(room)} left to pay. Pick an earlier period to pay more.`
-          )
-          return
-        }
-        const isPartial = amt < period.remaining - 0.005
-        input = {
-          date: paymentDate,
-          amount: amt,
-          method: paymentMethod,
-          referenceNo: paymentRef.trim() || undefined,
-          notes: paymentNotes.trim() || undefined,
-          status: isPartial ? 'Partially Paid' : 'Paid',
-          periodIndex: period.index,
-        }
-      }
-    } else if (paymentStatusType === 'Paid') {
-      const amt = round2(parseFloat(paymentAmount))
-      if (isNaN(amt) || amt <= 0) {
-        setPaymentError('Payment amount must be greater than 0.')
-        return
-      }
-      if (amt > activeTenant.remainingBalance + 0.005) {
-        setPaymentError(`Payment amount cannot exceed the remaining balance of ${formatPHP(activeTenant.remainingBalance)}.`)
-        return
-      }
-      input = {
-        date: paymentDate,
-        amount: amt,
-        method: paymentMethod,
-        referenceNo: paymentRef.trim() || undefined,
-        notes: paymentNotes.trim() || undefined,
-        status: 'Paid',
-      }
-    } else {
-      // Missed / Did Not Pay Today
-      input = {
-        date: paymentDate,
-        amount: 0,
-        method: 'N/A',
-        referenceNo: 'MISSED',
-        notes: paymentNotes.trim() || `Unpaid: ${missedReason}`,
-        status: 'Missed',
-        missedReason,
-      }
-    }
-
-    setIsSubmittingPayment(true)
-    try {
-      let updated = await tenantService.addPayment(activeTenant.id, input)
-      updated = await syncStatus(updated)
-      applyLease(updated)
-    } catch (err) {
-      setPaymentError(messageOf(err))
-      return
-    } finally {
-      setIsSubmittingPayment(false)
-    }
-    setHistoryPage(1)
-    setLedgerPage(1)
-    setIsUpdatePaymentModalOpen(false)
-  }
 
   // ---------------------------------------------------------------------------------------------
   // Edit, remove, mark paid and mark unpaid (spec 0016)
@@ -998,8 +855,6 @@ export const TenantPage: React.FC = () => {
   // ---------------------------------------------------------------------------------------------
 
   // Money recorded in a list of payments (Missed marks carry no money)
-  const moneyOf = (records: DailyRentRecord[]): number =>
-    round2(records.filter((r) => r.status !== 'Missed').reduce((sum, r) => sum + (r.amount || 0), 0))
 
   const handleOpenEditRecord = (record: DailyRentRecord) => {
     setEditingRecord(record)
@@ -1033,28 +888,8 @@ export const TenantPage: React.FC = () => {
   }
 
   // "Mark as Paid" on a schedule row: open Record Payment for that period with what it still owes
-  const handleMarkPeriodPaid = (period: SchedulePeriod) => {
-    if (!activeTenant) return
-    handleOpenDailyPayment(activeTenant)
-    setPaymentPeriod(period.index)
-    setPaymentAmount(String(period.remaining))
-  }
 
   // "Mark as Unpaid" on a schedule row: remove the payments that started at that period, after a confirm
-  const handleRequestMarkUnpaid = (period: SchedulePeriod) => {
-    if (!activeTenant) return
-    const records = activeTenant.dailyPayments.filter(
-      (r) => r.status !== 'Missed' && (r.amount || 0) > 0 && (r.periodIndex || 1) === period.index
-    )
-    if (records.length === 0) return
-    const kept = activeTenant.dailyPayments.filter((r) => !records.includes(r))
-    const before = buildSchedule(activeTenant, todayStr)
-    const after = buildSchedule({ ...activeTenant, dailyPayments: kept }, todayStr)
-    const affected = before
-      .map((p, i) => ({ label: p.label, amount: round2(p.paid - (after[i]?.paid || 0)) }))
-      .filter((a) => a.amount > 0.005)
-    setRemoveTarget({ kind: 'period', period, records, affected })
-  }
 
   // Due Date text shared by the table and both exports (AC-8): next unpaid period for a repeating lease
   const getDueDateText = (lease: TenantLease, fin: TenantPeriodFinancials): string => {
@@ -1125,7 +960,7 @@ export const TenantPage: React.FC = () => {
         ? `<tr><td colspan="9" style="padding: 24px; text-align: center; color: #64748B; font-size: 12px; font-style: italic;">No tenant leases found matching the selected filters.</td></tr>`
         : filteredTenants
             .map((t) => {
-              const fin = getFinancials(t)
+              const fin = financialsById.get(t.id) ?? getTenantPeriodFinancials(t, todayStr)
               return `
         <tr>
           <td style="padding: 8px 10px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-size: 11px; font-weight: 600; color: #960C01;">${escapeHtml(t.tenantId)}</td>
@@ -1204,8 +1039,6 @@ export const TenantPage: React.FC = () => {
   const renderDetailsPage = () => {
     if (!activeTenant) return null
 
-    const LEDGER_ITEMS_PER_PAGE = 13
-    const SCHEDULE_ITEMS_PER_PAGE = 13
     const HISTORY_ITEMS_PER_PAGE = 13
 
     const fin = getFinancials(activeTenant)
@@ -1266,40 +1099,8 @@ export const TenantPage: React.FC = () => {
       }
     }
 
-    // Filter non-repeating ledger by ledgerStatusFilter & detailSearchQuery
-    const filteredLedger = ledgerRows.filter((r) => {
-      if (ledgerStatusFilter === 'Paid' && r.status !== 'Paid') return false
-      if (ledgerStatusFilter === 'Pending' && r.status !== 'Pending') return false
-      if (detailSearchQuery.trim()) {
-        const q = detailSearchQuery.toLowerCase().trim()
-        if (
-          !r.date.toLowerCase().includes(q) &&
-          !r.notes.toLowerCase().includes(q) &&
-          !r.referenceNo.toLowerCase().includes(q)
-        ) {
-          return false
-        }
-      }
-      return true
-    })
 
     // Filter repeating periods
-    const filteredPeriods = fin.periods.filter((p) => {
-      if (ledgerStatusFilter === 'Paid') {
-        const isSettled = p.status === 'Paid' || p.status === 'Advance Paid'
-        if (!isSettled) return false
-      } else if (ledgerStatusFilter === 'Pending') {
-        const isSettled = p.status === 'Paid' || p.status === 'Advance Paid'
-        if (isSettled) return false
-      }
-      if (detailSearchQuery.trim()) {
-        const q = detailSearchQuery.toLowerCase().trim()
-        if (!p.label.toLowerCase().includes(q) && !p.dueDate.toLowerCase().includes(q)) {
-          return false
-        }
-      }
-      return true
-    })
 
     // Filter repeating history records (newest on top)
     const historyRecords = (activeTenant.dailyPayments || [])
@@ -1345,7 +1146,6 @@ export const TenantPage: React.FC = () => {
       const idx = r.periodIndex || 1
       startedAtPeriod.set(idx, (startedAtPeriod.get(idx) || 0) + 1)
     })
-    const periodLabelByIndex = new Map(fin.periods.map((p) => [p.index, p.label]))
 
     // Build cycle settlement map to know whether an installment cycle has reached its full target (matching Lending)
     const isDaily = !activeTenant.repeat || activeTenant.repeat === 'Daily'
@@ -1378,12 +1178,6 @@ export const TenantPage: React.FC = () => {
     }
 
     // Pagination for schedule periods
-    const totalSchedulePages = Math.max(1, Math.ceil(filteredPeriods.length / SCHEDULE_ITEMS_PER_PAGE))
-    const safeSchedulePage = Math.min(ledgerPage, totalSchedulePages)
-    const paginatedPeriods = filteredPeriods.slice(
-      (safeSchedulePage - 1) * SCHEDULE_ITEMS_PER_PAGE,
-      safeSchedulePage * SCHEDULE_ITEMS_PER_PAGE
-    )
 
     // Pagination for history records
     const totalHistoryPages = Math.max(1, Math.ceil(historyRecords.length / HISTORY_ITEMS_PER_PAGE))
@@ -1396,12 +1190,6 @@ export const TenantPage: React.FC = () => {
     const historyEndIndex = Math.min(safeHistoryPage * HISTORY_ITEMS_PER_PAGE, historyRecords.length)
 
     // Pagination for non-repeating ledger
-    const totalLedgerPages = Math.max(1, Math.ceil(filteredLedger.length / LEDGER_ITEMS_PER_PAGE))
-    const safeLedgerPage = Math.min(ledgerPage, totalLedgerPages)
-    const paginatedLedger = filteredLedger.slice(
-      (safeLedgerPage - 1) * LEDGER_ITEMS_PER_PAGE,
-      safeLedgerPage * LEDGER_ITEMS_PER_PAGE
-    )
 
     return (
       <div className="space-y-6 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-200">
@@ -1595,7 +1383,7 @@ export const TenantPage: React.FC = () => {
                   <span className="text-muted-fg">Amount Paid:</span>
                   <span className="font-mono font-bold text-emerald-600">{formatPHP(fin.amountPaid)}</span>
                 </div>
-                {(fin.totalPenalties || 0) > 0 && (
+                {((fin as any).totalPenalties || (fin.periods?.reduce((s, p) => s + (p.penalty || 0), 0) ?? 0)) > 0 && (
                   <div className="flex justify-between items-center py-0.5">
                     <div className="flex items-center gap-1.5">
                       <span className="text-muted-fg">Late Penalty:</span>
@@ -1604,7 +1392,7 @@ export const TenantPage: React.FC = () => {
                       </span>
                     </div>
                     <span className="font-mono font-bold text-[#960C01]">
-                      {formatPHP(fin.totalPenalties)}
+                      {formatPHP((fin as any).totalPenalties || (fin.periods?.reduce((s, p) => s + (p.penalty || 0), 0) ?? 0))}
                     </span>
                   </div>
                 )}
@@ -1963,253 +1751,6 @@ export const TenantPage: React.FC = () => {
   }
 
   // Record Payment form for a repeating lease: pick the starting period, extra money flows forward (AC-9, AC-10)
-  const renderRepeatPaymentForm = (lease: TenantLease) => {
-    const fin = getFinancials(lease)
-    const isDailyLease = lease.repeat === 'Daily'
-    const selectablePeriods = fin.periods.filter((p) => p.remaining > 0.005)
-    const selected = selectablePeriods.find((p) => p.index === paymentPeriod) || null
-    const isMissedMark = isDailyLease && paymentStatusType === 'Missed'
-    const amountNum = parseFloat(paymentAmount)
-    // Money only flows forward, so the most a payment can take is what the chosen period and the
-    // periods after it still owe. Anything more would have nowhere to go.
-    const maxAllowed = selected
-      ? round2(fin.periods.filter((p) => p.index >= selected.index).reduce((sum, p) => sum + p.remaining, 0))
-      : fin.remaining
-    const isAmountValid = !isNaN(amountNum) && amountNum > 0 && amountNum <= maxAllowed + 0.005
-    const allocation =
-      !isMissedMark && selected && isAmountValid
-        ? previewPayment(lease, todayStr, selected.index, round2(amountNum), paymentDate)
-        : []
-    const canSubmit = !!paymentDate && !!selected && (isMissedMark || isAmountValid)
-
-    const handlePeriodSelect = (index: number) => {
-      setPaymentError('')
-      setPaymentPeriod(index)
-      const period = fin.periods.find((p) => p.index === index)
-      if (period) setPaymentAmount(String(period.remaining))
-    }
-
-    return (
-      <form onSubmit={handleSubmitDailyPayment} className="space-y-3.5 mt-1.5 flex flex-col flex-1 min-h-0">
-        {paymentError && (
-          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2 text-xs text-rose-700 shrink-0" role="alert">
-            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
-            <span>{paymentError}</span>
-          </div>
-        )}
-
-        {isDailyLease && (
-          <div className="inline-flex items-center p-0.5 rounded-[10px] bg-slate-100 border border-stroke/40 shadow-2xs shrink-0 self-start">
-            {(['Paid', 'Missed'] as const).map((opt) => (
-              <button
-                key={opt}
-                type="button"
-                onClick={() => {
-                  setPaymentError('')
-                  setPaymentStatusType(opt)
-                }}
-                className={cn(
-                  'px-3.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none',
-                  paymentStatusType === opt ? 'bg-[#960C01] text-white shadow-xs' : 'text-muted-fg hover:text-focus'
-                )}
-              >
-                {opt === 'Paid' ? 'Record Payment' : 'Mark Day as Missed'}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start overflow-y-auto pr-1 flex-1 min-h-0">
-          {/* Left: starting period and what it owes */}
-          <div className="space-y-3.5">
-            <div>
-              <label htmlFor="payment-period" className="text-xs font-semibold text-focus block mb-1">
-                {isMissedMark ? 'Day' : 'Pay Starting From'} <span className="text-red-500">*</span>
-              </label>
-              <Dropdown
-                id="payment-period"
-                value={selected ? selected.index : ''}
-                onChange={(val) => handlePeriodSelect(Number(val))}
-                placeholder={selectablePeriods.length === 0 ? 'Every period is fully paid' : 'Select period...'}
-                aria-label="Payment Period"
-                options={selectablePeriods.map((p) => ({
-                  value: p.index,
-                  label: `${p.label} · due ${p.dueDate} · ${formatPHP(p.remaining)} left${p.isOverdue ? ' · overdue' : ''}`,
-                }))}
-              />
-              <p className="text-[10.5px] text-muted-fg mt-1">
-                Fully paid periods are not listed. Any extra money flows forward into the next periods.
-              </p>
-            </div>
-
-            {selected && (
-              <div className="p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1.5 text-xs">
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Period</span>
-                  <span className="font-semibold text-focus">{selected.label}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Due date</span>
-                  <span className={cn('font-mono font-semibold', selected.isOverdue ? 'text-rose-600' : 'text-focus')}>
-                    {selected.dueDate}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Amount due{selected.penalty > 0 ? ' (with penalty)' : ''}</span>
-                  <span className="font-semibold text-focus">{formatPHP(selected.amountDue)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-muted-fg">Already paid</span>
-                  <span className="font-semibold text-emerald-700">{formatPHP(selected.paid)}</span>
-                </div>
-                <div className="flex justify-between items-center border-t border-slate-200/60 pt-1.5">
-                  <span className="font-bold text-focus">Still owed</span>
-                  <span className="font-bold text-amber-700">{formatPHP(selected.remaining)}</span>
-                </div>
-              </div>
-            )}
-
-            {!isMissedMark && allocation.length > 0 && (
-              <div className="p-3 border border-emerald-200/70 bg-emerald-50/50 rounded-xl space-y-1 text-xs max-h-36 overflow-y-auto pr-1" aria-live="polite">
-                <div className="font-bold text-emerald-800 text-[11px] uppercase tracking-wider sticky top-0 bg-emerald-50/95 py-0.5">Where this payment goes</div>
-                {allocation.map((line) => (
-                  <div key={line.index} className="flex justify-between items-center text-xs">
-                    <span className="text-focus truncate max-w-[150px]">
-                      {line.label}
-                      {line.kind === 'advance' && <span className="text-sky-700 font-semibold"> (adv)</span>}
-                    </span>
-                    <span className="font-semibold text-emerald-700 tabular-nums">{formatPHP(line.amount)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Right: payment details */}
-          <div className="space-y-2.5">
-            <div>
-              <label htmlFor="payment-date" className="text-xs font-semibold text-focus block mb-1">
-                {isMissedMark ? 'Date Marked' : 'Payment Date'} <span className="text-red-500">*</span>
-              </label>
-              <Input
-                id="payment-date"
-                type="date"
-                value={paymentDate}
-                onChange={(e) => {
-                  setPaymentError('')
-                  setPaymentDate(e.target.value)
-                }}
-                className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl"
-              />
-            </div>
-
-            {isMissedMark ? (
-              <div>
-                <label className="text-xs font-semibold text-focus block mb-1">Reason</label>
-                <Input
-                  value={missedReason}
-                  onChange={(e) => setMissedReason(e.target.value)}
-                  className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl"
-                />
-                <p className="text-[10px] text-muted-fg mt-1">
-                  The day stays owed. It can still be paid later.
-                </p>
-              </div>
-            ) : (
-              <>
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label htmlFor="payment-amount" className="text-xs font-semibold text-focus">
-                      Payment Amount (₱) <span className="text-red-500">*</span>
-                    </label>
-                    <span className="text-[10.5px] text-muted-fg font-medium">Max: {formatPHP(maxAllowed)}</span>
-                  </div>
-                  <Input
-                    id="payment-amount"
-                    required
-                    type="number"
-                    min="0.01"
-                    max={maxAllowed}
-                    step="any"
-                    value={paymentAmount}
-                    onWheel={(e) => e.currentTarget.blur()}
-                    onChange={(e) => {
-                      setPaymentError('')
-                      setPaymentAmount(e.target.value)
-                    }}
-                    placeholder="Enter payment amount"
-                    className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-semibold [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                  {paymentAmount && !isAmountValid && (
-                    <p className="text-[10.5px] text-rose-600 mt-1">
-                      {amountNum <= 0 || isNaN(amountNum)
-                        ? 'Payment amount must be greater than 0.'
-                        : `Lease has only ${formatPHP(maxAllowed)} left. Pick earlier period to pay more.`}
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-focus block mb-1">Payment Method</label>
-                  <Dropdown
-                    value={paymentMethod}
-                    onChange={(val) => setPaymentMethod(String(val))}
-                    aria-label="Payment Method"
-                    options={[
-                      { value: 'Cash', label: 'Cash' },
-                      { value: 'GCash', label: 'GCash' },
-                      { value: 'Bank Transfer', label: 'Bank Transfer' },
-                      { value: 'Cheque', label: 'Cheque' },
-                    ]}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-focus block mb-1">Receipt / Ref No.</label>
-                  <Input
-                    value={paymentRef}
-                    onChange={(e) => setPaymentRef(e.target.value)}
-                    placeholder="e.g. OR-JK-101"
-                    className="h-9 sm:h-10 text-xs sm:text-sm rounded-xl font-mono"
-                  />
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="text-xs font-semibold text-focus block mb-1">Remarks / Notes</label>
-              <textarea
-                rows={2}
-                value={paymentNotes}
-                onChange={(e) => setPaymentNotes(e.target.value)}
-                placeholder="Enter remarks or notes..."
-                className="w-full h-16 p-2.5 rounded-xl border border-stroke/60 bg-white text-xs sm:text-sm text-focus focus:outline-none focus:ring-2 focus:ring-focus/20 resize-none transition-all placeholder:text-muted-fg/60"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-2.5 pt-2.5 border-t border-slate-100 shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setIsUpdatePaymentModalOpen(false)}
-            className="h-9 sm:h-10 px-4 rounded-xl text-xs font-semibold cursor-pointer"
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            disabled={!canSubmit || isSubmittingPayment}
-            className="h-9 sm:h-10 px-5 rounded-xl text-xs font-semibold bg-[#960C01] hover:bg-[#800a01] active:bg-[#700801] text-white cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-xs flex items-center gap-2"
-          >
-            {isSubmittingPayment && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />}
-            <span>{isSubmittingPayment ? 'Saving...' : (isMissedMark ? 'Mark as Missed' : 'Review & Confirm Payment')}</span>
-          </Button>
-        </div>
-      </form>
-    )
-  }
 
   return (
     <div className="space-y-6 pb-10 w-full max-w-[1600px] mx-auto animate-in fade-in duration-300">
@@ -2526,16 +2067,7 @@ export const TenantPage: React.FC = () => {
               ) : (
                 paginatedTenants.map((tenant) => {
                   const fin = financialsById.get(tenant.id) ?? getTenantPeriodFinancials(tenant, todayStr)
-                  const repeatingRow = isRepeating(tenant) && fin.periodCount > 0
 
-                  const statusTextColor = {
-                    Paid: 'text-emerald-700',
-                    'Advance Paid': 'text-sky-700',
-                    'Partially Paid': 'text-amber-700',
-                    Missed: 'text-rose-700',
-                    Overdue: 'text-[#960C01]',
-                    Unpaid: 'text-slate-600',
-                  }[fin.status] || 'text-slate-600'
 
                   return (
                     <TableRow
@@ -2832,10 +2364,10 @@ export const TenantPage: React.FC = () => {
                 errorMessage={formErrors.form}
                 items={[
                   { label: 'Tenant Name', value: formData.tenantName.trim(), highlight: true },
-                  { label: 'Unit / Property', value: `${formData.propertyName || ''} · ${formData.unitName}` },
-                  { label: 'Monthly Rent', value: formatPHP(formData.monthlyRent), isCurrency: true },
-                  { label: 'Security Deposit', value: formatPHP(formData.securityDeposit), isCurrency: true },
-                  { label: 'Lease Term', value: formData.leasePeriod },
+                  { label: 'Unit / Stall', value: formData.unitName },
+                  { label: 'Rent Amount', value: formatPHP(parseFloat(formData.rentAmount) || 0), isCurrency: true },
+                  { label: 'Total Payable', value: formatPHP(parseFloat(formData.totalAmountPayable) || 0), isCurrency: true },
+                  { label: 'Schedule', value: `${formData.repeat} (Due: ${formData.dueDate})` },
                   { label: 'Notes', value: formData.notes || 'None' },
                 ]}
               />
@@ -3412,7 +2944,7 @@ export const TenantPage: React.FC = () => {
                 ? tenantFin.periods.map((p) => ({
                     monthIndex: p.index,
                     dueDate: p.dueDate,
-                    target: p.amount,
+                    target: p.baseAmount ?? p.amountDue,
                     paid: p.paid,
                     remaining: p.remaining,
                     status: p.status,

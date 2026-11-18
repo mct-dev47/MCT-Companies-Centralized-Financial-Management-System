@@ -3,10 +3,8 @@ import { createPortal } from 'react-dom'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
-import { TableErrorState } from '@/components/common/TableErrorState'
-import { StatusPill } from '@/components/common/StatusPill'
 import { CardSkeleton } from '@/components/common/CardSkeleton'
-import { ConfirmModal, TablePagination, TableEmptyState, Dropdown } from '@/components/common'
+import { ConfirmModal, TablePagination, Dropdown } from '@/components/common'
 import { notifySuccess } from '@/utils/errorUtils'
 import {
   Table,
@@ -25,9 +23,7 @@ import {
   Search,
   ChevronDown,
   Check,
-  CheckCircle2,
   AlertCircle,
-  Download,
   RotateCcw,
   FileSpreadsheet,
   FileText,
@@ -35,7 +31,6 @@ import {
   Coins,
   Edit2,
   Trash2,
-  AlertTriangle,
   Lock,
   HelpCircle,
   Pencil,
@@ -362,13 +357,10 @@ export const ReceivablesPage: React.FC = () => {
   }, [people])
 
   // Dropdown menus
-  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const statusDropdownRef = React.useRef<HTMLDivElement>(null)
 
   const exportPos = useDropdownPosition(exportDropdownRef, isExportDropdownOpen)
-  const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
   const companyPos = useDropdownPosition(companyDropdownRef, isCompanyDropdownOpen)
 
   // Feedback banner
@@ -381,9 +373,6 @@ export const ReceivablesPage: React.FC = () => {
       const target = e.target as Node
       if (exportDropdownRef.current && !exportDropdownRef.current.contains(target)) {
         setIsExportDropdownOpen(false)
-      }
-      if (statusDropdownRef.current && !statusDropdownRef.current.contains(target)) {
-        setIsStatusDropdownOpen(false)
       }
       if (companyDropdownRef.current && !companyDropdownRef.current.contains(target)) {
         setIsCompanyDropdownOpen(false)
@@ -988,10 +977,6 @@ export const ReceivablesPage: React.FC = () => {
                 paginatedPeople.map((p) => {
                   const isStaff = p.type === 'Staff'
                   const hasOwed = p.total_owed > 0.005
-                  const unlockedOwed = p.sales
-                    .filter((s) => !s.is_locked)
-                    .reduce((acc, s) => acc + s.balance, 0)
-                  const rowCanEdit = canManageCompany(p.company, p.company_id)
 
                   return (
                     <TableRow
@@ -1171,7 +1156,6 @@ export const ReceivablesPage: React.FC = () => {
             {activeMenuPerson.total_owed > 0.005 && !isAudit && !isOwner && canManageCompany(activeMenuPerson.company, activeMenuPerson.company_id) && (
               <button
                 type="button"
-                disabled={activeMenuPerson.all_locked || activeMenuPerson.sales.filter((s) => !s.is_locked).reduce((acc, s) => acc + s.balance, 0) <= 0.005}
                 onClick={() => {
                   const target = activeMenuPerson
                   setOpenMenuPersonName(null)

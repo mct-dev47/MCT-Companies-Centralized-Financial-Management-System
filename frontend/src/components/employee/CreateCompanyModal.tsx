@@ -56,7 +56,7 @@ export const CreateCompanyModal: React.FC<CreateCompanyModalProps> = ({
   const [submitError, setSubmitError] = React.useState<string | null>(null)
 
   const form = useForm<CreateCompanyFormValues>({
-    resolver: zodResolver(createCompanySchema),
+    resolver: zodResolver(createCompanySchema) as any,
     defaultValues: {
       name: '',
       address: '',

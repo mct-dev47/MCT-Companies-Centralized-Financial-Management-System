@@ -2,7 +2,6 @@ import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowRight,
-  Eye,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import {

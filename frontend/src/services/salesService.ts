@@ -423,7 +423,7 @@ export const salesService = {
       description: input.particulars,
       category: input.category && input.category !== 'None' ? input.category : null,
       payment_method: input.paymentMethod || null,
-      payment_status: input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status) || 'Paid',
+      payment_status: input.payment_status || ((input.status as string) === 'Overdue' ? 'Unpaid' : input.status) || 'Paid',
       deposit_status: input.deposit_status || input.depositStatus || undefined,
       deposit_date: input.deposit_date || input.depositDate || undefined,
       chequeNo: input.chequeNo || undefined,
@@ -518,7 +518,7 @@ export const salesService = {
       payload.payment_method = input.paymentMethod || null
     if (input.chequeNo !== undefined) payload.chequeNo = input.chequeNo
     if (input.payment_status !== undefined || input.status !== undefined) {
-      payload.payment_status = input.payment_status || (input.status === 'Overdue' ? 'Unpaid' : input.status)
+      payload.payment_status = input.payment_status || ((input.status as string) === 'Overdue' ? 'Unpaid' : input.status)
     }
     if (input.deposit_status !== undefined || input.depositStatus !== undefined) {
       payload.deposit_status = input.deposit_status || input.depositStatus

@@ -7,27 +7,21 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
-import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import {
-  Calendar,
   Building2,
-  User,
   Plus,
   Trash2,
-  Upload,
   X,
   FileText,
   AlertCircle,
-  Clock,
   Eye,
   CheckCircle2,
   RotateCw,
-  FolderOpen,
   ChevronDown,
   Landmark,
   Search,
@@ -341,7 +335,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
           : user?.assignedCompany || 'MCT Kitchen'
       setRequestingCompany(initialComp)
       setExpenseDate(todayIso())
-      setPaidBy(formatRealName(user?.fullName || user?.name || user?.email || ''))
+      setPaidBy(formatRealName(user?.fullName || user?.fullName || user?.email || user?.email || ''))
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
       setCompanyFundedAmount('')
@@ -521,10 +515,6 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     }
   }
 
-  const companyFundedNum = React.useMemo(() => {
-    const n = parseFloat(companyFundedAmount)
-    return isNaN(n) ? 0 : n
-  }, [companyFundedAmount])
 
   const employeeOutOfPocket = React.useMemo(() => {
     const n = parseFloat(employeeOutOfPocketAmount)
@@ -700,7 +690,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     uploadSingleFile(item)
   }
 
-  const handleViewReceipt = (url?: string, name?: string) => {
+  const handleViewReceipt = (url?: string, _name?: string) => {
     if (!url) return
     if (url.startsWith('data:')) {
       try {

@@ -115,8 +115,7 @@ export const SignInForm: React.FC = () => {
         const role = (response.user.role || '').toLowerCase()
         const assignedCount = Math.max(
           response.user.companyIds?.length || 0,
-          response.user.companyNames?.length || 0,
-          response.user.assignedCompanies?.length || 0
+                    response.user.assignedCompanies?.length || 0
         )
 
         if (role === 'admin') {
@@ -124,7 +123,7 @@ export const SignInForm: React.FC = () => {
         } else if (assignedCount >= 2 || role === 'audit' || role.includes('audit') || role === 'owner') {
           navigate('/centralized-auth', { replace: true })
         } else {
-          const singleComp = response.user.companyNames?.[0] || response.user.companyName
+          const singleComp = response.user.assignedCompanies?.[0] || response.user.assignedCompany
           if (singleComp && typeof window !== 'undefined') {
             sessionStorage.setItem('mct_selected_company', singleComp)
             sessionStorage.setItem('mct_active_company_session', singleComp)

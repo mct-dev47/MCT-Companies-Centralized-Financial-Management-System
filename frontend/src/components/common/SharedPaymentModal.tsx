@@ -193,7 +193,6 @@ export const SharedPaymentModal: React.FC<SharedPaymentModalProps> = ({
   })
   const [paymentError, setPaymentError] = React.useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
-  const [isConfirmModalOpen, setIsConfirmModalOpen] = React.useState(false)
   const [isReviewing, setIsReviewing] = React.useState(false)
   const [pendingConfirm, setPendingConfirm] = React.useState<CompletedPaymentReceiptData | null>(null)
   const [completedReceipt, setCompletedReceipt] = React.useState<CompletedPaymentReceiptData | null>(null)
