@@ -1,8 +1,8 @@
 import * as React from 'react'
-import { createBrowserRouter, Navigate, useRouteError } from 'react-router-dom'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { createBrowserRouter, Navigate, useRouteError, isRouteErrorResponse } from 'react-router-dom'
 import { AppShell } from '@/components/layout/AppShell'
+import { ErrorPage } from '@/components/common/ErrorPage'
+import { ErrorPageRoute } from '@/pages/ErrorPage'
 import {
   ProtectedRoute,
   PublicOnlyRoute,
@@ -64,31 +64,14 @@ function PageFallback() {
 
 function RootErrorBoundary() {
   const error: any = useRouteError()
-  const errorMessage =
-    error?.message ||
-    (typeof error === 'string' ? error : 'The page encountered an unexpected error.')
+  let status = 500
+  if (isRouteErrorResponse(error)) {
+    status = error.status
+  } else if (error && typeof error === 'object') {
+    status = error.status || error.statusCode || error.response?.status || 500
+  }
 
-  return (
-    <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-6 text-center">
-      <div className="w-14 h-14 rounded-full bg-red-50 text-brand flex items-center justify-center mb-4 ring-8 ring-red-50/50">
-        <AlertTriangle className="w-7 h-7 text-brand" />
-      </div>
-      <h1 className="text-xl font-bold text-slate-800 mb-2">Something went wrong</h1>
-      <p className="text-sm text-slate-500 max-w-md mb-6 leading-relaxed">
-        {errorMessage}
-      </p>
-      <div className="flex items-center gap-3">
-        <Button
-          variant="primary"
-          onClick={() => window.location.reload()}
-          className="rounded-[10px] inline-flex items-center gap-2"
-        >
-          <RefreshCw className="w-4 h-4" />
-          Reload Page
-        </Button>
-      </div>
-    </div>
-  )
+  return <ErrorPage code={status} />
 }
 
 function lazyPage<P = any>(
@@ -459,10 +442,19 @@ export const router = createBrowserRouter([
       },
     ],
   },
-  // Fallback
+  // Dedicated Error Page routes for quick testing and direct navigation
+  {
+    path: '/error/:code',
+    element: <ErrorPageRoute />,
+  },
+  {
+    path: '/error',
+    element: <ErrorPageRoute />,
+  },
+  // Catch-all route that renders the 404 page
   {
     path: '*',
-    element: <Navigate to="/login" replace />,
+    element: <ErrorPage code={404} />,
   },
 ])
 
