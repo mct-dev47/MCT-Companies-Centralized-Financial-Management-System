@@ -36,6 +36,8 @@ from app.services.audit_service import AuditAction, log_transaction
 
 router = APIRouter()
 
+_has_backfilled_repayments = False
+
 from app.core.cache import get_cached, set_cached
 
 def get_supabase_company_mapping(client, db: Optional[Session] = None):
@@ -407,6 +409,7 @@ def _attach_borrower_banks(db: Session, loans: List[LoanOut]) -> None:
 
 def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
     """Populate total_paid, outstanding_balance, and repayments from LoanRepayment rows."""
+    global _has_backfilled_repayments
     loan_ids = [item.loan_id for item in items if item.loan_id]
     if not loan_ids:
         return
@@ -436,6 +439,57 @@ def _attach_loan_repayments(db: Session, items: List[LoanOut]) -> None:
         item.total_paid = total_paid
         item.outstanding_balance = outstanding
         item.repayments = [LoanRepaymentOut.model_validate(r) for r in reps]
+
+    # Run one-time self-healing backfill for legacy repayments lacking Expense records
+    if not _has_backfilled_repayments:
+        try:
+            loan_cat = db.query(Category).filter(Category.name.ilike("Loan Repayment")).first()
+            if not loan_cat:
+                loan_cat = db.query(Category).filter(Category.name.ilike("Loan%")).first()
+            if not loan_cat:
+                loan_cat = Category(name="Loan Repayment", description="Inter-company loan repayment")
+                db.add(loan_cat)
+                db.flush()
+
+            comp_map = dict(db.query(Company.company_id, Company.company_name).all())
+            needs_commit = False
+            for item in items:
+                reps = by_loan.get(item.loan_id, [])
+                for r in reps:
+                    if (r.status or "").lower() == "pending":
+                        continue
+                    r_ref = r.reference_no or item.loan_ref_no or f"LN-{item.loan_id}"
+                    exp_exists = db.query(Expense).filter(
+                        Expense.company_id == item.borrower,
+                        Expense.amount == r.amount,
+                        Expense.expense_date == r.payment_date,
+                        Expense.cheque_no == r_ref,
+                    ).first()
+                    if not exp_exists:
+                        l_name = comp_map.get(item.lender) if item.lender else "Lender"
+                        raw_desc = (item.description or item.particulars or "").strip()
+                        clean_particular = raw_desc[5:].strip() if raw_desc.lower().startswith("loan:") else (raw_desc or "Loan Facility")
+                        new_exp = Expense(
+                            company_id=item.borrower,
+                            category_id=loan_cat.category_id,
+                            payment_method="Cash",
+                            expense_date=r.payment_date,
+                            cheque_no=r_ref,
+                            amount=r.amount,
+                            amount_paid=r.amount,
+                            description=f"Loan Repayment: {clean_particular} (to {l_name})",
+                            remarks=r.notes,
+                            bank_account_id=item.borrower_bank_account_id,
+                            audit_status="Pending Audit",
+                        )
+                        db.add(new_exp)
+                        needs_commit = True
+            if needs_commit:
+                db.commit()
+                system_cache.invalidate_tag("expenses")
+            _has_backfilled_repayments = True
+        except Exception as exc:
+            print(f"Repayment expense backfill warning: {exc}")
 
 
 @router.get("", response_model=List[LoanOut], summary="List loans from Supabase / DB")
@@ -1798,11 +1852,11 @@ def create_loan_repayment(
         ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": lender_acc.id}})
 
     # 3. Record Expense for Borrower company (reflected in Expenses & Transactions)
-    loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan Repayment")).first()
+    loan_cat = db.query(Category).filter(Category.name.ilike("Loan Repayment")).first()
     if not loan_cat:
-        loan_cat = db.query(Category).filter(Category.category_name.ilike("Loan%")).first()
+        loan_cat = db.query(Category).filter(Category.name.ilike("Loan%")).first()
     if not loan_cat:
-        loan_cat = Category(category_name="Loan Repayment", category_type="Expense")
+        loan_cat = Category(name="Loan Repayment", description="Inter-company loan repayment")
         db.add(loan_cat)
         db.flush()
 
@@ -1818,6 +1872,7 @@ def create_loan_repayment(
         description=f"Loan Repayment: {clean_particular} (to {l_name})",
         remarks=repayment_in.notes,
         bank_account_id=borrower_acc.id if borrower_acc else None,
+        audit_status="Pending Audit",
     )
     db.add(expense_rec)
 
@@ -1828,6 +1883,23 @@ def create_loan_repayment(
         sb_client = get_supabase_admin_client()
         if sb_client:
             sb_client.table("loan").update({"status": new_loan_status}).eq("loan_id", loan_id).execute()
+            try:
+                sb_client.table("expenses").insert({
+                    "company_id": loan.borrower,
+                    "category_id": loan_cat.category_id,
+                    "payment_method": chosen_payment_method,
+                    "created_by": current_user.get("user_id"),
+                    "expense_date": repayment_in.payment_date.isoformat(),
+                    "cheque_number": repayment_in.reference_no or loan_ref,
+                    "amount": float(repayment_in.amount),
+                    "amount_paid": float(repayment_in.amount),
+                    "description": f"Loan Repayment: {clean_particular} (to {l_name})",
+                    "remarks": repayment_in.notes,
+                    "bank_account_id": borrower_acc.id if borrower_acc else None,
+                    "audit_status": "Pending Audit",
+                }).execute()
+            except Exception as sb_exp_err:
+                print(f"Supabase expense insert on loan repayment warning: {sb_exp_err}")
     except Exception as exc:
         print(f"Supabase loan status update on repayment failed: {exc}")
 

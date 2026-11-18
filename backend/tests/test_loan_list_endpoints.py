@@ -10,10 +10,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.v1.endpoints import loans as loans_endpoints
-from app.core.dependencies import require_business_reader
+from app.core.dependencies import require_business_reader, require_business_writer
 from app.db.session import Base, get_db
 from app.models.company import Company
 from app.models.loan import Loan, LoanRepayment
+from app.models.finance import Expense, Category
+from app.models.bank import BankAccount
 
 ADMIN = {
     "auth_user_id": "a",
@@ -68,6 +70,7 @@ def client():
     app.include_router(loans_endpoints.router, prefix="/loans")
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[require_business_reader] = lambda: ADMIN
+    app.dependency_overrides[require_business_writer] = lambda: ADMIN
     return TestClient(app)
 
 
@@ -88,3 +91,42 @@ def test_list_and_export_loans_return_borrower_and_lender_records(client):
     paginated_res = client.get("/loans")
     assert paginated_res.status_code == 200
     assert len(paginated_res.json()) == 1
+
+
+def test_record_repayment_creates_expense(client):
+    repay_res = client.post(
+        "/loans/1/repayments",
+        json={
+            "amount": 500.0,
+            "payment_date": str(date.today()),
+            "reference_no": "REP-TEST-1",
+            "notes": "Testing expense creation",
+            "payment_method": "Cash",
+        },
+    )
+    assert repay_res.status_code == 201, repay_res.text
+    rep_data = repay_res.json()
+    assert float(rep_data["amount"]) == 500.0
+
+    # Verify that loading loans shows updated balance
+    get_res = client.get("/loans")
+    assert get_res.status_code == 200
+    loan = get_res.json()[0]
+    assert float(loan["total_paid"]) == 1500.0
+    assert float(loan["outstanding_balance"]) == 1800.0
+
+    # Verify Expense was created in database
+    app = client.app
+    override = app.dependency_overrides[get_db]
+    db_gen = override()
+    db = next(db_gen)
+    try:
+        exp = db.query(Expense).filter(Expense.company_id == 2).first()
+        assert exp is not None
+        assert float(exp.amount) == 500.0
+        assert "Loan Repayment" in exp.description
+    finally:
+        try:
+            next(db_gen)
+        except StopIteration:
+            pass
