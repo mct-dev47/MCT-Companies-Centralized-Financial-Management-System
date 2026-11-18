@@ -119,6 +119,7 @@ import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionMo
 
 import { getParticularsSummary, stripBankSystemPrefix } from '@/utils/particularsUtils'
 import { formatToMMDDYYYY, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { compareTransactionsDesc } from '@/lib/transactionSort'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 
@@ -942,15 +943,9 @@ export const BankManagementPage: React.FC = () => {
 
   }
 
-  // Sort transactions newest-first by transaction date (falling back to id) so running balances match table order
+  // Sort transactions newest-first by transaction date, then timestamp, then id so running balances match table order
   const compareBankTransactionsDesc = React.useCallback((a: BankTransaction, b: BankTransaction): number => {
-    const dateA = normalizeDateToYYYYMMDD(a.date) || ''
-    const dateB = normalizeDateToYYYYMMDD(b.date) || ''
-    if (dateA !== dateB) return dateB.localeCompare(dateA)
-    const timeA = new Date(a.date).getTime() || 0
-    const timeB = new Date(b.date).getTime() || 0
-    if (timeA !== timeB) return timeB - timeA
-    return (b.id || '').localeCompare(a.id || '')
+    return compareTransactionsDesc(a, b)
   }, [])
 
   // Compute running historical balance for each transaction (newest to oldest)

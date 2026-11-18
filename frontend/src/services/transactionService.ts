@@ -91,7 +91,7 @@ class TransactionService {
         auditNotes: t.auditNotes,
         auditDate: t.auditDate,
         createdBy: t.createdBy,
-        createdAt: t.createdAt || t.date,
+        createdAt: t.createdAt || undefined,
         updatedAt: t.updatedAt,
         attachments: Array.isArray(t.attachments) ? t.attachments : [],
         paidAmount: t.paidAmount !== undefined ? Number(t.paidAmount) : undefined,

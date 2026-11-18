@@ -80,6 +80,7 @@ import { websocketService } from '@/services/websocketService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
 import { useDropdownPosition } from '@/hooks/useDropdownPosition'
 import { cn } from '@/lib/utils'
+import { parseTransactionTimestamp } from '@/lib/transactionSort'
 
 // ── Loan and petty cash rows (spec 0013) ─────────────────────────────────────────────────────
 // The company that receives the money sees a Deposit; the company that funds it sees a Withdrawal.
@@ -134,15 +135,7 @@ const getRowGroupDateIso = (tx: DashboardTransactionItem): string => {
 
 /** Extracts encoding/creation timestamp as epoch milliseconds for sorting tie-breakers. */
 const getTxEncodedTimestamp = (tx: DashboardTransactionItem): number => {
-  if (tx.createdAt) {
-    const parsed = Date.parse(tx.createdAt)
-    if (!isNaN(parsed)) return parsed
-  }
-  if (tx.updatedAt) {
-    const parsed = Date.parse(tx.updatedAt)
-    if (!isNaN(parsed)) return parsed
-  }
-  return 0
+  return parseTransactionTimestamp(tx.createdAt) || parseTransactionTimestamp(tx.updatedAt)
 }
 
 const isPettyCashLedgerRow = (t: DashboardTransactionItem): boolean => {
@@ -1551,7 +1544,7 @@ export const TransactionPage: React.FC = () => {
     const sortedDates = Array.from(groupsMap.keys()).sort((a, b) => {
       const ma = groupMeta.get(a)!
       const mb = groupMeta.get(b)!
-      const byDate = mb.date.localeCompare(ma.date)
+      const byDate = sortOrder === 'desc' ? mb.date.localeCompare(ma.date) : ma.date.localeCompare(mb.date)
       return byDate !== 0 ? byDate : ma.company.localeCompare(mb.company)
     })
 
@@ -1575,7 +1568,7 @@ export const TransactionPage: React.FC = () => {
         dayTransactionCount,
       }
     })
-  }, [activeTab, filteredDepositTransactions, filteredSalesTransactions, resolveTxBank, getRowAmounts])
+  }, [activeTab, filteredDepositTransactions, filteredSalesTransactions, resolveTxBank, getRowAmounts, sortOrder])
 
   // The By Day table gets a Company column only when a shared (multi-company) bank is in view
   const showDayCompanyColumn = dailySummaryGroups.some((g) => !!g.company)

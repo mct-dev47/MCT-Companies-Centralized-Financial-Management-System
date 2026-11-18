@@ -768,6 +768,7 @@ def list_transactions(
                         bankAccountId=borrower_bank_id,
                         bankName=borrower_bank_name,
                         remarks=ln.finance_remark,
+                        createdAt=ln.created_at.isoformat() if ln.created_at else None,
                         awaitingAudit=False,
                     )
                 )
@@ -797,6 +798,7 @@ def list_transactions(
                         bankAccountId=ln.bank_account_id,
                         bankName=bank_name_map.get(ln.bank_account_id),
                         remarks=ln.finance_remark,
+                        createdAt=ln.created_at.isoformat() if ln.created_at else None,
                         isMirrorRow=True,
                         awaitingAudit=False,
                     )
@@ -833,6 +835,7 @@ def list_transactions(
                             auditStatus="Pending Audit",
                             bankAccountId=ln.bank_account_id,
                             bankName=bank_name_map.get(ln.bank_account_id),
+                            createdAt=rep.created_at.isoformat() if rep.created_at else None,
                             isMirrorRow=True,
                             awaitingAudit=False,
                         )
@@ -997,8 +1000,20 @@ def list_transactions(
         a_term = audit_status.strip().lower()
         items = [it for it in items if it.auditStatus.strip().lower() == a_term]
 
-    # Sort items chronologically descending (date, then id)
-    items.sort(key=lambda x: (x.date, x.createdAt or x.date, x.id), reverse=True)
+    # Sort items chronologically descending (transaction date, then timestamp, then id)
+    def _tx_sort_key(x: TransactionOut):
+        ts_val = 0.0
+        if x.createdAt:
+            try:
+                dt = datetime.fromisoformat(str(x.createdAt).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                ts_val = dt.timestamp()
+            except ValueError:
+                ts_val = 0.0
+        return (x.date or "", ts_val, str(x.id))
+
+    items.sort(key=_tx_sort_key, reverse=True)
 
     total_count = len(items)
     if response is not None:

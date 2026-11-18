@@ -31,7 +31,7 @@ class BankAccount(Base):
         "BankTransaction",
         back_populates="account",
         cascade="all, delete-orphan",
-        order_by="desc(BankTransaction.created_at)"
+        order_by="desc(BankTransaction.transaction_date), desc(BankTransaction.created_at), desc(BankTransaction.id)"
     )
 
     @property

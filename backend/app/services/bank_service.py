@@ -273,9 +273,9 @@ class BankService:
             )
         total = query.count()
         if (sort_dir or "desc").lower() == "asc":
-            query = query.order_by(BankTransaction.transaction_date.asc(), BankTransaction.id.asc())
+            query = query.order_by(BankTransaction.transaction_date.asc(), BankTransaction.created_at.asc(), BankTransaction.id.asc())
         else:
-            query = query.order_by(BankTransaction.transaction_date.desc(), BankTransaction.id.desc())
+            query = query.order_by(BankTransaction.transaction_date.desc(), BankTransaction.created_at.desc(), BankTransaction.id.desc())
         rows = query.offset(offset).limit(limit).all()
         if rows and entry_source_supported(self.db):
             tx_ids = [r.id for r in rows]
