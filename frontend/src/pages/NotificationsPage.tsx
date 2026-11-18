@@ -8,6 +8,7 @@ import {
   Search,
   RefreshCw,
   WifiOff,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -68,9 +69,19 @@ export const NotificationsPage: React.FC = () => {
   const [syncError, setSyncError] = React.useState<string | null>(null)
   const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
   const [expandedGroupIds, setExpandedGroupIds] = React.useState<Set<string>>(new Set())
+  const [isNarrowScreen, setIsNarrowScreen] = React.useState(false)
 
   const isFetchingRef = React.useRef(false)
   const mountedRef = React.useRef(true)
+
+  React.useEffect(() => {
+    const handleResize = () => {
+      setIsNarrowScreen(window.innerWidth < 768)
+    }
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   React.useEffect(() => {
     mountedRef.current = true
@@ -413,7 +424,7 @@ export const NotificationsPage: React.FC = () => {
       {/* Main Content Container */}
       <Card className="rounded-2xl border border-[#EEF0F3] shadow-xs overflow-hidden bg-white">
         {/* Controls Bar: Tabs & Search */}
-        <div className="p-4 sm:p-5 border-b border-[#EEF0F3] flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+        <div className="p-4 sm:p-5 border-b border-[#EEF0F3] flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
           {/* Underline Tabs */}
           <div className="flex items-center gap-6 overflow-x-auto no-scrollbar shrink-0">
             {TABS.map((tab) => {
@@ -448,15 +459,25 @@ export const NotificationsPage: React.FC = () => {
           </div>
 
           {/* Search Input: Wide container preventing any placeholder or text clipping */}
-          <div className="relative w-full xl:w-[560px] 2xl:w-[620px]">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5B6470]" />
+          <div className="relative flex-1 w-full lg:max-w-[580px] xl:max-w-[680px]">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[#5B6470] pointer-events-none" />
             <Input
               type="text"
-              placeholder="Search notifications by title, borrower, loan or TX ref..."
+              placeholder={isNarrowScreen ? 'Search notifications...' : 'Search by title, borrower, loan or TX ref'}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-4 h-10 text-sm rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A] w-full"
+              className="pl-10 pr-9 h-10 text-sm rounded-xl border-[#EEF0F3] focus-visible:ring-[#8B1A1A] w-full bg-white shadow-2xs"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#5B6470] hover:text-[#1B2330] p-1 rounded-full cursor-pointer transition-colors"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
