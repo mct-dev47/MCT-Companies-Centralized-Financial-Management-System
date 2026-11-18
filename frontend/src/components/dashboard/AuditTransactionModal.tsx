@@ -489,7 +489,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayParticulars =
     activeSale?.particulars || activeExpense?.particulars || activeLoan?.particulars || activeTx?.particulars || activeTx?.description || '—'
   const displayStatus = isExpense
-    ? 'Paid'
+    ? (activeExpense?.status || activeTx?.status || 'Paid')
     : (activeSale?.status || activeExpense?.status || activeLoan?.status || activeTx?.status || '—')
   const displayCreatedAt =
     activeSale?.createdAt || activeExpense?.createdAt || activeLoan?.createdAt || activeTx?.createdAt
@@ -629,7 +629,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const netAmount = isLoan
     ? loanVal
     : isExpense
-    ? (activeExpense?.netAmount ?? withdrawalVal)
+    ? (activeExpense?.netAmount ?? (withdrawalVal || activeTx?.amount || 0))
     : ((depositVal || 0) - (withdrawalVal || 0))
 
   const isEditableType = Boolean(
