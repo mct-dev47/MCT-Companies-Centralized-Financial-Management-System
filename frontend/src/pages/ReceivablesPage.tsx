@@ -171,6 +171,7 @@ export const ReceivablesPage: React.FC = () => {
   const {
     people,
     kpis,
+    isLoading: isStoreLoading,
     recordPayment,
     settleStaffPayrollDeduction,
     editSale,
@@ -304,16 +305,8 @@ export const ReceivablesPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('')
   const [statusFilter, setStatusFilter] = React.useState<'All' | 'Unpaid' | 'Partial' | 'Paid'>('All')
 
-  // Skeleton loading state
-  const [loading, setLoading] = React.useState(true)
-
-  React.useEffect(() => {
-    setLoading(true)
-    const timer = setTimeout(() => {
-      setLoading(false)
-    }, 250)
-    return () => clearTimeout(timer)
-  }, [effectiveCompany, activeTab, statusFilter])
+  // Skeleton loading state: stay in skeleton until initial backend load completes
+  const loading = isStoreLoading
 
   // Pagination state
   const [currentPage, setCurrentPage] = React.useState(1)
@@ -1126,15 +1119,17 @@ export const ReceivablesPage: React.FC = () => {
           </Table>
         </div>
 
-        <TablePagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          totalItems={filteredPeople.length}
-          startIndex={startIndex}
-          endIndex={endIndex}
-          onPageChange={setCurrentPage}
-          itemLabel="accounts"
-        />
+        {!loading && (
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={filteredPeople.length}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onPageChange={setCurrentPage}
+            itemLabel="accounts"
+          />
+        )}
       </Card>
 
       {/* Floating 3-dots Action Menu Portal */}

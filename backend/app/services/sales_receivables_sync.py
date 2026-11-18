@@ -286,10 +286,15 @@ class SalesReceivablesSyncService:
     def _use_supabase(self) -> bool:
         try:
             bind = self.db.get_bind()
-            if bind is not None and bind.dialect.name == "sqlite":
-                db_name = bind.url.database
-                if not db_name or db_name == ":memory:":
+            if bind is not None:
+                # When SQLAlchemy is already connected to PostgreSQL (Supabase),
+                # `sales` lives in the same database — avoid redundant REST calls.
+                if bind.dialect.name == "postgresql":
                     return False
+                if bind.dialect.name == "sqlite":
+                    db_name = bind.url.database
+                    if not db_name or db_name == ":memory:":
+                        return False
         except Exception:
             pass
         return True

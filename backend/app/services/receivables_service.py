@@ -75,6 +75,7 @@ class ReceivablesService:
         search: Optional[str] = None,
         limit: Optional[int] = 100,
         offset: int = 0,
+        include_total: bool = True,
     ) -> Tuple[List[Receivable], int]:
         query = self.db.query(Receivable)
         query = self._apply_company_filters(query, company_id=company_id, company_ids=company_ids, company_name=company_name)
@@ -104,13 +105,15 @@ class ReceivablesService:
                 )
             )
 
-        total = query.count()
+        total = query.count() if include_total else 0
         ordered = query.options(selectinload(Receivable.payments)).order_by(
             desc(Receivable.transaction_date), desc(Receivable.receivable_id)
         )
         if limit is not None:
             ordered = ordered.offset(offset).limit(limit)
         rows = ordered.all()
+        if not include_total:
+            total = len(rows)
         return self.sync_service.attach_lock_flags(rows), total
 
     def list_receivables(
@@ -137,6 +140,7 @@ class ReceivablesService:
             search=search,
             limit=limit,
             offset=offset,
+            include_total=False,
         )
         return rows
 
