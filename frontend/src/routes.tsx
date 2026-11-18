@@ -254,9 +254,9 @@ export const router = createBrowserRouter([
       {
         path: '/sales/add',
         element: (
-          <NonAdminRouteGuard>
+          <SalesRouteGuard>
             <AddTransactionSheetPage initialType="Sales" />
-          </NonAdminRouteGuard>
+          </SalesRouteGuard>
         ),
       },
       {

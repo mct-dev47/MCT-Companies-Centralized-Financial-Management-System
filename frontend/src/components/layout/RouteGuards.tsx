@@ -6,8 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   isLendingEnabledCompany,
   isTenantEnabledCompany,
-  isFilCapCompany,
-  isJKPropertyCompany,
+  isSalesBlockedForCompany,
 } from '@/config/companyFeatures'
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({
@@ -209,22 +208,8 @@ export const SalesRouteGuard: React.FC<{ children: React.ReactNode }> = ({ child
     return <Navigate to="/employee" replace />
   }
 
-  // Determine current active or assigned company
-  const targetCompany = (activeCompany && activeCompany !== 'All Companies')
-    ? activeCompany
-    : (user?.assignedCompany && user.assignedCompany !== 'All Companies' && !user.assignedCompany.includes(','))
-      ? user.assignedCompany
-      : ''
-
-  // Only block company-scoped users when their active target company is strictly FilCap or JK
-  if (
-    targetCompany &&
-    userRole !== 'finance' &&
-    userRole !== 'audit' &&
-    !userRole.includes('auditor') &&
-    userRole !== 'owner' &&
-    (isFilCapCompany(targetCompany) || isJKPropertyCompany(targetCompany))
-  ) {
+  // Block any non-admin role from accessing Sales when the active or assigned company is FilCap or JK
+  if (isSalesBlockedForCompany(user?.role, activeCompany, user?.assignedCompany)) {
     return <Navigate to="/dashboard" replace />
   }
 
