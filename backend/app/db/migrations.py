@@ -767,6 +767,36 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0074_loan_repayment_links")
             logger.info("Migration 0074_loan_repayment_links applied successfully.")
 
+    # 41. 0075: store borrower's chosen receiving bank account on loan requests
+    result_0075 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0075_loan_borrower_bank'")
+    ).first()
+    if not result_0075:
+        script_0075 = MIGRATIONS_DIR / "0075_loan_borrower_bank.postgres.sql"
+        if script_0075.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0075.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0075_loan_borrower_bank')"))
+            applied.append("0075_loan_borrower_bank")
+            logger.info("Migration 0075_loan_borrower_bank applied successfully.")
+
+    # 42. 0076: link bank_transactions rows to receivable_payments so each installment keeps its own bank row
+    result_0076 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0076_bank_transactions_receivable_payment_link'")
+    ).first()
+    if not result_0076:
+        script_0076 = MIGRATIONS_DIR / "0076_bank_transactions_receivable_payment_link.postgres.sql"
+        if script_0076.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0076.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0076_bank_transactions_receivable_payment_link')"))
+            applied.append("0076_bank_transactions_receivable_payment_link")
+            logger.info("Migration 0076_bank_transactions_receivable_payment_link applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1863,6 +1893,22 @@ def _run_sqlite_migrations(conn) -> list[str]:
                 conn.execute(text("ALTER TABLE loan ADD COLUMN borrower_bank_account_id VARCHAR(100) NULL"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0075_loan_borrower_bank')"))
         applied.append("0075_loan_borrower_bank")
+
+    # 41. 0076: link bank_transactions rows to receivable_payments so each installment keeps its own bank row
+    result_0076 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0076_bank_transactions_receivable_payment_link'")
+    ).first()
+    if not result_0076:
+        tx_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if tx_exists:
+            bt_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "source_receivable_payment_id" not in bt_cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_receivable_payment_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_receivable_payment_id ON bank_transactions (source_receivable_payment_id)"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0076_bank_transactions_receivable_payment_link')"))
+        applied.append("0076_bank_transactions_receivable_payment_link")
 
     conn.commit()
     return applied
