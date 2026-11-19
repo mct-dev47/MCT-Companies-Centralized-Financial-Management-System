@@ -57,7 +57,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
   const [actionError, setActionError] = React.useState<string | null>(null)
 
   const [currentCompany, setCurrentCompany] = React.useState<Company | null>(company)
-  const [isLoadingDetails, setIsLoadingDetails] = React.useState(false)
+  const [, setIsLoadingDetails] = React.useState(false)
 
   React.useEffect(() => {
     if (open && company?.id) {
@@ -276,7 +276,7 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
         <DialogContent
           onCloseAutoFocus={(e) => {
-            if (document.activeElement && e.currentTarget.contains(document.activeElement)) {
+            if (document.activeElement && (e.currentTarget as HTMLElement)?.contains?.(document.activeElement)) {
               e.preventDefault()
               ;(document.activeElement as HTMLElement)?.blur()
             }
@@ -370,15 +370,15 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
                       Crop / Adjust
                     </Button>
                   )}
-                  {profilePreview && profilePreview !== company.logoUrl && (
+                  {profilePreview && profilePreview !== company?.logoUrl && (
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        setProfilePreview(company.logoUrl || null)
+                        setProfilePreview(company?.logoUrl || null)
                         setRawImageForCrop(null)
-                        setFormData((prev) => ({ ...prev, logoUrl: company.logoUrl }))
+                        setFormData((prev) => ({ ...prev, logoUrl: company?.logoUrl }))
                       }}
                       className="h-7 px-2 text-xs text-muted-fg hover:text-focus"
                     >
@@ -689,20 +689,20 @@ export const ViewCompanyModal: React.FC<ViewCompanyModalProps> = ({
               <span>Permanent deletion warning</span>
             </div>
             <p className="text-xs text-muted-fg leading-relaxed">
-              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-primary">{company.name}</strong>.
+              This action permanently purges all financial records, sales, expenses, receivables, tenant leases, and linked bank accounts associated with <strong className="font-semibold text-primary">{company?.name}</strong>.
             </p>
           </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="confirm-company-name" className="text-xs sm:text-sm font-medium text-focus block">
-              Please type <span className="font-bold select-all text-primary">"{company.name}"</span> to confirm.
+              Please type <span className="font-bold select-all text-primary">"{company?.name}"</span> to confirm.
             </Label>
             <Input
               id="confirm-company-name"
               type="text"
               value={deleteConfirmationName}
               onChange={(e) => setDeleteConfirmationName(e.target.value)}
-              placeholder={company.name}
+              placeholder={company?.name || ""}
               autoComplete="off"
               className="h-10 text-sm rounded-xl border-stroke/50 focus:border-primary focus:ring-primary/20"
             />

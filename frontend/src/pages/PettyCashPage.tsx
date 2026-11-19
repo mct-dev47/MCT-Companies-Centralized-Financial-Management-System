@@ -6,10 +6,8 @@ import {
   Search,
   X,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Building2,
-  Calendar,
   Check,
   FileSpreadsheet,
   FileText,
@@ -19,13 +17,11 @@ import {
   Download,
   AlertCircle,
   ArrowUpRight,
-  MessageSquare,
   Pencil,
   Trash2,
   MoreVertical,
   Eye,
   Receipt,
-  User,
   History,
   RotateCw,
   HelpCircle,
@@ -34,9 +30,7 @@ import { ReimbursementModal } from '@/components/dashboard/ReimbursementModal'
 import { formatRealName } from '@/utils/formatRealName'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
-import { TableErrorState } from '@/components/common/TableErrorState'
 import { TablePagination } from '@/components/common/TablePagination'
-import { StatusPill } from '@/components/common/StatusPill'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -195,16 +189,14 @@ function formatTimelineDateTime(dateStr?: string | null): string {
 
 export const PettyCashPage: React.FC = () => {
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const { activeCompany, allCompanies } = useCompany()
 
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isFinance = userRole === 'finance'
-  const isSupervisor = userRole === 'supervisor'
   const isAdmin = userRole === 'admin'
   const isFinanceOrAdmin = isFinance || isAdmin
   const canRequestTopUp = ['admin', 'superadmin', 'finance', 'supervisor'].includes(userRole)
-  const isCompanyScoped = isStrictlyCompanyScoped
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
   const canExecuteFinancialActions = (isFinance || isAdmin) && !isOwner
@@ -391,7 +383,7 @@ export const PettyCashPage: React.FC = () => {
       return
     }
     const auditorName = formatRealName(
-      user?.fullName || user?.name || user?.email || 'Audit Officer',
+      user?.fullName || user?.email || 'Audit Officer',
       user?.role || 'Audit Officer'
     )
     const nowIso = new Date().toISOString()
@@ -500,7 +492,7 @@ export const PettyCashPage: React.FC = () => {
     try {
       if (editEntry.expenseId != null || (editEntry.id && String(editEntry.id).startsWith('expense-'))) {
         const expId = editEntry.expenseId || editEntry.recordId
-        await expenseService.updateExpense(expId, {
+        await expenseService.updateExpense(String(expId), {
           withdrawal: numericAmount,
           particulars: editDescription.trim(),
           ...(editCategory.trim() ? { category: editCategory.trim() } : {}),
@@ -537,7 +529,7 @@ export const PettyCashPage: React.FC = () => {
     try {
       if (deleteConfirmEntry.expenseId != null || (deleteConfirmEntry.id && String(deleteConfirmEntry.id).startsWith('expense-'))) {
         const expId = deleteConfirmEntry.expenseId || deleteConfirmEntry.recordId
-        await expenseService.deleteExpense(expId)
+        await expenseService.deleteExpense(String(expId))
       } else {
         await pettyCashService.deleteTopUp(deleteConfirmEntry.recordId)
       }
@@ -1066,7 +1058,6 @@ export const PettyCashPage: React.FC = () => {
   }
 
   const displayedCompanyTitle = isAllCompanies ? 'All Subsidiaries' : selectedCompany
-  const pendingCount = ledger.filter((l) => l.status === 'Pending Finance Approval').length
 
   return (
     <div className="space-y-6 sm:space-y-8 w-full max-w-[1600px] mx-auto pb-12 animate-in fade-in duration-300">
@@ -2557,7 +2548,7 @@ export const PettyCashPage: React.FC = () => {
 
                     {/* Own Bank or Method A Claim in Approved status: Reimburse */}
                     {targetEntry.status === 'Approved' &&
-                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      (targetEntry.employeeOutOfPocket == null || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
                       targetEntry.paymentMethodOption !== 'transfer_first' && (
                       <Button
                         type="button"
@@ -2573,7 +2564,7 @@ export const PettyCashPage: React.FC = () => {
 
                     {/* Method B Claim in Approved status: Initiate Transfer */}
                     {targetEntry.status === 'Approved' &&
-                      (targetEntry.employeeOutOfPocket === undefined || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
+                      (targetEntry.employeeOutOfPocket == null || targetEntry.employeeOutOfPocket > 0 || targetEntry.amountRequested > 0) &&
                       targetEntry.paymentMethodOption === 'transfer_first' && (
                       <Button
                         type="button"
@@ -3297,7 +3288,7 @@ export const PettyCashPage: React.FC = () => {
 
                 {/* Own Bank or Method A */}
                 {activeMenuPetty.status === 'Approved' &&
-                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  (activeMenuPetty.employeeOutOfPocket == null || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
                   activeMenuPetty.paymentMethodOption !== 'transfer_first' && (
                   <button
                     type="button"
@@ -3315,7 +3306,7 @@ export const PettyCashPage: React.FC = () => {
 
                 {/* Method B: Initiate Transfer */}
                 {activeMenuPetty.status === 'Approved' &&
-                  (activeMenuPetty.employeeOutOfPocket === undefined || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
+                  (activeMenuPetty.employeeOutOfPocket == null || activeMenuPetty.employeeOutOfPocket > 0 || activeMenuPetty.amountRequested > 0) &&
                   activeMenuPetty.paymentMethodOption === 'transfer_first' && (
                   <button
                     type="button"

@@ -14,5 +14,5 @@ export function formatPHP(
   }).format(amount)
 }
 
-export { formatPersonInitialAndLastName } from '../utils/formatUtils'
+export { formatPersonInitialAndLastName } from '../utils/formatUtils.ts'
 

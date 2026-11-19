@@ -3,34 +3,25 @@ import * as React from 'react'
 import {
   TrendingDown,
   Building2,
-  Calendar,
   ChevronDown,
-  Check,
   Search,
   Plus,
-  Download,
   FileSpreadsheet,
   FileText,
   Trash2,
-  ChevronLeft,
   ChevronRight,
   ArrowLeft,
   AlertCircle,
-  X,
   CheckCircle2,
   Wallet,
-  ArrowDownLeft,
   MoreVertical,
   Eye,
   Pencil,
   Landmark,
-  Lock,
-  Loader2,
   HelpCircle,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
@@ -47,7 +38,6 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
@@ -69,8 +59,6 @@ import type { DashboardTransactionItem } from '@/services/dashboardService'
 import {
   isDateInRange,
   normalizeDateToYYYYMMDD,
-  formatToYYYYMMDD,
-  formatCreatedAt,
   formatDisplayDate,
 } from '@/utils/dateUtils'
 import {
@@ -93,7 +81,7 @@ const PERIOD_OPTIONS = ['Daily', 'Monthly', 'Quarterly', 'Annually'] as const
 type PeriodOption = (typeof PERIOD_OPTIONS)[number]
 
 import { getPaidDisbursementForExpense } from '@/utils/cashLedgerUtils'
-import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
+import { groupTransactionsByDate } from '@/utils/dailyGroupUtils'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { notifyError } from '@/utils/errorUtils'
 import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
@@ -103,7 +91,7 @@ const ITEMS_PER_PAGE = 50
 export const ExpensePage: React.FC = () => {
   const navigate = useNavigate()
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const { activeCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isCompanyUser =
@@ -111,7 +99,6 @@ export const ExpensePage: React.FC = () => {
   const isFinance = userRole === 'finance'
   const isAdmin = userRole === 'admin' || isAudit
   const isCompanyScoped = isStrictlyCompanyScoped
-  const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
   const isAuditor = isAudit
   const isOwner = userRole === 'owner'
   const canAuditActions = isAudit && !isOwner
@@ -124,7 +111,7 @@ export const ExpensePage: React.FC = () => {
   const [loadError, setLoadError] = React.useState<string | null>(null)
 
   // Dynamic companies list populated directly from database
-  const [companyList, setCompanyList] =
+  const [, setCompanyList] =
     React.useState<string[]>(() => (
       allCompanies && allCompanies.length > 0 ? allCompanies : DEFAULT_COMPANY_LIST
     ))
@@ -198,7 +185,7 @@ export const ExpensePage: React.FC = () => {
     ],
     []
   )
-  const [selectedPeriod, setSelectedPeriod] =
+  const [selectedPeriod] =
     React.useState<PeriodOption>('Monthly')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     preset: 'All Dates',
@@ -221,17 +208,11 @@ export const ExpensePage: React.FC = () => {
 
   // Dropdown menus
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
-  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const periodDropdownRef = React.useRef<HTMLDivElement>(null)
-  const statusDropdownRef = React.useRef<HTMLDivElement>(null)
   const tableCardRef = React.useRef<HTMLDivElement>(null)
 
   const exportPos = useDropdownPosition(exportDropdownRef, isExportDropdownOpen)
-  const periodPos = useDropdownPosition(periodDropdownRef, isPeriodDropdownOpen)
-  const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
 
   // Modals & Action state
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
@@ -251,79 +232,6 @@ export const ExpensePage: React.FC = () => {
     string | null
   >(null)
 
-  const handlePeriodChange = (period: PeriodOption) => {
-    setSelectedPeriod(period)
-    setIsPeriodDropdownOpen(false)
-    const currentToday = formatToYYYYMMDD(new Date())
-    const [currYear, currMonth] = currentToday.split('-')
-
-    switch (period) {
-      case 'Daily':
-        setDateRange({
-          preset: 'today',
-          label: 'Today',
-          startDate: currentToday,
-          endDate: currentToday,
-        })
-        break
-      case 'Monthly': {
-        const lastDay = new Date(
-          parseInt(currYear, 10),
-          parseInt(currMonth, 10),
-          0
-        ).getDate()
-        setDateRange({
-          preset: 'this_month',
-          label: 'This Month',
-          startDate: `${currYear}-${currMonth}-01`,
-          endDate: `${currYear}-${currMonth}-${String(lastDay).padStart(2, '0')}`,
-        })
-        break
-      }
-      case 'Quarterly': {
-        const monthNum = parseInt(currMonth, 10)
-        let qStartMonth = '01'
-        let qEndMonth = '03'
-        let qEndDay = '31'
-        let qLabel = 'Q1'
-
-        if (monthNum >= 4 && monthNum <= 6) {
-          qStartMonth = '04'
-          qEndMonth = '06'
-          qEndDay = '30'
-          qLabel = 'Q2'
-        } else if (monthNum >= 7 && monthNum <= 9) {
-          qStartMonth = '07'
-          qEndMonth = '09'
-          qEndDay = '30'
-          qLabel = 'Q3'
-        } else if (monthNum >= 10) {
-          qStartMonth = '10'
-          qEndMonth = '12'
-          qEndDay = '31'
-          qLabel = 'Q4'
-        }
-
-        setDateRange({
-          preset: 'this_quarter',
-          label: `This Quarter (${qLabel})`,
-          startDate: `${currYear}-${qStartMonth}-01`,
-          endDate: `${currYear}-${qEndMonth}-${qEndDay}`,
-        })
-        break
-      }
-      case 'Annually':
-        setDateRange({
-          preset: 'this_year',
-          label: 'This Year',
-          startDate: `${currYear}-01-01`,
-          endDate: `${currYear}-12-31`,
-        })
-        break
-      default:
-        break
-    }
-  }
 
   // `silent` reloads without the loading skeleton (used by realtime updates).
   const loadExpenses = React.useCallback(async (silent = false) => {
@@ -382,18 +290,6 @@ export const ExpensePage: React.FC = () => {
       ) {
         setIsExportDropdownOpen(false)
       }
-      if (
-        periodDropdownRef.current &&
-        !periodDropdownRef.current.contains(target)
-      ) {
-        setIsPeriodDropdownOpen(false)
-      }
-      if (
-        statusDropdownRef.current &&
-        !statusDropdownRef.current.contains(target)
-      ) {
-        setIsStatusDropdownOpen(false)
-      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -401,7 +297,7 @@ export const ExpensePage: React.FC = () => {
 
   // 1. Base filtered expenses (independent of Deposit / Expense Record tab so KPIs above stay constant)
   const {
-    accounts: allBankAccounts,
+    
     available: bankOptions,
     selectedId: selectedBankId,
     setSelectedId: setSelectedBankId,
@@ -520,32 +416,6 @@ export const ExpensePage: React.FC = () => {
     ).length
   }, [baseFilteredExpenses])
 
-  const withdrawBalanceByKey = React.useMemo(() => {
-    const ordered = [...expenses]
-      .filter((e) => getPaidDisbursementForExpense(e) > 0 || e.status === 'Paid')
-      .sort((a, b) => {
-        const da = a.disbursement_date || a.rawDate || a.date
-        const db = b.disbursement_date || b.rawDate || b.date
-        const byDate = String(da).localeCompare(String(db))
-        if (byDate !== 0) return byDate
-        return (a.id || '').localeCompare(b.id || '')
-      })
-    const running = new Map<string, number>()
-    const balances = new Map<string, number>()
-    ordered.forEach((e) => {
-      const groupKey = selectedBankId ? selectedBankId : (e.company || '').toLowerCase().trim()
-      if (!running.has(groupKey)) {
-        const seedBank = selectedBankId ? allBankAccounts.find((b) => String(b.id) === selectedBankId) : null
-        running.set(groupKey, seedBank ? (Number(seedBank.startingBalance) || 0) : 0)
-      }
-      const prev = running.get(groupKey)!
-      const amt = getPaidDisbursementForExpense(e) || e.withdrawal || 0
-      const next = Math.round((prev - amt) * 100) / 100
-      running.set(groupKey, next)
-      balances.set(e.id, next)
-    })
-    return balances
-  }, [expenses, selectedBankId, allBankAccounts])
 
   const hasFocusedDay = React.useMemo(
     () => dailyExpenseGroups.some((g) => expandedDates.has(g.date)),
@@ -701,9 +571,6 @@ export const ExpensePage: React.FC = () => {
     setIsAuditModalOpen(true)
   }
 
-  const handleRowClick = (expense: ExpenseItem) => {
-    handleOpenRow(expense)
-  }
 
   const handleExpenseUpdated = (updatedItem: ExpenseItem) => {
     setExpenses((prev) =>
@@ -828,7 +695,7 @@ export const ExpensePage: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const updated: ExpenseItem = {
       ...expense,
       auditStatus: status,
@@ -1282,7 +1149,7 @@ export const ExpensePage: React.FC = () => {
                   <TableErrorState
                     colSpan={7}
                     message={loadError}
-                    onRetry={() => loadExpenses(false, true)}
+                    onRetry={() => loadExpenses(false)}
                   />
                 ) : paginatedDailyGroups.length === 0 ? (
                   <TableEmptyState
@@ -1620,7 +1487,7 @@ export const ExpensePage: React.FC = () => {
                 <TableErrorState
                   colSpan={9}
                   message={loadError}
-                  onRetry={() => loadExpenses(false, true)}
+                  onRetry={() => loadExpenses(false)}
                 />
               ) : paginatedExpenses.length === 0 ? (
                 <TableEmptyState

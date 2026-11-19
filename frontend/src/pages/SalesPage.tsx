@@ -1,32 +1,24 @@
 import { formatRealName } from '@/utils/formatRealName'
 import * as React from 'react'
 import {
-  Download,
   Plus,
   Search,
   X,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ArrowLeft,
   Building2,
-  Check,
   FileSpreadsheet,
   FileText,
-  Calendar,
   TrendingUp,
   Wallet,
   AlertCircle,
   Trash2,
   Loader2,
   CheckCircle2,
-  ArrowDownLeft,
   MoreVertical,
   Eye,
   Pencil,
-  Landmark,
-  Lock,
-  Receipt,
   MessageSquare,
   HelpCircle,
 } from 'lucide-react'
@@ -59,7 +51,6 @@ import {
 } from '@/components/ui/dialog'
 import { FlagDiscrepancyDialog } from '@/components/common/FlagDiscrepancyDialog'
 import {
-  DateRangePicker,
   type DateRange,
 } from '@/components/ui/DateRangePicker'
 import { TransactionDateRangeControl } from '@/components/transactions/TransactionDateRangeControl'
@@ -85,10 +76,7 @@ import {
   isDateInRange,
   normalizeDateToYYYYMMDD,
   formatDisplayDate,
-  formatToYYYYMMDD,
-  formatCreatedAt,
 } from '@/utils/dateUtils'
-import { getCleanParticularsTitle } from '@/utils/transactionLifecycle'
 import {
   getParticularsSummary,
   matchesParticularsStatusFilter,
@@ -100,17 +88,15 @@ import { useCompany } from '@/context/CompanyContext'
 import { useDailyRemarks } from '@/hooks/useDailyRemarks'
 import { DayRemarkCell } from '@/components/dashboard/DayRemark'
 import { isCompanyMatch } from '@/utils/companyUtils'
-import { loanService } from '@/services/loanService'
 import { websocketService } from '@/services/websocketService'
 
-const DEFAULT_COMPANY_LIST = ['All Companies']
 
 // Period options: Daily, Quarterly, Monthly, Annually
 const PERIOD_OPTIONS = ['Daily', 'Quarterly', 'Monthly', 'Annually'] as const
 type PeriodType = (typeof PERIOD_OPTIONS)[number]
 
 import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
-import { groupTransactionsByDate, type DailyGroupSummary } from '@/utils/dailyGroupUtils'
+import { groupTransactionsByDate } from '@/utils/dailyGroupUtils'
 import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 
@@ -119,57 +105,25 @@ const ITEMS_PER_PAGE = 50
 export const SalesPage: React.FC = () => {
   const navigate = useNavigate()
   const { user } = useSession()
-  const { activeCompany, setActiveCompany, allCompanies, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
+  const { activeCompany, isCompanyScoped: isStrictlyCompanyScoped } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
   const isAudit = userRole === 'audit' || userRole.includes('auditor')
   const isOwner = userRole === 'owner'
   const isCompanyUser =
     (userRole === 'company' || userRole === 'supervisor') && !isAudit
   const isFinance = userRole === 'finance'
-  const isAdmin = userRole === 'admin' || isAudit
   const isAdminUser = userRole === 'admin'
   const isSupervisor =
     userRole.includes('supervisor') ||
     userRole.includes('company') ||
     (!isAudit && !isFinance && !isOwner)
   const isCompanyScoped = isStrictlyCompanyScoped
-  const showCompanyColumn = !isCompanyScoped && userRole !== 'supervisor' && userRole !== 'company'
-  const isAuditor = isAudit
   const canAuditActions = (isAudit || isAdminUser) && !isOwner
   const canAdd = !isAudit && !isOwner && (isCompanyUser || isFinance)
   const canMutateRecord = (isSupervisor || isCompanyUser || isFinance) && !isAudit && !isOwner
   const assignedCompany = user?.assignedCompany || 'MCT Kitchen'
 
 
-  // Dynamic company list loaded strictly from the database
-  const [companyList, setCompanyList] = React.useState<string[]>(() => {
-    if (allCompanies && allCompanies.length > 0) return allCompanies
-    return DEFAULT_COMPANY_LIST
-  })
-
-  // Keep in sync with dynamic companies from CompanyContext
-  React.useEffect(() => {
-    if (allCompanies && allCompanies.length > 0) {
-      setCompanyList(allCompanies)
-    }
-  }, [allCompanies])
-
-  React.useEffect(() => {
-    if (!isAdmin && !isFinance && allCompanies && allCompanies.length > 0) {
-      return
-    }
-    let mounted = true
-    loanService.getCompanies().then((companies) => {
-      if (mounted && companies.length > 0) {
-        const names = companies.map((c) => c.company_name).filter(Boolean)
-        const combined = Array.from(new Set(['All Companies', ...names]))
-        setCompanyList(combined)
-      }
-    })
-    return () => {
-      mounted = false
-    }
-  }, [allCompanies, isAdmin, isFinance, user])
 
   // Filter state: strictly locked to activeCompany chosen in Centralized Auth
   const selectedCompany = activeCompany || assignedCompany
@@ -237,7 +191,7 @@ export const SalesPage: React.FC = () => {
     ],
     []
   )
-  const [selectedPeriod, setSelectedPeriod] =
+  const [selectedPeriod] =
     React.useState<PeriodType>('Monthly')
   const [tableTab, setTableTab] = React.useState<'Deposit' | 'Sales Record'>(
     'Sales Record'
@@ -283,55 +237,13 @@ export const SalesPage: React.FC = () => {
   }
 
   // Handle switching period (Daily, Quarterly, Monthly, Annually)
-  const handlePeriodChange = (period: PeriodType) => {
-    setSelectedPeriod(period)
-    setIsPeriodDropdownOpen(false)
-    const currentToday = formatToYYYYMMDD(new Date())
-    const [currYear, currMonth, currDay] = currentToday.split('-')
-
-    if (period === 'Daily') {
-      setDateRange({
-        startDate: currentToday,
-        endDate: currentToday,
-        label: `Today (${currMonth}/${currDay}/${currYear})`,
-        preset: 'Daily',
-      })
-    } else if (period === 'Monthly') {
-      setDateRange({
-        startDate: `${currYear}-${currMonth}-01`,
-        endDate: `${currYear}-${currMonth}-31`,
-        label: 'This Month',
-        preset: 'This Month',
-      })
-    } else if (period === 'Quarterly') {
-      setDateRange({
-        startDate: `${currYear}-10-01`,
-        endDate: `${currYear}-12-31`,
-        label: 'Q4 2026',
-        preset: 'This Quarter',
-      })
-    } else if (period === 'Annually') {
-      setDateRange({
-        startDate: `${currYear}-01-01`,
-        endDate: `${currYear}-12-31`,
-        label: `Year ${currYear}`,
-        preset: 'This Year',
-      })
-    }
-  }
 
   // Dropdowns state
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isPeriodDropdownOpen, setIsPeriodDropdownOpen] = React.useState(false)
-  const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const periodDropdownRef = React.useRef<HTMLDivElement>(null)
-  const statusDropdownRef = React.useRef<HTMLDivElement>(null)
 
   const exportPos = useDropdownPosition(exportDropdownRef, isExportDropdownOpen)
-  const periodPos = useDropdownPosition(periodDropdownRef, isPeriodDropdownOpen)
-  const statusPos = useDropdownPosition(statusDropdownRef, isStatusDropdownOpen)
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
@@ -370,39 +282,6 @@ export const SalesPage: React.FC = () => {
     }, 4500)
   }
 
-  const handleDepositStatusChange = async (sale: SalesItem, newStatus: 'Deposited' | 'Not Deposited') => {
-    if (sale.auditStatus === 'Verified') {
-      showToast('This sale has been Verified by an Auditor and is locked as read-only.', 'error')
-      return
-    }
-    if (sale.sourceModule) {
-      showToast(`This sale was recorded from ${sale.sourceModule}. Change it on the ${sale.sourceModule} page.`, 'error')
-      return
-    }
-
-    const st = (sale as any).payment_status || (sale.status === 'Overdue' ? 'Unpaid' : sale.status)
-    if (newStatus === 'Deposited') {
-      if (st === 'Unpaid') {
-        showToast('Unpaid sales cannot be marked as deposited. Please mark payment status as Paid first.', 'error')
-        return
-      }
-      if (st === 'Pending') {
-        const pm = (sale.paymentMethod || '').trim().toLowerCase()
-        const hasChq = Boolean(sale.chequeNo && sale.chequeNo.trim())
-        if (pm !== 'cheque' || !hasChq) {
-          showToast('Pending sales cannot be marked as deposited unless the payment method is Cheque and physically deposited awaiting clearance.', 'error')
-          return
-        }
-      }
-    }
-
-    if (newStatus === 'Deposited') {
-      // Ask which bank and which day the money arrived before saving
-      setDepositDialogSale(sale)
-      return
-    }
-    await applyDepositStatus(sale, newStatus)
-  }
 
   const applyDepositStatus = async (
     sale: SalesItem,
@@ -579,7 +458,7 @@ export const SalesPage: React.FC = () => {
       minute: '2-digit',
       hour12: true,
     })
-    const auditorName = formatRealName(user?.fullName || user?.name || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
+    const auditorName = formatRealName(user?.fullName || user?.email || 'Audit Officer', user?.role || 'Audit Officer')
     const updated: SalesItem = {
       ...sale,
       auditStatus: status,
@@ -670,18 +549,6 @@ export const SalesPage: React.FC = () => {
         !exportDropdownRef.current.contains(target)
       ) {
         setIsExportDropdownOpen(false)
-      }
-      if (
-        periodDropdownRef.current &&
-        !periodDropdownRef.current.contains(target)
-      ) {
-        setIsPeriodDropdownOpen(false)
-      }
-      if (
-        statusDropdownRef.current &&
-        !statusDropdownRef.current.contains(target)
-      ) {
-        setIsStatusDropdownOpen(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -915,25 +782,6 @@ export const SalesPage: React.FC = () => {
     s.deposit_date || s.depositDate || getSaleDay(s)
 
   // Small line under the deposit badge: when and where the money landed, or that it is still in transit
-  const renderDepositInfo = (sale: SalesItem) => {
-    const isDeposited =
-      (sale.depositStatus || sale.deposit_status) === 'Deposited'
-    if (isDeposited) {
-      const bank = sale.bankName || (sale.bankAccountId ? bankLabel(sale.bankAccountId) : '')
-      return (
-        <span className="block mt-1 text-[10px] font-medium text-emerald-700">
-          {tableTab === 'Deposit' ? '' : 'Deposited '}
-          {formatDisplayDate(getDepositDay(sale))}
-          {bank && bank !== 'No bank' ? ` (${bank})` : ''}
-        </span>
-      )
-    }
-    // Paid but not yet in the bank (e.g. GCash waiting to be swept)
-    if (sale.payment_status === 'Paid') {
-      return <span className="block mt-1 text-[10px] font-medium text-amber-700">In transit</span>
-    }
-    return null
-  }
 
   const sortNewestFirst = (list: SalesItem[], getDay: (s: SalesItem) => string) =>
     [...list].sort((a, b) => {
@@ -2075,7 +1923,7 @@ export const SalesPage: React.FC = () => {
                                 id: s.id,
                                 ref: s.chequeNo || '',
                                 particulars: s.particulars,
-                                amount: tableTab === 'Deposit' ? getRealizedCashForSale(s) : s.deposit,
+                                amount: s.deposit,
                                 status: s.status,
                                 depositStatus: s.depositStatus || s.deposit_status,
                               }))}

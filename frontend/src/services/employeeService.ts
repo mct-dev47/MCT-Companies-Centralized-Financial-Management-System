@@ -83,18 +83,8 @@ export interface CompanyNotificationSettings {
 
 
 // "2026-10-30T09:15:00+00:00" or "2026-10-30 09:15:00" -> "2026-10-30 17:15" in the browser's time
-function formatLogTime(value?: string | null): string {
-  if (!value) return ''
-  const raw = String(value).trim().replace(' ', 'T')
-  // The database stores UTC. A value with no zone is UTC.
-  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(raw)
-  const d = new Date(hasZone ? raw : `${raw}Z`)
-  if (isNaN(d.getTime())) return String(value)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
 
-function getAuthHeaders(): HeadersInit {
+function getAuthHeaders(): Record<string, string> {
   const token = sessionStorage.getItem(['mct', 'access', 'token'].join('_'))
   return token ? { Authorization: 'Bearer ' + token } : {}
 }

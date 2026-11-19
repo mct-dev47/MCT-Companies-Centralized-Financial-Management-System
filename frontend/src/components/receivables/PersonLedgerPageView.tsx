@@ -6,11 +6,9 @@ import {
   ChevronRight,
   Check,
   AlertCircle,
-  AlertTriangle,
   Receipt,
   Pencil,
   Plus,
-  Sparkles,
   Lock,
   Edit2,
 } from 'lucide-react'
@@ -75,7 +73,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   onBack,
   onOpenRecordPayment,
   onOpenEditProfile,
-  onSettlePayrollDeduction,
   isAudit = false,
   canEdit = false,
   onEditSale,
@@ -84,7 +81,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
 }) => {
   const [detailSearchQuery, setDetailSearchQuery] = React.useState<string>('')
   const [historyPage, setHistoryPage] = React.useState<number>(1)
-  const [showPayrollConfirm, setShowPayrollConfirm] = React.useState(false)
 
   // Edit Order state
   const [editingSale, setEditingSale] = React.useState<UtangSale | null>(null)
@@ -193,29 +189,6 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
   const historyEndIndex = Math.min(historyStartIndex + HISTORY_ITEMS_PER_PAGE, activeRecordsCount)
 
   const paginatedPayments = filteredPayments.slice(historyStartIndex, historyEndIndex)
-
-  const handleStartEditSale = (sale: UtangSale) => {
-    if (sale.is_locked) return
-    setActionError(null)
-    setEditingSale(sale)
-    setEditCustomerName(sale.customer_name)
-    setEditCustomerType(sale.customer_type)
-    setEditParticulars(sale.items_summary)
-    setEditTotalAmount(String(sale.total_amount))
-    setEditDate(sale.date)
-    setEditPaymentStatus(sale.payment_status)
-    setEditPaymentMethod('Cash')
-    setEditNotes(sale.notes || '')
-    setEditTab('details')
-    setEditDepositStatus(
-      sale.deposit_status === 'Deposited' || (!sale.deposit_status && sale.amount_paid > 0.005)
-        ? 'Deposited'
-        : 'Not Deposited'
-    )
-    // Default deposit date is today unless one was already recorded
-    setEditDepositDate(sale.deposit_date || formatToYYYYMMDD(new Date()))
-    setDepositTouched(false)
-  }
 
   const editedNumAmt = parseFloat(editTotalAmount) || 0
   const showPaidSettlementFields =

@@ -1,4 +1,4 @@
-import { formatUserFriendlyErrorMessage, notifyError, notifyWarning } from '@/utils/errorUtils'
+import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import * as React from 'react'
 
 import {
@@ -9,9 +9,7 @@ import {
 
   ChevronDown,
 
-  ChevronLeft,
 
-  ChevronRight,
 
   FileSpreadsheet,
 
@@ -39,7 +37,6 @@ import {
   Landmark,
   HelpCircle,
 
-  Wallet,
 
   Loader2,
 
@@ -52,11 +49,9 @@ import {
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
-import { TableErrorState } from '@/components/common/TableErrorState'
 import { TablePagination } from '@/components/common/TablePagination'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ConfirmModal } from '@/components/common/ConfirmModal'
-import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 
 import { Button } from '@/components/ui/button'
 
@@ -113,12 +108,11 @@ import { websocketService, type ConnectionStatus } from '@/services/websocketSer
 
 import { pettyCashService, type PettyCashSummary } from '@/services/pettyCashService'
 
-import { Link } from 'react-router-dom'
 
 import { AuditTransactionModal } from '@/components/dashboard/AuditTransactionModal'
 
 import { getParticularsSummary, stripBankSystemPrefix } from '@/utils/particularsUtils'
-import { formatToMMDDYYYY, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
+import { formatToMMDDYYYY } from '@/utils/dateUtils'
 import { compareTransactionsDesc } from '@/lib/transactionSort'
 
 import type { DashboardTransactionItem } from '@/services/dashboardService'
@@ -263,7 +257,6 @@ export const BankManagementPage: React.FC = () => {
 
   const isFinance = userRole === 'finance'
 
-  const isAudit = userRole === 'audit' || userRole.includes('auditor')
 
   const isCompanyScoped = isStrictlyCompanyScoped
 
@@ -357,7 +350,7 @@ export const BankManagementPage: React.FC = () => {
   }, [allCompanies, isAdmin, isFinance])
 
   // Real-time WebSocket connection status state
-  const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>(websocketService.getStatus())
+  const [, setWsStatus] = React.useState<ConnectionStatus>(websocketService.getStatus())
 
   // Synchronize bank accounts with database
   const fetchAccounts = React.useCallback(async (forceRefresh = false) => {
@@ -421,7 +414,7 @@ export const BankManagementPage: React.FC = () => {
   // Each company's petty cash wallet, shown beside its banks. The balance is worked out on the server
   // from approved top-ups minus petty-cash expenses, so it always matches the Petty Cash page.
   // Petty cash is not a bank: it is never added to bank totals or listed in bank transactions.
-  const [pettyCashWallets, setPettyCashWallets] = React.useState<PettyCashSummary[]>([])
+  const [, setPettyCashWallets] = React.useState<PettyCashSummary[]>([])
 
   const fetchPettyCashWallets = React.useCallback(async (forceRefresh = false) => {
     try {
@@ -448,12 +441,6 @@ export const BankManagementPage: React.FC = () => {
     }
   }, [fetchPettyCashWallets])
 
-  const visiblePettyCashWallets = React.useMemo(() => {
-    const scope = isCompanyScoped && assignedCompany ? assignedCompany : selectedCompany
-    if (!scope || scope === 'All Companies') return pettyCashWallets
-    const target = scope.trim().toLowerCase()
-    return pettyCashWallets.filter((w) => (w.companyName || '').trim().toLowerCase() === target)
-  }, [pettyCashWallets, isCompanyScoped, assignedCompany, selectedCompany])
 
   // Active selected bank account
 
@@ -506,7 +493,6 @@ export const BankManagementPage: React.FC = () => {
   // Dropdown states
 
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState(false)
-  const [isTxTypeDropdownOpen, setIsTxTypeDropdownOpen] = React.useState(false)
 
   const [bankStatusFilter, setBankStatusFilter] = React.useState<string>('All')
   const [isBankStatusDropdownOpen, setIsBankStatusDropdownOpen] = React.useState(false)
@@ -514,20 +500,18 @@ export const BankManagementPage: React.FC = () => {
   const [isSortDropdownOpen, setIsSortDropdownOpen] = React.useState(false)
 
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
-  const txTypeDropdownRef = React.useRef<HTMLDivElement>(null)
   const bankStatusDropdownRef = React.useRef<HTMLDivElement>(null)
   const sortDropdownRef = React.useRef<HTMLDivElement>(null)
 
   // Modals state
 
   const [isAddBankModalOpen, setIsAddBankModalOpen] = React.useState(false)
-  // Review step states for modals (Phase 2 Standard F)
-  const [isReviewingAddBank, setIsReviewingAddBank] = React.useState(false)
-  const [isReviewingDeposit, setIsReviewingDeposit] = React.useState(false)
-  const [isReviewingEditBank, setIsReviewingEditBank] = React.useState(false)
-  const [bankActionError, setBankActionError] = React.useState<string | null>(null)
 
 
+  const [, setIsReviewingAddBank] = React.useState(false)
+  const [, setIsReviewingDeposit] = React.useState(false)
+  const [, setIsReviewingEditBank] = React.useState(false)
+  const [, setBankActionError] = React.useState<string | null>(null)
   const [isDepositModalOpen, setIsDepositModalOpen] = React.useState(false)
 
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = React.useState(false)
@@ -621,11 +605,6 @@ export const BankManagementPage: React.FC = () => {
 
       }
 
-      if (txTypeDropdownRef.current && !txTypeDropdownRef.current.contains(target)) {
-
-        setIsTxTypeDropdownOpen(false)
-
-      }
 
       if (bankStatusDropdownRef.current && !bankStatusDropdownRef.current.contains(target)) {
         setIsBankStatusDropdownOpen(false)
@@ -1776,7 +1755,6 @@ export const BankManagementPage: React.FC = () => {
                   type="button"
                   onClick={() => {
                     setIsBankStatusDropdownOpen((prev) => !prev)
-                    setIsTxTypeDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                     setIsSortDropdownOpen(false)
                   }}
@@ -1830,8 +1808,6 @@ export const BankManagementPage: React.FC = () => {
                   onClick={() => {
                     setIsSortDropdownOpen((prev) => !prev)
                     setIsBankStatusDropdownOpen(false)
-                    setIsCompanyDropdownOpen(false)
-                    setIsTxTypeDropdownOpen(false)
                     setIsExportDropdownOpen(false)
                   }}
                   className={cn(

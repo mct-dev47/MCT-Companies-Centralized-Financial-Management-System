@@ -300,7 +300,7 @@ export const ViewUserModal: React.FC<ViewUserModalProps> = ({
       <Dialog open={open} onOpenChange={handleModalOpenChange}>
         <DialogContent
           onCloseAutoFocus={(e) => {
-            if (document.activeElement && e.currentTarget.contains(document.activeElement)) {
+            if (document.activeElement && (e.currentTarget as HTMLElement)?.contains?.(document.activeElement)) {
               e.preventDefault()
               ;(document.activeElement as HTMLElement)?.blur()
             }

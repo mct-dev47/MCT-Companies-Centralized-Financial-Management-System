@@ -19,7 +19,6 @@ import {
   Globe,
   Monitor,
   Hash,
-  ArrowRight,
   Layers,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'

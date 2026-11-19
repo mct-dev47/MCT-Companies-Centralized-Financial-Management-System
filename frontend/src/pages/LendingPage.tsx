@@ -8,7 +8,6 @@ import { createPortal } from 'react-dom'
 import {
   ShieldCheck,
   CheckCircle2,
-  Download,
   Plus,
   Search,
   ChevronDown,
@@ -17,7 +16,6 @@ import {
   Check,
   FileSpreadsheet,
   FileText,
-  CreditCard,
   AlertCircle,
   Pencil,
   Trash2,
@@ -25,14 +23,12 @@ import {
   Receipt,
   MoreVertical,
   Eye,
-  Lock,
   Loader2,
   HelpCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { TableSkeleton } from '@/components/common/TableSkeleton'
 import { TableEmptyState } from '@/components/common/TableEmptyState'
-import { TableErrorState } from '@/components/common/TableErrorState'
 import { TablePagination } from '@/components/common/TablePagination'
 import { StatusPill } from '@/components/common/StatusPill'
 import { BackButton, ConfirmModal } from '@/components/common'
@@ -71,7 +67,6 @@ import {
   type LendingFacility,
   lendingService,
   getMonthlyProgress,
-  getNextInstallmentInfo,
   getCycleDueDate,
 } from '@/services/lendingService'
 
@@ -206,28 +201,8 @@ export const LendingPage: React.FC = () => {
     }
   }, [])
 
-  const saveFacilities = React.useCallback((newFacilities: LendingFacility[]) => {
-    setFacilities(newFacilities)
-  }, [])
 
   // Helper to format auditor tag initials from user's actual name rather than email
-  const formatAuditorTag = React.useCallback(
-    (auditedBy?: string | null): string => {
-      if (!auditedBy || auditedBy === '-') return ''
-      const trimmed = auditedBy.trim()
-      // If the stored audit tag has the current user's email, resolve to the logged in user's full name
-      if (
-        user &&
-        user.fullName &&
-        (trimmed.toLowerCase() === (user.email || '').toLowerCase() ||
-          trimmed.toLowerCase() === user.fullName.toLowerCase())
-      ) {
-        return formatPersonInitialAndLastName(user.fullName)
-      }
-      return formatPersonInitialAndLastName(trimmed)
-    },
-    [user]
-  )
 
   // Filter toolbar state matching SalesPage
   const [dateRange, setDateRange] = React.useState<DateRange>({
@@ -260,12 +235,11 @@ export const LendingPage: React.FC = () => {
   const [isDeletePaymentModalOpen, setIsDeletePaymentModalOpen] = React.useState(false)
   const [isDeletingPayment, setIsDeletingPayment] = React.useState(false)
   const [deletePaymentError, setDeletePaymentError] = React.useState<string | null>(null)
+  const [, setPaymentError] = React.useState<string | null>(null)
   const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = React.useState(false)
-  const [paymentError, setPaymentError] = React.useState<string | null>(null)
   const [addModalError, setAddModalError] = React.useState<string | null>(null)
   const [editModalError, setEditModalError] = React.useState<string | null>(null)
   const [deleteModalError, setDeleteModalError] = React.useState<string | null>(null)
-  const [isSubmittingPayment, setIsSubmittingPayment] = React.useState(false)
   const [isCreatingBorrower, setIsCreatingBorrower] = React.useState(false)
   const [isReviewingAdd, setIsReviewingAdd] = React.useState(false)
   const [isUpdatingBorrower, setIsUpdatingBorrower] = React.useState(false)
@@ -548,7 +522,7 @@ export const LendingPage: React.FC = () => {
       f.status,
       f.auditStatus === 'Verified' ? 'AUDITED' : f.auditStatus === 'Flagged' ? 'DISCREPANCY' : 'UNREVIEWED',
       f.auditedBy && f.auditedBy !== '-' ? `"${f.auditedBy.replace(/"/g, '""')}"` : ((f as any).audited_by || '-'),
-      formatAuditTimestamp(f.auditDate, f.audited_at || (f as any).auditedAt) || '-',
+      formatAuditTimestamp(f.auditDate, f.auditDate || (f as any).auditedAt) || '-',
     ])
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n')
@@ -583,7 +557,7 @@ export const LendingPage: React.FC = () => {
           <td style="text-align: center;">${f.status}</td>
           <td style="text-align: center; font-weight: 700;">${f.auditStatus === 'Verified' ? 'AUDITED' : f.auditStatus === 'Flagged' ? 'DISCREPANCY' : '-'}</td>
           <td style="text-align: center;">${f.auditedBy && f.auditedBy !== '-' ? f.auditedBy : ((f as any).audited_by || '-')}</td>
-          <td style="text-align: center; font-size: 10px; font-family: monospace;">${formatAuditTimestamp(f.auditDate, f.audited_at || (f as any).auditedAt) || '-'}</td>
+          <td style="text-align: center; font-size: 10px; font-family: monospace;">${formatAuditTimestamp(f.auditDate, f.auditDate || (f as any).auditedAt) || '-'}</td>
         </tr>
       `
       )
@@ -1093,13 +1067,13 @@ export const LendingPage: React.FC = () => {
 
               {canAuditActions && (
                 <div className="flex flex-col items-end gap-1.5">
-                  {(activeFacility.auditedBy || activeFacility.auditDate || (activeFacility as any).audited_by || (activeFacility as any).audited_at) && (
+                  {(activeFacility.auditedBy || activeFacility.auditDate || (activeFacility as any).audited_by || (activeFacility as any).auditDate) && (
                     <div className="text-[11px] text-muted-fg font-medium flex items-center gap-1.5">
                       <span>
                         Audited by <strong className="font-semibold text-focus">{activeFacility.auditedBy || (activeFacility as any).audited_by}</strong>
                       </span>
                       {(() => {
-                        const stamp = formatAuditTimestamp(activeFacility.auditDate, activeFacility.audited_at || (activeFacility as any).auditedAt)
+                        const stamp = formatAuditTimestamp(activeFacility.auditDate, activeFacility.auditDate || (activeFacility as any).auditedAt)
                         return stamp ? <span>• {stamp}</span> : null
                       })()}
                     </div>
@@ -1310,7 +1284,7 @@ export const LendingPage: React.FC = () => {
                   <div className="flex justify-between items-center py-0.5">
                     <span className="text-muted-fg">Audit Date:</span>
                     <span className="font-mono text-focus">
-                      {formatAuditTimestamp(activeFacility.auditDate, activeFacility.audited_at || (activeFacility as any).auditedAt) || '—'}
+                      {formatAuditTimestamp(activeFacility.auditDate, activeFacility.auditDate || (activeFacility as any).auditedAt) || '—'}
                     </span>
                   </div>
                 </div>
@@ -1847,12 +1821,6 @@ export const LendingPage: React.FC = () => {
                 />
               ) : (
                 paginatedFacilities.map((facility) => {
-                  const statusColorText = {
-                    Active: 'text-blue-600',
-                    Completed: 'text-emerald-600',
-                    Pending: 'text-amber-600',
-                    Overdue: 'text-[#960C01]',
-                  }[facility.status] || 'text-slate-600'
 
                   const isHighlighted = highlightedFacilityId === facility.id
 
@@ -1910,7 +1878,7 @@ export const LendingPage: React.FC = () => {
                         {(() => {
                           const status = facility.auditStatus || (facility as any).audit_status
                           const auditedBy = facility.auditedBy || (facility as any).audited_by
-                          const auditDate = formatAuditTimestamp(facility.auditDate, facility.audited_at || (facility as any).auditedAt)
+                          const auditDate = formatAuditTimestamp(facility.auditDate, facility.auditDate || (facility as any).auditedAt)
                           const remarks = facility.auditRemarks || (facility as any).audit_remarks
                           const isVerified = status === 'Verified'
                           const isFlagged = status === 'Flagged'
@@ -2175,10 +2143,10 @@ export const LendingPage: React.FC = () => {
                 errorMessage={addModalError}
                 items={[
                   { label: 'Borrower Name', value: formData.borrowerName.trim(), highlight: true },
-                  { label: 'Facility Type', value: formData.loanType },
-                  { label: 'Principal Loan Amount', value: formatPHP(formData.loanAmount), isCurrency: true },
+                  { label: 'Facility Type', value: `${formData.paymentFrequency} Lending` },
+                  { label: 'Principal Loan Amount', value: formatPHP(parseFloat(formData.loanAmount) || 0), isCurrency: true },
                   { label: 'Payment Frequency', value: formData.paymentFrequency },
-                  { label: 'Total Repayable', value: formatPHP(formData.totalLoanAmount), isCurrency: true },
+                  { label: 'Total Repayable', value: formatPHP((parseFloat(formData.loanAmount) || 0) * (1 + (parseFloat(formData.interestRate) || 0) / 100)), isCurrency: true },
                   { label: 'Start / Contract Date', value: formData.dateBorrowed },
                   { label: 'Maturity / Due Date', value: formData.dueDate },
                 ]}
@@ -2450,7 +2418,6 @@ export const LendingPage: React.FC = () => {
 
       {/* 5. Shared Record / Edit Payment Modal */}
       {activeFacility && (() => {
-        const isDaily = !activeFacility.paymentFrequency || activeFacility.paymentFrequency === 'Daily'
         const dailyTarget = getFacilityDailyTarget(activeFacility)
 
         const editInitialData: EditPaymentInitialData | null = editingPayment
@@ -2506,7 +2473,7 @@ export const LendingPage: React.FC = () => {
             dueDate={activeFacility.dueDate}
             existingPayments={(activeFacility.dailyPayments || []).map((p) => ({
               id: p.id,
-              date: p.date || p.payment_date,
+              date: p.date || p.payment_date || '',
               amount: p.amount,
               cycleDueDate: p.cycle_due_date || p.cycleDueDate || p.date,
               status: p.status,

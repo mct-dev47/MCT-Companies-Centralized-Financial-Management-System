@@ -146,51 +146,6 @@ export function detectUserByEmail(email: string): User {
   }
 }
 
-async function getRequest<T>(path: string, isRetry: boolean = false): Promise<T> {
-  const token = inMemoryAccessToken
-  if (!token) {
-    if (!isRetry) {
-      const refreshed = await authService.refreshSession()
-      if (refreshed && inMemoryAccessToken) {
-        return getRequest<T>(path, true)
-      }
-    }
-    throw new Error('No access token available')
-  }
-  const response = await fetch(`/api/v1/auth${path}`, {
-    method: 'GET',
-    credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
-  })
-  if (response.status === 401 && !isRetry) {
-    const refreshed = await authService.refreshSession()
-    if (refreshed && inMemoryAccessToken) {
-      return getRequest<T>(path, true)
-    }
-    throw new Error('Unauthorized')
-  }
-  const responseText = await response.text()
-  let data: any = {}
-  try {
-    data = responseText ? JSON.parse(responseText) : {}
-  } catch {
-    data = {}
-  }
-  if (!response.ok) {
-    const errorPayload = { status: response.status, ...data }
-    const errorMsg = formatUserFriendlyErrorMessage(
-      errorPayload,
-      data.detail || responseText || `Authentication request failed (${response.status}).`
-    )
-    const err = new Error(errorMsg)
-    Object.assign(err, errorPayload, { response: { status: response.status, data } })
-    throw err
-  }
-  return data as T
-}
 
 async function request<T>(path: string, body: unknown, isRetry: boolean = false): Promise<T> {
   const token = inMemoryAccessToken
@@ -620,7 +575,7 @@ export const authService = {
    * Reauthenticates the current user by password for sensitive actions (AC-16).
    */
   async reauthenticate(password: string): Promise<string> {
-    const encrypted = encryptPayload({ password })
+    const encrypted = await encryptPayload({ password })
     const body = encrypted ? { encrypted_payload: encrypted } : { password }
     const response = await fetch('/api/v1/auth/reauthenticate', {
       method: 'POST',

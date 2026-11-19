@@ -122,7 +122,7 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [userAssignedCompanies, user?.id])
 
-  const [dynamicCompanies, setDynamicCompanies] = React.useState<string[]>(getCachedCompanies)
+  const [, setDynamicCompanies] = React.useState<string[]>(getCachedCompanies)
   const [dbCompanies, setDbCompanies] = React.useState<CompanyOption[]>([])
   const [isLoadingCompanies, setIsLoadingCompanies] = React.useState<boolean>(false)
 

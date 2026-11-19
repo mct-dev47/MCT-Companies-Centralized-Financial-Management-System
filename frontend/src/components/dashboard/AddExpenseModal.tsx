@@ -18,7 +18,6 @@ import {
   Plus,
   Trash2,
   Pencil,
-  RotateCw,
   AlertCircle,
 } from 'lucide-react'
 import {
@@ -90,7 +89,7 @@ export const AddExpenseModal: React.FC<AddExpenseModalProps> = ({
       : ''
   )
   const [companyCategories, setCompanyCategories] = React.useState<CompanyCategory[]>([])
-  const [isLoadingCategories, setIsLoadingCategories] = React.useState(false)
+  const [, setIsLoadingCategories] = React.useState(false)
   const [isAddingCategory, setIsAddingCategory] = React.useState(false)
   const [isCategoryManaging, setIsCategoryManaging] = React.useState(false)
   const [newCategoryName, setNewCategoryName] = React.useState('')
