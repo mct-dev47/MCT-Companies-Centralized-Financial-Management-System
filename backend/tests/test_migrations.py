@@ -380,6 +380,65 @@ class TestMigrations(unittest.TestCase):
         self.assertTrue(any("borrower_bank_account_id" in s for s in executed_sql))
         self.assertTrue(any("ix_bank_transactions_source_receivable_payment_id" in s for s in executed_sql))
 
+    def test_0077_and_0078_migrations(self):
+        """Verify migrations 0077 (audit fields across financial tables) and 0078 (bank_transactions loan/topup links) in SQLite and Postgres."""
+        from unittest.mock import MagicMock
+        from app.db.migrations import _run_postgresql_migrations
+
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS bills (bill_id INTEGER PRIMARY KEY AUTOINCREMENT, status VARCHAR(50) NOT NULL DEFAULT 'unpaid');"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS receivables (receivable_id INTEGER PRIMARY KEY AUTOINCREMENT, payment_status VARCHAR(50) NOT NULL DEFAULT 'Unpaid');"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS loan (loan_id INTEGER PRIMARY KEY AUTOINCREMENT, borrower INTEGER NOT NULL, loan_date DATE NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS loans_repayments (repayment_id INTEGER PRIMARY KEY AUTOINCREMENT, loan_id INTEGER NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS petty_cash_topups (topup_id INTEGER PRIMARY KEY AUTOINCREMENT, amount NUMERIC(15, 2) NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS bank_transactions (id VARCHAR(100) PRIMARY KEY, bank_account_id VARCHAR(100) NOT NULL);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0077_audit_fields_financial_tables", applied)
+        self.assertIn("0078_bank_transactions_loan_topup_links", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0077_audit_fields_financial_tables", applied_second)
+        self.assertNotIn("0078_bank_transactions_loan_topup_links", applied_second)
+
+        inspector = inspect(self.engine)
+        for tbl in ("bills", "receivables", "loan", "loans_repayments", "petty_cash_topups"):
+            t_cols = {col["name"] for col in inspector.get_columns(tbl)}
+            for expected_col in ("audit_status", "audited_by", "audited_at", "audit_remarks"):
+                self.assertIn(expected_col, t_cols, f"Missing {expected_col} on {tbl}")
+
+        bt_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+        self.assertIn("source_loan_id", bt_cols)
+        self.assertIn("source_topup_id", bt_cols)
+
+        with self.engine.connect() as conn:
+            bt_idx = {row[1] for row in conn.execute(text("PRAGMA index_list(bank_transactions)")).fetchall()}
+            self.assertIn("ix_bank_transactions_source_loan_id", bt_idx)
+            self.assertIn("ix_bank_transactions_source_topup_id", bt_idx)
+
+        executed_sql: list[str] = []
+        pg_conn = MagicMock()
+
+        def fake_execute(stmt, *args, **kwargs):
+            s = str(stmt)
+            executed_sql.append(s)
+            res = MagicMock()
+            if "SELECT 1 FROM schema_migrations" in s:
+                if "0077_audit_fields_financial_tables" in s or "0078_bank_transactions_loan_topup_links" in s:
+                    res.first.return_value = None
+                else:
+                    res.first.return_value = (1,)
+            return res
+
+        pg_conn.execute.side_effect = fake_execute
+        pg_applied = _run_postgresql_migrations(pg_conn)
+        self.assertIn("0077_audit_fields_financial_tables", pg_applied)
+        self.assertIn("0078_bank_transactions_loan_topup_links", pg_applied)
+        for tbl in ("bills", "receivables", "loan", "loans_repayments", "petty_cash_topups"):
+            self.assertTrue(any(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS audit_status" in s for s in executed_sql))
+        self.assertTrue(any("ix_bank_transactions_source_loan_id" in s for s in executed_sql))
+        self.assertTrue(any("ix_bank_transactions_source_topup_id" in s for s in executed_sql))
+
 
 if __name__ == "__main__":
     unittest.main()

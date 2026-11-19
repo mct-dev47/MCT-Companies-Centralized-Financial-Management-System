@@ -1,0 +1,4 @@
+-- 0077_audit_fields_financial_tables.sqlite.sql
+-- In SQLite, ALTER TABLE column checks for bills, receivables, loan, loans_repayments, and petty_cash_topups
+-- (audit_status, audited_by, audited_at, audit_remarks) are executed idempotently in app/db/migrations.py
+-- (_run_sqlite_migrations) and app/db/session.py (init_db).
