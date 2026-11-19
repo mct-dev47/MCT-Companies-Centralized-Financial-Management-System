@@ -43,6 +43,14 @@ class DashboardTransactionOut(BaseModel):
     payment_method: Optional[str] = None
     status: str = "Paid"
     audit_status: str = "Pending Audit"
+    sale_date: Optional[str] = None
+    deposit_status: Optional[str] = None
+    deposit_date: Optional[str] = None
+    paid_amount: Optional[float] = None
+    audited_by: Optional[str] = None
+    audit_date: Optional[str] = None
+    audit_notes: Optional[str] = None
+    bank_account_id: Optional[str] = None
     created_at: Optional[str] = None
 
 

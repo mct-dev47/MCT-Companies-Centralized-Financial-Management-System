@@ -340,12 +340,15 @@ def get_dashboard_summary(
     for s, cat_name in recent_sales:
         amt = float(s.amount or 0.0)
         cname = company_name_map.get(s.company_id, target_cname)
+        sale_iso = s.transaction_date.isoformat() if s.transaction_date else ""
+        dep_iso = s.deposit_date.isoformat() if getattr(s, "deposit_date", None) else None
         recent_txs.append(
             DashboardTransactionOut(
                 id=f"sale_{s.sales_id}",
                 ref_no=s.cheque_no or "",
                 cheque_no=s.cheque_no,
-                date=s.transaction_date.isoformat() if s.transaction_date else "",
+                date=sale_iso,
+                sale_date=sale_iso,
                 type="Sales",
                 company=cname,
                 description=s.particulars or "Sales Transaction",
@@ -355,20 +358,30 @@ def get_dashboard_summary(
                 category=cat_name or "Sales",
                 payment_method=s.payment_method or "Cash",
                 status=s.payment_status or "Paid",
+                deposit_status=s.deposit_status or "Not Deposited",
+                deposit_date=dep_iso,
+                paid_amount=amt if (s.payment_status or "Paid") == "Paid" else 0.0,
                 audit_status=s.audit_status or "Pending Audit",
+                audited_by=s.audited_by,
+                audit_date=s.audited_at.isoformat() if s.audited_at else None,
+                audit_notes=s.audit_remarks,
+                bank_account_id=s.bank_account_id,
                 created_at=s.created_at.isoformat() if s.created_at else None,
             )
         )
 
     for e, cat_name in recent_expenses:
         amt = float(e.amount or 0.0)
+        paid_amt = float(e.amount_paid) if getattr(e, "amount_paid", None) is not None else amt
         cname = company_name_map.get(e.company_id, target_cname)
+        exp_iso = e.expense_date.isoformat() if e.expense_date else ""
         recent_txs.append(
             DashboardTransactionOut(
                 id=f"expense_{e.expense_id}",
                 ref_no=e.cheque_no or "",
                 cheque_no=e.cheque_no,
-                date=e.expense_date.isoformat() if e.expense_date else "",
+                date=exp_iso,
+                sale_date=exp_iso,
                 type="Expense",
                 company=cname,
                 description=e.description or "Expense Transaction",
@@ -377,8 +390,13 @@ def get_dashboard_summary(
                 deposit=0.0,
                 category=cat_name or "Other",
                 payment_method=e.payment_method or "Cash",
-                status="Paid",
+                status="Paid" if paid_amt >= amt - 0.005 else ("Partial" if paid_amt > 0 else "Unpaid"),
+                paid_amount=paid_amt,
                 audit_status=e.audit_status or "Pending Audit",
+                audited_by=e.audited_by,
+                audit_date=e.audited_at.isoformat() if e.audited_at else None,
+                audit_notes=e.audit_remarks,
+                bank_account_id=e.bank_account_id,
                 created_at=e.created_at.isoformat() if e.created_at else None,
             )
         )

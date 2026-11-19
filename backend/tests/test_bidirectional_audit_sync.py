@@ -540,3 +540,30 @@ def test_audit_endpoints_reject_invalid_status_and_non_auditor():
     res_unauth = client.patch("/api/v1/bills/1/audit", json={"audit_status": "Verified"})
     assert res_unauth.status_code in (401, 403)
 
+
+def test_dashboard_summary_includes_deposit_and_audit_status_on_recent_transactions(db_session):
+    comp, bank = _seed_company_and_bank(db_session, "Dash Summary Corp", "acc-dash-1")
+    sale = Sale(
+        company_id=comp.company_id,
+        transaction_date=date.today(),
+        amount=Decimal("1200.00"),
+        particulars="Deposited Sale",
+        payment_method="Cash",
+        payment_status="Paid",
+        deposit_status="Deposited",
+        deposit_date=date.today(),
+        bank_account_id=bank.id,
+        audit_status="Verified",
+    )
+    db_session.add(sale)
+    db_session.commit()
+
+    res = client.get(f"/api/v1/dashboard/summary?company_name={comp.company_name}")
+    assert res.status_code == 200
+    recent = res.json()["recent_transactions"]
+    sale_row = next(r for r in recent if r["id"] == f"sale_{sale.sales_id}")
+    assert sale_row["deposit_status"] == "Deposited"
+    assert sale_row["deposit_date"] == date.today().isoformat()
+    assert sale_row["paid_amount"] == 1200.0
+    assert sale_row["audit_status"] == "Verified"
+

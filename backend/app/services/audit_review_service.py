@@ -113,6 +113,7 @@ def apply_audit_review(
 
     if supabase_table == "expenses":
         system_cache.invalidate_tag("petty_cash")
+    system_cache.invalidate_tag("dashboard")
 
     # Tell every connected Finance, Audit and company screen to reload (spec 0016, AC-4).
     try:

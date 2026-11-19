@@ -164,7 +164,17 @@ export const dashboardService = {
       category: t.category || 'Uncategorized',
       paymentMethod: t.payment_method || undefined,
       status: t.status || 'Paid',
+      saleDate: t.sale_date || t.date || undefined,
+      depositStatus: t.deposit_status || undefined,
+      deposit_status: t.deposit_status || undefined,
+      depositDate: t.deposit_date || undefined,
+      deposit_date: t.deposit_date || undefined,
+      paidAmount: t.paid_amount !== undefined && t.paid_amount !== null ? Number(t.paid_amount) : undefined,
       auditStatus: t.audit_status || 'Pending Audit',
+      auditedBy: t.audited_by || undefined,
+      auditDate: t.audit_date || undefined,
+      auditNotes: t.audit_notes || undefined,
+      bankAccountId: t.bank_account_id || undefined,
       createdAt: t.created_at || undefined,
     }))
 
