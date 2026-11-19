@@ -399,10 +399,6 @@ class PettyCashLedgerEntry(BaseModel):
     remark: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
-    audit_status: str = "Pending Audit"
-    audited_by: Optional[str] = None
-    audited_at: Optional[datetime] = None
-    audit_remarks: Optional[str] = None
     created_at: Optional[datetime] = None
     # Funding bank chosen by Finance (spec 0012), shown to the reader (spec 0014).
     # The account number is deliberately not included.
